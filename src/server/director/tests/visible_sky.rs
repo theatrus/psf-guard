@@ -404,12 +404,22 @@ async fn a_site_horizon_counts_whatever_a_plan_turns_on() {
     assert_eq!(state.director.as_ref().unwrap().visible_sky.computed().0, 2);
 }
 
-/// The count at the grid node nearest a place, from the packed counts.
-fn count_at(view: &Value, ra: f64, dec: f64) -> u64 {
+/// A picture's counts unpacked: two bytes a node, low byte first.
+fn unpacked(view: &Value) -> Vec<u16> {
     use base64::Engine;
-    let counts = base64::engine::general_purpose::STANDARD
+    let bytes = base64::engine::general_purpose::STANDARD
         .decode(view["counts"].as_str().unwrap())
         .unwrap();
+    assert_eq!(bytes.len() % 2, 0);
+    bytes
+        .chunks(2)
+        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .collect()
+}
+
+/// The count at the grid node nearest a place, from the packed counts.
+fn count_at(view: &Value, ra: f64, dec: f64) -> u64 {
+    let counts = unpacked(view);
     let (columns, rows) = (
         view["grid"]["columns"].as_u64().unwrap() as usize,
         view["grid"]["rows"].as_u64().unwrap() as usize,
@@ -435,6 +445,7 @@ async fn the_month_and_the_year_count_the_nights_each_part_of_the_sky_is_in_view
     assert_eq!(month["every_nights"], 1);
     assert_eq!(month["nights"].as_array().unwrap().len(), 31);
     assert_eq!(month["nights"][30]["date"], "2026-10-24");
+    assert_eq!(month["nights_counted"], 31);
     assert_eq!(
         month["grid"],
         json!({"degrees": 2.0, "columns": 180, "rows": 91})
@@ -454,11 +465,8 @@ async fn the_month_and_the_year_count_the_nights_each_part_of_the_sky_is_in_view
     // The counts are the nights added up: a node counted on every night
     // is inside the every-night lines' share, one counted once or more
     // inside the any-night share.
-    use base64::Engine;
-    let counts = base64::engine::general_purpose::STANDARD
-        .decode(month["counts"].as_str().unwrap())
-        .unwrap();
-    let share = |at_least: u8| {
+    let counts = unpacked(&month);
+    let share = |at_least: u16| {
         let (mut inside, mut whole) = (0.0, 0.0);
         for (row, nodes) in counts.chunks(180).enumerate() {
             let weight = (-90.0 + row as f64 * 2.0_f64).to_radians().cos();
@@ -478,14 +486,13 @@ async fn the_month_and_the_year_count_the_nights_each_part_of_the_sky_is_in_view
     assert!(counts.iter().all(|count| *count <= 31));
     assert!(counts.iter().any(|count| (1..31).contains(count)));
     // The same nights one at a time add up to the same counts.
-    let mut summed = vec![0_u8; counts.len()];
+    let mut summed = vec![0_u16; counts.len()];
     for night in ["2026-09-24", "2026-10-09", "2026-10-24"] {
         let one = json!({"rig": rig, "first_night": night});
         let (status, body) = call(&app, "POST", PATH, one, None).await;
         assert_eq!(status, StatusCode::OK);
-        let single = base64::engine::general_purpose::STANDARD
-            .decode(body["data"]["counts"].as_str().unwrap())
-            .unwrap();
+        assert_eq!(body["data"]["nights_counted"], 1);
+        let single = unpacked(&body["data"]);
         assert!(single.iter().all(|count| *count <= 1));
         for (sum, count) in summed.iter_mut().zip(&single) {
             *sum += count;
@@ -507,8 +514,9 @@ async fn the_month_and_the_year_count_the_nights_each_part_of_the_sky_is_in_view
         "{reach}"
     );
 
-    // Year: one night a week for a year. Its grids and skies are kept
-    // apart, and the month's are all still kept.
+    // Year: one night a week measured for a year, and the nights between
+    // worked out. Its grids and skies are kept apart, and the month's are
+    // all still kept.
     let year = json!({"rig": rig, "first_night": "2026-09-24", "span": "year"});
     let (status, body) = call(&app, "POST", PATH, year.clone(), None).await;
     assert_eq!(status, StatusCode::OK, "{body}");
@@ -522,7 +530,54 @@ async fn the_month_and_the_year_count_the_nights_each_part_of_the_sky_is_in_view
     // Five of the year's nights are nights of the month, already
     // measured: the year reads those and measures the other 48.
     assert_eq!(service.visible_sky.computed(), (31, 48));
-    assert_eq!(count_at(&view, 0.0, 90.0), 53);
+    // Every night from the first measured to the last is counted.
+    assert_eq!(view["nights_counted"], 365);
+    assert_eq!(count_at(&view, 0.0, 90.0), 365);
+    assert_eq!(count_at(&view, 200.0, 80.0), 365);
+    let year_counts = unpacked(&view);
+    assert!(year_counts.iter().all(|count| *count <= 365));
+    assert!(year_counts.iter().any(|count| (54..365).contains(count)));
+    // The shares are the counts': every night, and any.
+    let year_share = |at_least: u16| {
+        let (mut inside, mut whole) = (0.0, 0.0);
+        for (row, nodes) in year_counts.chunks(180).enumerate() {
+            let weight = (-90.0 + row as f64 * 2.0_f64).to_radians().cos();
+            inside += weight * nodes.iter().filter(|count| **count >= at_least).count() as f64;
+            whole += weight * 180.0;
+        }
+        (inside / whole * 10_000.0_f64).round() / 10_000.0
+    };
+    assert_eq!(
+        year_share(365),
+        view["every_night"]["sky_fraction"].as_f64().unwrap()
+    );
+    assert_eq!(
+        year_share(1),
+        view["any_night"]["sky_fraction"].as_f64().unwrap()
+    );
+    // A place asked about for itself is counted as its node is in the
+    // picture: a card and the map beside it agree.
+    let nodes: Vec<(f64, f64)> = vec![(190.0, 0.0), (20.0, -20.0), (300.0, 40.0), (96.0, -28.0)];
+    let places: Vec<Value> = nodes
+        .iter()
+        .map(|(ra, dec)| json!({"ra_degrees": ra, "dec_degrees": dec}))
+        .collect();
+    let ask = json!({"rig": rig, "first_night": "2026-09-24", "span": "year", "places": places});
+    let (status, body) = call(&app, "POST", "/sky/visible-places", ask, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["data"]["nights_counted"], 365);
+    for (place, (ra, dec)) in body["data"]["places"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(&nodes)
+    {
+        assert_eq!(
+            place["nights_in_view"].as_u64().unwrap(),
+            count_at(&view, *ra, *dec),
+            "{ra} {dec}"
+        );
+    }
     // Over a year every right ascension has its season: north of the
     // limit all of it is in view on some night, and south of it none.
     for ra in (0..360).step_by(10) {
@@ -554,7 +609,7 @@ async fn the_month_and_the_year_count_the_nights_each_part_of_the_sky_is_in_view
     for (body, reason) in [
         (
             json!({"rig": rig, "span": "year", "nights": 10}),
-            "Leave nights out with span year: a year is always 53 nights, one a week.",
+            "Leave nights out with span year: a year always measures 53 nights, one a week.",
         ),
         (
             json!({"rig": rig, "span": "now", "nights": 32}),
@@ -621,12 +676,12 @@ async fn a_place_is_counted_for_itself_and_agrees_with_the_lines() {
     let year = json!({"rig": rig, "first_night": "2026-09-24", "span": "year", "places": [{"ra_degrees": 190.0, "dec_degrees": 0.0}, {"ra_degrees": 0.0, "dec_degrees": 89.0}]});
     let (status, body) = call(&app, "POST", PLACES, year, None).await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["data"]["nights_counted"], 53);
+    assert_eq!(body["data"]["nights_counted"], 365);
     let by_the_sun = body["data"]["places"][0]["nights_in_view"]
         .as_u64()
         .unwrap();
-    assert!((20..53).contains(&by_the_sun), "{by_the_sun}");
-    assert_eq!(body["data"]["places"][1]["nights_in_view"], 53);
+    assert!((140..365).contains(&by_the_sun), "{by_the_sun}");
+    assert_eq!(body["data"]["places"][1]["nights_in_view"], 365);
     // Counting places measures no grid.
     assert_eq!(service.visible_sky.computed(), (31, 0));
     for (places, why) in [

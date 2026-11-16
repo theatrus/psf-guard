@@ -2,8 +2,9 @@
 //! many of them each part of the sky stays in view, in the dark, for at
 //! least a minimum time without a break, and the lines around the sky in
 //! view on every night and on any. A plan's Sky tab draws them. The nights
-//! are tonight and the 30 after ([`Span::Now`]), or one night a week for a
-//! year ([`Span::Year`]).
+//! are tonight and the 30 after ([`Span::Now`]), or every night of a year
+//! ([`Span::Year`]): one night a week measured, and the nights between
+//! worked out from the measured ones ([`fill`]).
 //!
 //! In view is what Visibility and Nights count: the Sun below −12°, and the
 //! place inside the rig's altitude limits and above its horizon. The
@@ -23,8 +24,9 @@
 //! grid each. Measured with nothing kept, on one worker (a server with
 //! two cores), the month takes about 0.9 s and the year about 1.9 s, most
 //! of it the nights' skies; on eight workers 0.2 s and 0.4 s. Kept, each
-//! takes under 0.1 s. A year is twice a month because it is 53 nights,
-//! not 31; nothing in it grows with the catalog or the plans.
+//! takes under 0.1 s. A year is twice a month because it measures 53
+//! nights, not 31; filling in the nights between adds a few hundredths
+//! of a second. Nothing in it grows with the catalog or the plans.
 //!
 //! It still follows the rules for heavy work. It measures in a pool of
 //! workers leased from the interactive budget, so it shares the cores with
@@ -55,6 +57,7 @@ use rayon::prelude::*;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 mod contour;
+mod fill;
 
 /// The grid's spacing in degrees: 180 columns of right ascension from 0h,
 /// 91 rows of declination from pole to pole.
@@ -74,14 +77,15 @@ const MAX_KEPT: usize = 256;
 /// The most nights in a row one request covers: tonight and the 30 after.
 /// The visible sky's own limit, whatever night plans allow.
 pub(super) const MOST_NIGHTS: u32 = 31;
-/// A year is sampled one night a week: 53 nights from the first to the
-/// same night a year on, less a day. Darkness and the sky in view shift by
-/// about half an hour a week, less than the six samples the default
-/// minimum time needs, and a week is inside the eight days a place is
-/// placed across, so each sampled night is measured as exactly as a night
-/// of the month.
+/// A year is measured one night a week: 53 nights from the first to the
+/// same night a year on, less a day, each measured as exactly as a night
+/// of the month. The six nights between each two are worked out from
+/// them ([`fill`]), so a year counts 365 nights. A week is the most the
+/// fill-in spans: in it the sky in view turns seven degrees and the dark
+/// hours change by about half an hour.
 pub(super) const YEAR_EVERY_NIGHTS: u32 = 7;
 pub(super) const YEAR_NIGHTS: u32 = 53;
+const _: () = assert!(YEAR_EVERY_NIGHTS as usize == fill::EVERY);
 
 /// Which nights a request covers.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -90,7 +94,8 @@ pub(super) enum Span {
     /// Nights in a row from the first: [`MOST_NIGHTS`] unless `nights`
     /// asks for fewer.
     Now,
-    /// [`YEAR_NIGHTS`] nights, one every [`YEAR_EVERY_NIGHTS`].
+    /// Every night of a year: [`YEAR_NIGHTS`] nights measured, one every
+    /// [`YEAR_EVERY_NIGHTS`], and the nights between worked out from them.
     Year,
 }
 
@@ -190,9 +195,14 @@ pub(super) struct View {
     span: Span,
     every_nights: u32,
     grid: GridShape,
-    /// For each node of the grid, on how many of `nights` it meets the
-    /// minimum time: one byte a node, row by row from the south pole, in
-    /// base64.
+    /// How many nights are counted. For nights in a row, `nights` itself.
+    /// For a year, every night from the first of `nights` to the last:
+    /// `nights` are the ones measured, one a week, and the six between
+    /// each two are worked out from them ([`fill`]).
+    nights_counted: u32,
+    /// For each node of the grid, on how many of the nights counted it
+    /// meets the minimum time: two bytes a node, low byte first, row by
+    /// row from the south pole, in base64.
     counts: String,
     /// Sky that meets the minimum time on every night.
     every_night: Region,
@@ -429,6 +439,68 @@ fn region(
         lines,
         sky_fraction: (inside / whole * 10_000.0).round() / 10_000.0,
         declinations,
+    })
+}
+
+/// How many nights `measured` nights stand for: themselves, or for a
+/// year every night from the first to the last.
+fn nights_counted(span: Span, measured: usize) -> u32 {
+    match span {
+        Span::Now => measured as u32,
+        Span::Year => fill::nights_counted(measured) as u32,
+    }
+}
+
+/// A place `steps` grid steps of right ascension on from another, at the
+/// same declination: where a night a few nights off has the same sky.
+fn turned(at: IcrsPosition, steps: i32) -> IcrsPosition {
+    let ra = (at.ra_degrees + f64::from(steps) * GRID_DEGREES).rem_euclid(360.0);
+    IcrsPosition {
+        ra_degrees: if ra >= 360.0 { 0.0 } else { ra },
+        dec_degrees: at.dec_degrees,
+    }
+}
+
+/// What a night's grid settles about a place: whether it has its run,
+/// when the four nodes around it agree. Between nodes that differ the
+/// place has to be measured.
+fn settled(grid: &[bool], at: IcrsPosition) -> Option<bool> {
+    let across = at.ra_degrees.rem_euclid(360.0) / GRID_DEGREES;
+    let up = ((at.dec_degrees + 90.0) / GRID_DEGREES).clamp(0.0, (ROWS - 1) as f64);
+    let col = (across.floor() as usize) % COLS;
+    let row = (up.floor() as usize).min(ROWS - 2);
+    let node = |col: usize, row: usize| grid[row * COLS + col % COLS];
+    let first = node(col, row);
+    (first == node(col + 1, row) && first == node(col, row + 1) && first == node(col + 1, row + 1))
+        .then_some(first)
+}
+
+/// On how many nights of a year a place has its run: measured on each
+/// measured night, where it stands and turned, and filled in between as
+/// [`fill`] fills a node.
+fn year_count(runs: &[DarkRuns<'_>], at: IcrsPosition, needed: u32) -> Result<u32, NightError> {
+    fill::count(runs.len(), |night, steps| {
+        runs[night].reaches(turned(at, steps), needed)
+    })
+}
+
+/// Whether a place has its run on every night of a year, or on any, as
+/// [`year_count`] would count it. To place a line between nodes: where a
+/// measured night's grid settles a turned place it is not measured again,
+/// which is the trust the line itself puts in the grid.
+fn year_all_or_any(
+    runs: &[DarkRuns<'_>],
+    grids: &[Grid],
+    at: IcrsPosition,
+    needed: u32,
+    every: bool,
+) -> Result<bool, NightError> {
+    fill::all_or_any(runs.len(), every, |night, steps| {
+        let there = turned(at, steps);
+        match settled(&grids[night], there) {
+            Some(seen) => Ok(seen),
+            None => runs[night].reaches(there, needed),
+        }
     })
 }
 
@@ -681,13 +753,21 @@ fn measure(
         let places = places
             .into_iter()
             .map(|at| {
-                let placed = place_over(&runs, at)?;
-                let mut nights_in_view = 0;
-                for (night, runs) in runs.iter().enumerate() {
-                    if runs.reaches_placed(at, needed, &placed, night)? {
-                        nights_in_view += 1;
+                let nights_in_view = match span {
+                    // A year's place is filled in between its measured
+                    // nights as a node of the picture is.
+                    Span::Year => year_count(&runs, at, needed)?,
+                    Span::Now => {
+                        let placed = place_over(&runs, at)?;
+                        let mut nights = 0;
+                        for (night, runs) in runs.iter().enumerate() {
+                            if runs.reaches_placed(at, needed, &placed, night)? {
+                                nights += 1;
+                            }
+                        }
+                        nights
                     }
-                }
+                };
                 Ok(PlaceNights {
                     ra_degrees: at.ra_degrees,
                     dec_degrees: at.dec_degrees,
@@ -697,7 +777,7 @@ fn measure(
             .collect::<Result<Vec<_>, NightError>>()?;
         return Ok(Answer::Places(PlacesView {
             first_night: dates[0],
-            nights_counted: dates.len() as u32,
+            nights_counted: nights_counted(span, dates.len()),
             places,
         }));
     }
@@ -745,13 +825,22 @@ fn measure(
     }
     let grids: Vec<Grid> = grids.into_iter().flatten().collect();
     let grids_ms = began.elapsed().as_millis() - skies_ms;
-    let every: Vec<bool> = (0..COLS * ROWS)
-        .map(|index| grids.iter().all(|grid| grid[index]))
-        .collect();
     // On how many of the nights each node is in view: the kept grids
-    // added up, with no new astronomy.
-    let counts: Vec<u8> = (0..COLS * ROWS)
-        .map(|index| grids.iter().filter(|grid| grid[index]).count().min(255) as u8)
+    // added up, with no new astronomy. A year's count takes in the nights
+    // between its measured ones, worked out from them.
+    let counted = nights_counted(span, grids.len());
+    let counts: Vec<u16> = match span {
+        Span::Year => {
+            let measured: Vec<&[bool]> = grids.iter().map(|grid| grid.as_slice()).collect();
+            fill::counts(&measured, COLS)
+        }
+        Span::Now => (0..COLS * ROWS)
+            .map(|index| grids.iter().filter(|grid| grid[index]).count() as u16)
+            .collect(),
+    };
+    let every: Vec<bool> = counts
+        .iter()
+        .map(|count| u32::from(*count) == counted)
         .collect();
     // Whether a place between nodes has its run on every night, or on any:
     // placed once for all of them. An error here fails the request, as it
@@ -759,6 +848,9 @@ fn measure(
     let on_nights = |at: IcrsPosition, every: bool| -> Result<bool, Failure> {
         if stop.requested() {
             return Err(Failure::Stopped);
+        }
+        if span == Span::Year {
+            return Ok(year_all_or_any(&runs, &grids, at, needed, every)?);
         }
         let placed = place_over(&runs, at)?;
         for (night, runs) in runs.iter().enumerate() {
@@ -770,9 +862,7 @@ fn measure(
     };
     let every_night = region(&every, &|at| on_nights(at, true))?;
     let any_night = if grids.len() > 1 {
-        let any: Vec<bool> = (0..COLS * ROWS)
-            .map(|index| grids.iter().any(|grid| grid[index]))
-            .collect();
+        let any: Vec<bool> = counts.iter().map(|count| *count > 0).collect();
         Some(region(&any, &|at| on_nights(at, false))?)
     } else {
         None
@@ -832,9 +922,14 @@ fn measure(
             columns: COLS,
             rows: ROWS,
         },
+        nights_counted: counted,
         counts: {
             use base64::Engine;
-            base64::engine::general_purpose::STANDARD.encode(&counts)
+            let bytes: Vec<u8> = counts
+                .iter()
+                .flat_map(|count| count.to_le_bytes())
+                .collect();
+            base64::engine::general_purpose::STANDARD.encode(bytes)
         },
         every_night,
         any_night,
@@ -937,7 +1032,8 @@ async fn answer(
         (Some(Span::Year), None) => (YEAR_NIGHTS, YEAR_EVERY_NIGHTS),
         (Some(Span::Year), Some(_)) => {
             return Err(FeasibilityError::Rejected(
-                "Leave nights out with span year: a year is always 53 nights, one a week.".into(),
+                "Leave nights out with span year: a year always measures 53 nights, one a week."
+                    .into(),
             ));
         }
         (Some(Span::Now), None) => (MOST_NIGHTS, 1),
@@ -1067,6 +1163,9 @@ pub(super) async fn places(
         Answer::Picture(_) => Err(Error::Internal.into()),
     }
 }
+
+#[cfg(test)]
+mod year_check;
 
 #[cfg(test)]
 mod tests {
