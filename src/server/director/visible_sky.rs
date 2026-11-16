@@ -30,7 +30,7 @@ use super::least_recent::LeastRecent;
 use super::*;
 use crate::concurrency::{plan_workers, ComputePool, Priority, Stop};
 use psf_guard_director_core::{
-    night::{DarkRuns, NightDate, NightError, NightSky, MAX_NIGHTS},
+    night::{place_over, DarkRuns, NightDate, NightError, NightSky, MAX_NIGHTS},
     visibility::{AltitudeLimits, Horizon, IcrsPosition, Site},
 };
 use psf_guard_director_meta::{
@@ -228,15 +228,31 @@ fn place(across: f64, up: f64) -> IcrsPosition {
     }
 }
 
-/// One row of a night's grid: whether each node has a run of `needed`
-/// samples. Each pole is one place, measured once.
-fn grid_row(runs: &DarkRuns<'_>, row: usize, needed: u32) -> Result<Vec<bool>, NightError> {
-    if row == 0 || row == ROWS - 1 {
-        return Ok(vec![runs.reaches(node(0, row), needed)?; COLS]);
+/// One row of the grids of the nights `wanted`, among `runs`: for each of
+/// those nights, whether each node has a run of `needed` samples. A node
+/// is placed once for all the nights. Each pole is one place, measured
+/// once.
+fn grid_rows(
+    runs: &[DarkRuns<'_>],
+    wanted: &[usize],
+    row: usize,
+    needed: u32,
+) -> Result<Vec<Vec<bool>>, NightError> {
+    let cols = if row == 0 || row == ROWS - 1 { 1 } else { COLS };
+    let mut rows: Vec<Vec<bool>> = wanted.iter().map(|_| Vec::with_capacity(COLS)).collect();
+    for col in 0..cols {
+        let at = node(col, row);
+        let placed = place_over(runs, at)?;
+        for (row, night) in rows.iter_mut().zip(wanted) {
+            row.push(runs[*night].reaches_placed(at, needed, &placed, *night)?);
+        }
     }
-    (0..COLS)
-        .map(|col| runs.reaches(node(col, row), needed))
-        .collect()
+    if cols == 1 {
+        for row in &mut rows {
+            *row = vec![row[0]; COLS];
+        }
+    }
+    Ok(rows)
 }
 
 /// The lines around the nodes `seen` marks, placed by `in_view`, and the
@@ -371,6 +387,7 @@ fn measure(
     stop: &Stop,
 ) -> Result<View, Failure> {
     let site = inputs.site;
+    let began = std::time::Instant::now();
     let noons: Vec<u64> = dates
         .iter()
         .map(|date| date.span(site.longitude_degrees).start_ms)
@@ -385,6 +402,7 @@ fn measure(
         .iter()
         .map(|sky| DarkRuns::new(sky, horizon, inputs.limits, DARK_BELOW_DEGREES))
         .collect::<Result<_, _>>()?;
+    let skies_ms = began.elapsed().as_millis();
     let horizon_key = match horizon {
         Horizon::FixedMinimum {} => None,
         Horizon::Custom { points } => Some(Arc::new(
@@ -407,31 +425,36 @@ fn measure(
         .iter()
         .map(|key| service.visible_sky.get(key))
         .collect();
-    // Every row of every night not kept, at once across the pool, so one
-    // night spreads over it as well as many. A row not yet begun when the
+    // Every row of the nights not kept, across the pool: a row's nodes
+    // are placed once for all those nights. A row not yet begun when the
     // caller goes is not begun.
     let missing: Vec<usize> = (0..grids.len())
         .filter(|night| grids[*night].is_none())
         .collect();
-    let rows: Vec<(usize, usize)> = missing
-        .iter()
-        .flat_map(|night| (0..ROWS).map(move |row| (*night, row)))
-        .collect();
-    let measured: Vec<Result<Vec<bool>, Failure>> = rows
+    let rows: Vec<usize> = if missing.is_empty() {
+        Vec::new()
+    } else {
+        (0..ROWS).collect()
+    };
+    let measured: Vec<Result<Vec<Vec<bool>>, Failure>> = rows
         .par_iter()
-        .map(|(night, row)| {
+        .map(|row| {
             if stop.requested() {
                 return Err(Failure::Stopped);
             }
-            Ok(grid_row(&runs[*night], *row, needed)?)
+            Ok(grid_rows(&runs, &missing, *row, needed)?)
         })
         .collect();
-    let mut measured = measured.into_iter();
-    for night in missing {
-        let mut grid = Vec::with_capacity(COLS * ROWS);
-        for row in measured.by_ref().take(ROWS) {
-            grid.extend(row?);
+    let mut fresh: Vec<Vec<bool>> = missing
+        .iter()
+        .map(|_| Vec::with_capacity(COLS * ROWS))
+        .collect();
+    for row in measured {
+        for (grid, row) in fresh.iter_mut().zip(row?) {
+            grid.extend(row);
         }
+    }
+    for (night, grid) in missing.into_iter().zip(fresh) {
         let grid = Arc::new(grid);
         service
             .visible_sky
@@ -439,40 +462,43 @@ fn measure(
         grids[night] = Some(grid);
     }
     let grids: Vec<Grid> = grids.into_iter().flatten().collect();
+    let grids_ms = began.elapsed().as_millis() - skies_ms;
     let every: Vec<bool> = (0..COLS * ROWS)
         .map(|index| grids.iter().all(|grid| grid[index]))
         .collect();
-    // Whether a place between nodes has its run on one night; an error
-    // here fails the request, as it does in a grid row.
-    let reaches = |runs: &DarkRuns<'_>, at| -> Result<bool, Failure> {
+    // Whether a place between nodes has its run on every night, or on any:
+    // placed once for all of them. An error here fails the request, as it
+    // does in a grid row.
+    let on_nights = |at: IcrsPosition, every: bool| -> Result<bool, Failure> {
         if stop.requested() {
             return Err(Failure::Stopped);
         }
-        Ok(runs.reaches(at, needed)?)
-    };
-    let every_night = region(&every, &|at| {
-        for runs in &runs {
-            if !reaches(runs, at)? {
-                return Ok(false);
+        let placed = place_over(&runs, at)?;
+        for (night, runs) in runs.iter().enumerate() {
+            if runs.reaches_placed(at, needed, &placed, night)? != every {
+                return Ok(!every);
             }
         }
-        Ok(true)
-    })?;
+        Ok(every)
+    };
+    let every_night = region(&every, &|at| on_nights(at, true))?;
     let any_night = if grids.len() > 1 {
         let any: Vec<bool> = (0..COLS * ROWS)
             .map(|index| grids.iter().any(|grid| grid[index]))
             .collect();
-        Some(region(&any, &|at| {
-            for runs in &runs {
-                if reaches(runs, at)? {
-                    return Ok(true);
-                }
-            }
-            Ok(false)
-        })?)
+        Some(region(&any, &|at| on_nights(at, false))?)
     } else {
         None
     };
+    // Where the time went, for the next person to wonder.
+    tracing::debug!(
+        nights = dates.len(),
+        needed,
+        skies_ms = skies_ms as u64,
+        grids_ms = grids_ms as u64,
+        lines_ms = (began.elapsed().as_millis() - skies_ms - grids_ms) as u64,
+        "measured the visible sky"
+    );
     let limits = inputs.limits;
     Ok(View {
         rig: inputs.rig,
@@ -668,6 +694,183 @@ mod tests {
             region(&cap, &|_| Err(Failure::Stopped)).err(),
             Some(Failure::Stopped)
         );
+    }
+
+    /// The grids and lines of `nights` from `first_noon` at a site, by the
+    /// shortcut or by the plain rule: the same steps the endpoint takes.
+    fn regions(
+        site: Site,
+        first_noon: u64,
+        nights: u64,
+        horizon: &Horizon,
+        minimum_degrees: f64,
+        needed: u32,
+        plain: bool,
+    ) -> (Vec<Vec<bool>>, Region, Region) {
+        let limits = AltitudeLimits {
+            rig_minimum_degrees: minimum_degrees,
+            project_minimum_degrees: -90.0,
+            horizon_offset_degrees: 0.0,
+            rig_maximum_degrees: 90.0,
+            project_maximum_degrees: 90.0,
+        };
+        let skies: Vec<NightSky> = (0..nights)
+            .map(|night| NightSky::new(site, first_noon + night * 86_400_000, STEP_MS).unwrap())
+            .collect();
+        let runs: Vec<DarkRuns<'_>> = skies
+            .iter()
+            .map(|sky| {
+                if plain {
+                    DarkRuns::plain(sky, horizon, limits, DARK_BELOW_DEGREES).unwrap()
+                } else {
+                    DarkRuns::new(sky, horizon, limits, DARK_BELOW_DEGREES).unwrap()
+                }
+            })
+            .collect();
+        let wanted: Vec<usize> = (0..runs.len()).collect();
+        let rows: Vec<Vec<Vec<bool>>> = (0..ROWS)
+            .into_par_iter()
+            .map(|row| grid_rows(&runs, &wanted, row, needed).unwrap())
+            .collect();
+        let mut grids: Vec<Vec<bool>> = wanted.iter().map(|_| Vec::new()).collect();
+        for row in rows {
+            for (grid, row) in grids.iter_mut().zip(row) {
+                grid.extend(row);
+            }
+        }
+        let on_nights = |at: IcrsPosition, every: bool| -> Result<bool, Failure> {
+            let placed = place_over(&runs, at)?;
+            for (night, runs) in runs.iter().enumerate() {
+                if runs.reaches_placed(at, needed, &placed, night)? != every {
+                    return Ok(!every);
+                }
+            }
+            Ok(every)
+        };
+        let every: Vec<bool> = (0..COLS * ROWS)
+            .map(|index| grids.iter().all(|grid| grid[index]))
+            .collect();
+        let any: Vec<bool> = (0..COLS * ROWS)
+            .map(|index| grids.iter().any(|grid| grid[index]))
+            .collect();
+        let every = region(&every, &|at| on_nights(at, true)).unwrap();
+        let any = region(&any, &|at| on_nights(at, false)).unwrap();
+        (grids, every, any)
+    }
+
+    #[test]
+    fn the_shortcut_draws_the_lines_the_plain_rule_draws() {
+        let point = |azimuth_degrees: f64, altitude_degrees: f64| {
+            psf_guard_director_core::visibility::HorizonPoint {
+                azimuth_degrees,
+                altitude_degrees,
+            }
+        };
+        let wall = Horizon::Custom {
+            points: vec![
+                point(0.0, 10.0),
+                point(119.0, 10.0),
+                point(120.0, 65.0),
+                point(150.0, 65.0),
+                point(151.0, 10.0),
+                point(360.0, 10.0),
+            ],
+        };
+        // A mast one degree wide, due south.
+        let narrow = Horizon::Custom {
+            points: vec![
+                point(0.0, 5.0),
+                point(179.5, 5.0),
+                point(180.0, 70.0),
+                point(181.0, 70.0),
+                point(181.5, 5.0),
+                point(360.0, 5.0),
+            ],
+        };
+        let flat = Horizon::FixedMinimum {};
+        let site = |latitude_degrees: f64, longitude_degrees: f64| Site {
+            latitude_degrees,
+            longitude_degrees,
+            elevation_meters: 100.0,
+        };
+        // Local noon on the first night, near enough: the instant's night.
+        let noon = |date: &str, longitude: f64| {
+            date.parse::<NightDate>().unwrap().span(longitude).start_ms
+        };
+        let cases: [(&str, Site, &str, u64, &Horizon, f64, u32); 6] = [
+            (
+                "the scratch site and its wall",
+                site(40.0, -105.3),
+                "2026-11-15",
+                4,
+                &wall,
+                20.0,
+                6,
+            ),
+            (
+                "the same at one sample",
+                site(40.0, -105.3),
+                "2026-11-15",
+                3,
+                &wall,
+                20.0,
+                1,
+            ),
+            (
+                "52° north in June, a short dark",
+                site(52.0, 0.0),
+                "2027-06-05",
+                4,
+                &flat,
+                25.0,
+                6,
+            ),
+            (
+                "Tromsø as the dark returns",
+                site(69.6, 18.9),
+                "2027-09-10",
+                5,
+                &flat,
+                20.0,
+                2,
+            ),
+            (
+                "Cape Town and the wall",
+                site(-33.9, 18.5),
+                "2027-01-10",
+                3,
+                &wall,
+                15.0,
+                12,
+            ),
+            (
+                "a mast one degree wide",
+                site(40.0, -105.3),
+                "2027-03-01",
+                3,
+                &narrow,
+                0.0,
+                3,
+            ),
+        ];
+        for (name, site, date, nights, horizon, minimum, needed) in cases {
+            let first = noon(date, site.longitude_degrees);
+            let (grids, every, any) = regions(site, first, nights, horizon, minimum, needed, false);
+            let (plain_grids, plain_every, plain_any) =
+                regions(site, first, nights, horizon, minimum, needed, true);
+            // Node for node and point for point: no difference at all.
+            assert_eq!(grids, plain_grids, "{name}: grids");
+            assert_eq!(every.lines, plain_every.lines, "{name}: every night");
+            assert_eq!(any.lines, plain_any.lines, "{name}: any night");
+            assert_eq!(every.sky_fraction, plain_every.sky_fraction, "{name}");
+            assert_eq!(any.sky_fraction, plain_any.sky_fraction, "{name}");
+            // And there was something to compare.
+            assert!(
+                !any.lines.is_empty() && any.sky_fraction > 0.05,
+                "{name}: {}",
+                any.sky_fraction
+            );
+        }
     }
 
     #[test]

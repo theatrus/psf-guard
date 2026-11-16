@@ -175,9 +175,8 @@ weeks again.
 
 To draw a night, the server measures the whole sky for that night and
 minimum time, then keeps the result, so an overlapping range is quicker
-the next time. A night takes about a tenth of a second. A month takes from
-half a second to a few seconds, longest on a server with few cores and
-with a minimum time of 10 minutes or less. The line for **Tonight** is
+the next time. A night takes well under a tenth of a second, and a month
+up to about a second on a server with two cores. The line for **Tonight** is
 drawn again when the next night begins at the rig's site, and after you
 save a setting. The request is `POST /sky/visible-region`, described with
 the other Director endpoints in [DIRECTOR.md](DIRECTOR.md).
