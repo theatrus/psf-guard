@@ -926,6 +926,13 @@ export const apiClient = {
     return data.data;
   },
 
+  getDirectorVisibleSky: async (request: import('./directorTypes').DirectorVisibleSkyRequest): Promise<import('./directorTypes').DirectorVisibleSky> => {
+    const api = await getApi();
+    const { data } = await api.post<ApiResponse<import('./directorTypes').DirectorVisibleSky>>('/director/v1/sky/visible-region', request);
+    if (!data.data) throw new Error(data.error || 'Failed to work out the visible sky');
+    return data.data;
+  },
+
   getNightPlans: async (request: NightPlansRequest): Promise<NightPlans> => {
     const api = await getApi();
     const { data } = await api.post<ApiResponse<NightPlans>>('/director/v1/night-plans', request);

@@ -945,6 +945,44 @@ export interface DirectorRigProjection {
   /** What the rig's night plans noted, such as goals left out of its program. */
   notes: string[];
 }
+/** What `/sky/visible-region` is asked: a rig, and optionally a minimum
+ *  time, a first night (`YYYY-MM-DD`, the evening's date at the rig's site)
+ *  and a number of nights. Left out: the rig's minimum time, tonight, one. */
+export interface DirectorVisibleSkyRequest {
+  rig: string;
+  minimum_minutes?: number;
+  first_night?: string;
+  nights?: number;
+}
+/** Lines around the sky that meets the minimum time, and its share of the
+ *  whole sky. Each line is closed, in ICRS degrees, and runs with that sky
+ *  on its left, seen with north up and right ascension rising to the right. */
+export interface DirectorVisibleSkyRegion {
+  lines: Array<Array<[number, number]>>;
+  sky_fraction: number;
+}
+/** The sky a rig has in view, in the dark, for at least a minimum time
+ *  without a break, over one night or a range. */
+export interface DirectorVisibleSky {
+  rig: DirectorIdentity;
+  planning_site: DirectorIdentity | null;
+  site: { latitude_degrees: number; longitude_degrees: number; elevation_meters: number };
+  location_from: DirectorSiteOrigin;
+  /** `custom`: a horizon curve with the altitude limits. `flat`: the
+   *  minimum altitude all round. */
+  horizon: 'custom' | 'flat';
+  horizon_from: DirectorSiteOrigin;
+  limits: { minimum_altitude_degrees: number; maximum_altitude_degrees: number; horizon_offset_degrees: number };
+  /** The minimum time used, and the rig's own. */
+  minimum_minutes: number;
+  rig_minimum_minutes: number;
+  step_minutes: number;
+  dark_below_degrees: number;
+  nights: Array<{ date: string; dusk_ms: number | null; dawn_ms: number | null }>;
+  every_night: DirectorVisibleSkyRegion;
+  /** Null for one night, when it is the same sky as `every_night`. */
+  any_night: DirectorVisibleSkyRegion | null;
+}
 export interface DirectorFeasibility {
   center: DirectorSkyPosition;
   target_name: string;

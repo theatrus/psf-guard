@@ -21,13 +21,15 @@ import {
   type SkyCut,
 } from './skyModel';
 import { recallSkyView, rememberSkyView } from './skyViewMemory';
-import { useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { apiClient } from '../../api/client';
 import { useUrlParams } from '../../hooks/useUrlState';
 import { usePlans } from '../header/useCurrentPlan';
 import { retryWhenBusy } from '../director/retry';
 import { placeRigs, type PlacedRig } from './liveRigs';
 import SkyLive from './SkyLive';
+import SkyVisible, { type VisibleSkyRig } from './SkyVisible';
+import { NO_VISIBLE_SKY, visibleSkyLegend, visibleSkyLines, visibleSkyRequest, type VisibleSkyChoice } from './visibleSky';
 import './SkyPage.css';
 import { useDirectorClock } from '../../hooks/useDirectorClock';
 
@@ -60,6 +62,31 @@ export default function SkyPage() {
   const [playing, setPlaying] = useState(false);
   const [showBackdrop, setShowBackdrop] = useState(remembered.showBackdrop ?? true);
   const [showStacks, setShowStacks] = useState(remembered.showStacks ?? true);
+  // Visible sky: lines around the sky one rig has in view for long enough.
+  const [visibleChoice, setVisibleChoice] = useState<VisibleSkyChoice>({ ...NO_VISIBLE_SKY, ...remembered.visibleSky });
+  const visibleRigs: VisibleSkyRig[] = useMemo(
+    () => (statuses.data ?? []).map((view) => ({ id: view.rig.id, name: view.catalog_name ?? view.rig.name, slug: view.catalog_slug })),
+    [statuses.data]
+  );
+  // The rig picked, or the first one until a rig is picked.
+  const visibleSky: VisibleSkyChoice = useMemo(() => {
+    const rigId = visibleRigs.some((rig) => rig.id === visibleChoice.rigId) ? visibleChoice.rigId : visibleRigs[0]?.id ?? null;
+    return { ...visibleChoice, on: plans.enabled && visibleChoice.on, rigId };
+  }, [visibleChoice, visibleRigs, plans.enabled]);
+  const visibleRequest = useMemo(() => visibleSkyRequest(visibleSky), [visibleSky]);
+  const visibleQuery = useQuery({
+    queryKey: ['directorVisibleSky', visibleRequest],
+    queryFn: () => apiClient.getDirectorVisibleSky(visibleRequest!),
+    enabled: visibleRequest !== null,
+    retry: retryWhenBusy,
+    retryDelay: 1200,
+    staleTime: 5 * 60_000,
+    placeholderData: keepPreviousData,
+  });
+  // Lines drawn only for the rig they were worked out for.
+  const visibleView = visibleRequest && !visibleQuery.isError && visibleQuery.data?.rig.id === visibleRequest.rig ? visibleQuery.data : undefined;
+  const visibleLines = useMemo(() => (visibleView ? visibleSkyLines(visibleView) : null), [visibleView]);
+  const visibleRigName = visibleRigs.find((rig) => rig.id === visibleSky.rigId)?.name ?? '';
   const initialZoom = remembered.zoom;
   const initialCenter = useMemo(
     () =>
@@ -80,8 +107,9 @@ export default function SkyPage() {
       hiddenFilters: [...hiddenFilters],
       fromNight,
       asOfNight,
+      visibleSky: visibleChoice,
     });
-  }, [frame, mode, acceptedOnly, showBackdrop, showStacks, hiddenRigs, hiddenFilters, fromNight, asOfNight]);
+  }, [frame, mode, acceptedOnly, showBackdrop, showStacks, hiddenRigs, hiddenFilters, fromNight, asOfNight, visibleChoice]);
 
   const rememberView = useCallback((zoom: number, center: { lon: number; lat: number }) => {
     rememberSkyView({ zoom, centerLon: center.lon, centerLat: center.lat });
@@ -189,7 +217,8 @@ export default function SkyPage() {
       context.fillStyle = '#05070f';
       context.fillRect(0, 0, canvas.width, canvas.height);
       context.drawImage(image, 0, POSTER_HEADER * scale, MAP_WIDTH * scale, MAP_HEIGHT * scale);
-      paintPosterText(context, scale, stats, merged.rigs.length, asOfNight);
+      const legend = visibleView ? `Visible sky. ${visibleSkyLegend(visibleView, visibleRigName, null)}` : null;
+      paintPosterText(context, scale, stats, merged.rigs.length, asOfNight, legend);
       const link = document.createElement('a');
       link.download = `psf-guard-sky-${asOfNight ?? 'all'}.png`;
       link.href = canvas.toDataURL('image/png');
@@ -363,6 +392,16 @@ export default function SkyPage() {
         {plans.enabled && (
           <button
             type="button"
+            className="sky-chip sky-visible-toggle"
+            aria-pressed={visibleSky.on}
+            onClick={() => setVisibleChoice((current) => ({ ...current, on: !current.on }))}
+          >
+            Visible sky
+          </button>
+        )}
+        {plans.enabled && (
+          <button
+            type="button"
             className="sky-chip sky-live-toggle"
             aria-pressed={live}
             onClick={() => updateParams({ live: live ? null : '1' })}
@@ -377,6 +416,18 @@ export default function SkyPage() {
         )}
       </div>
 
+      {visibleSky.on && (
+        <SkyVisible
+          rigs={visibleRigs}
+          choice={visibleSky}
+          onChange={(next) => setVisibleChoice({ ...next, on: true })}
+          view={visibleView}
+          loading={visibleQuery.isFetching}
+          error={visibleRequest ? visibleQuery.error : null}
+          nowMs={now}
+        />
+      )}
+
       <div className={`sky-body${live ? ' has-live' : ''}`}>
         <SkyMap
           targets={shown}
@@ -390,6 +441,7 @@ export default function SkyPage() {
           onOpen={open}
           rigs={live ? placed : []}
           focus={focus}
+          visible={visibleLines}
         />
         {live && <SkyLive rigs={placed} onFocus={focusOn} />}
       </div>
@@ -424,7 +476,8 @@ function paintPosterText(
   scale: number,
   stats: SkyStats,
   rigs: number,
-  asOfNight: string | null
+  asOfNight: string | null,
+  visibleLegend: string | null
 ) {
   const px = (value: number) => value * scale;
   context.textBaseline = 'alphabetic';
@@ -459,6 +512,8 @@ function paintPosterText(
   context.textAlign = 'right';
   context.fillText(`PSF Guard · ${new Date().toISOString().slice(0, 10)}`, px(MAP_WIDTH - 40), px(POSTER_HEADER + MAP_HEIGHT + 26));
   context.textAlign = 'left';
+  // What the Visible sky lines were drawn for, when they are on the map.
+  if (visibleLegend) context.fillText(visibleLegend, px(40), px(POSTER_HEADER + MAP_HEIGHT + 26));
 }
 
 /**
@@ -481,6 +536,7 @@ function inlineMapStyles(svg: SVGSVGElement): SVGSVGElement {
     }
   });
   // A picture of the coverage, not of tonight: live rigs stay out of it.
+  // The Visible sky lines stay, and the footer shows what they were drawn for.
   // Removed after the styles are copied, so the two node lists line up.
   clone.querySelectorAll('.sky-rigs').forEach((node) => node.remove());
   clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
