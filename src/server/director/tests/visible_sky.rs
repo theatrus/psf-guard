@@ -38,6 +38,28 @@ async fn rig_profile(state: &Arc<AppState>, rig: Uuid, placed: bool) {
         .unwrap();
 }
 
+/// Give a rig that has its limits a Los Angeles location too.
+async fn rig_profile_location(state: &Arc<AppState>, rig: Uuid) {
+    let service = state.director.clone().unwrap();
+    service
+        .run(move |store| {
+            let mut profile = store.rig_profile(rig)?.unwrap();
+            let revision = profile.revision;
+            profile.site = Some(Reported {
+                value: Site {
+                    latitude_degrees: 34.2,
+                    longitude_degrees: -118.3,
+                    elevation_meters: 400.0,
+                },
+                source: Source::Manual {},
+                reported_at_ms: 0,
+            });
+            store.save_rig_profile(&profile, revision)
+        })
+        .await
+        .unwrap();
+}
+
 fn lines(region: &Value) -> Vec<Vec<(f64, f64)>> {
     region["lines"]
         .as_array()
@@ -81,8 +103,94 @@ async fn a_rig_without_a_location_is_told_what_to_set() {
         let (status, refused) = call(&app, "POST", PATH, body, None).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
     }
+    // A date that is not a night, or a range past the last night the
+    // astronomy times, is refused in a sentence the page can show.
+    rig_profile_location(&state, rig).await;
+    for (first, nights, reason) in [
+        (
+            "1970-01-01",
+            1,
+            "first_night must be a date from 1970-01-02 to 2098-12-31, written YYYY-MM-DD.",
+        ),
+        (
+            "2099-01-01",
+            1,
+            "first_night must be a date from 1970-01-02 to 2098-12-31, written YYYY-MM-DD.",
+        ),
+        (
+            "24 September",
+            1,
+            "first_night must be a date from 1970-01-02 to 2098-12-31, written YYYY-MM-DD.",
+        ),
+        (
+            "2098-12-31",
+            2,
+            "The last night must be 2098-12-31 or earlier.",
+        ),
+    ] {
+        let body = json!({"rig": rig, "first_night": first, "nights": nights});
+        let (status, refused) = call(&app, "POST", PATH, body, None).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{first}: {refused}");
+        assert_eq!(refused["error"], reason, "{first}");
+    }
     // Nothing was measured for any of them.
     assert_eq!(state.director.as_ref().unwrap().visible_sky.computed(), 0);
+    // Both ends of the range are nights.
+    for first in ["1970-01-02", "2098-12-31"] {
+        let body = json!({"rig": rig, "first_night": first});
+        let (status, view) = call(&app, "POST", PATH, body, None).await;
+        assert_eq!(status, StatusCode::OK, "{first}: {view}");
+        assert_eq!(view["data"]["nights"][0]["date"], first);
+    }
+}
+
+#[tokio::test]
+async fn requests_for_the_same_nights_measure_them_once_and_a_dropped_one_measures_nothing() {
+    use super::super::visible_sky::{compute, nights_asked, read_inputs};
+    use crate::concurrency::Stop;
+    let (_dir, state, app, _instance, _catalog, rig) = fixture().await;
+    rig_profile(&state, rig, true).await;
+    let service = state.director.clone().unwrap();
+    // A request whose caller has gone by its turn measures nothing.
+    let inputs = service
+        .clone()
+        .with_reader(move |store| read_inputs(store, rig))
+        .await
+        .ok()
+        .unwrap();
+    let dates = nights_asked(Some("2026-09-24"), 2, -118.3, 0).ok().unwrap();
+    let gone = Stop::new();
+    gone.request();
+    assert!(compute(&state, &service, inputs, dates.clone(), 30, &gone).is_err());
+    assert_eq!(service.visible_sky.computed(), 0);
+    // Three requests at once for the same two nights: each night is
+    // measured once, and all three get the same lines.
+    let body = json!({"rig": rig, "first_night": "2026-09-24", "nights": 2});
+    let (a, b, c) = tokio::join!(
+        call(&app, "POST", PATH, body.clone(), None),
+        call(&app, "POST", PATH, body.clone(), None),
+        call(&app, "POST", PATH, body.clone(), None),
+    );
+    for (status, view) in [&a, &b, &c] {
+        assert_eq!(*status, StatusCode::OK, "{view}");
+    }
+    assert_eq!(a.1["data"]["every_night"], b.1["data"]["every_night"]);
+    assert_eq!(a.1["data"]["any_night"], c.1["data"]["any_night"]);
+    assert_eq!(service.visible_sky.computed(), 2);
+    // The same inputs, not stopped, read the kept grids.
+    let inputs = service
+        .clone()
+        .with_reader(move |store| read_inputs(store, rig))
+        .await
+        .ok()
+        .unwrap();
+    assert!(compute(&state, &service, inputs, dates, 30, &Stop::new()).is_ok());
+    assert_eq!(service.visible_sky.computed(), 2);
+    // The workers it leased are back.
+    assert_eq!(
+        state.leased_workers(crate::concurrency::Priority::Interactive),
+        0
+    );
 }
 
 #[tokio::test]

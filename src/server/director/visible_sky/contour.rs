@@ -25,18 +25,18 @@ enum Edge {
 
 /// The lines between visible and hidden nodes of a `cols` by `rows` grid,
 /// row by row from the lowest. `crossing` gives how far along the way from
-/// a visible node to its hidden neighbour the boundary falls, from 0 to 1.
-/// Points are in grid units: column, which may be a fraction and stays
-/// under `cols`, then row. Every line closes, its first point repeated as
-/// its last.
-pub(super) fn contour(
+/// a visible node to its hidden neighbour the boundary falls, from 0 to 1;
+/// when it fails for any edge, so does the whole. Points are in grid units:
+/// column, which may be a fraction and stays under `cols`, then row. Every
+/// line closes, its first point repeated as its last.
+pub(super) fn contour<E: Send>(
     visible: &[bool],
     cols: usize,
     rows: usize,
-    crossing: &(dyn Fn(Node, Node) -> f64 + Sync),
-) -> Vec<Vec<(f64, f64)>> {
+    crossing: &(dyn Fn(Node, Node) -> Result<f64, E> + Sync),
+) -> Result<Vec<Vec<(f64, f64)>>, E> {
     if cols == 0 || rows < 2 || visible.len() != cols * rows {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let at = |(col, row): Node| visible[row * cols + col % cols];
     // Each boundary piece inside a cell, from the edge it enters by to the
@@ -99,7 +99,7 @@ pub(super) fn contour(
                 Edge::Up(col, row) => ((col, row), (col, row + 1)),
             };
             let (from, to) = if at(a) { (a, b) } else { (b, a) };
-            let share = crossing(from, to).clamp(0.0, 1.0);
+            let share = crossing(from, to)?.clamp(0.0, 1.0);
             let across = from.0 as f64 + (to.0 as f64 - from.0 as f64) * share;
             let up = from.1 as f64 + (to.1 as f64 - from.1 as f64) * share;
             // The far side of the last column is the first column.
@@ -108,9 +108,9 @@ pub(super) fn contour(
             } else {
                 across
             };
-            (*edge, (across, up))
+            Ok((*edge, (across, up)))
         })
-        .collect();
+        .collect::<Result<_, E>>()?;
     let mut lines = Vec::new();
     let mut walked: BTreeSet<Edge> = BTreeSet::new();
     for start in &crossed {
@@ -141,7 +141,7 @@ pub(super) fn contour(
             lines.push(line);
         }
     }
-    lines
+    Ok(lines)
 }
 
 #[cfg(test)]
@@ -158,8 +158,18 @@ mod tests {
             .collect()
     }
 
-    fn halfway(_: Node, _: Node) -> f64 {
-        0.5
+    fn halfway(_: Node, _: Node) -> Result<f64, ()> {
+        Ok(0.5)
+    }
+
+    /// The lines, from a crossing that cannot fail.
+    fn contour(
+        visible: &[bool],
+        cols: usize,
+        rows: usize,
+        crossing: &(dyn Fn(Node, Node) -> Result<f64, ()> + Sync),
+    ) -> Vec<Vec<(f64, f64)>> {
+        super::contour(visible, cols, rows, crossing).unwrap()
     }
 
     /// Twice the area a closed line encloses, positive when it runs
@@ -211,7 +221,7 @@ mod tests {
     #[test]
     fn a_polar_cap_is_one_ring_and_all_or_nothing_is_no_line() {
         let cap = grid(|_, row| row >= 14);
-        let lines = contour(&cap, COLS, ROWS, &|_, _| 0.25);
+        let lines = contour(&cap, COLS, ROWS, &|_, _| Ok(0.25));
         assert_eq!(lines.len(), 1);
         let ring = &lines[0];
         assert!(closed(ring));
@@ -249,7 +259,7 @@ mod tests {
         let asked = std::sync::Mutex::new(Vec::new());
         let lines = contour(&visible, COLS, ROWS, &|from, to| {
             asked.lock().unwrap().push((from, to));
-            0.1
+            Ok(0.1)
         });
         let asked = asked.into_inner().unwrap();
         assert!(asked
@@ -259,5 +269,21 @@ mod tests {
         let across = lines[0].iter().map(|p| p.0);
         assert!((across.clone().fold(f64::MAX, f64::min) - 9.9).abs() < 1e-9);
         assert!((across.fold(f64::MIN, f64::max) - 14.1).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_crossing_that_fails_fails_the_lines() {
+        let visible = grid(|col, row| (10..=14).contains(&col) && (5..=8).contains(&row));
+        let failed = super::contour(&visible, COLS, ROWS, &|from, _| {
+            if from == (10, 5) {
+                Err("lost")
+            } else {
+                Ok(0.5)
+            }
+        });
+        assert_eq!(failed, Err("lost"));
+        // Nothing to place, nothing to fail.
+        let nothing = super::contour(&grid(|_, _| true), COLS, ROWS, &|_, _| Err("lost"));
+        assert_eq!(nothing, Ok(vec![]));
     }
 }

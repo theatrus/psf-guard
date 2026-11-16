@@ -14,9 +14,21 @@
 //! night and the minimum time, so it is kept ([`Grids`]) and another range
 //! over the same nights reads it again. The lines are then placed between
 //! nodes by measuring there, to a small fraction of a cell.
+//!
+//! A request is answered in place: it is about a second of work at most,
+//! too short for a row in the job line. It still follows the rules for
+//! heavy work. It measures in a pool of workers leased from the
+//! interactive budget, so it shares the cores with a stack someone
+//! started, and it holds the interactive guard, so background work steps
+//! aside. Requests measure one at a time ([`Grids::turn`]): a second
+//! request for the same nights waits and then finds the grids kept, and
+//! the requests left behind by someone still typing cannot pile up on the
+//! cores. A request whose caller has gone measures nothing more.
 
-use super::feasibility::{combined_limits, FeasibilityError};
+use super::feasibility::{combined_limits, FeasibilityError, DARK_BELOW_DEGREES, STEP_MS};
+use super::least_recent::LeastRecent;
 use super::*;
+use crate::concurrency::{plan_workers, ComputePool, Priority, Stop};
 use psf_guard_director_core::{
     night::{DarkRuns, NightDate, NightError, NightSky, MAX_NIGHTS},
     visibility::{AltitudeLimits, Horizon, IcrsPosition, Site},
@@ -26,15 +38,10 @@ use psf_guard_director_meta::{
     site_profile::{Origin, RigSite},
 };
 use rayon::prelude::*;
-use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 mod contour;
 
-/// The step and the darkness feasibility and night plans count with, so the
-/// line agrees with their hours.
-const STEP_MS: u64 = 300_000;
-const DARK_BELOW_DEGREES: f64 = -12.0;
 /// The grid's spacing in degrees: 180 columns of right ascension from 0h,
 /// 91 rows of declination from pole to pole.
 const GRID_DEGREES: f64 = 2.0;
@@ -57,10 +64,11 @@ pub(super) struct Request {
     /// rig's Target Scheduler minimum time.
     #[serde(default)]
     minimum_minutes: Option<u32>,
-    /// The first night, the evening's date at the rig's site; without it,
-    /// the night under way there now.
+    /// The first night, the evening's date at the rig's site, as
+    /// `YYYY-MM-DD`; without it, the night under way there now. Read as
+    /// text so a date that is not a night is refused with a sentence.
     #[serde(default)]
-    first_night: Option<NightDate>,
+    first_night: Option<String>,
     /// How many nights from the first; 1 without it.
     #[serde(default)]
     nights: Option<u32>,
@@ -153,47 +161,24 @@ type Grid = Arc<Vec<bool>>;
 /// first.
 #[derive(Default)]
 pub(super) struct Grids {
-    kept: Mutex<Kept>,
+    kept: Mutex<LeastRecent<Key, Grid>>,
+    /// Held while one request measures, so they go one at a time.
+    turn: Mutex<()>,
     /// How many grids were computed.
     #[cfg(test)]
     computed: std::sync::atomic::AtomicUsize,
 }
 
-#[derive(Default)]
-struct Kept {
-    /// Each grid with the count of reads when it was last read.
-    grids: HashMap<Key, (Grid, u64)>,
-    /// Counts reads, to find the least recently read.
-    reads: u64,
-}
-
 impl Grids {
     fn get(&self, key: &Key) -> Option<Grid> {
-        let mut kept = self.kept.lock().unwrap_or_else(|e| e.into_inner());
-        kept.reads += 1;
-        let reads = kept.reads;
-        kept.grids.get_mut(key).map(|(grid, read)| {
-            *read = reads;
-            Arc::clone(grid)
-        })
+        self.kept.lock().unwrap_or_else(|e| e.into_inner()).get(key)
     }
 
     fn keep(&self, key: Key, grid: Grid) {
-        let mut kept = self.kept.lock().unwrap_or_else(|e| e.into_inner());
-        kept.reads += 1;
-        let reads = kept.reads;
-        kept.grids.insert(key, (grid, reads));
-        while kept.grids.len() > MAX_KEPT {
-            let Some(oldest) = kept
-                .grids
-                .iter()
-                .min_by_key(|(_, (_, read))| *read)
-                .map(|(key, _)| key.clone())
-            else {
-                break;
-            };
-            kept.grids.remove(&oldest);
-        }
+        self.kept
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .keep(key, grid, MAX_KEPT);
         #[cfg(test)]
         self.computed
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -205,8 +190,23 @@ impl Grids {
     }
 }
 
+/// Why the sky was not measured.
+#[derive(Debug, PartialEq)]
+enum Failure {
+    /// The astronomy refused a night or a place.
+    Night(NightError),
+    /// The request's caller has gone.
+    Stopped,
+}
+
+impl From<NightError> for Failure {
+    fn from(error: NightError) -> Self {
+        Self::Night(error)
+    }
+}
+
 /// What the sky is judged with, read from the store.
-struct Inputs {
+pub(super) struct Inputs {
     rig: NamedIdentity,
     placed: RigSite,
     site: Site,
@@ -240,24 +240,28 @@ fn grid_row(runs: &DarkRuns<'_>, row: usize, needed: u32) -> Result<Vec<bool>, N
 }
 
 /// The lines around the nodes `seen` marks, placed by `in_view`, and the
-/// share of the sky inside them.
-fn region(seen: &[bool], in_view: &(dyn Fn(IcrsPosition) -> bool + Sync)) -> Region {
-    let crossing = |from: contour::Node, to: contour::Node| {
+/// share of the sky inside them. A place `in_view` cannot judge fails the
+/// region, as it fails a grid row: it is never taken for out of view.
+fn region(
+    seen: &[bool],
+    in_view: &(dyn Fn(IcrsPosition) -> Result<bool, Failure> + Sync),
+) -> Result<Region, Failure> {
+    let crossing = |from: contour::Node, to: contour::Node| -> Result<f64, Failure> {
         // `from` is in view and `to` is not: halve towards the change.
         let (mut near, mut far) = (0.0_f64, 1.0_f64);
         for _ in 0..HALVINGS {
             let middle = (near + far) / 2.0;
             let across = from.0 as f64 + (to.0 as f64 - from.0 as f64) * middle;
             let up = from.1 as f64 + (to.1 as f64 - from.1 as f64) * middle;
-            if in_view(place(across, up)) {
+            if in_view(place(across, up))? {
                 near = middle;
             } else {
                 far = middle;
             }
         }
-        (near + far) / 2.0
+        Ok((near + far) / 2.0)
     };
-    let lines = contour::contour(seen, COLS, ROWS, &crossing)
+    let lines = contour::contour(seen, COLS, ROWS, &crossing)?
         .into_iter()
         .map(|line| {
             line.into_iter()
@@ -283,10 +287,10 @@ fn region(seen: &[bool], in_view: &(dyn Fn(IcrsPosition) -> bool + Sync)) -> Reg
         inside += weight * count as f64;
         whole += weight * COLS as f64;
     }
-    Region {
+    Ok(Region {
         lines,
         sky_fraction: (inside / whole * 10_000.0).round() / 10_000.0,
-    }
+    })
 }
 
 fn key(inputs: &Inputs, horizon: &Option<Arc<Vec<u64>>>, noon_ms: u64, needed: u32) -> Key {
@@ -313,19 +317,60 @@ fn key(inputs: &Inputs, horizon: &Option<Arc<Vec<u64>>>, noon_ms: u64, needed: u
     }
 }
 
-/// The view for `inputs` over `dates`. Arithmetic only: the skies and the
-/// grids are kept or computed across the shared pool.
-fn compute(
+/// The view for `inputs` over `dates`, measured in this request's turn in
+/// a pool of leased workers. `stop` is asked once the caller has gone.
+pub(super) fn compute(
+    state: &AppState,
     service: &Service,
     inputs: Inputs,
     dates: Vec<NightDate>,
     minimum_minutes: u32,
+    stop: &Stop,
 ) -> Result<View, FeasibilityError> {
-    let site = inputs.site;
-    let failed = |error: NightError| {
-        tracing::warn!(?error, "visible sky could not be computed");
+    let failed = |failure: Failure| {
+        match failure {
+            Failure::Night(error) => {
+                tracing::warn!(?error, "visible sky could not be computed")
+            }
+            Failure::Stopped => tracing::debug!("visible sky left: its request has gone"),
+        }
         FeasibilityError::Api(Error::Internal)
     };
+    let _turn = service
+        .visible_sky
+        .turn
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    // Requests left behind while this one waited end here.
+    if stop.requested() {
+        return Err(failed(Failure::Stopped));
+    }
+    let _interactive = state.begin_named_interactive_job("the visible sky");
+    let budget = plan_workers(None, &state.worker_policy(), Priority::Interactive, None);
+    let lease = state.lease_workers(Priority::Interactive, budget.workers);
+    let pool = ComputePool::take("visible-sky", lease.workers).map_err(|error| {
+        tracing::error!(%error, "no pool for the visible sky");
+        FeasibilityError::Api(Error::Internal)
+    })?;
+    tracing::debug!(
+        workers = lease.workers,
+        nights = dates.len(),
+        "measuring the visible sky"
+    );
+    // The skies, the grids and the crossings all run inside the pool.
+    pool.install(|| measure(service, inputs, dates, minimum_minutes, stop))
+        .map_err(failed)
+}
+
+/// [`compute`]'s arithmetic, on the pool of the calling thread.
+fn measure(
+    service: &Service,
+    inputs: Inputs,
+    dates: Vec<NightDate>,
+    minimum_minutes: u32,
+    stop: &Stop,
+) -> Result<View, Failure> {
+    let site = inputs.site;
     let noons: Vec<u64> = dates
         .iter()
         .map(|date| date.span(site.longitude_degrees).start_ms)
@@ -334,14 +379,12 @@ fn compute(
         .skies
         .nights(site, &noons, STEP_MS, false)
         .into_iter()
-        .collect::<Result<_, _>>()
-        .map_err(failed)?;
+        .collect::<Result<_, _>>()?;
     let horizon = &inputs.placed.horizon;
     let runs: Vec<DarkRuns<'_>> = skies
         .iter()
         .map(|sky| DarkRuns::new(sky, horizon, inputs.limits, DARK_BELOW_DEGREES))
-        .collect::<Result<_, _>>()
-        .map_err(failed)?;
+        .collect::<Result<_, _>>()?;
     let horizon_key = match horizon {
         Horizon::FixedMinimum {} => None,
         Horizon::Custom { points } => Some(Arc::new(
@@ -364,8 +407,9 @@ fn compute(
         .iter()
         .map(|key| service.visible_sky.get(key))
         .collect();
-    // Every row of every night not kept, at once across the shared pool,
-    // so one night spreads over it as well as many.
+    // Every row of every night not kept, at once across the pool, so one
+    // night spreads over it as well as many. A row not yet begun when the
+    // caller goes is not begun.
     let missing: Vec<usize> = (0..grids.len())
         .filter(|night| grids[*night].is_none())
         .collect();
@@ -373,15 +417,20 @@ fn compute(
         .iter()
         .flat_map(|night| (0..ROWS).map(move |row| (*night, row)))
         .collect();
-    let measured: Vec<Result<Vec<bool>, NightError>> = rows
+    let measured: Vec<Result<Vec<bool>, Failure>> = rows
         .par_iter()
-        .map(|(night, row)| grid_row(&runs[*night], *row, needed))
+        .map(|(night, row)| {
+            if stop.requested() {
+                return Err(Failure::Stopped);
+            }
+            Ok(grid_row(&runs[*night], *row, needed)?)
+        })
         .collect();
     let mut measured = measured.into_iter();
     for night in missing {
         let mut grid = Vec::with_capacity(COLS * ROWS);
         for row in measured.by_ref().take(ROWS) {
-            grid.extend(row.map_err(failed)?);
+            grid.extend(row?);
         }
         let grid = Arc::new(grid);
         service
@@ -393,14 +442,37 @@ fn compute(
     let every: Vec<bool> = (0..COLS * ROWS)
         .map(|index| grids.iter().all(|grid| grid[index]))
         .collect();
-    let reaches = |runs: &DarkRuns<'_>, at| runs.reaches(at, needed).unwrap_or(false);
-    let every_night = region(&every, &|at| runs.iter().all(|runs| reaches(runs, at)));
-    let any_night = (grids.len() > 1).then(|| {
+    // Whether a place between nodes has its run on one night; an error
+    // here fails the request, as it does in a grid row.
+    let reaches = |runs: &DarkRuns<'_>, at| -> Result<bool, Failure> {
+        if stop.requested() {
+            return Err(Failure::Stopped);
+        }
+        Ok(runs.reaches(at, needed)?)
+    };
+    let every_night = region(&every, &|at| {
+        for runs in &runs {
+            if !reaches(runs, at)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    })?;
+    let any_night = if grids.len() > 1 {
         let any: Vec<bool> = (0..COLS * ROWS)
             .map(|index| grids.iter().any(|grid| grid[index]))
             .collect();
-        region(&any, &|at| runs.iter().any(|runs| reaches(runs, at)))
-    });
+        Some(region(&any, &|at| {
+            for runs in &runs {
+                if reaches(runs, at)? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        })?)
+    } else {
+        None
+    };
     let limits = inputs.limits;
     Ok(View {
         rig: inputs.rig,
@@ -442,6 +514,87 @@ fn compute(
     })
 }
 
+/// What the rig's sky is judged with, read on one store snapshot. `422`
+/// when the rig has no location, or limits that leave nothing to image.
+pub(super) fn read_inputs(store: &MetaStore, rig_id: Uuid) -> Result<Inputs, FeasibilityError> {
+    let rig = store.rig(rig_id)?.ok_or(Error::Missing)?;
+    // A rig with no profile yet can still use its site's location and
+    // horizon; its limits are the defaults until it has one.
+    let profile = store.rig_profile(rig_id)?;
+    let placed = store.rig_site(rig_id, profile.as_ref())?;
+    let profile = profile.unwrap_or_else(|| RigProfile::empty(rig_id, 0));
+    // Global, then the rig's site, then the rig: the limits its Target
+    // Scheduler projects start from.
+    let scheduling = store
+        .effective_observing_preferences(rig_id, None)?
+        .scheduling
+        .values;
+    let Some(site) = placed.location else {
+        return Err(FeasibilityError::NotReady(format!(
+            "{} has no location. Choose a Planning site in Rig setup.",
+            rig.name
+        )));
+    };
+    let limits = combined_limits(
+        &profile.limits.value,
+        scheduling.minimum_altitude_degrees,
+        scheduling.maximum_altitude_degrees,
+        scheduling.horizon_offset_degrees,
+    )
+    .map_err(|limits| {
+        FeasibilityError::NotReady(format!(
+            "{}: the altitude limits leave nothing to image ({limits}).",
+            rig.name
+        ))
+    })?;
+    Ok(Inputs {
+        rig,
+        placed,
+        site,
+        limits,
+        rig_minimum_minutes: scheduling.minimum_time_minutes,
+    })
+}
+
+/// The nights a request covers: `nights` from `first`, or from the night
+/// under way at the site at `now_ms`. `400` with the reason when `first` is
+/// not a night, or the range runs past the last night the astronomy times.
+pub(super) fn nights_asked(
+    first: Option<&str>,
+    nights: u32,
+    longitude_degrees: f64,
+    now_ms: u64,
+) -> Result<Vec<NightDate>, FeasibilityError> {
+    let first = match first {
+        Some(text) => text.parse::<NightDate>().map_err(|_| {
+            FeasibilityError::Rejected(
+                "first_night must be a date from 1970-01-02 to 2098-12-31, written YYYY-MM-DD."
+                    .into(),
+            )
+        })?,
+        None => NightDate::at(now_ms, longitude_degrees).ok_or(Error::Internal)?,
+    };
+    let dates: Vec<NightDate> = std::iter::successors(Some(first), |date| date.next())
+        .take(nights as usize)
+        .collect();
+    if dates.len() != nights as usize {
+        return Err(FeasibilityError::Rejected(
+            "The last night must be 2098-12-31 or earlier.".into(),
+        ));
+    }
+    Ok(dates)
+}
+
+/// Asks the work to stop when the request that started it is dropped, as
+/// it is when its caller hangs up or cancels.
+struct StopWhenDropped(Stop);
+
+impl Drop for StopWhenDropped {
+    fn drop(&mut self) {
+        self.0.request();
+    }
+}
+
 pub(super) async fn evaluate(
     State(state): State<Arc<AppState>>,
     Json(request): Json<Request>,
@@ -464,74 +617,83 @@ pub(super) async fn evaluate(
     let rig_id = request.rig;
     let inputs = service
         .clone()
-        .with_reader(move |store| {
-            let rig = store.rig(rig_id)?.ok_or(Error::Missing)?;
-            // A rig with no profile yet can still use its site's location
-            // and horizon; its limits are the defaults until it has one.
-            let profile = store.rig_profile(rig_id)?;
-            let placed = store.rig_site(rig_id, profile.as_ref())?;
-            let profile = profile.unwrap_or_else(|| RigProfile::empty(rig_id, 0));
-            // Global, then the rig's site, then the rig: the limits its
-            // Target Scheduler projects start from.
-            let scheduling = store
-                .effective_observing_preferences(rig_id, None)?
-                .scheduling
-                .values;
-            let Some(site) = placed.location else {
-                return Err(FeasibilityError::NotReady(format!(
-                    "{} has no location. Choose a Planning site in Rig setup.",
-                    rig.name
-                )));
-            };
-            let limits = combined_limits(
-                &profile.limits.value,
-                scheduling.minimum_altitude_degrees,
-                scheduling.maximum_altitude_degrees,
-                scheduling.horizon_offset_degrees,
-            )
-            .map_err(|limits| {
-                FeasibilityError::NotReady(format!(
-                    "{}: the altitude limits leave nothing to image ({limits}).",
-                    rig.name
-                ))
-            })?;
-            Ok(Inputs {
-                rig,
-                placed,
-                site,
-                limits,
-                rig_minimum_minutes: scheduling.minimum_time_minutes,
-            })
-        })
+        .with_reader(move |store| read_inputs(store, rig_id))
         .await?;
     let now_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
-    let first = match request.first_night {
-        Some(first) => first,
-        None => NightDate::at(now_ms, inputs.site.longitude_degrees).ok_or(Error::Internal)?,
-    };
-    let dates: Vec<NightDate> = std::iter::successors(Some(first), |date| date.next())
-        .take(nights as usize)
-        .collect();
-    // The core times nights only in these years.
-    let in_years = |date: &NightDate| {
-        let span = date.span(inputs.site.longitude_degrees);
-        (psf_guard_director_core::night::EARLIEST_START_MS
-            ..=psf_guard_director_core::night::LATEST_START_MS)
-            .contains(&span.start_ms)
-    };
-    if dates.len() != nights as usize || !dates.iter().all(in_years) {
-        return Err(FeasibilityError::Rejected(
-            "first_night must fall between 1970-01-02 and 2099-01-01.".into(),
-        ));
-    }
+    let dates = nights_asked(
+        request.first_night.as_deref(),
+        nights,
+        inputs.site.longitude_degrees,
+        now_ms,
+    )?;
     let minimum_minutes = request
         .minimum_minutes
         .unwrap_or(inputs.rig_minimum_minutes)
         .min(MAX_MINIMUM_MINUTES);
-    // No store slot is held while the sky is measured.
-    let view = blocking(move || compute(&service, inputs, dates, minimum_minutes)).await??;
+    // No store slot is held while the sky is measured. The work runs on a
+    // blocking thread that outlives this request, so it is told when the
+    // request is dropped.
+    let stop = Stop::new();
+    let gone = StopWhenDropped(stop.clone());
+    let view = blocking(move || compute(&state, &service, inputs, dates, minimum_minutes, &stop))
+        .await??;
+    drop(gone);
     Ok(Json(ApiResponse::success(view)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_place_that_cannot_be_judged_fails_the_region() {
+        // A cap around the north pole: its edge has crossings to place.
+        let cap: Vec<bool> = (0..COLS * ROWS).map(|index| index / COLS >= 70).collect();
+        // The lowest row in view is at +50°; the sky is in view from +48.6°.
+        let placed = region(&cap, &|at| Ok(at.dec_degrees >= 48.6)).unwrap();
+        assert_eq!(placed.lines.len(), 1);
+        assert!(placed.lines[0]
+            .iter()
+            .all(|point| (point[1] - 48.6).abs() < 0.13));
+        let failed = region(&cap, &|_| Err(Failure::Night(NightError::InvalidRequest)));
+        assert_eq!(
+            failed.err(),
+            Some(Failure::Night(NightError::InvalidRequest))
+        );
+        // The caller going while crossings are placed ends it the same way.
+        assert_eq!(
+            region(&cap, &|_| Err(Failure::Stopped)).err(),
+            Some(Failure::Stopped)
+        );
+    }
+
+    #[test]
+    fn the_nights_asked_stay_inside_the_years_the_astronomy_times() {
+        let asked = |first, nights| nights_asked(Some(first), nights, -118.3, 0);
+        let dates = asked("1970-01-02", 2).ok().unwrap();
+        assert_eq!(dates[1].to_string(), "1970-01-03");
+        assert_eq!(asked("2098-12-31", 1).ok().unwrap().len(), 1);
+        for (first, nights) in [
+            ("1970-01-01", 1),
+            ("2099-01-01", 1),
+            ("2098-12-31", 2),
+            ("2098-12-02", 31),
+            ("2026-9-24", 1),
+            ("tonight", 1),
+        ] {
+            assert!(
+                matches!(asked(first, nights), Err(FeasibilityError::Rejected(_))),
+                "{first} for {nights}"
+            );
+        }
+        assert_eq!(asked("2098-12-01", 31).ok().unwrap().len(), 31);
+        // Without a first night: the night under way at the site.
+        let tonight = nights_asked(None, 1, -118.3, 1_790_294_400_000)
+            .ok()
+            .unwrap();
+        assert_eq!(tonight[0].to_string(), "2026-09-24");
+    }
 }
