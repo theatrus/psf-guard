@@ -105,9 +105,9 @@ function WorkerRow({ worker }: { worker: WorkerSessionSummary }) {
         {worker.connected && worker.license_check && (
           <RcAstroLicenseCheck
             where={worker.local ? 'this server' : worker.name}
-            check={worker.local
-              ? apiClient.checkRcAstroLicense
-              : () => apiClient.checkWorkerRcAstroLicense(worker.session)}
+            start={() => apiClient.startRcAstroLicenseCheck(worker.local ? undefined : worker.session)}
+            read={apiClient.getRcAstroLicenseCheck}
+            stop={apiClient.stopRcAstroLicenseCheck}
           />
         )}
         {worker.connected && !worker.license_check && !!worker.rc_astro_tools?.length && (

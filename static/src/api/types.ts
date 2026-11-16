@@ -2459,7 +2459,8 @@ export type JobControl =
   | { kind: 'import'; db_id: string }
   | { kind: 'export'; db_id: string }
   | { kind: 'catalog-install' }
-  | { kind: 'noise-model-download' };
+  | { kind: 'noise-model-download' }
+  | { kind: 'license-check'; key: string };
 
 /** The automatic jobs a person can pause. Mirrors `PausableJob` in
  *  `src/server/catalog_jobs.rs`. */
@@ -5616,7 +5617,22 @@ export interface RcAstroLicenseCheck {
     /** A step RC-Astro needs a person to take at a terminal. */
     attention?: { reason: string; message: string; command?: string };
   };
+  /** What RC-Astro itself reported as an error, in its words. */
   error?: string;
+  /** Why PSF Guard got no answer from rc-astro, in PSF Guard's words. */
+  failure?: string;
+}
+
+/** A license check a person started: a tracked job the page polls. */
+export interface RcAstroLicenseCheckStatus {
+  key: string;
+  /** "this server", or a worker's name. */
+  computer: string;
+  running: boolean;
+  started_at: number;
+  check?: RcAstroLicenseCheck;
+  /** Why there is no check to show, such as a worker that did not answer. */
+  problem?: string;
 }
 
 /** Where one kind of work runs. */

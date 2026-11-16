@@ -115,13 +115,17 @@ describe('WorkerSettings', () => {
           },
         ],
       })))),
-      http.post('/api/workers/:session/license-check', ({ params }) => {
-        asked.push(String(params.session));
+      http.post('/api/tools/rc-astro/license-check', async ({ request }) => {
+        const body = await request.json() as { worker?: string };
+        asked.push(String(body.worker));
         return HttpResponse.json(ok({
-          executable: 'C:\\Program Files\\RC-Astro\\CLI\\rc-astro.exe',
-          report: { computer: 'svc@studio-pc', products: [
-            { product: 'nxt', name: 'NoiseXTerminator', status: 'limit', message: 'Not activated' },
-          ] },
+          key: 'worker-1', computer: 'studio-pc', running: false, started_at: 1,
+          check: {
+            executable: 'C:\\Program Files\\RC-Astro\\CLI\\rc-astro.exe',
+            report: { computer: 'svc@studio-pc', products: [
+              { product: 'nxt', name: 'NoiseXTerminator', status: 'limit', message: 'Not activated' },
+            ] },
+          },
         }));
       }),
     );

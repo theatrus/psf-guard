@@ -7929,6 +7929,11 @@
   justify-items: start;
 }
 
+.rc-astro-license-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
 .rc-astro-license-report {
   display: grid;
   gap: 0.25rem;

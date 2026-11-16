@@ -1,17 +1,23 @@
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import RcAstroLicenseCheck from '../RcAstroLicenseCheck';
-import type { RcAstroLicenseCheck as Check } from '../../api/types';
+import type { RcAstroLicenseCheck as Check, RcAstroLicenseCheckStatus as Status } from '../../api/types';
 
 function wrapper() {
-  const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
+  });
   return function Wrapper({ children }: { children: ReactNode }) {
     return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
   };
 }
+
+const running: Status = { key: 'server', computer: 'this server', running: true, started_at: 1 };
+const ended = (check?: Check, problem?: string): Status =>
+  ({ ...running, running: false, check, problem });
 
 const registered: Check = {
   executable: '/opt/rc-astro/rc-astro',
@@ -28,19 +34,40 @@ const registered: Check = {
   },
 };
 
+/** The component over a check that ends with `result` at once. */
+function mount(where: string, result: Status) {
+  const start = vi.fn(async () => result);
+  const read = vi.fn(async () => result);
+  const stop = vi.fn(async () => {});
+  render(<RcAstroLicenseCheck where={where} start={start} read={read} stop={stop} />, { wrapper: wrapper() });
+  return { start, read, stop };
+}
+
 describe('RcAstroLicenseCheck', () => {
-  it('checks only when asked, then shows the computer, the account and each product as RC-Astro wrote it', async () => {
-    const check = vi.fn(async () => registered);
-    render(<RcAstroLicenseCheck where="this server" check={check} />, { wrapper: wrapper() });
+  it('starts a check only when asked, polls it, and shows what RC-Astro wrote', async () => {
+    const start = vi.fn(async () => running);
+    let polls = 0;
+    const read = vi.fn(async () => {
+      polls += 1;
+      return polls < 2 ? running : ended(registered);
+    });
+    const stop = vi.fn(async () => {});
+    render(<RcAstroLicenseCheck where="this server" start={start} read={read} stop={stop} />, { wrapper: wrapper() });
 
     const button = screen.getByRole('button', { name: 'Check license on this server' });
     expect(button).toHaveTextContent('Check license');
-    expect(check).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
     expect(screen.queryByRole('status')).toBeNull();
 
     await userEvent.click(button);
-    const report = await screen.findByRole('status');
-    expect(check).toHaveBeenCalledTimes(1);
+    // While the job runs the button waits and the check can be stopped.
+    expect(await screen.findByRole('button', { name: 'Stop the license check on this server' })).toBeInTheDocument();
+    expect(button).toBeDisabled();
+    expect(button).toHaveTextContent('Checking…');
+
+    const report = await screen.findByRole('status', {}, { timeout: 4000 });
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(read).toHaveBeenCalledWith('server');
     expect(report).toHaveTextContent('rc-astro: /opt/rc-astro/rc-astro · 2.6.10');
     expect(report).toHaveTextContent('Computer: ann@studio');
     expect(report).toHaveTextContent('RC-Astro account: user@example.com');
@@ -48,11 +75,23 @@ describe('RcAstroLicenseCheck', () => {
     expect(report).toHaveTextContent('NoiseXTerminator: Not activated - activate: rc-astro license --activate nxt');
     // A status this build has never heard of still shows its message.
     expect(report).toHaveTextContent('ZoomXTerminator: Leased until Friday');
+    expect(report).not.toHaveTextContent('is unchanged');
     expect(screen.queryByRole('link', { name: 'Get an activation code' })).toBeNull();
+    await waitFor(() => expect(button).toBeEnabled());
+    expect(screen.queryByRole('button', { name: /Stop the license check/ })).toBeNull();
+  });
+
+  it('stops a check under way', async () => {
+    const stop = vi.fn(async () => {});
+    render(<RcAstroLicenseCheck where="studio-pc" start={async () => ({ ...running, key: 'worker-1', computer: 'studio-pc' })}
+      read={async () => ({ ...running, key: 'worker-1', computer: 'studio-pc' })} stop={stop} />, { wrapper: wrapper() });
+    await userEvent.click(screen.getByRole('button', { name: 'Check license on studio-pc' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Stop the license check on studio-pc' }));
+    expect(stop).toHaveBeenCalledWith('worker-1');
   });
 
   it('says a computer has no account, where to get a code, and what to run in a terminal', async () => {
-    const check = async (): Promise<Check> => ({
+    mount('studio-pc', ended({
       executable: 'C:\\Program Files\\RC-Astro\\CLI\\rc-astro.exe',
       report: {
         computer: 'svc@worker',
@@ -65,8 +104,7 @@ describe('RcAstroLicenseCheck', () => {
         },
       },
       error: 'No license',
-    });
-    render(<RcAstroLicenseCheck where="studio-pc" check={check} />, { wrapper: wrapper() });
+    }));
     await userEvent.click(screen.getByRole('button', { name: 'Check license on studio-pc' }));
 
     const report = await screen.findByRole('status');
@@ -75,32 +113,48 @@ describe('RcAstroLicenseCheck', () => {
     expect(screen.getByRole('link', { name: 'Get an activation code' }))
       .toHaveAttribute('href', 'https://www.rc-astro.com/account');
     expect(report).toHaveTextContent('Run in a terminal on that computer: rc-astro license <code>');
-    // A refusal's error shows beside its report.
-    expect(report).toHaveTextContent('No license');
+    // A refusal's error shows beside its report, as RC-Astro's words.
+    expect(report).toHaveTextContent('RC-Astro reported: No license');
     expect(report).not.toHaveTextContent('is unchanged');
   });
 
-  it('shows RC-Astro\u2019s error when the check is offline, and says the local state stays', async () => {
-    const check = async (): Promise<Check> => ({
+  it('marks RC-Astro\u2019s error as its own when the check is offline, and says the local state stays', async () => {
+    mount('this server', ended({
       executable: '/opt/rc-astro/rc-astro',
       error: 'Could not reach the RC-Astro license server',
-    });
-    render(<RcAstroLicenseCheck where="this server" check={check} />, { wrapper: wrapper() });
+    }));
     await userEvent.click(screen.getByRole('button', { name: 'Check license on this server' }));
 
     const report = await screen.findByRole('status');
-    expect(report).toHaveTextContent(
-      'Could not reach the RC-Astro license server The license state each tool reports is unchanged.'
-    );
+    expect(report).toHaveTextContent('RC-Astro reported: Could not reach the RC-Astro license server');
+    expect(report).toHaveTextContent('The license state each tool reports is unchanged.');
     expect(report).not.toHaveTextContent('Computer:');
   });
 
-  it('shows why a check could not be made at all', async () => {
-    const check = async (): Promise<Check> => {
-      throw new Error('studio-pc cannot be asked for a license check');
-    };
-    render(<RcAstroLicenseCheck where="studio-pc" check={check} />, { wrapper: wrapper() });
+  it('says PSF Guard\u2019s own failure in its own words, once', async () => {
+    mount('this server', ended({
+      executable: '/opt/rc-astro/rc-astro',
+      failure: 'rc-astro ended (exit status: 127) without a license report. It printed: libtorch.so: cannot open',
+    }));
+    await userEvent.click(screen.getByRole('button', { name: 'Check license on this server' }));
+
+    const report = await screen.findByRole('status');
+    expect(report).toHaveTextContent('rc-astro ended (exit status: 127) without a license report.');
+    expect(report).not.toHaveTextContent('RC-Astro reported');
+    expect(report.textContent?.match(/is unchanged/g)).toHaveLength(1);
+  });
+
+  it('shows why a worker gave no check, and why one could not be started at all', async () => {
+    mount('studio-pc', ended(undefined,
+      'studio-pc did not answer within 90 seconds. Check that the worker is connected and try again, or run `psf-guard-cli rc-astro license` on that computer.'));
     await userEvent.click(screen.getByRole('button', { name: 'Check license on studio-pc' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('studio-pc cannot be asked for a license check');
+    expect(await screen.findByRole('status')).toHaveTextContent('studio-pc did not answer within 90 seconds.');
+
+    const refused = async (): Promise<Status> => {
+      throw new Error('attic-pc cannot be asked for a license check');
+    };
+    render(<RcAstroLicenseCheck where="attic-pc" start={refused} read={refused} stop={async () => {}} />, { wrapper: wrapper() });
+    await userEvent.click(screen.getByRole('button', { name: 'Check license on attic-pc' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('attic-pc cannot be asked for a license check');
   });
 });

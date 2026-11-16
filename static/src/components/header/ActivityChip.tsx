@@ -92,6 +92,7 @@ function runAction(action: ActivityAction): Promise<unknown> {
   if (control.kind === 'export') return apiClient.stopServerExport(control.dbId);
   if (control.kind === 'catalog-install') return apiClient.stopCatalogInstall();
   if (control.kind === 'noise-model-download') return apiClient.stopNoiseModelDownload();
+  if (control.kind === 'license-check') return apiClient.stopRcAstroLicenseCheck(control.key);
   return apiClient.removeQueuedWbppRun(control.dbId, control.queueId);
 }
 

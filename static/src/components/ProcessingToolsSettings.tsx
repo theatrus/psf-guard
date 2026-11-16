@@ -156,7 +156,10 @@ export default function ProcessingToolsSettings({
       )}
 
       {(data?.this_server || !!data?.executable) && (
-        <RcAstroLicenseCheck where="this server" check={apiClient.checkRcAstroLicense} />
+        <RcAstroLicenseCheck where="this server"
+          start={() => apiClient.startRcAstroLicenseCheck()}
+          read={apiClient.getRcAstroLicenseCheck}
+          stop={apiClient.stopRcAstroLicenseCheck} />
       )}
 
       {seiza && installed && (

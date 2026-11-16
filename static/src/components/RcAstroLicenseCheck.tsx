@@ -1,38 +1,68 @@
-import { useMutation } from '@tanstack/react-query';
-import type { RcAstroLicenseCheck as Check } from '../api/types';
+import { useState } from 'react';
+import { useMutation, useQuery } from '@tanstack/react-query';
+import type { RcAstroLicenseCheckStatus } from '../api/types';
 
 /**
  * A button that asks RC-Astro, online, for one computer's account and
- * license state, and the report it gives. It runs only when clicked:
- * RC-Astro asks hosts not to check routinely. Diagnostics only; nothing
- * here activates or deactivates a license.
+ * license state, and the report it gives. The check is a job on the server:
+ * the click starts it, this polls it once a second until it ends, and Stop
+ * ends it. It runs only when clicked, since RC-Astro asks hosts not to
+ * check routinely. Diagnostics only; nothing here activates or deactivates
+ * a license.
  */
 export default function RcAstroLicenseCheck({
   where,
-  check,
+  start,
+  read,
+  stop,
 }: {
   /** The computer checked, for the button's name: "this server" or a
    *  worker's name. */
   where: string;
-  check: () => Promise<Check>;
+  start: () => Promise<RcAstroLicenseCheckStatus>;
+  read: (key: string) => Promise<RcAstroLicenseCheckStatus>;
+  stop: (key: string) => Promise<void>;
 }) {
-  const run = useMutation({ mutationFn: check });
-  const result = run.data;
-  const report = result?.report;
+  const [started, setStarted] = useState<RcAstroLicenseCheckStatus | null>(null);
+  const begin = useMutation({ mutationFn: () => start(), onSuccess: setStarted });
+  const polled = useQuery({
+    queryKey: ['rc-astro-license-check', started?.key, started?.started_at],
+    queryFn: () => read(started!.key),
+    enabled: !!started?.running,
+    refetchInterval: (query) => (query.state.data?.running === false ? false : 1000),
+  });
+  const halt = useMutation({ mutationFn: (key: string) => stop(key) });
+  const status = polled.data ?? started;
+  const running = begin.isPending || !!status?.running;
+  const check = status?.check;
+  const report = check?.report;
+  const failed = begin.error ?? polled.error;
   return (
     <div className="rc-astro-license" role="group" aria-label={`RC-Astro license on ${where}`}>
-      <button type="button" className="browse-button" disabled={run.isPending}
-        aria-label={`Check license on ${where}`}
-        onClick={() => run.mutate()}>
-        {run.isPending ? 'Checking…' : 'Check license'}
-      </button>
-      {run.error && <p className="error-text" role="alert">{run.error.message}</p>}
-      {result && (
+      <div className="rc-astro-license-actions">
+        <button type="button" className="browse-button" disabled={running}
+          aria-label={`Check license on ${where}`}
+          onClick={() => begin.mutate()}>
+          {running ? 'Checking…' : 'Check license'}
+        </button>
+        {status?.running && (
+          <button type="button" className="browse-button" disabled={halt.isPending}
+            aria-label={`Stop the license check on ${where}`}
+            onClick={() => halt.mutate(status.key)}>
+            Stop
+          </button>
+        )}
+      </div>
+      {failed && <p className="error-text" role="alert">{failed.message}</p>}
+      {status && !status.running && (
         <div className="rc-astro-license-report" role="status">
-          <p>
-            rc-astro: <code>{result.executable}</code>
-            {result.cli_version ? ` · ${result.cli_version}` : ''}
-          </p>
+          {status.problem && <p className="error-text">{status.problem}</p>}
+          {check && (
+            <p>
+              rc-astro: <code>{check.executable}</code>
+              {check.cli_version ? ` · ${check.cli_version}` : ''}
+            </p>
+          )}
           {report && (
             <>
               <p>Computer: {report.computer}</p>
@@ -63,12 +93,11 @@ export default function RcAstroLicenseCheck({
               )}
             </>
           )}
-          {result.error && (
-            <p className="error-text">
-              {result.error}
-              {!report && ' The license state each tool reports is unchanged.'}
-            </p>
-          )}
+          {/* RC-Astro's words are marked as RC-Astro's; PSF Guard's own
+              failure to get an answer is said plainly. */}
+          {check?.error && <p className="error-text">RC-Astro reported: {check.error}</p>}
+          {check?.failure && <p className="error-text">{check.failure}</p>}
+          {!report && <p>The license state each tool reports is unchanged.</p>}
         </div>
       )}
     </div>

@@ -183,10 +183,13 @@ describe('ProcessingToolsSettings', () => {
       http.post('/api/tools/rc-astro/license-check', () => {
         asked += 1;
         return ok({
-          executable: '/opt/rc-astro/rc-astro',
-          report: { computer: 'ann@server', account_email: 'user@example.com', products: [
-            { product: 'bxt', name: 'BlurXTerminator', status: 'permanent', message: 'Permanent license' },
-          ] },
+          key: 'server', computer: 'this server', running: false, started_at: 1,
+          check: {
+            executable: '/opt/rc-astro/rc-astro',
+            report: { computer: 'ann@server', account_email: 'user@example.com', products: [
+              { product: 'bxt', name: 'BlurXTerminator', status: 'permanent', message: 'Permanent license' },
+            ] },
+          },
         });
       }),
     );

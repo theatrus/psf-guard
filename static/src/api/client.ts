@@ -163,7 +163,7 @@ import type { GuidFillReport, GuidReport, ImportedCopiesMerge, ImportedCopiesRep
   StackViewProcessingRequest,
   AstrometryCapabilities,
   RcAstroCapabilities,
-  RcAstroLicenseCheck,
+  RcAstroLicenseCheckStatus,
   SeizaNoiseModel,
   NoiseModelDownloadPart,
   NoiseModelDownloadProgress,
@@ -360,12 +360,18 @@ const stackStretchError = (cause: unknown, fallback: string): Error => {
   return cause instanceof Error ? cause : new Error(fallback);
 };
 
-/** Post a license check and return its report, or throw the server's own
- *  message when it could not run one. */
-async function licenseCheck(path: string): Promise<RcAstroLicenseCheck> {
+/** Call a license check route, or throw the server's own message when it
+ *  refuses. */
+async function licenseCheck(
+  method: 'get' | 'post',
+  path: string,
+  body?: unknown,
+): Promise<RcAstroLicenseCheckStatus> {
   const apiInstance = await getApi();
   try {
-    const { data } = await apiInstance.post<ApiResponse<RcAstroLicenseCheck>>(path);
+    const { data } = method === 'get'
+      ? await apiInstance.get<ApiResponse<RcAstroLicenseCheckStatus>>(path)
+      : await apiInstance.post<ApiResponse<RcAstroLicenseCheckStatus>>(path, body);
     if (!data.data) throw new Error(data.error || 'The license check failed');
     return data.data;
   } catch (cause) {
@@ -1379,14 +1385,21 @@ export const apiClient = {
     return data.data;
   },
 
-  /** Ask RC-Astro, online, for this server's account and license state. */
-  checkRcAstroLicense: async (): Promise<RcAstroLicenseCheck> =>
-    licenseCheck('/tools/rc-astro/license-check'),
+  /** Start an online RC-Astro license check on this server or, with a
+   *  worker's session, on that worker. Returns at once; a check already
+   *  running for that computer is returned instead of a second one. */
+  startRcAstroLicenseCheck: async (workerSession?: string): Promise<RcAstroLicenseCheckStatus> =>
+    licenseCheck('post', '/tools/rc-astro/license-check', workerSession ? { worker: workerSession } : {}),
 
-  /** Have one connected worker ask RC-Astro for its account and license
-   *  state, as the account the worker runs under. */
-  checkWorkerRcAstroLicense: async (session: string): Promise<RcAstroLicenseCheck> =>
-    licenseCheck(`/workers/${encodeURIComponent(session)}/license-check`),
+  /** A license check's state, and its report once it has ended. */
+  getRcAstroLicenseCheck: async (key: string): Promise<RcAstroLicenseCheckStatus> =>
+    licenseCheck('get', `/tools/rc-astro/license-check/${encodeURIComponent(key)}`),
+
+  /** Stop a license check under way. */
+  stopRcAstroLicenseCheck: async (key: string): Promise<void> => {
+    const apiInstance = await getApi();
+    await apiInstance.post(`/tools/rc-astro/license-check/${encodeURIComponent(key)}/stop`);
+  },
 
   getWorkers: async (): Promise<WorkersSettings> => {
     const apiInstance = await getApi();
