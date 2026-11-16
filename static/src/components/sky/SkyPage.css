@@ -783,6 +783,19 @@
   background: var(--color-bg-secondary);
 }
 
+/* With no targets, the note sits in one line over the empty map. */
+.sky-loading-above-map {
+  min-height: 0;
+  justify-content: flex-start;
+  margin-bottom: 12px;
+  font-size: 1em;
+}
+
+/* New lines are on their way: the legend still describes the old ones. */
+.sky-visible-panel[aria-busy='true'] .sky-visible-legend {
+  opacity: 0.6;
+}
+
 .sky-visible-fields {
   display: flex;
   flex-wrap: wrap;
@@ -795,8 +808,15 @@
 .sky-visible-minimum,
 .sky-visible-dates {
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
+  max-width: 100%;
+}
+
+.sky-visible-fields select,
+.sky-visible-dates input {
+  max-width: 100%;
 }
 
 .sky-visible-fields select,

@@ -21,7 +21,7 @@ import {
   type SkyCut,
 } from './skyModel';
 import { recallSkyView, rememberSkyView } from './skyViewMemory';
-import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useIsMutating, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../../api/client';
 import { useUrlParams } from '../../hooks/useUrlState';
 import { usePlans } from '../header/useCurrentPlan';
@@ -29,7 +29,8 @@ import { retryWhenBusy } from '../director/retry';
 import { placeRigs, type PlacedRig } from './liveRigs';
 import SkyLive from './SkyLive';
 import SkyVisible, { type VisibleSkyRig } from './SkyVisible';
-import { NO_VISIBLE_SKY, visibleSkyLegend, visibleSkyLines, visibleSkyRequest, type VisibleSkyChoice } from './visibleSky';
+import { NO_VISIBLE_SKY, addDays, currentChoice, nightCount, visibleSkyLegend, visibleSkyLines, visibleSkyRequest, type VisibleSkyChoice } from './visibleSky';
+import { localDate } from '../nights/nightsModel';
 import './SkyPage.css';
 import { useDirectorClock } from '../../hooks/useDirectorClock';
 
@@ -63,7 +64,11 @@ export default function SkyPage() {
   const [showBackdrop, setShowBackdrop] = useState(remembered.showBackdrop ?? true);
   const [showStacks, setShowStacks] = useState(remembered.showStacks ?? true);
   // Visible sky: lines around the sky one rig has in view for long enough.
-  const [visibleChoice, setVisibleChoice] = useState<VisibleSkyChoice>({ ...NO_VISIBLE_SKY, ...remembered.visibleSky });
+  // A remembered range that ended before yesterday is dropped; yesterday
+  // still counts, since the rig's site may be a day behind the browser.
+  const [visibleChoice, setVisibleChoice] = useState<VisibleSkyChoice>(() =>
+    currentChoice({ ...NO_VISIBLE_SKY, ...remembered.visibleSky }, addDays(localDate(new Date()), -1))
+  );
   const visibleRigs: VisibleSkyRig[] = useMemo(
     () => (statuses.data ?? []).map((view) => ({ id: view.rig.id, name: view.catalog_name ?? view.rig.name, slug: view.catalog_slug })),
     [statuses.data]
@@ -74,15 +79,45 @@ export default function SkyPage() {
     return { ...visibleChoice, on: plans.enabled && visibleChoice.on, rigId };
   }, [visibleChoice, visibleRigs, plans.enabled]);
   const visibleRequest = useMemo(() => visibleSkyRequest(visibleSky), [visibleSky]);
+  // The lines for fixed inputs do not change, so they are not fetched
+  // again on the app's timer or on focus. A superseded request is
+  // cancelled, and the server stops measuring for it.
   const visibleQuery = useQuery({
     queryKey: ['directorVisibleSky', visibleRequest],
-    queryFn: () => apiClient.getDirectorVisibleSky(visibleRequest!),
+    queryFn: ({ signal }) => apiClient.getDirectorVisibleSky(visibleRequest!, signal),
     enabled: visibleRequest !== null,
     retry: retryWhenBusy,
     retryDelay: 1200,
     staleTime: 5 * 60_000,
+    refetchInterval: false,
+    refetchOnWindowFocus: false,
     placeholderData: keepPreviousData,
   });
+  // Tonight is another night after the next local noon at the rig's site:
+  // fetch again once the night under way is not the one the lines are for.
+  const visibleLongitude = visibleQuery.data?.site.longitude_degrees;
+  const tonightIsOver =
+    visibleSky.when === 'tonight' &&
+    visibleRequest !== null &&
+    visibleLongitude !== undefined &&
+    !visibleQuery.isPlaceholderData &&
+    nightCount(now, visibleLongitude) !== nightCount(visibleQuery.dataUpdatedAt, visibleLongitude);
+  const refetchVisible = visibleQuery.refetch;
+  useEffect(() => {
+    if (tonightIsOver) void refetchVisible();
+  }, [tonightIsOver, refetchVisible]);
+  // A saved setting may have moved the rig's site, horizon or limits: read
+  // the lines again when a save settles. Kept grids make this cheap.
+  const queryClient = useQueryClient();
+  const saving = useIsMutating();
+  const sawSaving = useRef(false);
+  useEffect(() => {
+    if (saving > 0) sawSaving.current = true;
+    else if (sawSaving.current) {
+      sawSaving.current = false;
+      void queryClient.invalidateQueries({ queryKey: ['directorVisibleSky'] });
+    }
+  }, [saving, queryClient]);
   // Lines drawn only for the rig they were worked out for.
   const visibleView = visibleRequest && !visibleQuery.isError && visibleQuery.data?.rig.id === visibleRequest.rig ? visibleQuery.data : undefined;
   const visibleLines = useMemo(() => (visibleView ? visibleSkyLines(visibleView) : null), [visibleView]);
@@ -228,6 +263,76 @@ export default function SkyPage() {
     }
   };
 
+  const shapeControls = (
+    <>
+      <div className="sky-control-group" role="radiogroup" aria-label="Coordinate frame">
+        {(['equatorial', 'galactic'] as SkyFrame[]).map((option) => (
+          <button
+            key={option}
+            type="button"
+            role="radio"
+            aria-checked={frame === option}
+            className="sky-chip"
+            onClick={() => setFrame(option)}
+          >
+            {option === 'equatorial' ? 'Equatorial' : 'Galactic'}
+          </button>
+        ))}
+      </div>
+      <div className="sky-control-group" role="radiogroup" aria-label="Map shape">
+        {(['aitoff', 'globe'] as SkyMode[]).map((option) => (
+          <button
+            key={option}
+            type="button"
+            role="radio"
+            aria-checked={mode === option}
+            className="sky-chip"
+            onClick={() => setMode(option)}
+          >
+            {option === 'aitoff' ? 'Flat' : 'Globe'}
+          </button>
+        ))}
+      </div>
+    </>
+  );
+  const visibleToggle = plans.enabled && (
+    <button
+      type="button"
+      className="sky-chip sky-visible-toggle"
+      aria-pressed={visibleSky.on}
+      onClick={() => setVisibleChoice((current) => ({ ...current, on: !current.on }))}
+    >
+      Visible sky
+    </button>
+  );
+  const visiblePanel = visibleSky.on && (
+    <SkyVisible
+      rigs={visibleRigs}
+      choice={visibleSky}
+      onChange={(next) => setVisibleChoice({ ...next, on: true })}
+      view={visibleView}
+      loading={visibleQuery.isFetching}
+      error={visibleRequest ? visibleQuery.error : null}
+      nowMs={now}
+    />
+  );
+  const skyMap = (targets: ShownTarget[]) => (
+    <SkyMap
+      targets={targets}
+      frame={frame}
+      mode={mode}
+      showBackdrop={showBackdrop}
+      showStacks={showStacks}
+      initialZoom={initialZoom}
+      initialCenter={initialCenter}
+      onViewChange={rememberView}
+      onOpen={open}
+      rigs={live ? placed : []}
+      focus={focus}
+      visible={visibleLines}
+    />
+  );
+
   // Without a map, Live still lists the rigs and shows the table.
   const noMap = (note: string) => (
     <div className="sky-page">
@@ -237,7 +342,24 @@ export default function SkyPage() {
   );
   if (isLoading && rows.length === 0) return noMap('Reading the catalogs…');
   if (isError && rows.length === 0) return noMap('The sky coverage could not be loaded.');
-  if (merged.targets.length === 0) return noMap('No targets yet. Add a database or import image folders.');
+  // No frames yet: nothing to map, but the sky a rig can shoot needs no
+  // frames, so Visible sky still draws on an empty map.
+  if (merged.targets.length === 0) {
+    return (
+      <div className="sky-page">
+        <div className={`sky-loading${visibleSky.on ? ' sky-loading-above-map' : ''}`}>No targets yet. Add a database or import image folders.</div>
+        {plans.enabled && (
+          <div className="sky-controls">
+            {visibleSky.on && shapeControls}
+            {visibleToggle}
+          </div>
+        )}
+        {visiblePanel}
+        {visibleSky.on && <div className="sky-body">{skyMap([])}</div>}
+        {live && <SkyLive rigs={placed} />}
+      </div>
+    );
+  }
 
   return (
     <div className="sky-page">
@@ -319,34 +441,7 @@ export default function SkyPage() {
       </header>
 
       <div className="sky-controls">
-        <div className="sky-control-group" role="radiogroup" aria-label="Coordinate frame">
-          {(['equatorial', 'galactic'] as SkyFrame[]).map((option) => (
-            <button
-              key={option}
-              type="button"
-              role="radio"
-              aria-checked={frame === option}
-              className="sky-chip"
-              onClick={() => setFrame(option)}
-            >
-              {option === 'equatorial' ? 'Equatorial' : 'Galactic'}
-            </button>
-          ))}
-        </div>
-        <div className="sky-control-group" role="radiogroup" aria-label="Map shape">
-          {(['aitoff', 'globe'] as SkyMode[]).map((option) => (
-            <button
-              key={option}
-              type="button"
-              role="radio"
-              aria-checked={mode === option}
-              className="sky-chip"
-              onClick={() => setMode(option)}
-            >
-              {option === 'aitoff' ? 'Flat' : 'Globe'}
-            </button>
-          ))}
-        </div>
+        {shapeControls}
         <label className="sky-check">
           <input type="checkbox" checked={acceptedOnly} onChange={(event) => setAcceptedOnly(event.target.checked)} />
           Accepted frames only
@@ -389,16 +484,7 @@ export default function SkyPage() {
             </button>
           ))}
         </div>
-        {plans.enabled && (
-          <button
-            type="button"
-            className="sky-chip sky-visible-toggle"
-            aria-pressed={visibleSky.on}
-            onClick={() => setVisibleChoice((current) => ({ ...current, on: !current.on }))}
-          >
-            Visible sky
-          </button>
-        )}
+        {visibleToggle}
         {plans.enabled && (
           <button
             type="button"
@@ -416,33 +502,10 @@ export default function SkyPage() {
         )}
       </div>
 
-      {visibleSky.on && (
-        <SkyVisible
-          rigs={visibleRigs}
-          choice={visibleSky}
-          onChange={(next) => setVisibleChoice({ ...next, on: true })}
-          view={visibleView}
-          loading={visibleQuery.isFetching}
-          error={visibleRequest ? visibleQuery.error : null}
-          nowMs={now}
-        />
-      )}
+      {visiblePanel}
 
       <div className={`sky-body${live ? ' has-live' : ''}`}>
-        <SkyMap
-          targets={shown}
-          frame={frame}
-          mode={mode}
-          showBackdrop={showBackdrop}
-          showStacks={showStacks}
-          initialZoom={initialZoom}
-          initialCenter={initialCenter}
-          onViewChange={rememberView}
-          onOpen={open}
-          rigs={live ? placed : []}
-          focus={focus}
-          visible={visibleLines}
-        />
+        {skyMap(shown)}
         {live && <SkyLive rigs={placed} onFocus={focusOn} />}
       </div>
 

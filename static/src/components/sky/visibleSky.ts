@@ -1,6 +1,7 @@
 import { isAxiosError } from 'axios';
 import { projectedPath, projectedPoint, type LonLat, type PathScale, type SkyView } from '../../utils/skyProjection';
 import type { DirectorVisibleSky, DirectorVisibleSkyRequest } from '../../api/directorTypes';
+import { formatNightDate, isDate, localDate } from '../nights/nightsModel';
 
 /** The most nights one request covers, as the server allows. */
 export const MAX_VISIBLE_NIGHTS = 31;
@@ -23,12 +24,15 @@ export interface VisibleSkyChoice {
 export const NO_VISIBLE_SKY: VisibleSkyChoice = { on: false, rigId: null, minimumMinutes: null, when: 'tonight', from: null, to: null };
 
 const DAY_MS = 86_400_000;
-const DATE = /^\d{4}-\d{2}-\d{2}$/;
+/** The first and last nights the server times. */
+export const FIRST_NIGHT = '1970-01-02';
+export const LAST_NIGHT = '2098-12-31';
 
+/** A date as a day count, for arithmetic that no time zone can shift. */
 function dayOf(date: string): number | null {
-  if (!DATE.test(date)) return null;
-  const at = Date.parse(`${date}T00:00:00Z`);
-  return Number.isFinite(at) ? at : null;
+  if (!isDate(date)) return null;
+  const [year, month, day] = date.split('-').map(Number);
+  return Date.UTC(year, month - 1, day);
 }
 
 /** A date `days` after `date`, both `YYYY-MM-DD`. */
@@ -37,11 +41,42 @@ export function addDays(date: string, days: number): string {
   return at === null ? date : new Date(at + days * DAY_MS).toISOString().slice(0, 10);
 }
 
-/** Today's date where the browser is, `YYYY-MM-DD`. */
-export function localDate(nowMs: number): string {
-  const now = new Date(nowMs);
-  const two = (value: number) => String(value).padStart(2, '0');
-  return `${now.getFullYear()}-${two(now.getMonth() + 1)}-${two(now.getDate())}`;
+/** Whether the night the server called the night under way has ended. */
+function ended(night: DirectorVisibleSky['nights'][number] | undefined, nowMs: number): boolean {
+  return night !== undefined && night.dawn_ms !== null && night.dawn_ms <= nowMs;
+}
+
+/**
+ * The first night a range of dates opens with. When the lines for Tonight
+ * are known, it is the rig's night as the server dated it, by the site's
+ * longitude, or the next one once that night has ended. Otherwise it is
+ * today where the browser is, which may be a day off for a far site.
+ */
+export function firstNightFrom(tonight: DirectorVisibleSky | undefined, nowMs: number): string {
+  const night = tonight?.nights.length === 1 ? tonight.nights[0] : undefined;
+  if (!night) return localDate(new Date(nowMs));
+  return ended(night, nowMs) ? addDays(night.date, 1) : night.date;
+}
+
+/**
+ * A choice with a range that is still worth showing. A remembered range
+ * whose last night is over is dropped, so Dates opens with the two weeks
+ * from `today` again, not with nights long gone.
+ */
+export function currentChoice(choice: VisibleSkyChoice, today: string): VisibleSkyChoice {
+  if (!choice.to || choice.to >= today) return choice;
+  return choice.when === 'dates'
+    ? { ...choice, from: today, to: addDays(today, DEFAULT_RANGE_NIGHTS - 1) }
+    : { ...choice, from: null, to: null };
+}
+
+/**
+ * Which night is under way at a longitude at an instant: a count that
+ * steps at each local mean noon there, as the server's nights do. Two
+ * instants with the same count are in the same night.
+ */
+export function nightCount(atMs: number, longitudeDegrees: number): number {
+  return Math.floor((atMs + (longitudeDegrees / 15) * 3_600_000 - DAY_MS / 2) / DAY_MS);
 }
 
 /** How many nights a range covers, first and last included; null when the
@@ -61,7 +96,7 @@ export function visibleSkyRequest(choice: VisibleSkyChoice): DirectorVisibleSkyR
   if (choice.minimumMinutes !== null) request.minimum_minutes = choice.minimumMinutes;
   if (choice.when === 'dates') {
     const nights = nightsBetween(choice.from, choice.to);
-    if (nights === null || nights > MAX_VISIBLE_NIGHTS || !choice.from) return null;
+    if (nights === null || nights > MAX_VISIBLE_NIGHTS || !choice.from || rangeProblem(choice)) return null;
     request.first_night = choice.from;
     request.nights = nights;
   }
@@ -73,6 +108,7 @@ export function rangeProblem(choice: VisibleSkyChoice): string | null {
   if (choice.when !== 'dates') return null;
   const nights = nightsBetween(choice.from, choice.to);
   if (nights === null) return 'Choose a first and a last night.';
+  if ((choice.from ?? '') < FIRST_NIGHT || (choice.to ?? '') > LAST_NIGHT) return `Choose nights from ${FIRST_NIGHT} to ${LAST_NIGHT}.`;
   if (nights > MAX_VISIBLE_NIGHTS) return `Choose ${MAX_VISIBLE_NIGHTS} nights or fewer.`;
   return null;
 }
@@ -82,13 +118,6 @@ export function formatMinutes(minutes: number): string {
   const hours = Math.floor(minutes / 60);
   const rest = minutes % 60;
   return rest === 0 ? `${hours} h` : `${hours} h ${rest} min`;
-}
-
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
-function shortDate(date: string): string {
-  const [, month, day] = date.split('-').map(Number);
-  return `${day} ${MONTHS[month - 1] ?? ''}`.trim();
 }
 
 /** Which horizon the lines were drawn against, and where it was set. */
@@ -108,13 +137,12 @@ export function horizonText(view: DirectorVisibleSky): string {
 export function visibleSkyLegend(view: DirectorVisibleSky, rigName: string, tonightAtMs: number | null): string {
   const first = view.nights[0]?.date;
   const last = view.nights[view.nights.length - 1]?.date;
-  const dawn = view.nights[0]?.dawn_ms ?? null;
-  const tonight = tonightAtMs !== null && dawn !== null && dawn <= tonightAtMs ? 'last night' : 'tonight';
+  const tonight = tonightAtMs !== null && ended(view.nights[0], tonightAtMs) ? 'last night' : 'tonight';
   const when = !first || !last
     ? ''
     : view.nights.length === 1
-      ? tonightAtMs !== null ? `${tonight} (${shortDate(first)})` : shortDate(first)
-      : `${shortDate(first)} to ${shortDate(last)}`;
+      ? tonightAtMs !== null ? `${tonight} (${formatNightDate(first)})` : formatNightDate(first)
+      : `${formatNightDate(first)} to ${formatNightDate(last)}`;
   return [`${rigName}: in view ${formatMinutes(view.minimum_minutes)} or more`, when, horizonText(view)].filter(Boolean).join(' · ');
 }
 
@@ -158,11 +186,15 @@ function separation(a: [number, number, number], b: [number, number, number]): n
  * sides can be told apart without colour. The server runs every line with
  * the visible sky on its left, seen with north up and right ascension
  * rising to the right; on the sphere that side is `p × (next − previous)`.
- * A mark is `length` pixels long and one falls every `everyDegrees` of line.
+ * A mark is `length` map units long and one falls every `everyDegrees` of
+ * line. Zoomed in, a mark is a fraction of a unit, so its ends are written
+ * with enough digits to keep its direction.
  */
 export function visibleSideMarks(line: LonLat[], view: SkyView, at: PathScale, everyDegrees: number, length: number): string {
   if (line.length < 3) return '';
   const points = line.map(unit);
+  // Three digits more than the mark's own size: its direction to a small part of a degree.
+  const digits = Math.min(8, Math.max(1, Math.ceil(-Math.log10(length)) + 3));
   let path = '';
   let travelled = everyDegrees / 2;
   for (let i = 1; i < points.length - 1; i += 1) {
@@ -188,7 +220,7 @@ export function visibleSideMarks(line: LonLat[], view: SkyView, at: PathScale, e
     const span = Math.hypot(dx, dy);
     // Across the seam the two ends land far apart: no mark there.
     if (!(span > 0) || span > at.scale * 0.2) continue;
-    path += `M${from.x.toFixed(1)},${from.y.toFixed(1)}L${(from.x + (dx / span) * length).toFixed(1)},${(from.y + (dy / span) * length).toFixed(1)}`;
+    path += `M${from.x.toFixed(digits)},${from.y.toFixed(digits)}L${(from.x + (dx / span) * length).toFixed(digits)},${(from.y + (dy / span) * length).toFixed(digits)}`;
   }
   return path;
 }

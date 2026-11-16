@@ -926,9 +926,10 @@ export const apiClient = {
     return data.data;
   },
 
-  getDirectorVisibleSky: async (request: import('./directorTypes').DirectorVisibleSkyRequest): Promise<import('./directorTypes').DirectorVisibleSky> => {
+  /** `signal` cancels the request: the server stops measuring for it. */
+  getDirectorVisibleSky: async (request: import('./directorTypes').DirectorVisibleSkyRequest, signal?: AbortSignal): Promise<import('./directorTypes').DirectorVisibleSky> => {
     const api = await getApi();
-    const { data } = await api.post<ApiResponse<import('./directorTypes').DirectorVisibleSky>>('/director/v1/sky/visible-region', request);
+    const { data } = await api.post<ApiResponse<import('./directorTypes').DirectorVisibleSky>>('/director/v1/sky/visible-region', request, { signal });
     if (!data.data) throw new Error(data.error || 'Failed to work out the visible sky');
     return data.data;
   },

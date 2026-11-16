@@ -118,20 +118,23 @@ The choice lives in the URL (`live=1`).
 
 With Director on, click **Visible sky** in the controls to draw a line
 around the sky a rig can shoot. The line works in **Flat** and **Globe**,
-and in both coordinate frames.
+and in both coordinate frames. It needs no frames: with an empty catalog
+the page shows the line on a map with no targets.
 
 1. Choose the rig. The line uses the rig's location, horizon and altitude
    limits from Rig setup. A rig uses the location and horizon of its
    **Planning site** unless it has its own.
 2. Set how long a place must stay in view, in minutes. The field starts at
    the rig's Target Scheduler minimum time (30 minutes unless you changed
-   it). After you type another value, **Use rig's 30 min** restores the
-   rig's value.
+   it). The line follows a new value when you stop typing, press Enter or
+   leave the field. After you type another value, **Use rig's 30 min**
+   restores the rig's value.
 3. Choose **Tonight**, or **Dates** and a first and last night. **Dates**
-   opens with the two weeks from today; a range covers up to 31 nights.
-   Nights are dated by their evening at the rig's site, as on Nights.
-   Between dawn and noon there, **Tonight** is the night that has just
-   ended, and the legend shows "last night".
+   opens with the two weeks from the rig's coming night; a range covers up
+   to 31 nights, from 1970-01-02 to 2098-12-31. Nights are dated by their
+   evening at the rig's site, as on Nights. Between dawn and noon there,
+   **Tonight** is the night that has just ended, and the legend shows
+   "last night".
 
 A place is in view when the Sun is more than 12° below the horizon and the
 place is above the rig's horizon and minimum altitude and below its maximum
@@ -166,12 +169,18 @@ a night when it never gets dark at the site, nothing is in view; the legend
 notes how many nights of a range are like that.
 
 PSF Guard remembers the rig, the minimum time and the nights for the
-browser session, with the rest of the Sky view. To draw a night, the server
-measures the whole sky for that night and minimum time, then keeps the
-result, so an overlapping range is quicker the next time. A night takes
-well under a second, and a month up to about a second. The request is
-`POST /sky/visible-region`, described with the other Director endpoints in
-[DIRECTOR.md](DIRECTOR.md).
+browser session, with the rest of the Sky view. A remembered range whose
+last night has passed is dropped, and **Dates** opens with the coming two
+weeks again.
+
+To draw a night, the server measures the whole sky for that night and
+minimum time, then keeps the result, so an overlapping range is quicker
+the next time. A night takes about a tenth of a second. A month takes from
+half a second to a few seconds, longest on a server with few cores and
+with a minimum time of 10 minutes or less. The line for **Tonight** is
+drawn again when the next night begins at the rig's site, and after you
+save a setting. The request is `POST /sky/visible-region`, described with
+the other Director endpoints in [DIRECTOR.md](DIRECTOR.md).
 
 ## Saving a picture
 
