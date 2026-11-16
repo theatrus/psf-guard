@@ -13,7 +13,7 @@ use crate::windows::{Interval, MeridianExclusion};
 use serde::{Deserialize, Serialize};
 
 mod visible;
-pub use visible::{longest_dark_run_ms, DarkRuns};
+pub use visible::{longest_dark_run_ms, place_over, DarkRuns, Placed};
 
 pub const MAX_NIGHTS: u32 = 31;
 pub const MAX_TARGETS: usize = 16;
