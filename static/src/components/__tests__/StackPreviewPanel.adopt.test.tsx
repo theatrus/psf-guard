@@ -199,7 +199,7 @@ describe('StackPreviewPanel job adoption', () => {
     const second = render(panel, { wrapper: wrapper() });
     await waitFor(() => expect(screen.getByAltText('Sh2 86 Ha stack preview')).toHaveAttribute('src', '/selected.png'));
     await user.click(screen.getByText('View processing'));
-    expect(screen.getByText('RC-Astro 2.6.6')).toBeInTheDocument();
+    expect(screen.getByText('Made with RC-Astro 2.6.6')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Revert processing' }));
     await waitFor(() => expect(screen.getByAltText('Sh2 86 Ha stack preview')).not.toHaveAttribute('src', '/selected.png'));
     second.unmount();

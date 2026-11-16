@@ -5085,7 +5085,7 @@
   font-size: 0.54rem;
 }
 
-/* RC-Astro tool chain: shares the deconvolution card look. */
+/* Processing tools card: shares the deconvolution card look. */
 .stack-rc-astro-controls {
   min-width: 0;
   padding: 0.52rem;
@@ -5104,23 +5104,48 @@
 }
 
 .stack-rc-astro-controls > header span,
-.stack-rc-astro-controls > p {
+.stack-rc-astro-controls > p,
+.stack-rc-astro-note {
   color: var(--color-text-muted);
   font-size: 0.59rem;
 }
 
-.stack-rc-astro-controls > p {
+.stack-rc-astro-controls > p,
+.stack-rc-astro-note {
   margin: 0.35rem 0 0;
 }
 
+.stack-rc-astro-note button {
+  padding: 0.1rem 0.45rem;
+  font-size: 0.59rem;
+}
+
 .stack-rc-astro-tool {
+  min-width: 0;
   margin-top: 0.45rem;
 }
 
-.stack-rc-astro-tool > label {
+.stack-rc-astro-tool > label,
+.stack-rc-astro-tool > strong {
   display: flex;
   align-items: center;
   gap: 0.42rem;
+  font-size: 0.64rem;
+}
+
+/* A picker sits at the far edge from its category; a checkbox stays beside
+   its provider's name. */
+.stack-rc-astro-tool > label:has(> select) {
+  justify-content: space-between;
+}
+
+/* The picker takes what the label leaves, never its longest option's
+   width: that width would push the card past a phone's edge. */
+.stack-rc-astro-tool > label select {
+  flex: 1 1 0;
+  width: 0;
+  min-width: 0;
+  max-width: 62%;
   font-size: 0.64rem;
 }
 
@@ -7894,4 +7919,42 @@
 /* With two readings, the one scoring did not use. */
 .star-reading.is-unused {
   color: var(--color-text-muted);
+}
+
+/* An RC-Astro license check: the button and the report it gives. */
+.rc-astro-license {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0.5rem 0;
+  justify-items: start;
+}
+
+.rc-astro-license-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.rc-astro-license-report {
+  display: grid;
+  gap: 0.25rem;
+  width: 100%;
+  padding: 0.5rem 0.65rem;
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-bg-tertiary);
+  border-radius: 6px;
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.rc-astro-license-report p,
+.rc-astro-license-report ul {
+  margin: 0;
+}
+
+.rc-astro-license-report ul {
+  padding-left: 1.1rem;
+}
+
+.rc-astro-license-report [data-attention] {
+  color: var(--color-warning);
 }

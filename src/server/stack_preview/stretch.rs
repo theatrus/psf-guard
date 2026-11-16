@@ -175,7 +175,7 @@ pub(super) fn deconvolution_cache_id(
     source_revision: &str,
     config: &DeconvolutionConfig,
 ) -> Result<String, AppError> {
-    let encoded = serde_json::to_vec(config).map_err(|error| {
+    let encoded = crate::remote_work::steps::identity_json(config).map_err(|error| {
         AppError::InternalError(format!("Failed to encode deconvolution request: {error}"))
     })?;
     let mut hasher = Sha256::new();
@@ -1083,7 +1083,7 @@ async fn prepare_run(
         _ => None,
     };
     let rc_astro_id = rc_astro_chain.as_ref().and_then(|chain| chain.last());
-    let encoded = serde_json::to_vec(&config).map_err(|error| {
+    let encoded = crate::remote_work::steps::identity_json(&config).map_err(|error| {
         AppError::InternalError(format!("Failed to encode stretch request: {error}"))
     })?;
     let mut hasher = Sha256::new();
@@ -1105,10 +1105,13 @@ async fn prepare_run(
     if let Some(settings) = &color_calibration_settings {
         hasher.update(b"color-calibration");
         hasher.update(
-            serde_json::to_vec(&(settings, color_calibration.as_ref().map(|plan| &plan.basis)))
-                .map_err(|error| {
-                    AppError::InternalError(format!("Failed to encode color calibration: {error}"))
-                })?,
+            crate::remote_work::steps::identity_json(&(
+                settings,
+                color_calibration.as_ref().map(|plan| &plan.basis),
+            ))
+            .map_err(|error| {
+                AppError::InternalError(format!("Failed to encode color calibration: {error}"))
+            })?,
         );
     }
     let mut stretch_id = String::with_capacity(64);
@@ -1418,10 +1421,11 @@ async fn restore_processing(
     )
     .await
     .map_err(|error| match &error {
-        // A server with no rc-astro of its own waits for its workers, which
-        // join again some time after a restart.
+        // A server with no rc-astro or noise model of its own waits for its
+        // workers, which join again some time after a restart.
         AppError::BadRequest(message)
-            if message.contains(crate::server::workers::rc_astro::NOT_INSTALLED) =>
+            if message.contains(crate::server::workers::rc_astro::NOT_INSTALLED)
+                || message.contains(crate::remote_work::noise_model::NOT_INSTALLED) =>
         {
             NotRestored::Retry(message.clone())
         }
@@ -2384,6 +2388,8 @@ fn render_fits_variant(
     let lease = state.lease_workers(priority, budget.workers);
     let pool = crate::concurrency::ComputePool::take("stack-stretch", lease.workers)
         .map_err(|error| error.to_string())?;
+    // A processing step this job waits on runs on these workers.
+    let _held = crate::remote_work::steps::hold_threads(lease.workers);
     tracing::info!(
         "Stack stretch {stretch_id}: {} worker(s) — {}; {}",
         lease.workers,

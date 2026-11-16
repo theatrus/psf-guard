@@ -360,7 +360,9 @@ pub fn main() {
             crate::desktop_worker::save_desktop_worker,
             crate::desktop_worker::start_desktop_worker,
             crate::desktop_worker::stop_desktop_worker,
-            crate::desktop_worker::pause_desktop_worker
+            crate::desktop_worker::pause_desktop_worker,
+            crate::desktop_worker::get_worker_noise_model,
+            crate::desktop_worker::download_worker_noise_model
         ])
         .run(context())
         .expect("error while running tauri application");
@@ -827,6 +829,7 @@ mod tests {
             backups: None,
             scoring: None,
             remote_workers: None,
+            noise_model: None,
             peers: Vec::new(),
         }
     }

@@ -8,6 +8,7 @@ import StackStretchStageEditor from './StackStretchStageEditor';
 import StackDeconvolutionControls from './StackDeconvolutionControls';
 import StackRcAstroControls from './StackRcAstroControls';
 import { rcAstroProblem, useRcAstroCapabilities } from './rcAstroSchema';
+import { providerSchemas } from './processingTools';
 import ProcessingSetupsBar from './ProcessingSetupsBar';
 import ColorCalibrationSwitch from './ColorCalibrationSwitch';
 import { builtinViewSetups } from './processingSetups';
@@ -70,7 +71,7 @@ export default function StackStretchControls({
     requestForPreview(applied, displayReferred)
   );
   const [pending, setPending] = useState(false);
-  const rcAstroTools = useRcAstroCapabilities().data?.tools;
+  const rcAstroTools = providerSchemas(useRcAstroCapabilities().data);
   const [reverting, setReverting] = useState(false);
   const [pendingProgress, setPendingProgress] =
     useState<StackStretchPendingProgress | null>(null);
@@ -152,7 +153,7 @@ export default function StackStretchControls({
       <summary>
         <span>View processing</span>
         <small>{applied
-          ? `${applied.deconvolution ? `${applied.deconvolution.config.psf_fwhm_pixels}px deconv · ` : ''}${applied.rc_astro ? `RC-Astro ×${applied.rc_astro.steps.length} · ` : ''}${stretchModelLabels[applied.config.model.type]} applied${applied.reprocessing ? ' to the previous stack' : ''}`
+          ? `${applied.deconvolution ? `${applied.deconvolution.config.psf_fwhm_pixels}px deconv · ` : ''}${applied.rc_astro ? `${applied.rc_astro.steps.length} processing step(s) · ` : ''}${stretchModelLabels[applied.config.model.type]} applied${applied.reprocessing ? ' to the previous stack' : ''}`
           : 'Deconvolution off · default stretch'}</small>
       </summary>
       <div className="stack-stretch-body">

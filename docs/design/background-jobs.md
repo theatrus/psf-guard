@@ -59,7 +59,8 @@ or grades. A rig the catalog does not record is ignored.
 | A quiet moment | `AppState::interactive_quiet_for()`: how long no person's work has run, as automatic stack refreshes wait `RESUME_QUIET` (30 s) before they resume |
 | Holding a stop until a write commits | `state.shutdown.hold(what)` |
 | The job line | `GET /api/jobs` (`src/server/jobs.rs`) builds every row; `useHeaderActivity.ts` polls it and `activityItems.ts` maps each row to the header's item |
-| Work on a worker | `Workers::board` (`src/server/workers/`): a job submits a task and waits on its ticket on its own thread. This server's own worker claims tasks on one long-lived thread, `worker-this-server`, the one exception to one thread per job: it runs an external tool, such as rc-astro, while the job's thread waits. See [Remote workers](remote-workers.md) |
+| Work on a worker | `Workers::board` (`src/server/workers/`): a job submits a task and waits on its ticket on its own thread. This server's own worker claims tasks on one long-lived thread, `worker-this-server`, the one exception to one thread per job: it runs an external tool, such as rc-astro, or the noise model on leased threads, while the job's thread waits. See [Remote workers](remote-workers.md) |
+| A check a person asks one computer for | `server/workers/license.rs`: the POST returns at once, one runner thread per check, a row in the job line with no result, Stop, and a second start for the same computer joins the running check. A worker answers on its side connection, not through the board |
 
 ## The job line
 

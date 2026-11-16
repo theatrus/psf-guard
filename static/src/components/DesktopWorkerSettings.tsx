@@ -20,6 +20,7 @@ const DEFAULTS: Settings = {
   maps: [],
   work_dir: null,
   rc_astro: null,
+  onnxruntime: null,
   work: [],
   slots: 1,
 };
@@ -44,10 +45,12 @@ function draftOf(worker: DesktopWorker): Draft {
   };
 }
 
-/** The `--work` choices for the two boxes: none when both are selected. */
+/** The `--work` choices for the two boxes: none when both are selected.
+ *  The second box covers every processing step (the RC-Astro tools and the
+ *  noise model), as the server's choice of where they run does. */
 function workOf(draft: Draft): string[] {
   if (draft.stack && draft.rcAstro) return [];
-  return [...(draft.stack ? ['stack'] : []), ...(draft.rcAstro ? ['rc-astro'] : [])];
+  return [...(draft.stack ? ['stack'] : []), ...(draft.rcAstro ? ['rc-astro', 'noise-model'] : [])];
 }
 
 function sameSettings(draft: Draft, worker: DesktopWorker): boolean {
@@ -133,7 +136,7 @@ export default function DesktopWorkerSettings() {
     event.preventDefault();
     setNotice('');
     if (!draft.stack && !draft.rcAstro) {
-      setNotice('Select at least one task type: Stack builds or RC-Astro tools.');
+      setNotice('Select at least one task type: Stack builds or Processing steps.');
       return;
     }
     action.mutate(
@@ -144,6 +147,7 @@ export default function DesktopWorkerSettings() {
         maps: draft.files === 'shared' ? draft.maps : [],
         work_dir: draft.work_dir?.trim() ? draft.work_dir.trim() : null,
         rc_astro: draft.rc_astro,
+        onnxruntime: draft.onnxruntime?.trim() ? draft.onnxruntime.trim() : null,
         work: workOf(draft),
         slots: draft.slots,
         token: draft.token.trim() || null,
@@ -172,7 +176,7 @@ export default function DesktopWorkerSettings() {
       <UnsavedMark label="worker settings" dirty={dirty} />
       <h3>Worker on this computer</h3>
       <p>
-        Use this computer to build stacks and run RC-Astro tools for a PSF Guard
+        Use this computer to build stacks and run processing steps for a PSF Guard
         server. Enter that server&apos;s address and a worker token from its
         Settings › Performance › Workers. After you start the worker, it keeps running in the
         menu bar or system tray when you close this window.
@@ -312,9 +316,14 @@ export default function DesktopWorkerSettings() {
               onChange={(event) => update({ rcAstro: event.target.checked })}
               disabled={busy}
             />
-            RC-Astro tools
+            Processing steps
           </label>
         </fieldset>
+        <NoiseModelOnThisComputer
+          path={draft.onnxruntime ?? ''}
+          onPath={(onnxruntime) => update({ onnxruntime })}
+          disabled={busy}
+        />
         <div className="database-config">
           <label htmlFor="desktop-worker-slots">Concurrent tasks</label>
           <input
@@ -437,5 +446,80 @@ export default function DesktopWorkerSettings() {
         </p>
       )}
     </section>
+  );
+}
+
+/**
+ * The noise model on this computer: what is installed, the download a
+ * person starts, and the path of an ONNX Runtime they installed. Nothing
+ * is downloaded until Download is clicked.
+ */
+function NoiseModelOnThisComputer({
+  path,
+  onPath,
+  disabled,
+}: {
+  path: string;
+  onPath: (path: string) => void;
+  disabled: boolean;
+}) {
+  const client = useQueryClient();
+  const key = ['desktopWorker', 'noiseModel'] as const;
+  const state = useQuery({ queryKey: key, queryFn: desktopWorker.noiseModel });
+  const download = useMutation({
+    mutationFn: (parts: { runtime: boolean; model: boolean }) => desktopWorker.downloadNoiseModel(parts),
+    onSuccess: (next) => client.setQueryData(key, next),
+  });
+  const data = state.data;
+  // An app older than the noise model answers nothing.
+  if (!data) return null;
+  const { installed } = data;
+  // The app reads what is on disk and does not open the library, so a
+  // library the person installed has a path and no version here.
+  const needsRuntime = !installed.runtime_path && !path.trim() && !!data.runtime_download;
+  const ready = !!installed.runtime_path && !!installed.model;
+  const runtime = installed.runtime_version
+    ? `ONNX Runtime ${installed.runtime_version}`
+    : 'ONNX Runtime at the path below';
+  return (
+    <fieldset className="desktop-worker-work" aria-describedby="desktop-worker-noise-model-state">
+      <legend>Noise model</legend>
+      <p className="muted" id="desktop-worker-noise-model-state" role="status">
+        {download.isPending
+          ? 'Downloading…'
+          : ready
+            ? `Installed: ${installed.model}, ${runtime}. Restart the worker after a download.`
+            : [
+              installed.runtime_path ? runtime : 'ONNX Runtime is not installed',
+              installed.model ? installed.model : 'the model is not installed',
+            ].join('; ') + '.'}
+      </p>
+      {!ready && !data.runtime_download && !installed.runtime_path && (
+        <p className="muted">
+          PSF Guard has no ONNX Runtime download for this computer. Install ONNX Runtime 1.17 or
+          later and enter its path.
+        </p>
+      )}
+      <button type="button" className="browse-button" disabled={disabled || download.isPending}
+        onClick={() => download.mutate({ runtime: needsRuntime, model: true })}>
+        {ready ? 'Update noise model' : 'Download noise model'}
+      </button>
+      <div className="database-config">
+        <label htmlFor="desktop-worker-onnxruntime">ONNX Runtime path</label>
+        <input
+          id="desktop-worker-onnxruntime"
+          aria-describedby="desktop-worker-onnxruntime-help"
+          className="file-path-input"
+          value={path}
+          onChange={(event) => onPath(event.target.value)}
+          disabled={disabled}
+        />
+        <p className="muted" id="desktop-worker-onnxruntime-help">
+          Leave blank to use the downloaded ONNX Runtime. To use one you installed, enter its
+          library file or the folder that contains it.
+        </p>
+      </div>
+      {download.error && <p className="error-text" role="alert">{errorText(download.error)}</p>}
+    </fieldset>
   );
 }

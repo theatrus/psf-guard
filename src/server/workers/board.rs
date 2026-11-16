@@ -54,11 +54,13 @@ const STALE_TASK_FILES: Duration = Duration::from_secs(6 * 3600);
 /// What a worker must offer to run a task.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TaskNeeds {
-    /// This RC-Astro tool, at this CLI and model version, licensed.
-    RcAstro {
-        tool: String,
+    /// This provider of a processing step, licensed, at the version that
+    /// identifies its output: an RC-Astro tool's CLI and model version, or
+    /// a Seiza model's identity line.
+    Step {
+        provider: String,
         name: String,
-        cli_version: String,
+        version: String,
         ml_version: Option<i64>,
     },
     /// Stacking at this Seiza stacking output version, on this PSF Guard
@@ -70,33 +72,32 @@ pub enum TaskNeeds {
 }
 
 impl TaskNeeds {
-    /// An RC-Astro step run with `schema`: its tool, licensed, at its CLI
-    /// and model version.
-    pub fn rc_astro(schema: &seiza_stacking::ExternalToolSchema) -> Self {
-        TaskNeeds::RcAstro {
-            tool: schema.key.clone(),
+    /// A processing step run with `schema`: its provider, licensed, at its
+    /// version.
+    pub fn step(schema: &seiza_stacking::ExternalToolSchema) -> Self {
+        TaskNeeds::Step {
+            provider: schema.key.clone(),
             name: schema.name.clone(),
-            cli_version: schema.cli_version.clone(),
+            version: schema.cli_version.clone(),
             ml_version: schema.ml_version,
         }
     }
 
     fn met_by(&self, offers: &Offers) -> bool {
         match self {
-            TaskNeeds::RcAstro {
-                tool,
-                cli_version,
+            TaskNeeds::Step {
+                provider,
+                version,
                 ml_version,
                 ..
-            } => {
-                offers.work.contains(&TaskKind::RcAstroStep)
-                    && offers.rc_astro.iter().any(|schema| {
-                        schema.key == *tool
-                            && schema.licensed
-                            && schema.cli_version == *cli_version
-                            && schema.ml_version == *ml_version
-                    })
-            }
+            } => crate::remote_work::steps::offers_of(offers)
+                .iter()
+                .any(|offer| {
+                    offer.provider == *provider
+                        && offer.schema.licensed
+                        && offer.schema.cli_version == *version
+                        && offer.schema.ml_version == *ml_version
+                }),
             TaskNeeds::Stack {
                 stacking_version,
                 release,
@@ -111,9 +112,10 @@ impl TaskNeeds {
     /// What the task needs, as a person reads it.
     fn describe(&self) -> String {
         match self {
-            TaskNeeds::RcAstro {
-                name, cli_version, ..
-            } => format!("{name} {cli_version}"),
+            TaskNeeds::Step { name, version, .. } => format!(
+                "{name} {}",
+                crate::remote_work::noise_model::display_version(version)
+            ),
             TaskNeeds::Stack {
                 stacking_version,
                 release,
@@ -121,6 +123,8 @@ impl TaskNeeds {
         }
     }
 }
+
+use crate::remote_work::steps::is_rc_astro;
 
 /// A task to put on the board.
 pub struct NewTask {
@@ -219,6 +223,9 @@ struct Task {
     stop_requested: bool,
     /// Stops the work when this server's worker runs it.
     local_stop: Option<crate::concurrency::Stop>,
+    /// A person's task took this server's worker from it: when the worker
+    /// answers that it stopped, the task goes back in the queue.
+    preempted: bool,
     /// When the worker last reported or sent an output: a stop that lets
     /// the worker finish waits while it keeps doing so.
     last_report: Option<Instant>,
@@ -339,10 +346,43 @@ struct Inner {
 
 impl Inner {
     fn placement(&self, kind: TaskKind) -> WorkPlacement {
+        // One choice covers every provider's steps. It is stored under the
+        // RC-Astro kind, which was the only one before providers.
+        let kind = match kind {
+            TaskKind::ProcessingStep => TaskKind::RcAstroStep,
+            kind => kind,
+        };
         self.placements
             .get(&kind)
             .copied()
             .unwrap_or_else(|| WorkPlacement::default_for(kind))
+    }
+
+    /// A person's task with `needs` was queued. When this server's worker
+    /// would run it but is busy with automatic work, stop that work: it
+    /// goes back in the queue when the worker answers, and the person's
+    /// task, which goes first, takes the worker. A long automatic model run
+    /// would otherwise keep a person waiting for all of it.
+    fn preempt_automatic_work(&mut self, needs: &TaskNeeds, kind: TaskKind) {
+        let placement = self.placement(kind);
+        let Some((local, _)) = self.sessions.iter().find(|(_, session)| {
+            session.local && needs.met_by(&session.offers) && placement.allows(true)
+        }) else {
+            return;
+        };
+        let local = local.clone();
+        for task in self.tasks.values_mut() {
+            let runs_here =
+                matches!(&task.state, TaskState::Leased { session, .. } if *session == local);
+            if runs_here
+                && !task.person
+                && !task.preempted
+                && let Some(stop) = &task.local_stop
+            {
+                task.preempted = true;
+                stop.request();
+            }
+        }
     }
 
     /// Whether `session` may run `task`: it offers what the task needs, the
@@ -391,6 +431,29 @@ impl Default for Timings {
     }
 }
 
+/// Which worker a session is: the token it joined with and its name. They
+/// stay the same when the worker registers again.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct WorkerIdentity {
+    pub token_id: String,
+    pub name: String,
+    /// This server's own worker.
+    pub local: bool,
+}
+
+/// One RC-Astro tool on a worker and its local license state.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ToolLicense {
+    pub provider: String,
+    pub name: String,
+    pub version: String,
+    pub licensed: bool,
+    /// The license line the tool printed. It gives the licensee, and
+    /// Settings › Workers is for people who run the server.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
 /// A connected worker, for Settings › Workers.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SessionSummary {
@@ -407,10 +470,21 @@ pub struct SessionSummary {
     pub slots: usize,
     /// The licensed RC-Astro tools it takes, as "StarXTerminator 2.6.6".
     pub rc_astro: Vec<String>,
+    /// The rc-astro it found, when it reported one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rc_astro_path: Option<String>,
+    /// Each RC-Astro tool it has, with the license state the tool itself
+    /// reports. This is the local state: no online check is made for it.
+    pub rc_astro_tools: Vec<ToolLicense>,
+    /// Whether it can be asked for an online license check.
+    pub license_check: bool,
     /// The Seiza stacking version it stacks builds with, when it takes
     /// stack builds.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stacking_version: Option<String>,
+    /// The noise model it runs, as "noise-v1-d33 cpu f32, …".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub noise_model: Option<String>,
     pub file_mode: FileMode,
     /// Whether task files reach it by path.
     pub exchange_shared: bool,
@@ -835,6 +909,7 @@ impl Board {
         let mut inner = self.lock();
         let seq = inner.next_seq;
         inner.next_seq += 1;
+        let preempts = task.person.then(|| (task.needs.clone(), task.kind));
         inner.tasks.insert(
             id,
             Task {
@@ -857,9 +932,13 @@ impl Board {
                 preview: None,
                 stop_requested: false,
                 local_stop: None,
+                preempted: false,
                 last_report: None,
             },
         );
+        if let Some((needs, kind)) = preempts {
+            inner.preempt_automatic_work(&needs, kind);
+        }
         drop(inner);
         self.notify();
         Ok(())
@@ -961,7 +1040,13 @@ impl Board {
         let assignment = Assignment {
             task: id.clone(),
             lease,
-            kind: task.kind,
+            // A worker older than providers knows an RC-Astro step by its
+            // old kind; the spec reads the same.
+            kind: if task.kind == TaskKind::ProcessingStep && found.offers.steps.is_empty() {
+                TaskKind::RcAstroStep
+            } else {
+                task.kind
+            },
             label: task.label.clone(),
             spec: task.spec.clone(),
             inputs: task
@@ -1270,7 +1355,25 @@ impl Board {
                 .values()
                 .any(|other| other.local && needs.met_by(&other.offers));
         let found = inner.tasks.get_mut(task).expect("the task is current");
-        if let (true, Some(refuser)) = (fallback, &refuser) {
+        if found.preempted {
+            // It stopped for a person's task, not for a fault: it waits its
+            // turn again, and the stop does not count against it.
+            found.preempted = false;
+            found.stop_requested = false;
+            found.local_stop = None;
+            found.events.clear();
+            found.events_received = 0;
+            found.preview = None;
+            found.last_report = None;
+            found.fraction = 0.0;
+            if let TaskState::Leased { lease, .. } = &found.state {
+                let old = found.lease_dir(lease);
+                inner.trash.push(old);
+            }
+            let found = inner.tasks.get_mut(task).expect("the task is current");
+            tracing::info!("{} went back in the queue for a person's step", found.label);
+            found.state = TaskState::Queued;
+        } else if let (true, Some(refuser)) = (fallback, &refuser) {
             found.refused_by.insert(refuser.token_and_name());
             let old = found.requeue(format!("{worker} could not run it: {error}"));
             inner.trash.extend(old);
@@ -1287,28 +1390,61 @@ impl Board {
         Ok(())
     }
 
-    /// The RC-Astro schemas of each connected worker that may run RC-Astro
-    /// steps under their placement: other machines' by name, then this
-    /// server's, which is the fallback.
-    pub fn rc_astro_offers(&self) -> Vec<(String, bool, Vec<seiza_stacking::ExternalToolSchema>)> {
+    /// The worker with `session`, when it can be asked for an online license
+    /// check, or why it cannot.
+    pub fn license_checkable(&self, session: &str) -> Result<WorkerIdentity, String> {
         let now = Instant::now();
         let inner = self.lock();
-        let placement = inner.placement(TaskKind::RcAstroStep);
+        let found = inner
+            .sessions
+            .get(session)
+            .filter(|found| found.online(now))
+            .ok_or_else(|| "That worker is not connected".to_string())?;
+        if !found.local && !found.offers.license_check {
+            return Err(format!(
+                "{} cannot be asked for a license check: it has no rc-astro, or runs a PSF Guard \
+                 from before the check. On that computer, run `psf-guard-cli rc-astro license`",
+                found.name
+            ));
+        }
+        Ok(WorkerIdentity {
+            token_id: found.token_id.clone(),
+            name: found.name.clone(),
+            local: found.local,
+        })
+    }
+
+    /// The token and name of the worker with `session`. A worker that
+    /// registers again gets a new session and keeps these.
+    pub fn identity_of(&self, session: &str) -> Option<WorkerIdentity> {
+        let inner = self.lock();
+        let found = inner.sessions.get(session)?;
+        Some(WorkerIdentity {
+            token_id: found.token_id.clone(),
+            name: found.name.clone(),
+            local: found.local,
+        })
+    }
+
+    /// The providers each connected worker offers and may run under the
+    /// placement of processing steps: other machines' by name, then this
+    /// server's, which is the fallback.
+    pub fn step_offers(&self) -> Vec<(String, bool, Vec<crate::remote_work::steps::StepOffer>)> {
+        let now = Instant::now();
+        let inner = self.lock();
+        let placement = inner.placement(TaskKind::ProcessingStep);
         let mut offers = inner
             .sessions
             .values()
             .filter(|found| found.online(now) && placement.allows(found.local))
-            .filter(|found| {
-                found.offers.work.contains(&TaskKind::RcAstroStep)
-                    && !found.offers.rc_astro.is_empty()
-            })
             .map(|found| {
                 (
                     found.name.clone(),
                     found.local,
-                    found.offers.rc_astro.clone(),
+                    crate::remote_work::steps::offers_of(&found.offers),
                 )
             })
+            .filter(|(_, _, steps)| !steps.is_empty())
             .collect::<Vec<_>>();
         offers.sort_by(|left, right| left.1.cmp(&right.1).then_with(|| left.0.cmp(&right.0)));
         offers
@@ -1325,7 +1461,14 @@ impl Board {
         let mut sessions = inner
             .sessions
             .iter()
-            .map(|(id, found)| SessionSummary {
+            .map(|(id, found)| {
+                (
+                    id,
+                    found,
+                    crate::remote_work::steps::offers_of(&found.offers),
+                )
+            })
+            .map(|(id, found, steps)| SessionSummary {
                 session: id.clone(),
                 token_id: found.token_id.clone(),
                 name: found.name.clone(),
@@ -1336,13 +1479,10 @@ impl Board {
                 seconds_since_seen: now.duration_since(found.last_seen).as_secs(),
                 threads: found.offers.threads,
                 slots: found.slots(),
-                rc_astro: found
-                    .offers
-                    .rc_astro
+                rc_astro: steps
                     .iter()
-                    .filter(|_| found.offers.work.contains(&TaskKind::RcAstroStep))
-                    .filter(|schema| schema.licensed)
-                    .map(|schema| format!("{} {}", schema.name, schema.cli_version))
+                    .filter(|offer| offer.schema.licensed && is_rc_astro(&offer.provider))
+                    .map(|offer| format!("{} {}", offer.schema.name, offer.schema.cli_version))
                     .collect(),
                 stacking_version: found
                     .offers
@@ -1350,6 +1490,26 @@ impl Board {
                     .contains(&TaskKind::StackChannel)
                     .then(|| found.offers.stacking_version.clone())
                     .flatten(),
+                rc_astro_path: found.offers.rc_astro_path.clone(),
+                rc_astro_tools: steps
+                    .iter()
+                    .filter(|offer| is_rc_astro(&offer.provider))
+                    .map(|offer| ToolLicense {
+                        provider: offer.provider.clone(),
+                        name: offer.schema.name.clone(),
+                        version: offer.schema.cli_version.clone(),
+                        licensed: offer.schema.licensed,
+                        message: offer.schema.license_message.clone(),
+                    })
+                    .collect(),
+                license_check: found.offers.license_check && found.online(now),
+                noise_model: steps
+                    .iter()
+                    .find(|offer| !is_rc_astro(&offer.provider))
+                    .map(|offer| {
+                        crate::remote_work::noise_model::display_version(&offer.schema.cli_version)
+                            .to_string()
+                    }),
                 file_mode: found.files.mode,
                 exchange_shared: found.exchange_shared,
                 exchange_problem: found.exchange_problem.clone(),

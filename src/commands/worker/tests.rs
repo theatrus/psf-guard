@@ -131,6 +131,7 @@ fn start_controlled_worker(
         tools: LocalTools {
             rc_astro: crate::remote_work::rc_astro::locate(None),
             slots: 1,
+            ..Default::default()
         },
         work,
         slots: 1,
@@ -264,6 +265,179 @@ async fn a_remote_worker_downloads_the_input_and_uploads_the_result() {
         std::fs::read_dir(work.path()).is_ok_and(|mut entries| entries.next().is_none())
     })
     .await;
+
+    drop(stop);
+    worker.await.unwrap().unwrap();
+    eventually("the worker leaves", || connected(&server).is_none()).await;
+}
+
+/// A person asks one worker for RC-Astro's account status. The check is a
+/// tracked job: the request returns at once, the worker answers on its side
+/// connection though its one slot is busy, and nothing it runs is stopped.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_busy_worker_answers_a_license_check_only_when_asked() {
+    use tower::ServiceExt as _;
+    // A holding tool: a step stays in the worker's one slot until released.
+    let tool = crate::server::stack_preview::rc_astro::test_tool::install(true);
+    let server = server().await;
+    let work = tempfile::tempdir().unwrap();
+    let (stop, worker) = start_worker(&server, FileAccess::default(), work.path());
+    eventually("the worker connects", || connected(&server).is_some()).await;
+    let row = connected(&server).unwrap();
+    assert!(row.license_check);
+    assert!(row
+        .rc_astro_path
+        .as_deref()
+        .is_some_and(|path| path.ends_with("rc-astro")));
+    assert_eq!(row.rc_astro_tools.len(), 3);
+    assert!(row.rc_astro_tools.iter().all(|found| found.licensed));
+    // Connecting and listing made no online check.
+    assert_eq!(tool.license_calls(), 0);
+
+    let call = |method: &'static str, path: String, body: serde_json::Value| {
+        let app = crate::server::api_router(Arc::clone(&server.state));
+        async move {
+            let response = app
+                .oneshot(
+                    axum::http::Request::builder()
+                        .method(method)
+                        .uri(path)
+                        .header("content-type", "application/json")
+                        .body(axum::body::Body::from(body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let status = response.status();
+            let body = axum::body::to_bytes(response.into_body(), 1 << 20)
+                .await
+                .unwrap();
+            (
+                status,
+                serde_json::from_slice::<serde_json::Value>(&body).unwrap_or_default(),
+            )
+        }
+    };
+    let start = |worker: Option<&str>| {
+        call(
+            "POST",
+            "/tools/rc-astro/license-check".into(),
+            match worker {
+                Some(session) => serde_json::json!({ "worker": session }),
+                None => serde_json::json!({}),
+            },
+        )
+    };
+    let ended = |key: String| {
+        let call = &call;
+        async move {
+            for _ in 0..400 {
+                let (status, body) = call(
+                    "GET",
+                    format!("/tools/rc-astro/license-check/{key}"),
+                    serde_json::json!({}),
+                )
+                .await;
+                assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+                if body["data"]["running"] == false {
+                    return body["data"].clone();
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            panic!("the check did not end");
+        }
+    };
+
+    // A worker's check is for the people who run the server.
+    let (status, _) = start(Some(&row.session)).await;
+    assert_eq!(status, axum::http::StatusCode::FORBIDDEN);
+    server.state.set_allow_database_management(true);
+    let (status, body) = start(Some("no-such-session")).await;
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"], "That worker is not connected");
+    assert_eq!(tool.license_calls(), 0);
+
+    // Fill the worker's one slot with a step that holds.
+    let running = tokio::spawn({
+        let board = Arc::clone(&server.state.workers.board);
+        async move {
+            tokio::task::spawn_blocking(move || {
+                crate::server::workers::rc_astro::run_on_board(
+                    &board,
+                    false,
+                    &noise_x(),
+                    &request(),
+                    &image(),
+                    &[],
+                    None,
+                    &mut |_, _| {},
+                )
+            })
+            .await
+            .unwrap()
+        }
+    });
+    eventually("the step starts on the worker", || tool.invocations() == 1).await;
+
+    // The request returns at once with a running check, and a second click
+    // joins it rather than asking RC-Astro again.
+    let (status, started) = start(Some(&row.session)).await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{started}");
+    assert_eq!(started["data"]["computer"], "test-worker");
+    let key = started["data"]["key"].as_str().unwrap().to_string();
+    let (_, again) = start(Some(&row.session)).await;
+    assert_eq!(again["data"]["key"], key.as_str());
+    // The job line has its row, with no result in it.
+    if started["data"]["running"] == true {
+        let rows = server.state.workers.license_checks.running();
+        assert!(rows.iter().all(|row| row.computer == "test-worker"));
+    }
+    let done = ended(key.clone()).await;
+    assert_eq!(done["check"]["cli_version"], "9.9.9-test");
+    assert_eq!(done["check"]["report"]["computer"], "ann@stand-in");
+    assert_eq!(done["check"]["report"]["account_email"], "user@example.com");
+    assert_eq!(
+        done["check"]["report"]["products"][0]["message"],
+        "Permanent license through ML4"
+    );
+    assert_eq!(tool.license_calls(), 1);
+    // The step in the worker's slot was not stopped for it, and is still
+    // the one run.
+    assert!(!running.is_finished());
+    assert_eq!(tool.invocations(), 1);
+    tool.release();
+    running.await.unwrap().unwrap();
+
+    // Offline, the worker sends RC-Astro's own error and no report.
+    tool.go_offline();
+    let (_, started) = start(Some(&row.session)).await;
+    let done = ended(started["data"]["key"].as_str().unwrap().to_string()).await;
+    assert!(done["check"]["report"].is_null());
+    assert_eq!(
+        done["check"]["error"],
+        "Could not reach the RC-Astro license server"
+    );
+    assert!(done["check"]["failure"].is_null());
+    assert_eq!(tool.license_calls(), 2);
+
+    // This server's own check runs the same command here.
+    let (status, started) = start(None).await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{started}");
+    assert_eq!(started["data"]["computer"], "this server");
+    let done = ended(started["data"]["key"].as_str().unwrap().to_string()).await;
+    assert_eq!(
+        done["check"]["error"],
+        "Could not reach the RC-Astro license server"
+    );
+    assert_eq!(tool.license_calls(), 3);
+    let (status, _) = call(
+        "GET",
+        "/tools/rc-astro/license-check/nothing".into(),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::NOT_FOUND);
 
     drop(stop);
     worker.await.unwrap().unwrap();
@@ -582,6 +756,7 @@ fn maps_imply_shared_files_and_must_name_both_sides() {
         maps: maps.iter().map(|map| map.to_string()).collect(),
         work_dir: None,
         rc_astro: None,
+        onnxruntime: None,
         work: Vec::new(),
         slots: 1,
     };
@@ -909,8 +1084,8 @@ async fn the_server_keeps_a_running_image_only_from_the_current_lease_and_only_a
         .unwrap();
     let client = Client::new(&server.address, &server.secret).unwrap();
     let (offers, _) = LocalTools {
-        rc_astro: None,
         slots: 1,
+        ..Default::default()
     }
     .offers(1, &WorkChoice::parse(&["stack".into()]).unwrap());
     let session = client

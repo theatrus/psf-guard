@@ -66,6 +66,24 @@ pub struct Offers {
     /// sends a channel only to a worker on its own release.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stacking_release: Option<String>,
+    /// Every provider of a processing step the worker runs, by category:
+    /// the RC-Astro tools again, and Seiza's noise model when ONNX Runtime
+    /// and a model are installed. A server sends a step only to a worker
+    /// that offers its provider at the version the step was planned with.
+    /// A worker older than providers sends none; the server then reads its
+    /// `rc_astro` tools as offers. `work` does not list
+    /// [`TaskKind::ProcessingStep`], so a server older than providers still
+    /// reads the registration, and sends the worker RC-Astro steps as before.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub steps: Vec<crate::remote_work::steps::StepOffer>,
+    /// The rc-astro the worker found, for Settings › Workers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rc_astro_path: Option<String>,
+    /// Whether the worker asks the server for side requests, such as an
+    /// RC-Astro license check, and has rc-astro to answer one. A worker
+    /// from before side requests lacks the field and is never asked.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub license_check: bool,
 }
 
 fn one_slot() -> usize {
@@ -172,10 +190,16 @@ pub struct Assignment {
 #[serde(rename_all = "snake_case")]
 pub enum TaskKind {
     /// One RC-Astro tool over one image. See
-    /// [`crate::remote_work::rc_astro`].
+    /// [`crate::remote_work::rc_astro`]. What servers older than providers
+    /// send, and what a worker older than providers is sent.
     RcAstroStep,
     /// One channel of a stack build: its frames integrated into a stack.
     StackChannel,
+    /// One provider's step over one image: an RC-Astro tool or one of
+    /// Seiza's models. See [`crate::remote_work::steps`]. A worker older
+    /// than providers is sent an RC-Astro provider's step as
+    /// [`TaskKind::RcAstroStep`], which has the same spec.
+    ProcessingStep,
 }
 
 /// A file the task reads.
@@ -366,4 +390,41 @@ mod tests {
             assert!(!valid_file_name(name), "{name}");
         }
     }
+}
+
+/// `POST /api/workers/v1/sessions/{session}/side`: something a person asked
+/// this worker for that is not work for a slot, answered with `200`. `204`
+/// means nothing was asked within the poll time. A worker asks on a
+/// connection of its own, so a worker with every slot busy still answers.
+/// A server from before side requests answers `404`, and the worker stops
+/// asking.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SideRequest {
+    pub id: String,
+    pub kind: SideKind,
+}
+
+/// What a side request asks for. A kind a worker does not know is answered
+/// with a refusal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SideKind {
+    /// RC-Astro's account status, checked online: `rc-astro license
+    /// --json`, run as the worker's account. The answer is a
+    /// [`crate::remote_work::rc_astro::LicenseCheck`].
+    RcAstroLicense,
+    /// A kind from a later server.
+    #[serde(other)]
+    Unknown,
+}
+
+/// `POST /api/workers/v1/sessions/{session}/side/{id}`: the worker's answer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SideAnswer {
+    /// The answer, as the request's kind defines it.
+    #[serde(default)]
+    pub result: serde_json::Value,
+    /// Why the worker could not answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }

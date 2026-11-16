@@ -78,7 +78,7 @@ test('this computer saves its worker settings, then starts and stops the worker'
   await computer.getByLabel('Server address').fill('http://observatory.local:3000');
   await computer.getByLabel('Worker token').fill(`psfw_${'a'.repeat(64)}`);
   await computer.getByLabel('Worker name').fill('studio-mac');
-  await computer.getByRole('checkbox', { name: 'RC-Astro tools' }).uncheck();
+  await computer.getByRole('checkbox', { name: 'Processing steps' }).uncheck();
   await computer.getByRole('checkbox', { name: 'Start worker at login' }).check();
   // Shared storage is optional, under Task files.
   await computer.getByText('Task files', { exact: true }).click();
@@ -97,6 +97,7 @@ test('this computer saves its worker settings, then starts and stops the worker'
     maps: [{ server: '/srv/astro', local: '/Volumes/astro' }],
     work_dir: null,
     rc_astro: null,
+    onnxruntime: null,
     work: ['stack'],
     slots: 1,
     token: `psfw_${'a'.repeat(64)}`,

@@ -163,6 +163,10 @@ import type { GuidFillReport, GuidReport, ImportedCopiesMerge, ImportedCopiesRep
   StackViewProcessingRequest,
   AstrometryCapabilities,
   RcAstroCapabilities,
+  RcAstroLicenseCheckStatus,
+  SeizaNoiseModel,
+  NoiseModelDownloadPart,
+  NoiseModelDownloadProgress,
   StackStretchPendingProgress,
   AstrometryValidationReport,
   CatalogInstallPreset,
@@ -355,6 +359,31 @@ const stackStretchError = (cause: unknown, fallback: string): Error => {
   }
   return cause instanceof Error ? cause : new Error(fallback);
 };
+
+/** Call a license check route, or throw the server's own message when it
+ *  refuses. */
+async function licenseCheck(
+  method: 'get' | 'post',
+  path: string,
+  body?: unknown,
+): Promise<RcAstroLicenseCheckStatus> {
+  const apiInstance = await getApi();
+  try {
+    const { data } = method === 'get'
+      ? await apiInstance.get<ApiResponse<RcAstroLicenseCheckStatus>>(path)
+      : await apiInstance.post<ApiResponse<RcAstroLicenseCheckStatus>>(path, body);
+    if (!data.data) throw new Error(data.error || 'The license check failed');
+    return data.data;
+  } catch (cause) {
+    if (axios.isAxiosError<ApiResponse<unknown>>(cause)) {
+      throw new Error(
+        cause.response?.data?.error || cause.message || 'The license check failed',
+        { cause },
+      );
+    }
+    throw cause;
+  }
+}
 
 /** What a stack build is asked for, alone or split by channel. */
 export type StackPreviewStartRequest = {
@@ -1356,6 +1385,22 @@ export const apiClient = {
     return data.data;
   },
 
+  /** Start an online RC-Astro license check on this server or, with a
+   *  worker's session, on that worker. Returns at once; a check already
+   *  running for that computer is returned instead of a second one. */
+  startRcAstroLicenseCheck: async (workerSession?: string): Promise<RcAstroLicenseCheckStatus> =>
+    licenseCheck('post', '/tools/rc-astro/license-check', workerSession ? { worker: workerSession } : {}),
+
+  /** A license check's state, and its report once it has ended. */
+  getRcAstroLicenseCheck: async (key: string): Promise<RcAstroLicenseCheckStatus> =>
+    licenseCheck('get', `/tools/rc-astro/license-check/${encodeURIComponent(key)}`),
+
+  /** Stop a license check under way. */
+  stopRcAstroLicenseCheck: async (key: string): Promise<void> => {
+    const apiInstance = await getApi();
+    await apiInstance.post(`/tools/rc-astro/license-check/${encodeURIComponent(key)}/stop`);
+  },
+
   getWorkers: async (): Promise<WorkersSettings> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.get<ApiResponse<WorkersSettings>>('/workers');
@@ -1734,7 +1779,39 @@ export const apiClient = {
   getRcAstroCapabilities: async (): Promise<RcAstroCapabilities> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.get<ApiResponse<RcAstroCapabilities>>('/tools/rc-astro');
-    if (!data.data) throw new Error(data.error || 'Failed to probe RC-Astro tools');
+    if (!data.data) throw new Error(data.error || 'Failed to check the processing tools');
+    return data.data;
+  },
+
+  /** Download ONNX Runtime, the noise model, or both to the server. */
+  downloadNoiseModel: async (
+    parts: NoiseModelDownloadPart[],
+    /** Download ONNX Runtime again when this release is installed. */
+    force = false,
+  ): Promise<NoiseModelDownloadProgress> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<NoiseModelDownloadProgress>>(
+      '/tools/noise-model/download',
+      force ? { parts, force } : { parts }
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to start the download');
+    return data.data;
+  },
+
+  /** Stop the noise model download under way. */
+  stopNoiseModelDownload: async (): Promise<void> => {
+    const apiInstance = await getApi();
+    await apiInstance.post('/tools/noise-model/download/stop');
+  },
+
+  /** Set, or with an empty path clear, the ONNX Runtime the server uses. */
+  updateNoiseModelSettings: async (onnxruntime: string): Promise<SeizaNoiseModel> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.put<ApiResponse<SeizaNoiseModel>>(
+      '/settings/noise-model',
+      { onnxruntime: onnxruntime.trim() || null }
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to save the ONNX Runtime path');
     return data.data;
   },
 

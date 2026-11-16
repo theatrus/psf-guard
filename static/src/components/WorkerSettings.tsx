@@ -1,3 +1,4 @@
+import RcAstroLicenseCheck from './RcAstroLicenseCheck';
 import { useEffect, useState, type FormEvent } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
@@ -17,7 +18,7 @@ const WORKERS_QUERY_KEY = ['workers'] as const;
 type PlacementKind = 'rc_astro' | 'stack';
 
 const PLACEMENT_KINDS: Array<{ kind: PlacementKind; legend: string; fallback: WorkPlacement }> = [
-  { kind: 'rc_astro', legend: 'RC-Astro tools', fallback: 'workers_first' },
+  { kind: 'rc_astro', legend: 'Processing steps', fallback: 'workers_first' },
   { kind: 'stack', legend: 'Stack builds', fallback: 'this_server' },
 ];
 
@@ -76,8 +77,20 @@ function WorkerRow({ worker }: { worker: WorkerSessionSummary }) {
           <span className="muted">
             {worker.rc_astro.length
               ? worker.rc_astro.join(', ')
-              : 'No RC-Astro tools'}
+              : 'No processing tools'}
           </span>
+          {worker.rc_astro_path && (
+            <span className="muted">rc-astro: <code>{worker.rc_astro_path}</code></span>
+          )}
+          {worker.rc_astro_tools?.map((tool) => (
+            <span className="muted" key={tool.provider} data-licensed={tool.licensed}
+              title={tool.message}>
+              {tool.name.replace(/^RC-Astro /, '')} {tool.version}: {tool.licensed ? 'licensed' : 'not licensed'}
+            </span>
+          ))}
+          {worker.noise_model && (
+            <span className="muted">Noise model ({worker.noise_model})</span>
+          )}
           {worker.stacking_version && (
             <span className="muted">Stack builds (Seiza stacking {worker.stacking_version})</span>
           )}
@@ -89,6 +102,22 @@ function WorkerRow({ worker }: { worker: WorkerSessionSummary }) {
             </span>
           )}
         </div>
+        {worker.connected && worker.license_check && (
+          <RcAstroLicenseCheck
+            where={worker.local ? 'this server' : worker.name}
+            start={() => apiClient.startRcAstroLicenseCheck(worker.local ? undefined : worker.session)}
+            read={apiClient.getRcAstroLicenseCheck}
+            stop={apiClient.stopRcAstroLicenseCheck}
+          />
+        )}
+        {worker.connected && !worker.license_check && !!worker.rc_astro_tools?.length && (
+          <div className="user-row-details">
+            <span className="muted">
+              To check its license, update PSF Guard on this worker, or run{' '}
+              <code>psf-guard-cli rc-astro license</code> there.
+            </span>
+          </div>
+        )}
         {worker.running.map((task, index) => (
           <div className="user-row-details" key={index}>
             <span>
@@ -215,7 +244,7 @@ export default function WorkerSettings() {
         <div>
           <h3>Workers for this server</h3>
           <p>
-            Use other computers to build stacks and run RC-Astro tools for this
+            Use other computers to build stacks and run processing steps for this
             server. Create a worker token here, then use it to connect the PSF Guard
             app or <code>psf-guard worker</code> on the worker computer. This server
             stores the catalog and processing results.

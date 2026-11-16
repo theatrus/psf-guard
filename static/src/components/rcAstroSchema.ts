@@ -6,14 +6,21 @@ import type {
   RcAstroParameterValue,
   RcAstroProcessing,
 } from '../api/types';
+import { normalizeCapabilities, processingCapabilitiesKey } from './processingTools';
 
-/** The server's RC-Astro tools and their live schemas, shared across panels. */
-export function useRcAstroCapabilities() {
+/**
+ * The server's processing providers and their live schemas, shared across
+ * panels: the RC-Astro tools and Seiza's noise model. Polls while a noise
+ * model download runs.
+ */
+export function useRcAstroCapabilities(options: { refetchOnMount?: 'always' } = {}) {
   return useQuery({
-    queryKey: ['rc-astro-capabilities'],
-    queryFn: apiClient.getRcAstroCapabilities,
+    queryKey: processingCapabilitiesKey,
+    queryFn: async () => normalizeCapabilities(await apiClient.getRcAstroCapabilities()),
     staleTime: 5 * 60 * 1000,
     retry: false,
+    refetchInterval: (query) => (query.state.data?.seiza?.download.running ? 1000 : false),
+    ...options,
   });
 }
 
@@ -41,7 +48,7 @@ export function rcAstroProblem(
     const schema = tools?.find((tool) => tool.key === step.tool);
     for (const [name, value] of Object.entries(step.parameters)) {
       if (typeof value === 'number' && !Number.isFinite(value)) {
-        return 'Enter a finite value for every RC-Astro parameter';
+        return 'Enter a finite value for every processing parameter';
       }
       const parameter = schema?.parameters.find((candidate) => candidate.name === name);
       const problem = parameter ? rangeProblem(parameter, value) : null;

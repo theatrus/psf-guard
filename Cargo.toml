@@ -53,6 +53,9 @@ semver = "1"
 byteorder = "1.5"
 seiza = "0.52.0"
 seiza-download = "0.10.0"
+# The learned noise model. It links nothing native: ONNX Runtime is found and
+# opened at run time, and only after a person asked PSF Guard to download it.
+seiza-model = "0.3.0"
 seiza-imgproc = { version = "0.3.2", features = ["parallel"] }
 seiza-fits = "=0.8.1"
 seiza-image-io = "0.13.1"
@@ -111,6 +114,9 @@ dunce = "1"
 rpassword = "7.5.4"
 async_zip = { version = "0.0.19", features = ["tokio"] }
 zip = { version = "9", default-features = false, features = ["deflate"] }
+# Unpack the ONNX Runtime release archive for Linux and macOS.
+tar = { version = "0.4", default-features = false }
+flate2 = "1"
 reflink-copy = "0.1.30"
 rmcp = { version = "3.5.1", features = ["server", "macros", "schemars", "transport-streamable-http-server", "transport-io"] }
 schemars = "1"

@@ -307,6 +307,9 @@ pub async fn update_stack_gpu(
     })
     .await?;
     gpu::configure(gpu);
+    // The noise model's backend follows the main switch, and with it what
+    // this server offers.
+    state.workers.forget_local_offers();
     Ok(Json(ApiResponse::success(gpu_response(gpu))))
 }
 

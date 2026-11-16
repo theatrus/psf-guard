@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import { http, HttpResponse } from 'msw';
 import { server } from '../../test/msw-server';
 import StackRcAstroControls from '../StackRcAstroControls';
+import { OPEN_SETTINGS_EVENT } from '../../utils/settingsIntent';
 import type { RcAstroProcessing } from '../../api/types';
 
 function ok(data: unknown) {
@@ -77,19 +78,296 @@ const capabilities = {
   ],
 };
 
+
+const nxt = {
+  schema_version: 6,
+  cli_version: '2.6.6',
+  key: 'nxt',
+  name: 'RC-Astro NoiseXTerminator',
+  ml_version: 3,
+  licensed: true,
+  license_message: 'Permanently licensed',
+  parameters: [
+    {
+      name: 'dn', flag: '--dn', label: 'Denoise', description: 'Amount of denoising',
+      kind: { type: 'float', default: 0.9, min: 0, max: 1 },
+    },
+  ],
+};
+
+const noiseVersion = 'noise-v1-d33 cpu f32, seiza-model 0.1.0, band scale 5';
+
+const noiseSchema = {
+  schema_version: 1,
+  cli_version: `${noiseVersion}, card abc`,
+  key: 'noise-model',
+  name: 'Seiza noise model',
+  ml_version: null,
+  licensed: true,
+  license_message: null,
+  parameters: [
+    { name: 'grain', flag: '--grain', label: 'Grain', description: 'Grain removed', kind: { type: 'float', default: 0.7, min: 0, max: 1 } },
+    { name: 'mottle', flag: '--mottle', label: 'Mottle', description: 'Mottle removed', kind: { type: 'float', default: 0.9, min: 0, max: 1 } },
+  ],
+};
+
+const [bxt, sxt] = capabilities.tools;
+
+function provider(category: string, schema: { key: string; name: string; cli_version: string }, extra: object = {}) {
+  return {
+    category, provider: schema.key, name: schema.name, state: 'ready',
+    version: schema.cli_version, schema, this_server: true, workers: [], ...extra,
+  };
+}
+
+const noiseModelMissing = {
+  category: 'denoise', provider: 'noise-model', name: 'Seiza noise model', state: 'not_installed',
+  reason: 'The Seiza noise model is not downloaded.', remedy: 'download_noise_model',
+  this_server: false, workers: [],
+};
+
+/** A server with the provider list: all three RC-Astro tools and the noise model. */
+const listed = {
+  available: true,
+  tools: [bxt, nxt, sxt, noiseSchema],
+  this_server: true, workers: [], tool_workers: {},
+  providers: [
+    provider('sharpen', bxt),
+    provider('denoise', nxt),
+    provider('denoise', noiseSchema, { version: noiseVersion }),
+    provider('star_removal', sxt),
+  ],
+};
+
+const options = (select: HTMLElement) =>
+  within(select).getAllByRole('option').map((option) => option.textContent);
+
 describe('StackRcAstroControls', () => {
-  it('renders nothing when rc-astro is not installed', async () => {
+  it('renders nothing when the server lists no provider', async () => {
     server.use(http.get('/api/tools/rc-astro', () => ok({ available: false, tools: [] })));
     const { container } = render(
       <StackRcAstroControls label="Sh2 157 R" config={null} disabled={false} onChange={() => {}} />,
       { wrapper: wrapper() }
     );
-    await waitFor(() =>
-      expect(container.querySelector('.stack-rc-astro-controls')).toBeNull()
-    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(container).toBeEmptyDOMElement();
   });
 
-  it('builds controls from the schema and keeps the stars image by default', async () => {
+  it('shows a checkbox where one provider is ready and a picker where two are, in run order', async () => {
+    server.use(http.get('/api/tools/rc-astro', () => ok(listed)));
+    render(
+      <StackRcAstroControls label="Sh2 157 R" config={null} disabled={false} onChange={() => {}} />,
+      { wrapper: wrapper() }
+    );
+    const card = await screen.findByRole('region', { name: 'Sh2 157 R processing tools' });
+    expect(within(card).getByText('Processing tools')).toBeInTheDocument();
+    // Each category is a group a test or a screen reader can find.
+    expect(within(card).getAllByRole('group').map((group) => group.getAttribute('aria-label')))
+      .toEqual(['Sharpening', 'Noise reduction', 'Star removal']);
+    const sharpening = within(card).getByRole('group', { name: 'Sharpening' });
+    expect(within(sharpening).getByRole('checkbox', { name: 'RC-Astro BlurXTerminator' })).not.toBeChecked();
+    expect(within(sharpening).queryByRole('combobox')).toBeNull();
+    // Noise reduction has two providers.
+    const denoise = within(card).getByRole('group', { name: 'Noise reduction' });
+    expect(options(within(denoise).getByRole('combobox', { name: 'Noise reduction' })))
+      .toEqual(['Off', 'NoiseXTerminator', 'Seiza noise model']);
+    expect(within(denoise).queryByRole('checkbox')).toBeNull();
+    const starRemoval = within(card).getByRole('group', { name: 'Star removal' });
+    expect(within(starRemoval).getByRole('checkbox', { name: 'RC-Astro StarXTerminator' })).not.toBeChecked();
+    expect(within(card).getAllByRole('combobox')).toHaveLength(1);
+  });
+
+  it('adds and removes a step with the checkbox of a single provider', async () => {
+    server.use(http.get('/api/tools/rc-astro', () => ok(listed)));
+    const onChange = vi.fn();
+    const props = { label: 'R', disabled: false, onChange };
+    const { rerender } = render(<StackRcAstroControls {...props} config={null} />,
+      { wrapper: wrapper() });
+    const sharpen = await screen.findByRole('checkbox', { name: 'RC-Astro BlurXTerminator' });
+    expect(screen.queryByRole('spinbutton', { name: 'Sharpen Stars' })).toBeNull();
+    fireEvent.click(sharpen);
+    expect(onChange).toHaveBeenLastCalledWith({ steps: [{ tool: 'bxt', parameters: {} }] });
+
+    rerender(<StackRcAstroControls {...props} config={{ steps: [{ tool: 'bxt', parameters: {} }] }} />);
+    expect(sharpen).toBeChecked();
+    // The provider's controls show under its checkbox.
+    expect(within(screen.getByRole('group', { name: 'Sharpening' }))
+      .getByRole('spinbutton', { name: 'Sharpen Stars' })).toHaveValue(0.5);
+    fireEvent.click(sharpen);
+    expect(onChange).toHaveBeenLastCalledWith(null);
+  });
+
+  it('shows a checkbox for the Seiza noise model where no other noise reduction is listed', async () => {
+    server.use(http.get('/api/tools/rc-astro', () => ok({
+      ...listed, tools: [noiseSchema],
+      providers: [provider('denoise', noiseSchema, { version: noiseVersion })],
+    })));
+    const onChange = vi.fn();
+    render(<StackRcAstroControls label="M31 L" config={null} disabled={false} onChange={onChange} />,
+      { wrapper: wrapper() });
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Seiza noise model' }));
+    expect(screen.queryByRole('combobox')).toBeNull();
+    expect(onChange).toHaveBeenLastCalledWith({ steps: [{ tool: 'noise-model', parameters: {} }] });
+  });
+
+  it('replaces one noise reduction provider with the other, never both', async () => {
+    server.use(http.get('/api/tools/rc-astro', () => ok(listed)));
+    const onChange = vi.fn();
+    const sharpen = { tool: 'bxt', parameters: {} };
+    const starless = { tool: 'sxt', parameters: { stars: true } };
+    const props = { label: 'R', disabled: false, onChange };
+    const { rerender } = render(
+      <StackRcAstroControls {...props} config={{ steps: [sharpen, starless] }} />,
+      { wrapper: wrapper() }
+    );
+    const denoise = await screen.findByRole('combobox', { name: 'Noise reduction' });
+    fireEvent.change(denoise, { target: { value: 'nxt' } });
+    // The step lands between sharpening and star removal.
+    expect(onChange).toHaveBeenLastCalledWith({
+      steps: [sharpen, { tool: 'nxt', parameters: {} }, starless],
+    });
+
+    rerender(<StackRcAstroControls {...props}
+      config={{ steps: [sharpen, { tool: 'nxt', parameters: { dn: 0.5 } }, starless] }} />);
+    expect(screen.getByRole('spinbutton', { name: 'Denoise' })).toHaveValue(0.5);
+    fireEvent.change(denoise, { target: { value: 'noise-model' } });
+    expect(onChange).toHaveBeenLastCalledWith({
+      steps: [sharpen, { tool: 'noise-model', parameters: {} }, starless],
+    });
+
+    rerender(<StackRcAstroControls {...props}
+      config={{ steps: [sharpen, { tool: 'noise-model', parameters: { grain: 0.5 } }, starless] }} />);
+    // The picked provider's controls replace the other's.
+    expect(screen.queryByRole('spinbutton', { name: 'Denoise' })).toBeNull();
+    expect(screen.getByRole('spinbutton', { name: 'Grain' })).toHaveValue(0.5);
+    const mottle = screen.getByRole('spinbutton', { name: 'Mottle' });
+    expect(mottle).toHaveValue(0.9);
+    fireEvent.change(mottle, { target: { value: '0.6' } });
+    expect(onChange).toHaveBeenLastCalledWith({
+      steps: [sharpen, { tool: 'noise-model', parameters: { grain: 0.5, mottle: 0.6 } }, starless],
+    });
+  });
+
+  it('removes a step when its category is set to Off', async () => {
+    server.use(http.get('/api/tools/rc-astro', () => ok(listed)));
+    const onChange = vi.fn();
+    const sharpen = { tool: 'bxt', parameters: {} };
+    const { rerender } = render(
+      <StackRcAstroControls label="R" disabled={false} onChange={onChange}
+        config={{ steps: [sharpen, { tool: 'noise-model', parameters: {} }] }} />,
+      { wrapper: wrapper() }
+    );
+    fireEvent.change(await screen.findByRole('combobox', { name: 'Noise reduction' }),
+      { target: { value: '' } });
+    expect(onChange).toHaveBeenLastCalledWith({ steps: [sharpen] });
+    rerender(<StackRcAstroControls label="R" disabled={false} onChange={onChange}
+      config={{ steps: [sharpen] }} />);
+    fireEvent.click(screen.getByRole('checkbox', { name: 'RC-Astro BlurXTerminator' }));
+    expect(onChange).toHaveBeenLastCalledWith(null);
+  });
+
+  it('shows a provider that is not installed under the checkbox, with its reason and the way to Settings', async () => {
+    server.use(http.get('/api/tools/rc-astro', () => ok({
+      ...listed,
+      tools: [bxt, nxt, sxt],
+      providers: [listed.providers[0], listed.providers[1], noiseModelMissing, listed.providers[3]],
+    })));
+    const opened = vi.fn();
+    window.addEventListener(OPEN_SETTINGS_EVENT, opened);
+    const { rerender } = render(
+      <StackRcAstroControls label="M31 L" config={null} disabled={false} onChange={() => {}} />,
+      { wrapper: wrapper() }
+    );
+    // NoiseXTerminator is the one provider to pick, so it has a checkbox.
+    const denoise = await screen.findByRole('group', { name: 'Noise reduction' });
+    expect(within(denoise).getByRole('checkbox', { name: 'RC-Astro NoiseXTerminator' })).not.toBeChecked();
+    expect(within(denoise).queryByRole('combobox')).toBeNull();
+    expect(within(denoise).getByText(/Seiza noise model: The Seiza noise model is not downloaded\./)).toBeInTheDocument();
+    // The note stays while NoiseXTerminator is on.
+    rerender(<StackRcAstroControls label="M31 L" disabled={false} onChange={() => {}}
+      config={{ steps: [{ tool: 'nxt', parameters: {} }] }} />);
+    expect(within(denoise).getByRole('checkbox', { name: 'RC-Astro NoiseXTerminator' })).toBeChecked();
+    expect(within(denoise).getByText(/Seiza noise model: The Seiza noise model is not downloaded\./)).toBeInTheDocument();
+    fireEvent.click(within(denoise).getByRole('button', { name: 'Download in Settings' }));
+    window.removeEventListener(OPEN_SETTINGS_EVENT, opened);
+    expect((opened.mock.calls[0][0] as CustomEvent).detail)
+      .toEqual({ intent: 'stacking', field: 'processing_tools' });
+  });
+
+  it('keeps a saved step of a provider that is not installed, with its reason', async () => {
+    server.use(http.get('/api/tools/rc-astro', () => ok({
+      ...listed, tools: [bxt, nxt, sxt],
+      providers: [listed.providers[1], noiseModelMissing],
+    })));
+    const onChange = vi.fn();
+    render(
+      <StackRcAstroControls label="M31 L" disabled={false} onChange={onChange}
+        config={{ steps: [{ tool: 'noise-model', parameters: { grain: 0.4 } }] }} />,
+      { wrapper: wrapper() }
+    );
+    const denoise = await screen.findByRole('combobox', { name: 'Noise reduction' });
+    expect(denoise).toHaveValue('noise-model');
+    expect(await screen.findByText(/^The Seiza noise model is not downloaded\./)).toBeInTheDocument();
+    expect(screen.getByText('grain: 0.4')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Download in Settings' })).toBeInTheDocument();
+    fireEvent.change(denoise, { target: { value: '' } });
+    expect(onChange).toHaveBeenCalledWith(null);
+  });
+
+  it('keeps a checkbox for a saved step whose provider is the only one and is not installed', async () => {
+    server.use(http.get('/api/tools/rc-astro', () => ok({
+      ...listed, tools: [], providers: [noiseModelMissing],
+    })));
+    const onChange = vi.fn();
+    render(
+      <StackRcAstroControls label="M31 L" disabled={false} onChange={onChange}
+        config={{ steps: [{ tool: 'noise-model', parameters: { grain: 0.4 } }] }} />,
+      { wrapper: wrapper() }
+    );
+    const saved = await screen.findByRole('checkbox', { name: 'Seiza noise model' });
+    expect(saved).toBeChecked();
+    expect(saved).toBeEnabled();
+    expect(screen.getByText(/^The Seiza noise model is not downloaded\./)).toBeInTheDocument();
+    expect(screen.getByText('grain: 0.4')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Download in Settings' })).toBeInTheDocument();
+    fireEvent.click(saved);
+    expect(onChange).toHaveBeenCalledWith(null);
+  });
+
+  it('shows no checkbox for a provider that is not installed and not in use', async () => {
+    server.use(http.get('/api/tools/rc-astro', () => ok({
+      ...listed, tools: [], providers: [noiseModelMissing],
+    })));
+    render(<StackRcAstroControls label="M31 L" config={null} disabled={false} onChange={() => {}} />,
+      { wrapper: wrapper() });
+    const denoise = await screen.findByRole('group', { name: 'Noise reduction' });
+    expect(within(denoise).getByText('Noise reduction')).toBeInTheDocument();
+    expect(within(denoise).getByText(/Seiza noise model: The Seiza noise model is not downloaded\./)).toBeInTheDocument();
+    expect(within(denoise).getByRole('button', { name: 'Download in Settings' })).toBeInTheDocument();
+    expect(within(denoise).queryByRole('checkbox')).toBeNull();
+    expect(within(denoise).queryByRole('combobox')).toBeNull();
+  });
+
+  it('disables the checkbox of an RC-Astro tool that is not licensed, with the reason', async () => {
+    server.use(http.get('/api/tools/rc-astro', () => ok({
+      ...listed,
+      providers: [provider('sharpen', bxt, {
+        state: 'not_licensed', remedy: 'install_rc_astro',
+        reason: 'RC-Astro BlurXTerminator is not licensed on this server (Trial expired)',
+      })],
+    })));
+    render(
+      <StackRcAstroControls label="R" config={null} disabled={false} onChange={() => {}} />,
+      { wrapper: wrapper() }
+    );
+    const sharpen = await screen.findByRole('checkbox', { name: 'RC-Astro BlurXTerminator' });
+    expect(sharpen).not.toBeChecked();
+    expect(sharpen).toBeDisabled();
+    expect(screen.getByText(/^RC-Astro BlurXTerminator is not licensed on this server \(Trial expired\)/)).toBeInTheDocument();
+    expect(screen.queryByRole('button')).toBeNull();
+  });
+
+  it('builds the checkboxes from the tools of a server that sends no provider list', async () => {
     server.use(http.get('/api/tools/rc-astro', () => ok(capabilities)));
     const onChange = vi.fn();
     render(
@@ -97,9 +375,12 @@ describe('StackRcAstroControls', () => {
       { wrapper: wrapper() }
     );
 
-    const sxt = await screen.findByRole('checkbox', { name: 'RC-Astro StarXTerminator' });
-    fireEvent.click(sxt);
-    // Enabling star removal keeps the stars image so both halves can be
+    const starRemoval = await screen.findByRole('checkbox', { name: 'RC-Astro StarXTerminator' });
+    expect(screen.getByRole('checkbox', { name: 'RC-Astro BlurXTerminator' })).not.toBeChecked();
+    // No tool for noise reduction, so nothing shows for it.
+    expect(screen.queryByRole('group', { name: 'Noise reduction' })).toBeNull();
+    fireEvent.click(starRemoval);
+    // Turning star removal on keeps the stars image so both halves can be
     // stretched independently.
     expect(onChange).toHaveBeenCalledWith({
       steps: [{ tool: 'sxt', parameters: { stars: true } }],
@@ -143,19 +424,19 @@ describe('StackRcAstroControls', () => {
     server.use(http.get('/api/tools/rc-astro', () => ok(capabilities)));
     const onChange = vi.fn();
     const config: RcAstroProcessing = { steps: [
-      { tool: 'bxt', parameters: {} },
       { tool: 'sxt', parameters: { stars: true } },
+      { tool: 'bxt', parameters: {} },
     ] };
     render(<StackRcAstroControls label="R" config={config} disabled={false} onChange={onChange} />,
       { wrapper: wrapper() });
     fireEvent.change(await screen.findByRole('spinbutton', { name: 'Sharpen Stars' }),
       { target: { value: '0.3' } });
     expect(onChange).toHaveBeenCalledWith({ steps: [
-      { tool: 'bxt', parameters: { ss: 0.3 } }, config.steps[1],
+      config.steps[0], { tool: 'bxt', parameters: { ss: 0.3 } },
     ] });
   });
 
-  it('stores and displays backend execution order regardless of toggle order', async () => {
+  it('stores the steps in run order regardless of the order they are picked', async () => {
     server.use(http.get('/api/tools/rc-astro', () => ok(capabilities)));
     const onChange = vi.fn();
     const props = { label: 'R', disabled: false, onChange };
@@ -169,25 +450,76 @@ describe('StackRcAstroControls', () => {
     expect(onChange).toHaveBeenLastCalledWith({ steps: [
       { tool: 'bxt', parameters: {} }, starless,
     ] });
-    // Existing imported requests need not have canonical array order.
-    rerender(<StackRcAstroControls {...props} config={{ steps: [
-      starless, { tool: 'bxt', parameters: {} },
-    ] }} />);
-    expect(screen.getByText('RC-Astro BlurXTerminator → RC-Astro StarXTerminator')).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'R processing tools' }))
+      .toHaveTextContent('1 step(s) · linear, before stretch');
   });
 
-  it('retains saved steps and cached tool versions when the CLI is absent', async () => {
+  it('keeps a saved step visible and removable when the server lists no provider for it', async () => {
     server.use(http.get('/api/tools/rc-astro', () => ok({ available: false, tools: [] })));
     const onChange = vi.fn();
+    const custom = { tool: 'gradient-x', parameters: { amount: 2 } };
+    render(<StackRcAstroControls label="R" disabled={false} onChange={onChange}
+      config={{ steps: [{ tool: 'sxt', parameters: { stars: true } }, custom] }} />,
+      { wrapper: wrapper() });
+    // A step of a known category keeps its checkbox, in its category.
+    const starRemoval = await within(screen.getByRole('group', { name: 'Star removal' }))
+      .findByRole('checkbox', { name: 'sxt (unavailable)' });
+    expect(starRemoval).toBeChecked();
+    expect(await screen.findByText(/Your saved step is unchanged\./)).toHaveTextContent('stars: true');
+    fireEvent.click(starRemoval);
+    expect(onChange).toHaveBeenLastCalledWith({ steps: [custom] });
+    // A step PSF Guard cannot place has a Remove button.
+    expect(screen.getByText(/gradient-x \(unavailable\) amount: 2/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove gradient-x' }));
+    expect(onChange).toHaveBeenLastCalledWith({ steps: [{ tool: 'sxt', parameters: { stars: true } }] });
+  });
+
+  it('offers to remove a second step saved in one category', async () => {
+    server.use(http.get('/api/tools/rc-astro', () => ok(listed)));
+    const onChange = vi.fn();
+    const both = [{ tool: 'nxt', parameters: {} }, { tool: 'noise-model', parameters: {} }];
+    render(<StackRcAstroControls label="R" disabled={false} onChange={onChange}
+      config={{ steps: both }} />, { wrapper: wrapper() });
+    expect(await screen.findByText(/This chain also runs Seiza noise model\./)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Seiza noise model' }));
+    expect(onChange).toHaveBeenCalledWith({ steps: [both[0]] });
+  });
+
+  it('shows what ran an RC-Astro step', async () => {
+    server.use(http.get('/api/tools/rc-astro', () => ok({ available: false, tools: [] })));
     render(<StackRcAstroControls label="R" config={{ steps: [{ tool: 'sxt', parameters: { stars: true } }] }}
       result={{ cli_version: '2.6.6', has_stars: true, steps: [{ tool: 'sxt',
-        name: 'StarXTerminator', ml_version: 11, warnings: [] }] }}
-      disabled={false} onChange={onChange} />, { wrapper: wrapper() });
-    expect(await screen.findByText(/Your saved processing steps are unchanged/)).toBeInTheDocument();
-    expect(screen.getByText('RC-Astro 2.6.6')).toBeInTheDocument();
-    expect(screen.getByText(/StarXTerminator · model 11/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Remove RC-Astro steps' }));
-    expect(onChange).toHaveBeenCalledWith(null);
+        name: 'StarXTerminator', ml_version: 11, device: 'CUDA', warnings: ['Ran on the CPU'] }] }}
+      disabled={false} onChange={() => {}} />, { wrapper: wrapper() });
+    expect(await screen.findByText('Made with RC-Astro 2.6.6')).toBeInTheDocument();
+    expect(screen.getByText(/StarXTerminator · model 11 · CUDA/)).toBeInTheDocument();
+    expect(screen.getByText('Ran on the CPU')).toBeInTheDocument();
+  });
+
+  it('shows what ran a noise model step, with no RC-Astro version', async () => {
+    server.use(http.get('/api/tools/rc-astro', () => ok({
+      ...listed,
+      providers: listed.providers.map((entry) =>
+        entry.provider === 'noise-model' ? { ...entry, workers: ['studio'] } : entry),
+    })));
+    render(<StackRcAstroControls label="M31 L" disabled={false} onChange={() => {}}
+      config={{ steps: [{ tool: 'noise-model', parameters: {} }] }}
+      result={{ cli_version: '', has_stars: false, steps: [
+        { tool: 'noise-model', name: 'Seiza noise model', ml_version: null, version: noiseVersion, device: 'cpu', warnings: [] },
+      ] }} />, { wrapper: wrapper() });
+
+    const card = await screen.findByRole('region', { name: 'M31 L processing tools' });
+    await screen.findByRole('spinbutton', { name: 'Grain' });
+    expect(card).toHaveTextContent(`Seiza noise model · ${noiseVersion} · cpu`);
+    expect(card).not.toHaveTextContent(/RC-Astro\s*$/);
+    // The result line gives no RC-Astro version; the checkboxes carry the tool names.
+    const made = card.querySelector<HTMLElement>('.stack-rc-astro-diagnostics')!;
+    expect(within(made).queryByText(/^(Made with )?RC-Astro/)).toBeNull();
+    // Where each provider runs.
+    expect(card).toHaveTextContent(
+      'BlurXTerminator on this server · NoiseXTerminator on this server · Seiza noise model on studio · ' +
+      'StarXTerminator on this server. This server runs a tool while no worker that takes it is connected.'
+    );
   });
 
   it('allows removing a configured tool whose license is unavailable', async () => {
@@ -197,11 +529,33 @@ describe('StackRcAstroControls', () => {
     const onChange = vi.fn();
     render(<StackRcAstroControls label="R" config={{ steps: [{ tool: 'bxt', parameters: {} }] }}
       disabled={false} onChange={onChange} />, { wrapper: wrapper() });
-    const configured = await screen.findByRole('checkbox', { name: 'RC-Astro BlurXTerminator' });
-    expect(configured).toBeEnabled();
+    const sharpen = await screen.findByRole('checkbox', { name: 'RC-Astro BlurXTerminator' });
+    expect(sharpen).toBeEnabled();
+    expect(sharpen).toBeChecked();
+    // Its fields are locked, and an unlicensed tool cannot be turned on.
+    expect(await screen.findByRole('spinbutton', { name: 'Sharpen Stars' })).toBeDisabled();
     expect(screen.getByRole('checkbox', { name: 'RC-Astro StarXTerminator' })).toBeDisabled();
-    fireEvent.click(configured);
+    fireEvent.click(sharpen);
     expect(onChange).toHaveBeenCalledWith(null);
+  });
+
+  it('checks and disables the checkbox of the configured provider where the step is required', async () => {
+    server.use(http.get('/api/tools/rc-astro', () => ok(listed)));
+    render(<StackRcAstroControls label="M31 separation" heading="Star separation" required
+      categories={['star_removal']} excludedParameters={['stars']}
+      config={{ steps: [{ tool: 'sxt', parameters: {} }] }} disabled={false} onChange={() => {}} />,
+      { wrapper: wrapper() });
+    const card = await screen.findByRole('region', { name: 'M31 separation processing tools' });
+    expect(within(card).getByText('Star separation')).toBeInTheDocument();
+    const step = await within(card).findByRole('checkbox', { name: 'RC-Astro StarXTerminator' });
+    expect(step).toBeDisabled();
+    expect(step).toBeChecked();
+    expect(step.closest('label')).toHaveAttribute('title', 'The Stars choice controls whether star separation runs');
+    // Only the offered provider's category shows, and its fields stay editable.
+    expect(within(card).getAllByRole('group').map((group) => group.getAttribute('aria-label')))
+      .toEqual(['Star removal']);
+    expect(within(card).getByRole('checkbox', { name: 'Unscreen Stars' })).toBeEnabled();
+    expect(within(card).queryByRole('checkbox', { name: 'Generate Star Image' })).toBeNull();
   });
 
   it('sets the pinned values for Correct only and locks those fields', async () => {
@@ -232,16 +586,15 @@ describe('StackRcAstroControls', () => {
     const config: RcAstroProcessing = { steps: [{ tool: 'bxt', parameters: { overlap: 0.3 } }] };
     const { rerender } = render(
       <StackRcAstroControls label="Color channels" config={config} disabled={false}
-        toolKeys={['bxt', 'nxt']} onChange={onChange} />,
+        categories={['sharpen', 'denoise']} onChange={onChange} />,
       { wrapper: wrapper() }
     );
 
     // Star removal is not offered where the caller leaves it out.
-    expect(await screen.findByRole('checkbox', { name: 'RC-Astro BlurXTerminator' }))
-      .toBeChecked();
-    expect(screen.queryByRole('checkbox', { name: 'RC-Astro StarXTerminator' })).toBeNull();
+    expect(await screen.findByRole('checkbox', { name: 'RC-Astro BlurXTerminator' })).toBeChecked();
+    expect(screen.queryByRole('group', { name: 'Star removal' })).toBeNull();
 
-    const correctOnly = screen.getByRole('checkbox', { name: 'Correct only' });
+    const correctOnly = await screen.findByRole('checkbox', { name: 'Correct only' });
     expect(correctOnly).not.toBeChecked();
     fireEvent.click(correctOnly);
     const pinned = { ss: 0, sn: 0, ash: 0, nsd: 0, ansp: true, lp: false };
@@ -252,10 +605,10 @@ describe('StackRcAstroControls', () => {
     rerender(
       <StackRcAstroControls label="Color channels"
         config={{ steps: [{ tool: 'bxt', parameters: { overlap: 0.3, ...pinned } }] }}
-        disabled={false} toolKeys={['bxt', 'nxt']} onChange={onChange} />
+        disabled={false} categories={['sharpen', 'denoise']} onChange={onChange} />
     );
     expect(screen.getByRole('checkbox', { name: 'Correct only' })).toBeChecked();
-    expect(screen.getByRole('spinbutton', { name: 'Sharpen Stars' })).toBeDisabled();
+    expect(await screen.findByRole('spinbutton', { name: 'Sharpen Stars' })).toBeDisabled();
     expect(screen.getByRole('spinbutton', { name: 'Tile Overlap' })).toBeEnabled();
 
     // Turning it off returns the pinned fields to the tool's defaults.

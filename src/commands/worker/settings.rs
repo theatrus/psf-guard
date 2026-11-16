@@ -35,6 +35,11 @@ pub struct WorkerSettings {
     /// folder RC-Astro's installer uses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rc_astro: Option<String>,
+    /// The library of an ONNX Runtime the person installed for the noise
+    /// model, or the folder that contains it. Empty uses the one PSF Guard
+    /// downloaded on this computer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub onnxruntime: Option<String>,
     /// The work the worker accepts, as `--work` takes it. Empty accepts
     /// everything the worker can run.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -57,6 +62,7 @@ impl Default for WorkerSettings {
             maps: Vec::new(),
             work_dir: None,
             rc_astro: None,
+            onnxruntime: None,
             work: Vec::new(),
             slots: 1,
         }
@@ -142,6 +148,7 @@ impl WorkerSettings {
                 .collect(),
             work_dir: blank_is_none(self.work_dir),
             rc_astro: blank_is_none(self.rc_astro),
+            onnxruntime: blank_is_none(self.onnxruntime),
             work: self.work,
             slots: self.slots,
         }
@@ -185,6 +192,7 @@ mod tests {
                 local: "Z:\\astro".into(),
             }],
             work: vec!["stack".into()],
+            onnxruntime: Some("/opt/onnxruntime/lib".into()),
             slots: 2,
             ..Default::default()
         }
@@ -208,6 +216,11 @@ mod tests {
         assert_eq!(args.files, WorkerFilesArg::Shared);
         assert_eq!(args.maps, ["/srv/astro=Z:\\astro"]);
         assert_eq!(args.slots, 2);
+        assert_eq!(args.onnxruntime.as_deref(), Some("/opt/onnxruntime/lib"));
+        // A settings file from before the noise model has no path.
+        let old: WorkerSettings =
+            serde_json::from_str(r#"{"server": "http://s:3000", "token": "psfw_x"}"#).unwrap();
+        assert_eq!(old.onnxruntime, None);
     }
 
     #[test]

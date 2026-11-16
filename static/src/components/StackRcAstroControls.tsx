@@ -1,171 +1,306 @@
+import { Fragment } from 'react';
 import {
   defaultParameters,
   isCorrectOnly,
   offersCorrectOnly,
-  rangeProblem,
   useRcAstroCapabilities,
   bxtCorrectOnly,
 } from './rcAstroSchema';
+import ParameterField from './RcAstroParameterField';
+import {
+  categoryOf,
+  orderedSteps,
+  PROCESSING_CATEGORIES,
+  PROCESSING_TOOLS_FIELD,
+} from './processingTools';
+import { toolName } from './stackProcessingLabel';
+import { openSettings } from '../utils/settingsIntent';
 import type {
-  ExternalToolParameter,
+  ProcessingCategory,
   ExternalToolSchema,
+  ProcessingProvider,
   RcAstroProcessing,
   RcAstroParameterValue,
+  RcAstroStep,
   StackRcAstroResult,
 } from '../api/types';
 
-const executionOrder = new Map([['bxt', 0], ['nxt', 1], ['sxt', 2]]);
-
-function orderedSteps(steps: RcAstroProcessing['steps']): RcAstroProcessing['steps'] {
-  return [...steps].sort((left, right) =>
-    (executionOrder.get(left.tool) ?? 3) - (executionOrder.get(right.tool) ?? 3)
-  );
-}
-
-/**
- * RC-Astro tool chain controls (BlurXTerminator, NoiseXTerminator,
- * StarXTerminator), rendered from each tool's live schema so the knobs stay
- * correct across CLI upgrades. Saved choices remain visible without a CLI.
- */
-export default function StackRcAstroControls({
-  label,
-  config,
-  result,
-  disabled,
-  toolKeys,
-  defaultsFor = defaultParameters,
-  heading = 'RC-Astro tools',
-  required = false,
-  excludedParameters = [],
-  onChange,
-}: {
+interface Props {
   label: string;
   config: RcAstroProcessing | null | undefined;
   result?: StackRcAstroResult;
   disabled: boolean;
-  /** The tools offered, by key; every tool the server reports when absent. */
-  toolKeys?: readonly string[];
-  /** The parameters a tool starts with when it is turned on. */
+  /** The categories offered; every provider the server lists when absent. */
+  categories?: readonly ProcessingCategory[];
+  /** The parameters a provider starts with when it is picked. */
   defaultsFor?: (schema: ExternalToolSchema) => Record<string, RcAstroParameterValue>;
   heading?: string;
   /** Required managed steps are configured here; the star policy controls running them. */
   required?: boolean;
   excludedParameters?: readonly string[];
   onChange: (config: RcAstroProcessing | null) => void;
-}) {
+}
+
+const stateMark: Record<ProcessingProvider['state'], string> = {
+  ready: '',
+  not_licensed: ' (not licensed)',
+  not_installed: ' (not installed)',
+};
+
+/**
+ * The processing steps that run on linear data before the stretch. Each
+ * category (sharpening, noise reduction, star removal) has one control. With
+ * one provider to pick it is a checkbox with the provider's name; with more
+ * it is a picker: Off, or one of the providers the server lists. A chain
+ * never has two steps of one category. The picked provider's controls come from its live
+ * schema, so they stay correct across upgrades. A saved step stays visible
+ * and removable when its provider is gone.
+ */
+export default function StackRcAstroControls({
+  label,
+  config,
+  result,
+  disabled,
+  categories,
+  defaultsFor = defaultParameters,
+  heading = 'Processing tools',
+  required = false,
+  excludedParameters = [],
+  onChange,
+}: Props) {
   const capabilities = useRcAstroCapabilities();
+  const listed = capabilities.data?.providers ?? [];
+  const offered = listed.filter((provider) => !categories || categories.includes(provider.category));
+  const steps = config?.steps ?? [];
+  const problem = capabilities.data?.error ?? capabilities.error?.message;
 
-  if (!capabilities.data?.available) {
-    if (capabilities.data?.error || capabilities.error || config?.steps.length || result) {
-      return (
-        <section className="stack-rc-astro-controls" aria-label={`${label} RC-Astro tools`}>
-          <header>
-            <strong>{heading}</strong>
-            <span>{capabilities.isPending ? 'Checking tools' : 'Unavailable'}</span>
-          </header>
-          <p>{capabilities.data?.error ?? capabilities.error?.message ??
-            (capabilities.isPending ? 'Checking server availability.' :
-              'RC-Astro is not installed on this server or on a connected worker. Your saved processing steps are unchanged.')}</p>
-          {!!config?.steps.length && (
-            <>
-              <ol>{orderedSteps(config.steps).map((step) => (
-                <li key={step.tool}>{step.tool.toUpperCase()}
-                  {Object.entries(step.parameters).map(([name, value]) => (
-                    <small key={name}> {name}: {String(value)}</small>
-                  ))}
-                </li>
-              ))}</ol>
-              {!required && <button type="button" disabled={disabled} onClick={() => onChange(null)}>
-                Remove RC-Astro steps
-              </button>}
-            </>
-          )}
-          {result && <ResultDiagnostics result={result} />}
-        </section>
-      );
-    }
-    return null;
-  }
-  const tools = capabilities.data.tools.filter(
-    (schema) => !toolKeys || toolKeys.includes(schema.key)
-  );
+  if (!offered.length && !steps.length && !result && !problem) return null;
 
-  const stepFor = (tool: string) => config?.steps.find((step) => step.tool === tool);
+  const categoryOfStep = (step: RcAstroStep) => categoryOf(step.tool, listed);
+  const nameOfStep = (step: RcAstroStep) => {
+    const provider = listed.find((candidate) => candidate.provider === step.tool);
+    return provider ? toolName(provider.name) : step.tool;
+  };
+  const removeStep = (step: RcAstroStep) => {
+    const next = steps.filter((candidate) => candidate !== step);
+    onChange(next.length ? { steps: next } : null);
+  };
+  // Steps PSF Guard cannot place in a category stay listed on their own.
+  const uncategorized = steps.filter((step) => !categoryOfStep(step));
+  const blocks = PROCESSING_CATEGORIES.flatMap(({ category, label: categoryLabel }) => {
+    const providers = offered.filter((provider) => provider.category === category);
+    const saved = steps.filter((step) => categoryOfStep(step) === category);
+    return providers.length || saved.length
+      ? [{ category, categoryLabel, providers, step: saved[0], extra: saved.slice(1) }]
+      : [];
+  });
 
-  const setStep = (tool: string, parameters: Record<string, RcAstroParameterValue> | null) => {
-    const current = config?.steps ?? [];
-    const steps = parameters === null
-      ? current.filter((step) => step.tool !== tool)
-      : current.some((step) => step.tool === tool)
-        ? current.map((step) => step.tool === tool ? { tool, parameters } : step)
-        : orderedSteps([...current, { tool, parameters }]);
-    onChange(steps.length === 0 ? null : { steps });
+  /** Replace a category's step, or with `null` remove it. */
+  const setCategoryStep = (category: string, step: RcAstroStep | null) => {
+    const others = steps.filter((candidate) => categoryOfStep(candidate) !== category);
+    const next = step ? orderedSteps([...others, step], listed) : others;
+    onChange(next.length ? { steps: next } : null);
+  };
+  /** Edit a step's parameters where it stands. */
+  const setParameters = (tool: string, parameters: Record<string, RcAstroParameterValue>) => {
+    onChange({ steps: steps.map((step) => step.tool === tool ? { ...step, parameters } : step) });
   };
 
+  const ready = offered.filter((provider) => provider.state === 'ready');
+  const onWorkers = ready.some((provider) => provider.workers.length);
+
   return (
-    <section className="stack-rc-astro-controls" aria-label={`${label} RC-Astro tools`}>
+    <section className="stack-rc-astro-controls" aria-label={`${label} processing tools`}>
       <header>
         <strong>{heading}</strong>
         <span>
-          {config?.steps.length
-            ? `${config.steps.length} step(s) · linear, before stretch`
-            : 'Off'}
+          {capabilities.isPending
+            ? 'Checking tools'
+            : steps.length
+              ? `${steps.length} step(s) · linear, before stretch`
+              : 'Off'}
         </span>
       </header>
-      {!!capabilities.data.workers?.length && (
+      {problem && <p>{problem}</p>}
+      {onWorkers && (
         <p className="stack-rc-astro-where">
-          {tools.map((schema) => {
-            const workers = capabilities.data.tool_workers?.[schema.key] ?? [];
-            return `${schema.name.replace(/^RC-Astro /, '')} on ${workers.length ? workers.join(', ') : 'this server'}`;
-          }).join(' · ')}
-          {capabilities.data.this_server && tools.some((schema) => capabilities.data.tool_workers?.[schema.key]?.length)
+          {ready.map((provider) =>
+            `${toolName(provider.name)} on ${provider.workers.length ? provider.workers.join(', ') : 'this server'}`
+          ).join(' · ')}
+          {ready.some((provider) => provider.workers.length && provider.this_server)
             && '. This server runs a tool while no worker that takes it is connected.'}
         </p>
       )}
-      {!!config?.steps.length && (
-        <p>{orderedSteps(config.steps).map((step) =>
-          tools.find((schema) => schema.key === step.tool)?.name ?? step.tool
-        ).join(' → ')}</p>
-      )}
-      {tools.map((schema) => (
-        <ToolSection
-          key={schema.key}
-          schema={schema}
-          required={required}
-          excludedParameters={excludedParameters}
-          parameters={stepFor(schema.key)?.parameters}
-          disabled={disabled}
-          onToggle={(enabled) =>
-            setStep(schema.key, enabled ? defaultsFor(schema) : null)
-          }
-          onParameter={(name, value) => {
-            const current = stepFor(schema.key)?.parameters ?? defaultsFor(schema);
-            setStep(schema.key, { ...current, [name]: value });
-          }}
-          onParameters={(parameters) => setStep(schema.key, parameters)}
-        />
-      ))}
-      {config?.steps.filter((step) => !tools.some((tool) => tool.key === step.tool)).map((step) => (
-        <label key={step.tool}>
-          <input type="checkbox" checked disabled={disabled || required}
-            aria-label={`${step.tool} unavailable`}
-            onChange={() => setStep(step.tool, null)} />
-          {step.tool} (unavailable)
-        </label>
+      {blocks.map(({ category, categoryLabel, providers, step, extra }) => {
+        const picked = step ? providers.find((provider) => provider.provider === step.tool) : undefined;
+        // What a person could pick: the ready providers, and the one the
+        // step uses now, so a saved choice is never hidden.
+        const choices = providers.filter(
+          (provider) => provider.state === 'ready' || provider === picked
+        );
+        const choiceCount = choices.length + (step && !picked ? 1 : 0);
+        // The single choice; absent when it is a step the server does not list.
+        const only = step ? picked : choices[0];
+        const title = required ? 'The Stars choice controls whether star separation runs' : undefined;
+        const stepOf = (provider: ProcessingProvider): RcAstroStep => ({
+          tool: provider.provider,
+          parameters: provider.schema ? defaultsFor(provider.schema) : {},
+        });
+        // Providers a person cannot pick, other than the one in use.
+        const others = providers.filter(
+          (provider) => provider.state !== 'ready' && provider !== picked
+        );
+        return (
+          <div className="stack-rc-astro-tool" key={category} role="group" aria-label={categoryLabel}>
+            {choiceCount > 1 && (
+              <label title={title}>
+                <strong>{categoryLabel}</strong>
+                <select
+                  aria-label={categoryLabel}
+                  value={step?.tool ?? ''}
+                  disabled={disabled || required}
+                  onChange={(event) => {
+                    const provider = providers.find((candidate) => candidate.provider === event.target.value);
+                    setCategoryStep(category, provider ? stepOf(provider) : null);
+                  }}
+                >
+                  <option value="">Off</option>
+                  {providers.map((provider) => (
+                    <option key={provider.provider} value={provider.provider}
+                      disabled={provider.state !== 'ready' && provider.provider !== step?.tool}>
+                      {toolName(provider.name)}{stateMark[provider.state]}
+                    </option>
+                  ))}
+                  {step && !picked && (
+                    <option value={step.tool}>
+                      {capabilities.isPending ? step.tool : `${step.tool} (unavailable)`}
+                    </option>
+                  )}
+                </select>
+              </label>
+            )}
+            {/* One choice: a checkbox with the provider's name, as the cards
+                had before a category could have several providers. */}
+            {choiceCount === 1 && (
+              <label title={title}>
+                <input
+                  type="checkbox"
+                  checked={!!step}
+                  disabled={disabled || required}
+                  onChange={(event) =>
+                    setCategoryStep(category, event.target.checked && only ? stepOf(only) : null)}
+                />
+                <strong>
+                  {only?.name ?? (capabilities.isPending ? step?.tool : `${step?.tool} (unavailable)`)}
+                </strong>
+              </label>
+            )}
+            {/* Nothing to pick: an unlicensed tool keeps its checkbox,
+                disabled; a provider that is not installed has its note. */}
+            {choiceCount === 0 && !others.some((provider) => provider.state === 'not_licensed') && (
+              <strong>{categoryLabel}</strong>
+            )}
+            {step && !picked && (
+              <p className="stack-rc-astro-note">
+                {capabilities.isPending
+                  ? 'Checking server availability.'
+                  : 'Not available on this server or a connected worker. Your saved step is unchanged.'}
+                {' '}{parameterList(step)}
+              </p>
+            )}
+            {picked && picked.state !== 'ready' && <ProviderNote provider={picked} />}
+            {/* A chain saved before one step per category was the rule. */}
+            {extra.map((other) => (
+              <p className="stack-rc-astro-note" key={other.tool}>
+                This chain also runs {nameOfStep(other)}.{' '}
+                {!required && (
+                  <button type="button" disabled={disabled}
+                    aria-label={`Remove ${nameOfStep(other)}`}
+                    onClick={() => removeStep(other)}>
+                    Remove
+                  </button>
+                )}
+              </p>
+            ))}
+            {step && picked && (picked.schema ? (
+              <ProviderFields
+                schema={picked.schema}
+                parameters={step.parameters}
+                disabled={disabled || picked.state !== 'ready'}
+                excludedParameters={excludedParameters}
+                onParameters={(parameters) => setParameters(step.tool, parameters)}
+              />
+            ) : (
+              <p className="stack-rc-astro-note">{parameterList(step)}</p>
+            ))}
+            {/* The picker lists these while a step is picked; a checkbox
+                does not, so their notes stay under it. */}
+            {(!step || choiceCount === 1) && others.map((provider) => (
+              choiceCount === 0 && provider.state === 'not_licensed' ? (
+                <Fragment key={provider.provider}>
+                  <label>
+                    <input type="checkbox" checked={false} disabled readOnly />
+                    <strong>{provider.name}</strong>
+                  </label>
+                  <ProviderNote provider={provider} />
+                </Fragment>
+              ) : (
+                <ProviderNote key={provider.provider} provider={provider} named />
+              )
+            ))}
+          </div>
+        );
+      })}
+      {uncategorized.map((step) => (
+        <p className="stack-rc-astro-note" key={step.tool}>
+          {step.tool} (unavailable) {parameterList(step)}{' '}
+          {!required && (
+            <button type="button" disabled={disabled}
+              aria-label={`Remove ${step.tool}`}
+              onClick={() => removeStep(step)}>
+              Remove
+            </button>
+          )}
+        </p>
       ))}
       {result && <ResultDiagnostics result={result} />}
     </section>
   );
 }
 
+function parameterList(step: RcAstroStep): string {
+  return Object.entries(step.parameters)
+    .map(([name, value]) => `${name}: ${String(value)}`)
+    .join(' · ');
+}
+
+/** Why a provider cannot run, with the action when PSF Guard has one. */
+function ProviderNote({ provider, named = false }: { provider: ProcessingProvider; named?: boolean }) {
+  const reason = provider.reason
+    ?? (provider.state === 'not_licensed' ? 'Not licensed.' : 'Not installed.');
+  return (
+    <p className="stack-rc-astro-note">
+      {named && `${toolName(provider.name)}: `}{reason}{' '}
+      {provider.remedy === 'download_noise_model' && (
+        <button type="button"
+          onClick={() => openSettings('stacking', { field: PROCESSING_TOOLS_FIELD })}>
+          Download in Settings
+        </button>
+      )}
+    </p>
+  );
+}
+
 function ResultDiagnostics({ result }: { result: StackRcAstroResult }) {
   return (
     <div className="stack-rc-astro-diagnostics">
-      <span>RC-Astro {result.cli_version}</span>
+      {/* What made the result shown, which may no longer be installed. */}
+      {result.cli_version && <span>Made with RC-Astro {result.cli_version}</span>}
       {result.steps.map((step) => (
         <span key={step.tool}>
           {step.name}
-          {step.ml_version !== null ? ` · model ${step.ml_version}` : ''}
+          {step.ml_version !== null && step.ml_version !== undefined ? ` · model ${step.ml_version}` : ''}
+          {step.version ? ` · ${step.version}` : ''}
           {step.device ? ` · ${step.device}` : ''}
           {step.warnings.map((warning) => <small key={warning}>{warning}</small>)}
         </span>
@@ -174,122 +309,50 @@ function ResultDiagnostics({ result }: { result: StackRcAstroResult }) {
   );
 }
 
-
-function ToolSection({
+/** The picked provider's controls, drawn from its schema. */
+function ProviderFields({
   schema,
   parameters,
   disabled,
-  required,
   excludedParameters,
-  onToggle,
-  onParameter,
   onParameters,
 }: {
   schema: ExternalToolSchema;
-  required: boolean;
   excludedParameters: readonly string[];
-  parameters: Record<string, RcAstroParameterValue> | undefined;
+  parameters: Record<string, RcAstroParameterValue>;
   disabled: boolean;
-  onToggle: (enabled: boolean) => void;
-  onParameter: (name: string, value: RcAstroParameterValue) => void;
   onParameters: (parameters: Record<string, RcAstroParameterValue>) => void;
 }) {
-  const enabled = parameters !== undefined;
-  const correctOnly = enabled && offersCorrectOnly(schema) && isCorrectOnly(parameters);
+  const correctOnly = offersCorrectOnly(schema) && isCorrectOnly(parameters);
   return (
-    <div className="stack-rc-astro-tool">
-      <label title={required ? 'The Stars choice controls whether star separation runs' : undefined}>
-        <input
-          type="checkbox"
-          checked={enabled}
-          disabled={disabled || required || (!schema.licensed && !enabled)}
-          onChange={(event) => onToggle(event.target.checked)}
-          aria-label={schema.name}
-        />
-        <strong>{schema.name}</strong>
-        {!schema.licensed && <small>not licensed</small>}
-      </label>
-      {enabled && (
-        <div className="stack-rc-astro-fields">
-          {offersCorrectOnly(schema) && (
-            <label className="stack-stretch-field stack-rc-astro-switch"
-              title="Correct star shapes and color fringes without sharpening">
-              <input
-                type="checkbox"
-                checked={correctOnly}
-                disabled={disabled || !schema.licensed}
-                onChange={(event) => onParameters(event.target.checked
-                  ? { ...parameters, ...bxtCorrectOnly }
-                  : Object.fromEntries(Object.entries(parameters)
-                    .filter(([name]) => !(name in bxtCorrectOnly))))}
-                aria-label="Correct only"
-              />
-              <span>Correct only</span>
-            </label>
-          )}
-          {schema.parameters
-            .filter((parameter) => parameter.flag !== null && !excludedParameters.includes(parameter.name))
-            .map((parameter) => (
-              <ParameterField
-                key={parameter.name}
-                parameter={parameter}
-                value={parameters[parameter.name]}
-                disabled={disabled || !schema.licensed ||
-                  (correctOnly && parameter.name in bxtCorrectOnly)}
-                onChange={(value) => onParameter(parameter.name, value)}
-              />
-            ))}
-        </div>
+    <div className="stack-rc-astro-fields">
+      {offersCorrectOnly(schema) && (
+        <label className="stack-stretch-field stack-rc-astro-switch"
+          title="Correct star shapes and color fringes without sharpening">
+          <input
+            type="checkbox"
+            checked={correctOnly}
+            disabled={disabled}
+            onChange={(event) => onParameters(event.target.checked
+              ? { ...parameters, ...bxtCorrectOnly }
+              : Object.fromEntries(Object.entries(parameters)
+                .filter(([name]) => !(name in bxtCorrectOnly))))}
+            aria-label="Correct only"
+          />
+          <span>Correct only</span>
+        </label>
       )}
+      {schema.parameters
+        .filter((parameter) => parameter.flag !== null && !excludedParameters.includes(parameter.name))
+        .map((parameter) => (
+          <ParameterField
+            key={parameter.name}
+            parameter={parameter}
+            value={parameters[parameter.name]}
+            disabled={disabled || (correctOnly && parameter.name in bxtCorrectOnly)}
+            onChange={(value) => onParameters({ ...parameters, [parameter.name]: value })}
+          />
+        ))}
     </div>
-  );
-}
-
-function ParameterField({
-  parameter,
-  value,
-  disabled,
-  onChange,
-}: {
-  parameter: ExternalToolParameter;
-  value: RcAstroParameterValue | undefined;
-  disabled: boolean;
-  onChange: (value: RcAstroParameterValue) => void;
-}) {
-  const { kind } = parameter;
-  if (kind.type === 'bool') {
-    return (
-      <label className="stack-stretch-field stack-rc-astro-switch" title={parameter.description}>
-        <input
-          type="checkbox"
-          checked={typeof value === 'boolean' ? value : kind.default}
-          disabled={disabled}
-          onChange={(event) => onChange(event.target.checked)}
-          aria-label={parameter.label}
-        />
-        <span>{parameter.label}</span>
-      </label>
-    );
-  }
-  const numeric = typeof value === 'number' ? value : kind.default;
-  const problem = value === undefined ? null : rangeProblem(parameter, value);
-  return (
-    <label className="stack-stretch-field" title={parameter.description}>
-      <span>{parameter.label}</span>
-      <input
-        type="number"
-        aria-label={parameter.label}
-        aria-invalid={problem ? true : undefined}
-        value={Number.isFinite(numeric) ? numeric : ''}
-        min={kind.min}
-        max={kind.max}
-        step={kind.type === 'int' ? 1 : 0.05}
-        disabled={disabled}
-        onChange={(event) => onChange(event.target.valueAsNumber)}
-      />
-      {problem && (
-        <small className="stack-rc-astro-field-error">{kind.min} to {kind.max}</small>
-      )}
-    </label>
   );
 }

@@ -3,7 +3,7 @@ import StackRcAstroControls from './StackRcAstroControls';
 import StackFitsDownload from './StackFitsDownload';
 
 const defaultSeparation: RcAstroProcessing = { steps: [{ tool: 'sxt', parameters: {} }] };
-const separationTools = ['sxt'] as const;
+const separationCategories = ['star_removal'] as const;
 const outputParameters = ['stars', 'difference', 'unscreen'] as const;
 
 /** Managed linear SXT: parameters are editable; the Stars policy controls its use. */
@@ -17,7 +17,7 @@ export default function StackStarSeparationControls({ label, config, result, dis
   return <section className="stack-color-channel-tools">
     <StackRcAstroControls label={`${label} separation`} heading="Star separation" required
       config={config ?? defaultSeparation} result={result ?? undefined} disabled={disabled}
-      toolKeys={separationTools} excludedParameters={outputParameters} onChange={onChange} />
+      categories={separationCategories} excludedParameters={outputParameters} onChange={onChange} />
     <p className="processing-setups-hint">Runs on linear data before stretching and keeps both the starless image and stars. Unscreen Stars stays off.
       Changing these settings runs this branch again. Stretch, palette and star-reduction edits reuse the cached linear outputs.</p>
     {result && <div className="stack-fits-downloads">

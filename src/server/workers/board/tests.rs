@@ -25,6 +25,9 @@ fn offers(tools: &[(&str, &str)]) -> Offers {
         work: vec![TaskKind::RcAstroStep],
         stacking_version: None,
         stacking_release: None,
+        steps: Vec::new(),
+        rc_astro_path: None,
+        license_check: false,
         rc_astro: tools
             .iter()
             .map(|(tool, version)| schema(tool, version, true))
@@ -43,10 +46,10 @@ fn registration(name: &str, offers: Offers, files: FileAccess) -> Registration {
 }
 
 fn needs(tool: &str, version: &str) -> TaskNeeds {
-    TaskNeeds::RcAstro {
-        tool: tool.into(),
+    TaskNeeds::Step {
+        provider: tool.into(),
         name: format!("RC-Astro {tool}"),
-        cli_version: version.into(),
+        version: version.into(),
         ml_version: Some(4),
     }
 }
@@ -602,7 +605,7 @@ fn this_server_runs_a_task_only_while_no_other_worker_can() {
     );
     // The remote worker goes first in the schema order, this server last.
     let order = board
-        .rc_astro_offers()
+        .step_offers()
         .into_iter()
         .map(|(name, _, _)| name)
         .collect::<Vec<_>>();
@@ -748,7 +751,7 @@ fn placement_keeps_work_on_workers_or_on_this_server() {
     board.set_placement(TaskKind::RcAstroStep, WorkPlacement::WorkersOnly);
     let names = |board: &Board| {
         board
-            .rc_astro_offers()
+            .step_offers()
             .into_iter()
             .map(|(name, _, _)| name)
             .collect::<Vec<_>>()
@@ -1072,6 +1075,9 @@ fn only_a_worker_that_stacks_at_the_same_version_takes_a_channel() {
         rc_astro: Vec::new(),
         stacking_version: Some(version.into()),
         stacking_release: Some("0.12".into()),
+        steps: Vec::new(),
+        rc_astro_path: None,
+        license_check: false,
     };
     let older = board.register(
         "token",
@@ -1186,4 +1192,289 @@ fn a_stopped_task_goes_to_no_new_worker() {
     );
     assert!(board.try_claim(&second).unwrap().is_none());
     assert_eq!(waiting.join().unwrap().unwrap_err(), WaitError::Stopped);
+}
+
+/// What a worker of this release registers: its providers as `steps`, and
+/// its RC-Astro tools again for a server older than providers.
+fn step_offers(schemas: Vec<seiza_stacking::ExternalToolSchema>) -> Offers {
+    Offers {
+        steps: schemas
+            .into_iter()
+            .filter_map(crate::remote_work::steps::StepOffer::of)
+            .collect(),
+        ..offers(&[])
+    }
+}
+
+#[test]
+fn a_noise_model_step_goes_only_to_a_worker_that_offers_the_same_model() {
+    use crate::remote_work::noise_model::testing::identity;
+
+    let dir = tempfile::tempdir().unwrap();
+    let board = board(dir.path(), Timings::default());
+    let wanted = identity("noise-v1");
+    // The step's schema is what a chain plans with; its needs come from it.
+    let needs = TaskNeeds::step(&wanted.schema());
+    let ticket = board.ticket().unwrap();
+    ticket
+        .submit(NewTask {
+            kind: TaskKind::ProcessingStep,
+            ..task("denoise", true, needs.clone())
+        })
+        .unwrap();
+
+    // RC-Astro's own noise reduction, another model, and the same model on
+    // another backend all leave the task where it is.
+    let other_backend = crate::remote_work::noise_model::Identity {
+        backend: "coreml-gpu".into(),
+        ..wanted.clone()
+    };
+    for (name, offered) in [
+        ("nxt-only", schema("nxt", "2.6.6", true)),
+        ("other-model", identity("noise-v2").schema()),
+        ("other-backend", other_backend.schema()),
+    ] {
+        let session = board.register(
+            name,
+            registration(name, step_offers(vec![offered]), FileAccess::default()),
+            false,
+        );
+        assert!(board.try_claim(&session).unwrap().is_none(), "{name}");
+        assert!(!board.remote_can_run(&needs), "{name}");
+    }
+    let session = board.register(
+        "same",
+        registration(
+            "same",
+            step_offers(vec![schema("nxt", "2.6.6", true), wanted.schema()]),
+            FileAccess::default(),
+        ),
+        false,
+    );
+    assert!(board.remote_can_run(&needs));
+    let claimed = board.try_claim(&session).unwrap().unwrap();
+    assert_eq!(claimed.kind, TaskKind::ProcessingStep);
+    assert_eq!(claimed.label, "denoise");
+    // The worker's summary shows the model without its card's hash, beside
+    // its RC-Astro tools.
+    let (sessions, _) = board.summary();
+    let summary = sessions.iter().find(|found| found.name == "same").unwrap();
+    assert_eq!(
+        summary.noise_model.as_deref(),
+        Some("noise-v1 cpu f32, seiza-model 0.1.0, band scale 5, ONNX Runtime 1.31.1")
+    );
+    assert_eq!(summary.rc_astro, ["RC-Astro nxt 2.6.6"]);
+}
+
+#[test]
+fn a_worker_older_than_providers_is_sent_an_rc_astro_step_under_its_old_kind() {
+    let dir = tempfile::tempdir().unwrap();
+    let board = board(dir.path(), Timings::default());
+    // A step of this release: one kind for every provider.
+    let submit = |label: &str| {
+        let ticket = board.ticket().unwrap();
+        ticket
+            .submit(NewTask {
+                kind: TaskKind::ProcessingStep,
+                spec: serde_json::json!({"category": "denoise", "provider": "nxt", "schema": {}}),
+                ..task(label, true, TaskNeeds::step(&schema("nxt", "2.6.6", true)))
+            })
+            .unwrap();
+        ticket
+    };
+    // The older worker registers RC-Astro tools and no providers. It never
+    // heard of the new kind, so the step reaches it as `rc_astro_step`, with
+    // the spec an RC-Astro task has always had beside the new fields.
+    let _first = submit("first");
+    let old = board.register(
+        "old",
+        registration("old", offers(&[("nxt", "2.6.6")]), FileAccess::default()),
+        false,
+    );
+    let sent = board.try_claim(&old).unwrap().unwrap();
+    assert_eq!(sent.kind, TaskKind::RcAstroStep);
+    assert_eq!(
+        serde_json::to_value(&sent).unwrap()["kind"],
+        "rc_astro_step"
+    );
+    assert_eq!(sent.spec["provider"], "nxt");
+    // It is never sent a provider it does not have.
+    let model = crate::remote_work::noise_model::testing::identity("noise-v1");
+    let denoise = board.ticket().unwrap();
+    denoise
+        .submit(NewTask {
+            kind: TaskKind::ProcessingStep,
+            ..task("model", true, TaskNeeds::step(&model.schema()))
+        })
+        .unwrap();
+    board
+        .fail(&old, &sent.task, &sent.lease, "done".into())
+        .unwrap();
+    assert!(board.try_claim(&old).unwrap().is_none());
+
+    // A worker of this release gets the same step under the one kind.
+    let _second = submit("second");
+    let new = board.register(
+        "new",
+        registration(
+            "new",
+            step_offers(vec![schema("nxt", "2.6.6", true)]),
+            FileAccess::default(),
+        ),
+        false,
+    );
+    let sent = board.try_claim(&new).unwrap().unwrap();
+    assert_eq!(sent.kind, TaskKind::ProcessingStep);
+}
+
+#[test]
+fn every_provider_runs_where_the_stored_rc_astro_choice_says() {
+    let dir = tempfile::tempdir().unwrap();
+    let board = board(dir.path(), Timings::default());
+    for placement in [
+        WorkPlacement::WorkersOnly,
+        WorkPlacement::ThisServer,
+        WorkPlacement::WorkersFirst,
+    ] {
+        // The setting is stored and set under the RC-Astro kind, as before
+        // providers.
+        board.set_placement(TaskKind::RcAstroStep, placement);
+        assert_eq!(board.placement(TaskKind::ProcessingStep), placement);
+    }
+}
+
+#[test]
+fn a_person_s_step_takes_this_server_s_worker_from_automatic_work() {
+    let dir = tempfile::tempdir().unwrap();
+    let board = board(dir.path(), Timings::default());
+    let model = crate::remote_work::noise_model::testing::identity("noise-v1");
+    let local = board.register(
+        crate::server::workers::THIS_SERVER,
+        registration(
+            "This server",
+            step_offers(vec![schema("nxt", "2.6.6", true), model.schema()]),
+            FileAccess::default(),
+        ),
+        true,
+    );
+    let step = |label: &str, person: bool, schema: &seiza_stacking::ExternalToolSchema| {
+        let ticket = board.ticket().unwrap();
+        ticket
+            .submit(NewTask {
+                kind: TaskKind::ProcessingStep,
+                ..task(label, person, TaskNeeds::step(schema))
+            })
+            .unwrap();
+        ticket
+    };
+    // An automatic model run, which can take most of an hour, has the
+    // worker.
+    let _automatic = step("automatic model", false, &model.schema());
+    let running = board.try_claim(&local).unwrap().unwrap();
+    let stop = crate::concurrency::Stop::new();
+    board
+        .attach_stop(&local, &running.task, &running.lease, stop.clone())
+        .unwrap();
+    assert!(!stop.requested());
+    // A person applies a step this server would run: the automatic run is
+    // told to stop.
+    let _person = step("person nxt", true, &schema("nxt", "2.6.6", true));
+    assert!(stop.requested());
+    // The worker answers that it stopped. The run goes back in the queue,
+    // behind the person's step, and the stop does not count as a failure.
+    board
+        .fail(
+            &local,
+            &running.task,
+            &running.lease,
+            "The noise model was stopped".into(),
+        )
+        .unwrap();
+    let next = board.try_claim(&local).unwrap().unwrap();
+    assert_eq!(next.label, "person nxt");
+    board
+        .fail(&local, &next.task, &next.lease, "done".into())
+        .unwrap();
+    for _ in 0..MAX_ATTEMPTS + 1 {
+        let again = board.try_claim(&local).unwrap().unwrap();
+        assert_eq!(again.label, "automatic model");
+        let stop = crate::concurrency::Stop::new();
+        board
+            .attach_stop(&local, &again.task, &again.lease, stop.clone())
+            .unwrap();
+        let _another = step("person again", true, &schema("nxt", "2.6.6", true));
+        assert!(stop.requested());
+        board
+            .fail(&local, &again.task, &again.lease, "stopped".into())
+            .unwrap();
+        let person = board.try_claim(&local).unwrap().unwrap();
+        assert_eq!(person.label, "person again");
+        board
+            .fail(&local, &person.task, &person.lease, "done".into())
+            .unwrap();
+    }
+    // Another person's work on a step this server does not run leaves the
+    // automatic run alone.
+    let again = board.try_claim(&local).unwrap().unwrap();
+    let stop = crate::concurrency::Stop::new();
+    board
+        .attach_stop(&local, &again.task, &again.lease, stop.clone())
+        .unwrap();
+    let _elsewhere = step("person bxt", true, &schema("bxt", "2.6.6", true));
+    assert!(!stop.requested());
+}
+
+#[test]
+fn a_worker_s_row_shows_its_rc_astro_and_an_older_worker_cannot_be_asked() {
+    let dir = tempfile::tempdir().unwrap();
+    let board = board(dir.path(), Timings::default());
+    let studio = board.register(
+        "a",
+        registration(
+            "studio",
+            Offers {
+                rc_astro_path: Some("C:\\RC-Astro\\rc-astro.exe".into()),
+                license_check: true,
+                ..step_offers(vec![schema("nxt", "2.6.6", false)])
+            },
+            FileAccess::default(),
+        ),
+        false,
+    );
+    // A worker from before the check registers without the field.
+    let old = board.register(
+        "c",
+        registration("old", offers(&[("nxt", "2.6.6")]), FileAccess::default()),
+        false,
+    );
+    let asked = board.license_checkable(&studio).unwrap();
+    assert_eq!(
+        (asked.token_id.as_str(), asked.name.as_str()),
+        ("a", "studio")
+    );
+    let refused = board.license_checkable(&old).unwrap_err();
+    assert!(
+        refused.contains("psf-guard-cli rc-astro license"),
+        "{refused}"
+    );
+    assert!(board.license_checkable("gone").is_err());
+
+    // Settings › Workers shows where each worker found rc-astro and what
+    // each tool says of its license, with no online check.
+    let (sessions, _) = board.summary();
+    let row = sessions
+        .iter()
+        .find(|found| found.name == "studio")
+        .unwrap();
+    assert_eq!(
+        row.rc_astro_path.as_deref(),
+        Some("C:\\RC-Astro\\rc-astro.exe")
+    );
+    assert!(row.license_check);
+    assert_eq!(row.rc_astro_tools.len(), 1);
+    assert!(!row.rc_astro_tools[0].licensed);
+    let row = sessions.iter().find(|found| found.name == "old").unwrap();
+    assert!(!row.license_check);
+    assert_eq!(row.rc_astro_path, None);
+    assert!(row.rc_astro_tools[0].licensed);
 }

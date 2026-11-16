@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it, vi } from 'vitest';
 import { server } from '../../test/msw-server';
@@ -91,6 +92,61 @@ describe('WorkerSettings', () => {
     expect(screen.getByText('In use')).toBeInTheDocument();
   });
 
+  it('shows each worker\u2019s rc-astro and local license state, and asks one worker for an online check', async () => {
+    const base = settings();
+    const asked: string[] = [];
+    server.use(
+      http.get('/api/workers', () => HttpResponse.json(ok(settings({
+        workers: [
+          base.workers[0],
+          {
+            ...base.workers[1],
+            rc_astro_path: 'C:\\Program Files\\RC-Astro\\CLI\\rc-astro.exe',
+            rc_astro_tools: [
+              { provider: 'bxt', name: 'RC-Astro BlurXTerminator', version: '2.6.10', licensed: true },
+              { provider: 'nxt', name: 'RC-Astro NoiseXTerminator', version: '2.6.10', licensed: false },
+            ],
+            license_check: true,
+          },
+          // A worker from before the check has tools and cannot be asked.
+          {
+            ...base.workers[1], session: 's2', name: 'attic-pc',
+            rc_astro_tools: [{ provider: 'sxt', name: 'RC-Astro StarXTerminator', version: '2.6.6', licensed: true }],
+          },
+        ],
+      })))),
+      http.post('/api/tools/rc-astro/license-check', async ({ request }) => {
+        const body = await request.json() as { worker?: string };
+        asked.push(String(body.worker));
+        return HttpResponse.json(ok({
+          key: 'worker-1', computer: 'studio-pc', running: false, started_at: 1,
+          check: {
+            executable: 'C:\\Program Files\\RC-Astro\\CLI\\rc-astro.exe',
+            report: { computer: 'svc@studio-pc', products: [
+              { product: 'nxt', name: 'NoiseXTerminator', status: 'limit', message: 'Not activated' },
+            ] },
+          },
+        }));
+      }),
+    );
+    render(<WorkerSettings />, { wrapper: wrapper() });
+
+    await screen.findByText('attic-pc');
+    const row = document.querySelector('.worker-row[data-worker="studio-pc"]') as HTMLElement;
+    expect(row).toHaveTextContent('rc-astro: C:\\Program Files\\RC-Astro\\CLI\\rc-astro.exe');
+    expect(row).toHaveTextContent('BlurXTerminator 2.6.10: licensed');
+    expect(row).toHaveTextContent('NoiseXTerminator 2.6.10: not licensed');
+    // Listing the workers asked RC-Astro nothing.
+    expect(asked).toEqual([]);
+    await userEvent.click(within(row).getByRole('button', { name: 'Check license on studio-pc' }));
+    expect(await within(row).findByRole('status')).toHaveTextContent('Computer: svc@studio-pc');
+    expect(asked).toEqual(['s1']);
+
+    const old = document.querySelector('.worker-row[data-worker="attic-pc"]') as HTMLElement;
+    expect(within(old).queryByRole('button', { name: /Check license/ })).toBeNull();
+    expect(old).toHaveTextContent('To check its license, update PSF Guard on this worker');
+  });
+
   it('shows a new token once, inside the command to run', async () => {
     let created: unknown = null;
     server.use(
@@ -174,7 +230,7 @@ describe('WorkerSettings', () => {
       }),
     );
     render(<WorkerSettings />, { wrapper: wrapper() });
-    const tools = await screen.findByRole('group', { name: 'RC-Astro tools' });
+    const tools = await screen.findByRole('group', { name: 'Processing steps' });
     const stacks = screen.getByRole('group', { name: 'Stack builds' });
     // Stack builds stay on this server until someone chooses otherwise.
     expect(within(stacks).getByRole('radio', { name: /^This server only/ })).toBeChecked();

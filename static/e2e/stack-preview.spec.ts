@@ -596,7 +596,9 @@ test('retains RC-Astro color steps in saved setups on desktop and mobile', async
     .locator('option', { hasText: 'RC color test' })).toHaveCount(1);
   const setupsDocument = (await (await page.request.get('/api/processing-setups')).json()).data;
   const saved = setupsDocument.setups.find((entry: { name: string }) => entry.name === 'RC color test');
-  expect(saved.settings.input_rc_astro.red.steps).toEqual([{ tool: 'bxt', parameters: { ss: 0.2 } }]);
+  // A step is saved with its category and provider; `tool` stays for a
+  // release from before providers.
+  expect(saved.settings.input_rc_astro.red.steps).toEqual([{ category: 'sharpen', provider: 'bxt', tool: 'bxt', parameters: { ss: 0.2 } }]);
   await page.reload();
   await processing.locator(':scope > summary').click();
   await openProcessingSteps(processing);
@@ -652,7 +654,7 @@ test('processing FITS downloads are explicit and fit desktop and phone panels', 
   await processing.locator(':scope > summary').click();
   await openProcessingSteps(processing);
   const red = processing.getByRole('region', { name: 'R input linear processing' });
-  const together = processing.getByRole('region', { name: 'RC-Astro on the color channels together' });
+  const together = processing.getByRole('region', { name: 'Processing on the color channels together' });
   const download = together.getByRole('link', { name: 'Download processed color channels FITS' });
   await expect(download).toBeVisible();
   await expect(red.getByRole('link', { name: 'Download R input starless FITS' })).toBeVisible();
@@ -737,7 +739,7 @@ test('runs RC-Astro on the color channels together', async ({ page }, testInfo) 
   const processing = card.locator('.stack-color-processing');
   await processing.locator(':scope > summary').click();
   await openProcessingSteps(processing);
-  const together = processing.getByRole('region', { name: 'RC-Astro on the color channels together' });
+  const together = processing.getByRole('region', { name: 'Processing on the color channels together' });
   await expect(together.getByRole('checkbox', { name: 'RC-Astro StarXTerminator' })).toHaveCount(0);
   await together.getByRole('checkbox', { name: 'RC-Astro BlurXTerminator' }).check();
   await expect(together.getByRole('checkbox', { name: 'Correct only' })).toBeChecked();
@@ -2388,7 +2390,7 @@ test('keeps narrowband and RGB star processing consistent on desktop and phone',
   const balance = processing.getByRole('group', { name: 'Stretch and narrowband balance', exact: true });
   const combine = processing.getByRole('group', { name: 'Combine and restore stars', exact: true });
   for (const step of [linear, balance, combine]) await step.locator(':scope > summary').click();
-  const stars = linear.getByRole('region', { name: 'RGB stars RC-Astro tools' });
+  const stars = linear.getByRole('region', { name: 'RGB stars processing tools' });
   await stars.getByRole('checkbox', { name: 'RC-Astro BlurXTerminator' }).check();
   await stars.getByRole('spinbutton', { name: 'Sharpen Stars' }).fill('0.6');
   await stars.getByRole('spinbutton', { name: 'Adjust Star Halos' }).fill('-0.1');
@@ -2398,8 +2400,8 @@ test('keeps narrowband and RGB star processing consistent on desktop and phone',
   const starCalibration = linear.getByRole('switch', { name: 'Color calibration' });
   await starCalibration.click();
   await expect(starCalibration).not.toBeChecked();
-  const rgbSeparation = linear.getByRole('region', { name: 'RGB separation RC-Astro tools' });
-  const nebulaSeparation = linear.getByRole('region', { name: 'Narrowband nebula separation RC-Astro tools' });
+  const rgbSeparation = linear.getByRole('region', { name: 'RGB separation processing tools' });
+  const nebulaSeparation = linear.getByRole('region', { name: 'Narrowband nebula separation processing tools' });
   const overlap = rgbSeparation.getByRole('spinbutton', { name: 'Tile Overlap' });
   await overlap.fill('0.3');
   await expect(nebulaSeparation.getByRole('spinbutton', { name: 'Tile Overlap' })).toHaveValue('0.2');

@@ -41,6 +41,7 @@ pub(crate) mod listener;
 pub mod master_cleanup;
 pub mod mcp;
 pub mod mosaic_scope;
+pub mod noise_model;
 pub mod organization;
 pub mod page_build;
 pub mod pairing;
@@ -186,6 +187,44 @@ fn apply_registry_settings(registry: &crate::db_registry::DbRegistry) {
     scoring_defaults::configure(registry.scoring.as_ref());
     crate::star_detection::configure(registry.star_detection.as_ref());
     cache_budget::configure(registry.storage.as_ref());
+    noise_model::configure(registry.noise_model.as_ref());
+}
+
+/// Have this server's noise model runs lease their threads from the shared
+/// budget when the job that waits for them holds none: a person's run at
+/// `Interactive`, automatic work at `Viewed`. An automatic run also waits,
+/// between tiles, while a person's work runs.
+fn lease_noise_model_threads(state: &Arc<AppState>) {
+    let waiting = Arc::downgrade(state);
+    workers::set_local_yield(Arc::new(move |stop| {
+        if let Some(state) = waiting.upgrade() {
+            state.wait_for_interactive_work_unless(
+                std::time::Duration::from_millis(250),
+                stop,
+                |_| {},
+            );
+        }
+    }));
+    let state = Arc::downgrade(state);
+    workers::set_local_compute(Arc::new(move |person| {
+        let Some(state) = state.upgrade() else {
+            return crate::remote_work::Compute {
+                threads: 1,
+                hold: None,
+            };
+        };
+        let priority = if person {
+            crate::concurrency::Priority::Interactive
+        } else {
+            crate::concurrency::Priority::Viewed
+        };
+        let budget = crate::concurrency::plan_workers(None, &state.worker_policy(), priority, None);
+        let lease = state.lease_workers(priority, budget.workers);
+        crate::remote_work::Compute {
+            threads: lease.workers,
+            hold: Some(Box::new(lease)),
+        }
+    }));
 }
 
 /// Whether a caller with no session is trusted while the server has no user
@@ -890,6 +929,19 @@ pub fn api_router(state: Arc<AppState>) -> Router {
             get(stack_preview::rc_astro::get_rc_astro_capabilities),
         )
         .route(
+            "/tools/processing",
+            get(stack_preview::rc_astro::get_rc_astro_capabilities),
+        )
+        .route(
+            "/tools/noise-model/download",
+            post(noise_model::start_download),
+        )
+        .route(
+            "/tools/noise-model/download/stop",
+            post(noise_model::stop_download),
+        )
+        .route("/settings/noise-model", put(noise_model::update_settings))
+        .route(
             "/astrometry/catalogs/validate",
             post(handlers::validate_astrometry_catalogs),
         )
@@ -1239,6 +1291,7 @@ async fn run_server_internal(
     // hours; browser reloads only read this cache through the API.
     state.update_notices.start_refresh_loop(&state);
     crate::server::wbpp_storage::spawn(&state);
+    lease_noise_model_threads(&state);
 
     // For the job journal's last write at shutdown; the router takes `state`.
     let journal_state = Arc::clone(&state);

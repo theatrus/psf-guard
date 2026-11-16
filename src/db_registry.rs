@@ -713,6 +713,16 @@ pub struct DbRegistry {
         skip_serializing_if = "Option::is_none"
     )]
     pub remote_workers: Option<RemoteWorkerSettings>,
+    /// The path of an ONNX Runtime a person installed for the noise model,
+    /// edited in Settings › Stacking. Additive within registry
+    /// v2; absent uses the ONNX Runtime PSF Guard downloaded. A block this
+    /// version cannot read reads as absent.
+    #[serde(
+        default,
+        deserialize_with = "lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub noise_model: Option<crate::server::noise_model::NoiseModelSettings>,
 }
 
 /// Who may join this server as a worker, and where task files go.
@@ -725,7 +735,8 @@ pub struct RemoteWorkerSettings {
     /// it in the cache folder. A worker in shared mode must see this folder.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exchange_folder: Option<String>,
-    /// Where RC-Astro steps run.
+    /// Where processing steps run, whatever provider runs them. The key
+    /// is from when RC-Astro's tools were the only providers.
     #[serde(default)]
     pub rc_astro: WorkPlacement,
     /// Where stack builds' channels are stacked. This server unless chosen
@@ -771,7 +782,8 @@ impl WorkPlacement {
     pub fn default_for(kind: crate::remote_work::protocol::TaskKind) -> Self {
         match kind {
             crate::remote_work::protocol::TaskKind::StackChannel => Self::this_server(),
-            crate::remote_work::protocol::TaskKind::RcAstroStep => Self::default(),
+            crate::remote_work::protocol::TaskKind::RcAstroStep
+            | crate::remote_work::protocol::TaskKind::ProcessingStep => Self::default(),
         }
     }
 
@@ -1147,6 +1159,7 @@ impl Default for DbRegistry {
             backups: None,
             scoring: None,
             remote_workers: None,
+            noise_model: None,
         }
     }
 }

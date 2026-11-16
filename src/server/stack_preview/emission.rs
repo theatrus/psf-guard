@@ -476,7 +476,7 @@ pub(super) fn apply(
             narrowband: source_for(role),
             references: references.iter().map(|r| source_for(*r)).collect(),
         };
-        let payload = serde_json::to_vec(&(
+        let payload = crate::remote_work::steps::identity_json(&(
             SEIZA_STACKING_OUTPUT_VERSION,
             &sources,
             config.mode,
@@ -682,8 +682,12 @@ pub(super) fn apply(
             .map(|i| results[*i].plan.clone().unwrap())
             .collect();
         let flux_id = fingerprint(
-            &serde_json::to_vec(&(SEIZA_STACKING_OUTPUT_VERSION, &plans, calibration))
-                .map_err(|e| e.to_string())?,
+            &crate::remote_work::steps::identity_json(&(
+                SEIZA_STACKING_OUTPUT_VERSION,
+                &plans,
+                calibration,
+            ))
+            .map_err(|e| e.to_string())?,
         );
         let flux_directory = color_input_dir(root, input)
             .join("emission-flux")
@@ -947,7 +951,7 @@ pub(super) fn validate_natural_star_removal(
     if processing
         .input_rc_astro
         .values()
-        .any(|config| config.steps.iter().any(|step| step.tool == "sxt"))
+        .any(|config| config.removes_stars())
     {
         return Err(AppError::BadRequest("RGB/LRGB with emission retains broadband stars and cannot use channel StarXTerminator. Choose Set in this build and remove SXT, or choose narrowband with RGB stars.".into()));
     }

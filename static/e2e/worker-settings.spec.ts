@@ -45,13 +45,13 @@ test('a worker joins with the token shown once, and stops when it is revoked', a
 
   // This server's own worker is listed even with no rc-astro here.
   const local = page.locator('.worker-row', { has: page.getByText('This server', { exact: true }) });
-  await expect(local).toContainText('No RC-Astro tools');
+  await expect(local).toContainText('No processing tools');
   await expect(local).toContainText('Reads task files in place');
 
   // Where RC-Astro runs saves at once; stack builds stay on this server
   // until chosen otherwise. Each radio shows the saved choice, so it turns
   // on once the save returns.
-  const tools = page.getByRole('group', { name: 'RC-Astro tools' });
+  const tools = page.getByRole('group', { name: 'Processing steps' });
   const stacks = page.getByRole('group', { name: 'Stack builds' });
   await expect(stacks.getByRole('radio', { name: /^This server only/ })).toBeChecked();
   const workersOnly = tools.getByRole('radio', { name: /^Workers only/ });
@@ -97,7 +97,7 @@ test('a worker joins with the token shown once, and stops when it is revoked', a
   const row = page.locator(`.worker-row[data-worker="${name}"]`);
   await expect(row).toContainText('Connected', { timeout: 30_000 });
   await expect(row).toContainText('Shared storage');
-  await expect(row).toContainText('No RC-Astro tools');
+  await expect(row).toContainText('No processing tools');
   await expect(tokenRow).toContainText('In use');
   await row.scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath('worker-connected.png') });
@@ -114,4 +114,58 @@ test('a worker joins with the token shown once, and stops when it is revoked', a
   expect(code, output).not.toBe('still running');
   expect(code, output).not.toBe(0);
   expect(output).toContain('Settings › Workers');
+});
+
+// The e2e server runs with rc-astro off, so there is no stand-in to check
+// against here: the license routes are mocked, and this covers the page
+// starting a check, polling it and showing the report. The check itself
+// runs against a stand-in rc-astro in the Rust tests.
+test('Check license starts a check, waits for it, and shows RC-Astro’s report', async ({ page }) => {
+  let started = 0;
+  let polls = 0;
+  const status = (running: boolean) => ({
+    key: 'server', computer: 'this server', running, started_at: 1,
+    ...(running ? {} : { check: {
+      executable: '/opt/rc-astro/rc-astro',
+      cli_version: '2.6.10',
+      report: {
+        computer: 'svc@server',
+        activation_url: 'https://www.rc-astro.com/account',
+        products: [{ product: 'nxt', name: 'NoiseXTerminator', status: 'limit', message: 'Not activated - activate: rc-astro license --activate nxt' }],
+        attention: { reason: 'unregistered', message: 'This computer is not registered to an RC-Astro account', command: 'rc-astro license <code>' },
+      },
+      error: 'No license',
+    } }),
+  });
+  await page.route('**/api/tools/rc-astro', (route) => route.fulfill({ json: { success: true, data: {
+    available: true, executable: '/opt/rc-astro/rc-astro', this_server: true, workers: [], tool_workers: {},
+    tools: [{ schema_version: 6, cli_version: '2.6.10', key: 'nxt', name: 'RC-Astro NoiseXTerminator', ml_version: 3, licensed: false, license_message: null, parameters: [] }],
+  } } }));
+  await page.route('**/api/tools/rc-astro/license-check', (route) => {
+    started += 1;
+    return route.fulfill({ json: { success: true, data: status(true) } });
+  });
+  await page.route('**/api/tools/rc-astro/license-check/server', (route) => {
+    polls += 1;
+    return route.fulfill({ json: { success: true, data: status(polls < 2) } });
+  });
+
+  await page.goto('/');
+  await openSettings(page);
+  await selectSettingsSection(page, 'stacking');
+  const check = page.getByRole('group', { name: 'RC-Astro license on this server' });
+  await check.scrollIntoViewIfNeeded();
+  // Opening the page asked RC-Astro nothing.
+  expect(started).toBe(0);
+  await check.getByRole('button', { name: 'Check license on this server' }).click();
+  await expect(check.getByRole('button', { name: 'Stop the license check on this server' })).toBeVisible();
+  const report = check.getByRole('status');
+  await expect(report).toContainText('Computer: svc@server', { timeout: 10_000 });
+  await expect(report).toContainText('This computer is not registered to an RC-Astro account.');
+  await expect(report.getByRole('link', { name: 'Get an activation code' })).toHaveAttribute('href', 'https://www.rc-astro.com/account');
+  await expect(report).toContainText('NoiseXTerminator: Not activated - activate: rc-astro license --activate nxt');
+  await expect(report).toContainText('Run in a terminal on that computer: rc-astro license <code>');
+  await expect(report).toContainText('RC-Astro reported: No license');
+  expect(started).toBe(1);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });

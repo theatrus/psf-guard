@@ -436,6 +436,20 @@ mod tests {
         )
         .unwrap();
         assert_eq!(color["input_rc_astro"]["red"]["steps"][1]["tool"], "sxt");
+        // The noise model is a step of the same chain, so a setup stores it
+        // whether or not the model is installed.
+        let denoised = canonical_settings(
+            ProcessingSetupKind::View,
+            serde_json::json!({"model": {"type": "identity"}, "rc_astro": {"steps": [
+                {"tool": "noise-model", "parameters": {"grain": 0.5}}, {"tool": "bxt"}
+            ]}}),
+        )
+        .unwrap();
+        assert!(denoised["rc_astro"]["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|step| step["tool"] == "noise-model" && step["parameters"]["grain"] == 0.5));
         for chain in [
             serde_json::json!({"steps": []}),
             serde_json::json!({"steps": [{"tool":"invalid"}]}),

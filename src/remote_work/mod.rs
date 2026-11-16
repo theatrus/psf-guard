@@ -5,12 +5,15 @@
 //! This module holds what both sides share: the wire protocol, and how each
 //! kind of task runs on whichever worker claims it.
 
+pub mod noise_model;
 pub mod protocol;
 pub mod rc_astro;
+pub mod steps;
 
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use protocol::TaskKind;
 
@@ -18,10 +21,36 @@ use protocol::TaskKind;
 #[derive(Clone, Default)]
 pub struct LocalTools {
     pub rc_astro: Option<seiza_stacking::RcAstroCli>,
+    /// What runs the noise model here. `None` on a worker that leaves it
+    /// out.
+    pub noise_model: Option<Arc<dyn noise_model::Engine>>,
+    /// The threads a noise model run may use, given whether a person waits
+    /// for it. This server leases them from its shared budget; `None` uses
+    /// this machine's share of its cores.
+    pub compute: Option<ComputeSource>,
+    /// Blocks while a person's work runs on this machine, or until the
+    /// given stop says so. This server sets it; automatic model runs call
+    /// it between tiles.
+    pub yield_to_person: Option<YieldHook>,
+    /// Whether these are this server's own tools: its worker runs a step on
+    /// the workers the waiting job leased.
+    pub this_server: bool,
     /// How many tasks the worker runs at once; a stack channel takes this
     /// share of its cores and memory.
     pub slots: usize,
 }
+
+/// Waits for a person's work to end, unless the stop it is given fires.
+pub type YieldHook = Arc<dyn Fn(&dyn Fn() -> bool) + Send + Sync>;
+
+/// Threads granted to one task. Dropping `hold` gives them back.
+pub struct Compute {
+    pub threads: usize,
+    pub hold: Option<Box<dyn std::any::Any + Send>>,
+}
+
+/// Grants threads to a task, given whether a person waits for it.
+pub type ComputeSource = Arc<dyn Fn(bool) -> Compute + Send + Sync>;
 
 impl LocalTools {
     /// What the worker takes, for its registration: what it can run,
@@ -32,11 +61,26 @@ impl LocalTools {
         threads: usize,
         choice: &WorkChoice,
     ) -> (protocol::Offers, Option<String>) {
-        let (mut rc_astro, problem) = match &self.rc_astro {
-            Some(cli) => rc_astro::probe(cli),
-            None => (Vec::new(), None),
-        };
-        rc_astro.retain(|schema| choice.takes_rc_astro_tool(&schema.key));
+        // Every engine reports the providers it can run here.
+        let mut steps = Vec::new();
+        let mut problem = None;
+        for engine in [steps::Engine::RcAstro, steps::Engine::SeizaNoiseModel] {
+            let (schemas, engine_problem) = steps::runner(engine).offers(self);
+            problem = problem.or(engine_problem);
+            steps.extend(
+                schemas
+                    .into_iter()
+                    .filter(|schema| choice.takes_provider(&schema.key))
+                    .filter_map(steps::StepOffer::of),
+            );
+        }
+        // Servers older than providers read the RC-Astro tools here, and
+        // `work` as the kinds they know.
+        let rc_astro: Vec<_> = steps
+            .iter()
+            .filter(|offer| steps::is_rc_astro(&offer.provider))
+            .map(|offer| offer.schema.clone())
+            .collect();
         let mut work = Vec::new();
         if !rc_astro.is_empty() {
             work.push(TaskKind::RcAstroStep);
@@ -56,6 +100,12 @@ impl LocalTools {
                 stacking_release: choice
                     .takes_stack()
                     .then(|| env!("CARGO_PKG_VERSION").into()),
+                steps,
+                rc_astro_path: self
+                    .rc_astro
+                    .as_ref()
+                    .map(|cli| cli.executable().display().to_string()),
+                license_check: self.rc_astro.is_some(),
             },
             problem,
         )
@@ -81,6 +131,8 @@ pub struct WorkChoice {
     rc_astro_tools: Option<Vec<String>>,
     /// Whether it takes stack builds.
     stack: bool,
+    /// Whether it runs the noise model.
+    noise_model: bool,
 }
 
 impl Default for WorkChoice {
@@ -88,27 +140,38 @@ impl Default for WorkChoice {
         Self {
             rc_astro_tools: None,
             stack: true,
+            noise_model: true,
         }
     }
 }
 
 /// The `--work` choices, for the command's help and its errors.
-pub const WORK_CHOICES: &str = "stack, rc-astro (every RC-Astro tool), bxt, nxt or sxt";
+pub const WORK_CHOICES: &str =
+    "stack, processing or rc-astro (every processing step), noise-model, bxt, nxt or sxt";
 
 impl WorkChoice {
-    /// Read `--work` values: `rc-astro` takes every RC-Astro tool, and a
-    /// tool's key, such as `bxt`, takes that tool.
+    /// Read `--work` values: `processing`, or `rc-astro` as it was called
+    /// when RC-Astro's tools were the only providers, takes every
+    /// processing step; a provider's key, such as `bxt` or `noise-model`,
+    /// takes that provider.
     pub fn parse(values: &[String]) -> Result<Self, String> {
         if values.is_empty() {
             return Ok(Self::default());
         }
         let mut tools = Vec::new();
         let mut stack = false;
+        let mut noise_model = false;
         for value in values {
             let value = value.trim().to_ascii_lowercase();
             match value.as_str() {
                 "stack" => stack = true,
-                "rc-astro" => tools.extend(rc_astro::TOOLS.iter().map(|tool| tool.to_string())),
+                noise_model::TOOL => noise_model = true,
+                // The choice that was RC-Astro's alone covers every provider
+                // of a processing step, as the server's placement does.
+                "rc-astro" | "processing" => {
+                    tools.extend(rc_astro::TOOLS.iter().map(|tool| tool.to_string()));
+                    noise_model = true;
+                }
                 tool if rc_astro::TOOLS.contains(&tool) => tools.push(tool.to_string()),
                 _ => return Err(format!("--work must be {WORK_CHOICES}, not '{value}'")),
             }
@@ -118,20 +181,36 @@ impl WorkChoice {
         Ok(Self {
             rc_astro_tools: Some(tools),
             stack,
+            noise_model,
         })
     }
 
-    /// RC-Astro tools only, as this server's own worker takes: this server
-    /// stacks its builds in process.
-    pub fn rc_astro_only() -> Self {
+    /// The processing steps only, as this server's own worker takes: the
+    /// RC-Astro tools and the noise model. This server stacks its builds
+    /// in process.
+    pub fn processing_only() -> Self {
         Self {
             rc_astro_tools: None,
             stack: false,
+            noise_model: true,
         }
     }
 
     pub fn takes_stack(&self) -> bool {
         self.stack
+    }
+
+    pub fn takes_noise_model(&self) -> bool {
+        self.noise_model
+    }
+
+    /// Whether it takes a provider's steps, by the provider's key.
+    pub fn takes_provider(&self, provider: &str) -> bool {
+        match steps::provider(provider).map(|found| found.engine) {
+            Some(steps::Engine::RcAstro) => self.takes_rc_astro_tool(provider),
+            Some(steps::Engine::SeizaNoiseModel) => self.takes_noise_model(),
+            None => false,
+        }
     }
 
     /// Whether it takes any RC-Astro tool.
@@ -163,24 +242,37 @@ pub fn execute(
     report: &mut dyn TaskReport,
 ) -> Result<serde_json::Value, String> {
     match kind {
-        TaskKind::RcAstroStep => {
-            let spec: rc_astro::StepSpec = serde_json::from_value(spec)
-                .map_err(|error| format!("The RC-Astro task could not be read: {error}"))?;
-            let cli = tools
-                .rc_astro
-                .as_ref()
-                .ok_or_else(|| "rc-astro is not installed on this worker".to_string())?;
-            let input = inputs
-                .get(rc_astro::INPUT)
-                .ok_or_else(|| "The RC-Astro task has no input image".to_string())?;
-            let cancel = {
-                let stop = stop.clone();
-                seiza_stacking::CancelSignal::new(move || stop.requested())
-            };
-            let result = rc_astro::run(cli, &spec, input, output_dir, &cancel, &mut |done| {
-                report.fraction(done)
+        // What a server older than providers sends: an RC-Astro step, whose
+        // spec is the RC-Astro engine's payload.
+        TaskKind::RcAstroStep => steps::runner(steps::Engine::RcAstro).run(
+            spec,
+            steps::RunContext {
+                inputs,
+                output_dir,
+                tools,
+                stop,
+                report,
+            },
+        ),
+        TaskKind::ProcessingStep => {
+            let spec: steps::StepSpec = serde_json::from_value(spec)
+                .map_err(|error| format!("The processing step could not be read: {error}"))?;
+            let provider = steps::provider(&spec.provider).ok_or_else(|| {
+                format!(
+                    "This worker does not know the provider {:?}; update PSF Guard on it",
+                    spec.provider
+                )
             })?;
-            serde_json::to_value(result).map_err(|error| error.to_string())
+            steps::runner(provider.engine).run(
+                spec.payload,
+                steps::RunContext {
+                    inputs,
+                    output_dir,
+                    tools,
+                    stop,
+                    report,
+                },
+            )
         }
         TaskKind::StackChannel => crate::server::stack_preview::remote_channel::execute(
             spec,
@@ -272,8 +364,15 @@ mod tests {
         assert!(rc_astro::TOOLS
             .iter()
             .all(|tool| everything.takes_rc_astro_tool(tool)));
+        // `rc-astro`, saved by settings from before the noise model, and
+        // `processing` both mean every processing step.
         let all = WorkChoice::parse(&["RC-Astro".into()]).unwrap();
-        assert_eq!(all, everything_listed());
+        assert_eq!(all, WorkChoice::parse(&["processing".into()]).unwrap());
+        assert!(rc_astro::TOOLS.iter().all(|tool| all.takes_provider(tool)));
+        assert!(all.takes_provider(noise_model::TOOL));
+        assert!(!all.takes_stack());
+        // The three tools by key leave the model out.
+        assert!(!everything_listed().takes_noise_model());
         let some = WorkChoice::parse(&["bxt".into(), "sxt".into(), "bxt".into()]).unwrap();
         assert!(some.takes_rc_astro_tool("bxt"));
         assert!(some.takes_rc_astro_tool("sxt"));
@@ -286,6 +385,80 @@ mod tests {
         let stack = WorkChoice::parse(&["stack".into()]).unwrap();
         assert!(stack.takes_stack());
         assert!(!stack.takes_rc_astro_tool("bxt"));
+        // The noise model is a choice of its own, beside the RC-Astro tools.
+        assert!(everything.takes_noise_model());
+        assert!(all.takes_noise_model());
+        assert!(!stack.takes_noise_model());
+        let model = WorkChoice::parse(&["noise-model".into(), "nxt".into()]).unwrap();
+        assert!(model.takes_noise_model());
+        assert!(model.takes_rc_astro_tool("nxt"));
+        assert!(!model.takes_stack());
+    }
+
+    #[test]
+    fn a_worker_offers_the_noise_model_only_when_it_can_run_it() {
+        let offers = |engine: Arc<dyn noise_model::Engine>, work: &[String]| {
+            LocalTools {
+                noise_model: Some(engine),
+                slots: 1,
+                ..Default::default()
+            }
+            .offers(4, &WorkChoice::parse(work).unwrap())
+            .0
+        };
+        let model = |offers: &protocol::Offers| {
+            offers
+                .steps
+                .iter()
+                .find(|offer| offer.provider == noise_model::TOOL)
+                .map(|offer| (offer.category, offer.schema.cli_version.clone()))
+        };
+        let installed = noise_model::testing::FixedEngine::new("noise-v1");
+        let offered = offers(installed.clone(), &[]);
+        assert_eq!(
+            model(&offered),
+            Some((
+                steps::Category::Denoise,
+                noise_model::testing::identity("noise-v1").version()
+            ))
+        );
+        // A server older than providers reads `work` as a list of the kinds
+        // it knows, and a registration with a kind it does not know fails.
+        assert!(!offered.work.contains(&TaskKind::ProcessingStep));
+        let wire = serde_json::to_value(&offered).unwrap();
+        assert_eq!(wire["work"], serde_json::json!(["stack_channel"]));
+        assert_eq!(model(&offers(installed.clone(), &["stack".into()])), None);
+        // A desktop worker saved with the RC-Astro choice offers the model.
+        assert!(model(&offers(installed.clone(), &["rc-astro".into()])).is_some());
+        assert!(model(&offers(installed, &["bxt".into()])).is_none());
+        let missing = noise_model::testing::FixedEngine::missing("ONNX Runtime is not installed");
+        assert_eq!(model(&offers(missing, &[])), None);
+    }
+
+    #[test]
+    fn a_worker_older_than_providers_offers_its_rc_astro_tools_as_providers() {
+        // What a worker of an earlier release registers with.
+        let old: protocol::Offers = serde_json::from_value(serde_json::json!({
+            "threads": 4,
+            "work": ["rc_astro_step"],
+            "rc_astro": [{
+                "schema_version": 6, "cli_version": "2.6.6", "key": "nxt",
+                "name": "RC-Astro NoiseXTerminator", "ml_version": 3, "licensed": true,
+                "license_message": null, "parameters": [],
+            }],
+        }))
+        .unwrap();
+        assert!(old.steps.is_empty());
+        let read = steps::offers_of(&old);
+        assert_eq!(read.len(), 1);
+        assert_eq!(read[0].provider, "nxt");
+        assert_eq!(read[0].category, steps::Category::Denoise);
+        // One that left RC-Astro out of `--work` offers none.
+        let narrowed = protocol::Offers {
+            work: vec![TaskKind::StackChannel],
+            ..old
+        };
+        assert!(steps::offers_of(&narrowed).is_empty());
     }
 
     fn everything_listed() -> WorkChoice {

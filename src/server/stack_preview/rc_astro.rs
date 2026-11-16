@@ -1,5 +1,6 @@
-//! RC-Astro post-processing on stacked linear FITS: BlurXTerminator,
-//! NoiseXTerminator, and StarXTerminator through their standalone CLI.
+//! Post-processing on stacked linear FITS: RC-Astro's BlurXTerminator,
+//! NoiseXTerminator, and StarXTerminator through their standalone CLI, and
+//! Seiza's noise model, a step of its own that needs no RC-Astro license.
 //!
 //! This is a reversible view-processing tier like deconvolution: the
 //! integration artifact is never touched, results cache under their own
@@ -21,57 +22,158 @@ use seiza_stacking::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::remote_work::steps::{self, Category};
 use crate::server::api::ApiResponse;
 use crate::server::handlers::AppError;
 use crate::server::state::AppState;
 
 pub(super) const RC_ASTRO_CACHE_VERSION: u32 = 3;
 
-/// The order steps run when several are enabled: sharpen the linear data,
-/// denoise it, then separate the stars.
-pub const RC_ASTRO_STEP_ORDER: [&str; 3] = ["bxt", "nxt", "sxt"];
-
-/// One tool run with its parameter values, keyed by schema parameter name.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
-pub struct RcAstroStep {
-    pub tool: String,
-    #[serde(default)]
+/// One step of a chain: a provider, which decides the step's category, and
+/// its parameter values by schema parameter name.
+///
+/// A step is stored as `{category, provider, parameters}`. Steps stored
+/// before providers were `{tool, parameters}`: the tool's name is the
+/// provider's key, so they read as the same step, and `tool` is still
+/// written beside `provider` for a release older than providers that reads
+/// the same file.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProcessingStep {
+    pub provider: String,
     pub parameters: BTreeMap<String, ExternalParameterValue>,
 }
 
-/// The requested chain of tool runs.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
-pub struct RcAstroProcessing {
-    pub steps: Vec<RcAstroStep>,
+/// The name steps had while RC-Astro's tools were the only providers.
+pub type RcAstroStep = ProcessingStep;
+
+impl ProcessingStep {
+    /// What the step does, when this build knows its provider.
+    pub fn category(&self) -> Option<Category> {
+        steps::category_of(&self.provider)
+    }
 }
 
-impl RcAstroProcessing {
+impl Serialize for ProcessingStep {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        struct Stored<'a> {
+            #[serde(skip_serializing_if = "Option::is_none")]
+            category: Option<Category>,
+            provider: &'a str,
+            tool: &'a str,
+            parameters: &'a BTreeMap<String, ExternalParameterValue>,
+        }
+        // An identity hashes the step as it was written before providers.
+        if steps::encoding_identity() {
+            #[derive(Serialize)]
+            struct Keyed<'a> {
+                tool: &'a str,
+                parameters: &'a BTreeMap<String, ExternalParameterValue>,
+            }
+            return Keyed {
+                tool: &self.provider,
+                parameters: &self.parameters,
+            }
+            .serialize(serializer);
+        }
+        Stored {
+            category: self.category(),
+            provider: &self.provider,
+            tool: &self.provider,
+            parameters: &self.parameters,
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ProcessingStep {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Stored {
+            #[serde(default)]
+            category: Option<Category>,
+            #[serde(default)]
+            provider: Option<String>,
+            #[serde(default)]
+            tool: Option<String>,
+            #[serde(default)]
+            parameters: BTreeMap<String, ExternalParameterValue>,
+        }
+        let stored = Stored::deserialize(deserializer)?;
+        let provider = stored
+            .provider
+            .or(stored.tool)
+            .ok_or_else(|| serde::de::Error::missing_field("provider"))?;
+        // A category that is not the provider's is a mistake, not a choice.
+        if let (Some(given), Some(known)) = (stored.category, steps::category_of(&provider))
+            && given != known
+        {
+            return Err(serde::de::Error::custom(format!(
+                "{provider} is a {} provider, not {}",
+                known.label().to_lowercase(),
+                given.label().to_lowercase()
+            )));
+        }
+        Ok(Self {
+            provider,
+            parameters: stored.parameters,
+        })
+    }
+}
+
+/// The requested chain: at most one step in each category.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct ProcessingChain {
+    pub steps: Vec<ProcessingStep>,
+}
+
+/// The name chains had while RC-Astro's tools were the only providers.
+pub type RcAstroProcessing = ProcessingChain;
+
+impl ProcessingChain {
     /// Refuse a request the run loop would fail on anyway, with a clearer
     /// message and before anything is hashed or cached.
     pub fn validate(&self) -> Result<(), String> {
         if self.steps.is_empty() {
-            return Err("RC-Astro processing lists no steps".into());
+            return Err("The processing lists no steps".into());
         }
-        let mut seen = Vec::new();
+        let mut seen: Vec<(Category, &str)> = Vec::new();
         for step in &self.steps {
-            if !RC_ASTRO_STEP_ORDER.contains(&step.tool.as_str()) {
-                return Err(format!("unknown RC-Astro tool {:?}", step.tool));
+            let Some(category) = step.category() else {
+                return Err(format!("unknown processing step {:?}", step.provider));
+            };
+            if let Some((_, other)) = seen.iter().find(|(found, _)| *found == category) {
+                return Err(if *other == step.provider {
+                    format!("processing step {:?} is listed twice", step.provider)
+                } else {
+                    format!(
+                        "{} runs one provider, not both {other:?} and {:?}",
+                        category.label(),
+                        step.provider
+                    )
+                });
             }
-            if seen.contains(&step.tool.as_str()) {
-                return Err(format!("RC-Astro tool {:?} is listed twice", step.tool));
-            }
-            seen.push(step.tool.as_str());
+            seen.push((category, &step.provider));
         }
         Ok(())
     }
 
-    /// Steps in canonical run order, regardless of request order.
-    fn ordered(&self) -> Vec<&RcAstroStep> {
-        let mut steps: Vec<&RcAstroStep> = self.steps.iter().collect();
+    /// Whether a step of the chain removes the stars, whichever provider
+    /// does it.
+    pub fn removes_stars(&self) -> bool {
+        self.steps
+            .iter()
+            .any(|step| step.category() == Some(Category::StarRemoval))
+    }
+
+    /// Steps in canonical run order, regardless of request order: sharpen
+    /// the linear data, reduce its noise, then separate the stars.
+    fn ordered(&self) -> Vec<&ProcessingStep> {
+        let mut steps: Vec<&ProcessingStep> = self.steps.iter().collect();
         steps.sort_by_key(|step| {
-            RC_ASTRO_STEP_ORDER
+            steps::PROVIDERS
                 .iter()
-                .position(|tool| *tool == step.tool)
+                .position(|provider| provider.key == step.provider)
                 .unwrap_or(usize::MAX)
         });
         steps
@@ -84,6 +186,10 @@ pub struct RcAstroStepResult {
     pub tool: String,
     pub name: String,
     pub ml_version: Option<i64>,
+    /// What ran the step, when it is not an RC-Astro tool: the noise
+    /// model's name, backend and Seiza version.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
     #[serde(default)]
     pub device: Option<String>,
     #[serde(default)]
@@ -93,6 +199,7 @@ pub struct RcAstroStepResult {
 /// The whole chain's outcome, reported back to the client.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct StackRcAstroResult {
+    /// The rc-astro CLI's version; empty when no RC-Astro tool ran.
     pub cli_version: String,
     pub steps: Vec<RcAstroStepResult>,
     /// Whether a stars image was produced and stored beside the result.
@@ -103,7 +210,9 @@ impl StackRcAstroResult {
     /// Whether StarXTerminator ran, so the result is starless, whether or
     /// not it kept the stars as an image of their own.
     pub fn removed_stars(&self) -> bool {
-        self.steps.iter().any(|step| step.tool == "sxt")
+        self.steps
+            .iter()
+            .any(|step| steps::category_of(&step.tool) == Some(Category::StarRemoval))
     }
 }
 
@@ -119,62 +228,91 @@ struct CachedRcAstro {
     rows_as_stored: bool,
 }
 
-/// What `GET /api/tools/rc-astro` reports: whether this server or a
-/// connected worker has rc-astro, and each tool's live schema, so the UI can
-/// build its controls from the same contract the run will use.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RcAstroCapabilities {
+/// What `GET /api/tools/processing` reports: every provider of a
+/// processing step with its state, so the UI builds its pickers and
+/// controls from the contract the run will use. `GET /api/tools/rc-astro`
+/// gives the same answer: the fields before `providers` are the ones it
+/// had while RC-Astro's tools were the only providers, and still mean
+/// RC-Astro alone.
+#[derive(Debug, Clone, Serialize)]
+pub struct ProcessingCapabilities {
+    /// Whether this server or a connected worker has rc-astro.
     pub available: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub executable: Option<String>,
-    #[serde(default)]
+    /// The schema of each provider a machine has.
     pub tools: Vec<ExternalToolSchema>,
     /// Whether this server has rc-astro.
-    #[serde(default)]
     pub this_server: bool,
     /// The connected workers that have rc-astro, by name.
-    #[serde(default)]
     pub workers: Vec<String>,
-    /// For each tool, the connected workers that take it, by name. A tool
-    /// no worker takes runs on this server.
-    #[serde(default)]
+    /// For each provider, the connected workers that take it, by name. A
+    /// provider no worker takes runs on this server.
     pub tool_workers: BTreeMap<String, Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Every provider, in the order a chain runs their categories.
+    pub providers: Vec<crate::server::workers::rc_astro::ProviderState>,
+    /// What this server has installed for Seiza's models, and the download
+    /// under way.
+    pub seiza: crate::server::noise_model::SeizaInstall,
 }
 
-/// What `GET /api/tools/rc-astro` lists: the tools the next run would
-/// use, from this server or a connected worker.
-fn capabilities(workers: &crate::server::workers::Workers) -> RcAstroCapabilities {
-    let offered = workers.rc_astro_tools();
-    RcAstroCapabilities {
-        available: !offered.tools.is_empty(),
+fn capabilities(state: &AppState) -> ProcessingCapabilities {
+    let providers = state.workers.providers();
+    let rc_astro: Vec<_> = providers
+        .iter()
+        .filter(|provider| steps::is_rc_astro(&provider.provider))
+        .collect();
+    let mut workers: Vec<String> = rc_astro
+        .iter()
+        .flat_map(|provider| provider.workers.iter().cloned())
+        .collect();
+    workers.sort();
+    workers.dedup();
+    ProcessingCapabilities {
+        available: rc_astro.iter().any(|provider| provider.schema.is_some()),
         executable: crate::remote_work::rc_astro::locate(None)
             .map(|cli| cli.executable().display().to_string()),
-        tools: offered.tools,
-        this_server: offered.this_server,
-        workers: offered.workers,
-        tool_workers: offered.tool_workers,
-        error: workers.local_rc_astro_problem(),
+        tools: providers
+            .iter()
+            .filter_map(|provider| provider.schema.clone())
+            .collect(),
+        this_server: rc_astro.iter().any(|provider| provider.this_server),
+        workers,
+        tool_workers: providers
+            .iter()
+            .map(|provider| (provider.provider.clone(), provider.workers.clone()))
+            .collect(),
+        error: state.workers.local_rc_astro_problem(),
+        seiza: crate::server::noise_model::install_state(state),
+        providers,
     }
 }
 
-/// GET /api/tools/rc-astro
+/// GET /api/tools/processing, and GET /api/tools/rc-astro
 pub async fn get_rc_astro_capabilities(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
-) -> Result<Json<ApiResponse<RcAstroCapabilities>>, AppError> {
+) -> Result<Json<ApiResponse<ProcessingCapabilities>>, AppError> {
     let probed = Arc::clone(&state);
-    let mut capabilities = tokio::task::spawn_blocking(move || capabilities(&probed.workers))
+    // Spawns rc-astro, and opens ONNX Runtime when its library is installed.
+    let mut capabilities = tokio::task::spawn_blocking(move || capabilities(&probed))
         .await
-        .map_err(|error| AppError::InternalError(format!("RC-Astro probe failed: {error}")))?;
-    // Every viewer may see which tools exist; the license line names the
-    // licensee and the executable gives a server path, so those stay with
-    // the operator role.
+        .map_err(|error| AppError::InternalError(format!("Processing probe failed: {error}")))?;
+    // Every viewer may see which providers exist; the license line names
+    // the licensee, and the executable, the library and the download folder
+    // are server paths, so those stay with the operator role.
     for tool in &mut capabilities.tools {
         tool.license_message = None;
     }
+    for provider in &mut capabilities.providers {
+        if let Some(schema) = &mut provider.schema {
+            schema.license_message = None;
+        }
+    }
     if !state.database_management_allowed() {
         capabilities.executable = None;
+        capabilities.seiza = capabilities.seiza.for_viewer();
     }
     Ok(Json(ApiResponse::success(capabilities)))
 }
@@ -191,8 +329,8 @@ pub(super) fn schemas_for(
         .into_iter()
         .map(|step| {
             workers
-                .rc_astro_schema(&step.tool)
-                .map(|schema| (step.tool.clone(), schema))
+                .step_schema(&step.provider)
+                .map(|schema| (step.provider.clone(), schema))
         })
         .collect()
 }
@@ -210,8 +348,8 @@ pub(super) fn normalize_against_schemas(
     for step in config.ordered() {
         let (_, schema) = schemas
             .iter()
-            .find(|(tool, _)| tool == &step.tool)
-            .ok_or_else(|| format!("no schema for RC-Astro tool {:?}", step.tool))?;
+            .find(|(tool, _)| tool == &step.provider)
+            .ok_or_else(|| format!("no schema for processing step {:?}", step.provider))?;
         let mut parameters = BTreeMap::new();
         for (name, value) in &step.parameters {
             let parameter = schema
@@ -297,8 +435,8 @@ pub(super) fn normalize_against_schemas(
             };
             parameters.insert(name.clone(), value);
         }
-        steps.push(RcAstroStep {
-            tool: step.tool.clone(),
+        steps.push(ProcessingStep {
+            provider: step.provider.clone(),
             parameters,
         });
     }
@@ -336,19 +474,19 @@ pub(super) fn rc_astro_chain_ids(
     // The canonical order is the identity: two requests that run the same
     // steps the same way cache as one.
     for step in config.ordered() {
-        let encoded = serde_json::to_vec(step).map_err(|error| {
+        let encoded = steps::identity_json(step).map_err(|error| {
             AppError::InternalError(format!("Failed to encode RC-Astro request: {error}"))
         })?;
         let (_, schema) = schemas
             .iter()
-            .find(|(tool, _)| tool == &step.tool)
+            .find(|(tool, _)| tool == &step.provider)
             .ok_or_else(|| {
-                AppError::BadRequest(format!("no schema for RC-Astro tool {:?}", step.tool))
+                AppError::BadRequest(format!("no schema for processing step {:?}", step.provider))
             })?;
         let mut hasher = Sha256::new();
         hasher.update(previous);
         hasher.update(&encoded);
-        hasher.update(step.tool.as_bytes());
+        hasher.update(step.provider.as_bytes());
         hasher.update(schema.cli_version.as_bytes());
         hasher.update(schema.ml_version.unwrap_or(0).to_le_bytes());
         previous = hasher.finalize();
@@ -522,7 +660,7 @@ fn persist_prefix(
     // file.
     let unique = super::temporary_tag();
     let temporary = fits.with_extension(format!("{unique}.tmp.fits"));
-    let mut cards = rc_astro_cards();
+    let mut cards = rc_astro_cards(result);
     cards.extend(
         reference_headers
             .iter()
@@ -664,11 +802,20 @@ fn apply_rc_astro_with_runner(
         before_step()?;
         let (_, schema) = schemas
             .iter()
-            .find(|(tool, _)| tool == &step.tool)
-            .ok_or_else(|| format!("no schema for RC-Astro tool {:?}", step.tool))?;
-        cli_version = schema.cli_version.clone();
+            .find(|(tool, _)| tool == &step.provider)
+            .ok_or_else(|| format!("no schema for processing step {:?}", step.provider))?;
+        let engine = steps::provider(&step.provider)
+            .ok_or_else(|| format!("unknown processing step {:?}", step.provider))?
+            .engine;
+        let runner = steps::runner(engine);
+        // The chain's version line is rc-astro's; a model gives its own on
+        // its step.
+        let rc_astro = steps::is_rc_astro(&step.provider);
+        if rc_astro {
+            cli_version = schema.cli_version.clone();
+        }
         let request = ExternalToolRequest {
-            tool: step.tool.clone(),
+            tool: step.provider.clone(),
             parameters: step
                 .parameters
                 .iter()
@@ -714,7 +861,11 @@ fn apply_rc_astro_with_runner(
         let mut processed = run(
             schema,
             &request,
-            &padded,
+            if runner.reads_holes() {
+                &current
+            } else {
+                &padded
+            },
             &exchange_headers,
             &mut step_progress,
         )?;
@@ -726,9 +877,12 @@ fn apply_rc_astro_with_runner(
             stars = Some(step_stars);
         }
         steps.push(RcAstroStepResult {
-            tool: step.tool.clone(),
+            tool: step.provider.clone(),
             name: schema.name.clone(),
             ml_version: schema.ml_version,
+            version: (!rc_astro).then(|| {
+                crate::remote_work::noise_model::display_version(&schema.cli_version).to_string()
+            }),
             device: processed.device.clone(),
             warnings: processed.warnings.clone(),
         });
@@ -855,19 +1009,27 @@ pub(super) fn prune_rc_astro_cache(
     }
 }
 
-fn rc_astro_cards() -> Vec<seiza_fits::WriteHeaderCard> {
-    vec![
-        seiza_fits::WriteHeaderCard::new(
+/// The cards that say what processed a result: RC-Astro's tools, Seiza's
+/// noise model, or both.
+fn rc_astro_cards(result: &StackRcAstroResult) -> Vec<seiza_fits::WriteHeaderCard> {
+    let text = |key: &str, value: &str, comment: &str| {
+        seiza_fits::WriteHeaderCard::new(key, seiza_fits::HeaderValue::String(value.into()))
+            .with_comment(comment)
+    };
+    let mut cards = Vec::new();
+    if result.steps.iter().any(|step| step.version.is_none()) {
+        cards.push(text(
             "SEIZARCA",
-            seiza_fits::HeaderValue::String("RC-ASTRO".into()),
-        )
-        .with_comment("processed by RC-Astro standalone tools"),
-        seiza_fits::WriteHeaderCard::new(
-            "SEIZATRF",
-            seiza_fits::HeaderValue::String("LINEAR".into()),
-        )
-        .with_comment("linear sample transfer"),
-    ]
+            "RC-ASTRO",
+            "processed by RC-Astro standalone tools",
+        ));
+    }
+    if let Some(version) = result.steps.iter().find_map(|step| step.version.as_deref()) {
+        let model = version.split(' ').next().unwrap_or(version);
+        cards.push(text("SEIZAMDL", model, "Seiza learned model"));
+    }
+    cards.push(text("SEIZATRF", "LINEAR", "linear sample transfer"));
+    cards
 }
 
 #[cfg(test)]
@@ -1063,7 +1225,7 @@ mod tests {
 
     fn step(tool: &str) -> RcAstroStep {
         RcAstroStep {
-            tool: tool.into(),
+            provider: tool.into(),
             parameters: BTreeMap::new(),
         }
     }
@@ -1080,6 +1242,311 @@ mod tests {
             "parameters": [],
         }))
         .unwrap()
+    }
+
+    /// Workers whose own worker runs a stand-in noise model.
+    fn workers_with_noise_model(
+        engine: std::sync::Arc<crate::remote_work::noise_model::testing::FixedEngine>,
+    ) -> crate::server::workers::Workers {
+        let workers = crate::server::workers::Workers::default();
+        workers.set_tool_source(std::sync::Arc::new(move || {
+            crate::remote_work::LocalTools {
+                noise_model: Some(engine.clone()),
+                this_server: true,
+                slots: 1,
+                ..Default::default()
+            }
+        }));
+        workers
+    }
+
+    fn noise_step(grain: f64) -> RcAstroStep {
+        RcAstroStep {
+            provider: crate::remote_work::noise_model::TOOL.into(),
+            parameters: BTreeMap::from([(
+                crate::remote_work::noise_model::GRAIN.to_string(),
+                ExternalParameterValue::Float(grain),
+            )]),
+        }
+    }
+
+    #[test]
+    fn the_noise_model_runs_as_a_step_with_no_rc_astro_and_caches_its_result() {
+        use crate::remote_work::noise_model::testing::FixedEngine;
+        use std::sync::atomic::Ordering;
+
+        let cache = tempfile::tempdir().unwrap();
+        let engine = FixedEngine::new("noise-v1");
+        let workers = workers_with_noise_model(engine.clone());
+        let runner = crate::server::workers::rc_astro::RcAstroRunner {
+            workers: &workers,
+            person: true,
+        };
+        let config = RcAstroProcessing {
+            steps: vec![noise_step(0.5)],
+        };
+        config.validate().unwrap();
+        let schemas = schemas_for(&workers, &config).unwrap();
+        let config = normalize_against_schemas(&config, &schemas).unwrap();
+        let ids = rc_astro_chain_ids("db", "mono:1", "revision", &config, &schemas, None).unwrap();
+        let image = LinearImage::new(2, 2, 1, vec![8.0, f32::NAN, 2.0, 4.0]).unwrap();
+        let apply = |config: &RcAstroProcessing, ids: &[String]| {
+            apply_rc_astro(
+                runner,
+                cache.path(),
+                ids,
+                config,
+                &schemas,
+                &image,
+                &[],
+                &mut |_, _| {},
+                None,
+                &mut || Ok(()),
+            )
+            .unwrap()
+        };
+        let first = apply(&config, &ids);
+        assert_eq!(first.image.data[0], 4.0);
+        assert_eq!(first.image.data[3], 2.0);
+        // A pixel with no coverage stays one.
+        assert!(first.image.data[1].is_nan());
+        assert!(first.stars.is_none());
+        // No RC-Astro tool ran, so the result gives no rc-astro version.
+        assert_eq!(first.result.cli_version, "");
+        let step = &first.result.steps[0];
+        assert_eq!(step.name, "Seiza noise model");
+        assert_eq!(
+            step.version.as_deref(),
+            Some("noise-v1 cpu f32, seiza-model 0.1.0, band scale 5, ONNX Runtime 1.31.1")
+        );
+        assert_eq!(step.device.as_deref(), Some("cpu"));
+
+        // No job held workers for that run, so the model had this
+        // machine's cores. A job that leased three applies the step inside
+        // its pool, or records them, and the model runs on three.
+        assert_eq!(
+            engine.threads.load(Ordering::SeqCst),
+            crate::concurrency::logical_cores()
+        );
+        for (inside_pool, grain) in [(true, 0.25), (false, 0.3)] {
+            let held = normalize_against_schemas(
+                &RcAstroProcessing {
+                    steps: vec![noise_step(grain)],
+                },
+                &schemas,
+            )
+            .unwrap();
+            let held_ids =
+                rc_astro_chain_ids("db", "mono:1", "revision", &held, &schemas, None).unwrap();
+            if inside_pool {
+                let pool = crate::concurrency::ComputePool::take("test-held", 3).unwrap();
+                pool.install(|| apply(&held, &held_ids));
+            } else {
+                let _held = steps::hold_threads(3);
+                apply(&held, &held_ids);
+            }
+            assert_eq!(engine.threads.load(Ordering::SeqCst), 3, "{inside_pool}");
+        }
+        assert_eq!(engine.runs.load(Ordering::SeqCst), 3);
+
+        // The same request is a cache hit: the model does not run again.
+        let second = apply(&config, &ids);
+        assert_eq!(second.image.data[0], 4.0);
+        assert_eq!(engine.runs.load(Ordering::SeqCst), 3);
+        assert!(rc_astro_chain_cached(cache.path(), &ids, &config));
+        // The result says which model made it, and not RC-Astro.
+        let header = seiza_image_io::read_header(&rc_astro_fits_path(cache.path(), &ids[0]))
+            .unwrap()
+            .cards;
+        assert!(header.iter().any(|(key, value)| key == "SEIZAMDL"
+            && matches!(value, seiza_fits::HeaderValue::String(model) if model.trim() == "noise-v1")));
+        assert!(!header.iter().any(|(key, _)| key == "SEIZARCA"));
+
+        // Another amount is another result.
+        let stronger = normalize_against_schemas(
+            &RcAstroProcessing {
+                steps: vec![noise_step(0.75)],
+            },
+            &schemas,
+        )
+        .unwrap();
+        let stronger_ids =
+            rc_astro_chain_ids("db", "mono:1", "revision", &stronger, &schemas, None).unwrap();
+        assert_ne!(stronger_ids, ids);
+        assert_eq!(apply(&stronger, &stronger_ids).image.data[0], 2.0);
+        assert_eq!(engine.runs.load(Ordering::SeqCst), 4);
+    }
+
+    #[test]
+    fn the_noise_model_s_cache_identity_follows_the_model_that_runs() {
+        use crate::remote_work::noise_model::testing::identity;
+
+        let config = RcAstroProcessing {
+            steps: vec![noise_step(0.5)],
+        };
+        let ids = |identity: &crate::remote_work::noise_model::Identity| {
+            let schemas = vec![(
+                crate::remote_work::noise_model::TOOL.to_string(),
+                identity.schema(),
+            )];
+            rc_astro_chain_ids("db", "mono:1", "revision", &config, &schemas, None).unwrap()
+        };
+        let base = identity("noise-v1");
+        for changed in [
+            crate::remote_work::noise_model::Identity {
+                card_sha256: "d".repeat(64),
+                ..base.clone()
+            },
+            crate::remote_work::noise_model::Identity {
+                output_version: "0.2.0".into(),
+                ..base.clone()
+            },
+            crate::remote_work::noise_model::Identity {
+                backend: "coreml-gpu".into(),
+                ..base.clone()
+            },
+            crate::remote_work::noise_model::Identity {
+                precision: "f16".into(),
+                ..base.clone()
+            },
+        ] {
+            assert_ne!(ids(&changed), ids(&base), "{changed:?}");
+        }
+        assert_eq!(ids(&base), ids(&base.clone()));
+    }
+
+    #[test]
+    fn a_missing_noise_model_fails_with_what_to_click() {
+        use crate::remote_work::noise_model::testing::FixedEngine;
+
+        let workers =
+            workers_with_noise_model(FixedEngine::missing("ONNX Runtime is not installed"));
+        let config = RcAstroProcessing {
+            steps: vec![noise_step(0.5)],
+        };
+        let refused = schemas_for(&workers, &config).unwrap_err();
+        assert!(refused.contains("Processing tools"), "{refused}");
+        assert!(refused.contains("Download"), "{refused}");
+    }
+
+    #[test]
+    fn a_chain_runs_one_provider_in_each_category_in_category_order() {
+        let config = RcAstroProcessing {
+            steps: vec![step("sxt"), noise_step(0.5), step("bxt")],
+        };
+        config.validate().unwrap();
+        let ordered: Vec<&str> = config
+            .ordered()
+            .iter()
+            .map(|step| step.provider.as_str())
+            .collect();
+        assert_eq!(ordered, ["bxt", "noise-model", "sxt"]);
+        // Noise reduction runs NoiseXTerminator or Seiza's model, never both.
+        let both = RcAstroProcessing {
+            steps: vec![step("nxt"), noise_step(0.5)],
+        }
+        .validate()
+        .unwrap_err();
+        assert!(both.contains("Noise reduction runs one provider"), "{both}");
+        // An amount outside 0 to 1 is refused before anything runs.
+        let schemas = vec![(
+            crate::remote_work::noise_model::TOOL.to_string(),
+            crate::remote_work::noise_model::testing::identity("noise-v1").schema(),
+        )];
+        let refused = normalize_against_schemas(
+            &RcAstroProcessing {
+                steps: vec![noise_step(1.5)],
+            },
+            &schemas,
+        )
+        .unwrap_err();
+        assert!(refused.contains("outside"), "{refused}");
+    }
+
+    #[test]
+    fn a_step_stored_before_providers_reads_as_the_same_step() {
+        // What setups, stack records, journals and cache manifests hold.
+        let old: RcAstroProcessing = serde_json::from_value(serde_json::json!({
+            "steps": [{"tool": "bxt", "parameters": {"ss": 0.4}}, {"tool": "sxt"}]
+        }))
+        .unwrap();
+        assert_eq!(old.steps[0].provider, "bxt");
+        assert_eq!(old.steps[0].category(), Some(Category::Sharpen));
+        assert_eq!(old.steps[1].category(), Some(Category::StarRemoval));
+        // It is written with its category and provider, and with `tool` for
+        // a release older than providers.
+        let written = serde_json::to_value(&old).unwrap();
+        assert_eq!(
+            written["steps"][0],
+            serde_json::json!({
+                "category": "sharpen", "provider": "bxt", "tool": "bxt",
+                "parameters": {"ss": 0.4}
+            })
+        );
+        // Both spellings are one step, so a cached manifest still matches.
+        let new: RcAstroProcessing = serde_json::from_value(written).unwrap();
+        assert_eq!(new, old);
+        let by_provider: RcAstroProcessing = serde_json::from_value(serde_json::json!({
+            "steps": [
+                {"category": "sharpen", "provider": "bxt", "parameters": {"ss": 0.4}},
+                {"category": "star_removal", "provider": "sxt"}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(by_provider, old);
+        // A category that is not the provider's is refused.
+        let wrong = serde_json::from_value::<RcAstroProcessing>(serde_json::json!({
+            "steps": [{"category": "denoise", "provider": "bxt"}]
+        }))
+        .unwrap_err()
+        .to_string();
+        assert!(wrong.contains("sharpening provider"), "{wrong}");
+    }
+
+    #[test]
+    fn rc_astro_results_cached_before_providers_keep_their_identities() {
+        // These ids are what the release before providers gave this chain:
+        // SHA-256 over the same bytes, worked out from that release's
+        // source. A change here would orphan every processed stack.
+        let config: RcAstroProcessing = serde_json::from_value(serde_json::json!({
+            "steps": [{"tool": "sxt"}, {"tool": "bxt", "parameters": {"ss": 0.4}}]
+        }))
+        .unwrap();
+        let schemas = vec![
+            ("bxt".to_string(), schema("bxt", "2.6.6", 5)),
+            ("sxt".to_string(), schema("sxt", "2.6.6", 11)),
+        ];
+        let ids = rc_astro_chain_ids("db", "mono:1", "revision", &config, &schemas, None).unwrap();
+        assert_eq!(
+            ids,
+            [
+                "058e754a9ce83078e5ad14c828016372527765a77a7cbb343cb67fa67e9cc6ec",
+                "a6b759f07dfad2b2dc8f87850a641d393198ff8a3cf874bce8afda427750aa66",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_manifest_written_before_providers_still_serves_its_result() {
+        let cache = tempfile::tempdir().unwrap();
+        let config = RcAstroProcessing {
+            steps: vec![step("nxt")],
+        };
+        let image = LinearImage::new(2, 2, 1, vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+        let result = StackRcAstroResult {
+            cli_version: "2.6.6".into(),
+            steps: Vec::new(),
+            has_stars: false,
+        };
+        let id = "c".repeat(64);
+        persist_prefix(cache.path(), &id, &config, &image, None, &result, &[]).unwrap();
+        // Rewrite the manifest's steps as the earlier release wrote them.
+        let path = rc_astro_manifest_path(cache.path(), &id);
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        manifest["config"] = serde_json::json!({"steps": [{"tool": "nxt", "parameters": {}}]});
+        std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        assert!(rc_astro_chain_cached(cache.path(), &[id], &config));
     }
 
     #[test]
@@ -1193,7 +1660,7 @@ mod tests {
                 steps: vec![
                     step("bxt"),
                     RcAstroStep {
-                        tool: "nxt".into(),
+                        provider: "nxt".into(),
                         parameters: BTreeMap::from([(
                             "denoise".to_string(),
                             ExternalParameterValue::Float(0.7),
@@ -1244,7 +1711,7 @@ mod tests {
         // JSON delivers 1.0 as 1; the same request must hash identically.
         let with_int = RcAstroProcessing {
             steps: vec![RcAstroStep {
-                tool: "sxt".into(),
+                provider: "sxt".into(),
                 parameters: BTreeMap::from([(
                     "overlap".to_string(),
                     ExternalParameterValue::Int(1),
@@ -1253,7 +1720,7 @@ mod tests {
         };
         let with_float = RcAstroProcessing {
             steps: vec![RcAstroStep {
-                tool: "sxt".into(),
+                provider: "sxt".into(),
                 parameters: BTreeMap::from([(
                     "overlap".to_string(),
                     ExternalParameterValue::Float(1.0),
@@ -1277,7 +1744,7 @@ mod tests {
         ] {
             let config = RcAstroProcessing {
                 steps: vec![RcAstroStep {
-                    tool: "sxt".into(),
+                    provider: "sxt".into(),
                     parameters,
                 }],
             };
@@ -1293,7 +1760,7 @@ mod tests {
         let ordered: Vec<&str> = config
             .ordered()
             .iter()
-            .map(|step| step.tool.as_str())
+            .map(|step| step.provider.as_str())
             .collect();
         assert_eq!(ordered, vec!["bxt", "nxt", "sxt"]);
     }
@@ -1308,7 +1775,7 @@ mod tests {
 
         let config = RcAstroProcessing {
             steps: vec![RcAstroStep {
-                tool: "sxt".into(),
+                provider: "sxt".into(),
                 parameters: BTreeMap::from([(
                     "stars".to_string(),
                     ExternalParameterValue::Bool(true),
@@ -1536,6 +2003,19 @@ pub(crate) mod test_tool {
             std::fs::write(self.dir.path().join("release"), b"").unwrap();
         }
 
+        /// Have the next license check fail as an offline computer's does.
+        pub fn go_offline(&self) {
+            std::fs::write(self.dir.path().join("offline"), b"").unwrap();
+        }
+
+        /// One line per license check the tool was asked for.
+        pub fn license_calls(&self) -> usize {
+            std::fs::read_to_string(self.dir.path().join("license-calls"))
+                .unwrap_or_default()
+                .lines()
+                .count()
+        }
+
         /// One line per run the tool started, naming the tool.
         pub fn invocations_log(&self) -> String {
             std::fs::read_to_string(self.dir.path().join("invocations")).unwrap_or_default()
@@ -1596,6 +2076,13 @@ rm -f "{state}/release"
         };
         let script = format!(
             r#"#!/bin/sh
+if [ "$1" = "license" ]; then
+  echo "$@" >> "{state}/license-calls"
+  echo '{{"event":"info","topic":"version","cliVersion":"9.9.9-test","schemaVersion":6}}'
+  if [ -f "{state}/offline" ]; then echo '{{"event":"error","message":"Could not reach the RC-Astro license server"}}'; exit 77; fi
+  echo '{{"event":"info","topic":"licenseReport","operation":"check","computer":"ann@stand-in","account":{{"email":"user@example.com"}},"activationUrl":"https://www.rc-astro.com/account","licenseStatus":[{{"product":"nxt","name":"NoiseXTerminator","status":"permanent","message":"Permanent license through ML4","mlVersion":4}}]}}'
+  exit 0
+fi
 if [ "$2" = "--json" ]; then
   case "$1" in
     bxt) name="BlurXTerminator" ;;
@@ -1654,6 +2141,7 @@ fi
                     tool: (*tool).into(),
                     name: (*tool).into(),
                     ml_version: None,
+                    version: None,
                     device: None,
                     warnings: Vec::new(),
                 })

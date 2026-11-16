@@ -41,6 +41,7 @@ import BackupSettings from './BackupSettings';
 import ExportDefaultsSettings from './ExportDefaultsSettings';
 import AstroBinSettings from './AstroBinSettings';
 import PixInsightSettings from './PixInsightSettings';
+import ProcessingToolsSettings from './ProcessingToolsSettings';
 import type { DatabaseSummary, ScanRules } from '../api/types';
 import { DEFAULT_SCAN_RULES } from '../api/types';
 import { planChanges, scanRuleNotes } from '../utils/importNotes';
@@ -1681,6 +1682,8 @@ export default function TauriSettings({
             <div className="settings-setups">
               <StackMethodSettings />
               <StackAutomationSettings />
+              <ProcessingToolsSettings canManage={managementAllowed && canEdit}
+                focus={initialIntent === 'stacking' ? initialField : null} />
             </div>
           )}
 

@@ -41,6 +41,17 @@ also offers its own worker controls under **Workers**.
 - **Storage** is now **Storage & backups → Folders & limits**.
 - **Catalogs** is now **Storage & backups → Reference catalogs**, for
   downloaded astronomy data such as solver indexes and Gaia colors.
+- **Processing tools** is on **Processing → Stacking**. It lists every
+  provider of a processing step with its state: the RC-Astro tools, Seiza's
+  noise model and ONNX Runtime. It downloads ONNX Runtime and the noise
+  model when you click **Download**, and stores the path of an ONNX Runtime
+  you installed. See [Seiza's noise
+  model](STACKING_PREVIEWS.md#seizas-noise-model). **Check license** asks
+  RC-Astro for this server's account and license state; see [Check a
+  worker's RC-Astro license](REMOTE_WORKERS.md#check-a-workers-rc-astro-license).
+- **Where work runs** under **Performance → Workers** now reads
+  **Processing steps** where it read **RC-Astro tools**. It keeps your
+  choice, and covers every provider.
 
 ## Open a database
 

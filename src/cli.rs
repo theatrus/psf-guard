@@ -14,6 +14,52 @@ pub struct Cli {
     pub command: Commands,
 }
 
+/// What `psf-guard noise-model` does.
+#[derive(Subcommand, Debug)]
+pub enum NoiseModelAction {
+    /// Download ONNX Runtime and the latest noise model to this computer.
+    Download {
+        /// Leave out ONNX Runtime, such as when you installed one yourself
+        /// and gave the worker its path.
+        #[arg(long)]
+        skip_runtime: bool,
+        /// Leave out the model.
+        #[arg(long)]
+        skip_model: bool,
+        /// Download ONNX Runtime again when this release is installed
+        /// already.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Show what is installed on this computer and which model it runs.
+    Status {
+        /// The library of an ONNX Runtime you installed, or the folder
+        /// that contains it, in place of the downloaded one.
+        #[arg(long, value_name = "PATH")]
+        onnxruntime: Option<String>,
+    },
+}
+
+/// What `psf-guard rc-astro` does.
+#[derive(Subcommand, Debug)]
+pub enum RcAstroAction {
+    /// Show RC-Astro's account and license state on this computer. This
+    /// makes one online check with RC-Astro, as the account you run it as.
+    ///
+    /// Exits 0 when RC-Astro gave a report with no error, 77 when RC-Astro
+    /// reported an error such as a refusal or no connection, and 1 when
+    /// rc-astro could not be started, took too long or printed no report.
+    License {
+        /// Print the report as JSON.
+        #[arg(long)]
+        json: bool,
+        /// The rc-astro executable (defaults to PSF_GUARD_RC_ASTRO, then
+        /// rc-astro on PATH, then the folder RC-Astro's installer uses).
+        #[arg(long, value_name = "PATH")]
+        rc_astro: Option<String>,
+    },
+}
+
 /// What `psf-guard worker-service` does.
 #[derive(Subcommand, Debug)]
 pub enum WorkerServiceAction {
@@ -1435,8 +1481,8 @@ pub enum Commands {
     /// Create a token in the server's Settings › Workers, then run
     /// `psf-guard worker --server http://host:3000`, with the token in
     /// PSF_GUARD_WORKER_TOKEN or `--token`. The worker offers the RC-Astro
-    /// tools installed here, runs the tasks the server sends it, and keeps
-    /// running until you stop it with Ctrl-C.
+    /// tools and the noise model installed here, runs the tasks the server
+    /// sends it, and keeps running until you stop it with Ctrl-C.
     ///
     /// With `--config`, the worker reads its settings from a file instead,
     /// such as the one the desktop app writes. With `--tray`, the desktop
@@ -1452,7 +1498,7 @@ pub enum Commands {
         #[arg(
             long,
             value_name = "FILE",
-            conflicts_with_all = ["server", "token", "name", "files", "maps", "work_dir", "rc_astro", "work", "slots"]
+            conflicts_with_all = ["server", "token", "name", "files", "maps", "work_dir", "rc_astro", "onnxruntime", "work", "slots"]
         )]
         config: Option<String>,
 
@@ -1461,7 +1507,7 @@ pub enum Commands {
         /// Desktop app builds only.
         #[arg(
             long,
-            conflicts_with_all = ["server", "token", "name", "files", "maps", "work_dir", "rc_astro", "work", "slots"]
+            conflicts_with_all = ["server", "token", "name", "files", "maps", "work_dir", "rc_astro", "onnxruntime", "work", "slots"]
         )]
         tray: bool,
 
@@ -1499,8 +1545,15 @@ pub enum Commands {
         #[arg(long)]
         rc_astro: Option<String>,
 
-        /// Work this worker accepts: `stack` for stack builds, `rc-astro`
-        /// for every RC-Astro tool, or `bxt`, `nxt` or `sxt` for one. Repeat
+        /// The library of an ONNX Runtime you installed for the noise
+        /// model, or the folder that contains it (defaults to the one
+        /// `psf-guard noise-model download` fetched).
+        #[arg(long, value_name = "PATH")]
+        onnxruntime: Option<String>,
+
+        /// Work this worker accepts: `stack` for stack builds, `processing`
+        /// (or `rc-astro`) for every processing step, or `noise-model`,
+        /// `bxt`, `nxt` or `sxt` for one provider. Repeat
         /// for more. Without this option, the worker accepts every task type
         /// it can run. Choose where tasks run in Settings › Workers.
         /// Restart the worker after licensing or upgrading rc-astro.
@@ -1511,6 +1564,30 @@ pub enum Commands {
         /// RC-Astro step uses the GPU, so more than one seldom helps.
         #[arg(long, default_value_t = 1)]
         slots: usize,
+    },
+
+    /// Download Seiza's noise model and ONNX Runtime to this computer, or
+    /// show what is installed.
+    ///
+    /// The noise model is a noise reduction provider for stack processing
+    /// that needs no RC-Astro license. PSF Guard never downloads it by itself: run `psf-guard
+    /// noise-model download` on a worker computer, then restart the
+    /// worker. A server downloads its own from Settings › Stacking, or
+    /// with this command on the server computer.
+    NoiseModel {
+        #[command(subcommand)]
+        action: NoiseModelAction,
+    },
+
+    /// Check RC-Astro's tools on this computer.
+    ///
+    /// `psf-guard rc-astro license` shows which rc-astro PSF Guard found,
+    /// the RC-Astro account this computer is registered to, and each
+    /// product's license state. Run it on a worker computer as the account
+    /// the worker runs under to see what the worker sees.
+    RcAstro {
+        #[command(subcommand)]
+        action: RcAstroAction,
     },
 
     /// Run the worker as a Windows service, for a computer that runs work

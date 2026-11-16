@@ -135,6 +135,8 @@ pub enum RowControl {
     Import { db_id: String },
     Export { db_id: String },
     CatalogInstall,
+    NoiseModelDownload,
+    LicenseCheck { key: String },
 }
 
 /// The job a row's Pause or Resume button calls
@@ -413,6 +415,9 @@ pub struct Snapshot {
     pub backup: Option<BackupJob>,
     pub wbpp_cleanup: crate::server::wbpp_storage::Status,
     pub catalog_install: Option<CatalogInstallProgress>,
+    pub noise_model_download: Option<crate::server::noise_model::DownloadProgress>,
+    /// RC-Astro license checks under way: which computer, never the result.
+    pub license_checks: Vec<crate::server::workers::license::RunningCheck>,
     pub previews: Vec<PreviewRun>,
     /// Artifact searches in the stack line, with their places while they
     /// wait.
@@ -442,6 +447,8 @@ impl Default for Snapshot {
             backup: None,
             wbpp_cleanup: Default::default(),
             catalog_install: None,
+            noise_model_download: None,
+            license_checks: Vec::new(),
             previews: Vec::new(),
             artifact_searches: Vec::new(),
             planning_pushes: Vec::new(),
@@ -1620,6 +1627,54 @@ fn catalog_install_row(progress: &CatalogInstallProgress) -> JobRow {
     }
 }
 
+/// An RC-Astro license check a person started in Settings. The row gives
+/// the computer checked and nothing of the result, which holds the
+/// RC-Astro account's address. Settings is a dialog, so the row has no
+/// link.
+fn license_check_row(check: &crate::server::workers::license::RunningCheck) -> JobRow {
+    JobRow {
+        detail: format!("Asking RC-Astro about {}", check.computer),
+        control: Some(RowControl::LicenseCheck {
+            key: check.key.clone(),
+        }),
+        stoppable: true,
+        ..JobRow::new(
+            format!("rc-astro-license:{}:{}", check.key, check.started_at),
+            RowKind::Catalog,
+            "Checking the RC-Astro license",
+            "RC-Astro",
+        )
+    }
+}
+
+/// A download of ONNX Runtime or the noise model a person started in
+/// Settings › Stacking. Settings is a dialog, not a view, so the
+/// row has no link.
+fn noise_model_download_row(progress: &crate::server::noise_model::DownloadProgress) -> JobRow {
+    JobRow {
+        detail: progress.message.clone(),
+        percent: match progress.bytes_total {
+            Some(total) if total > 0 => Some(
+                (100.0 * progress.bytes_completed.unwrap_or(0) as f64 / total as f64).min(100.0),
+            ),
+            _ => None,
+        },
+        control: Some(RowControl::NoiseModelDownload),
+        stoppable: true,
+        ..JobRow::new(
+            format!("noise-model:{}", progress.started_at.unwrap_or(0)),
+            RowKind::Catalog,
+            match progress.part {
+                Some(crate::server::noise_model::DownloadPart::Runtime) => {
+                    "Downloading ONNX Runtime"
+                }
+                _ => "Downloading the noise model",
+            },
+            "Noise model",
+        )
+    }
+}
+
 /// A person's work first, then automatic work. Within each: work that needs
 /// a person, running work, each line's queued rows in line order, then
 /// waiting work. One line can hold rows of both tiers; a queued row's
@@ -1758,6 +1813,10 @@ pub fn rows(snapshot: &Snapshot, project_of: ProjectOf) -> Vec<JobRow> {
     if let Some(install) = snapshot.catalog_install.as_ref().filter(|p| p.running) {
         rows.push(catalog_install_row(install));
     }
+    if let Some(download) = snapshot.noise_model_download.as_ref().filter(|p| p.running) {
+        rows.push(noise_model_download_row(download));
+    }
+    rows.extend(snapshot.license_checks.iter().map(license_check_row));
     rows.extend(snapshot.ts_sync.iter().filter_map(ts_sync_row));
     let names: HashMap<&str, &str> = snapshot
         .databases
@@ -1885,6 +1944,8 @@ fn snapshot(state: &Arc<AppState>, transfers: Vec<Value>, manages: bool) -> Snap
         backup: backups_allowed.then(|| state.backups.job()).flatten(),
         wbpp_cleanup: crate::server::wbpp_storage::status(state),
         catalog_install: Some(state.catalog_install.status().progress),
+        noise_model_download: Some(state.noise_model_downloads.progress()),
+        license_checks: state.workers.license_checks.running(),
         previews: state.previews.running(),
         artifact_searches: state.stack_previews.artifact_searches_under_way(),
         planning_pushes: if manages {
