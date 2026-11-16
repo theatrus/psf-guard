@@ -158,23 +158,27 @@ impl Horizon {
         if !azimuth_degrees.is_finite() {
             return Err(VisibilityError::InvalidPosition);
         }
+        Ok(self.curve_at(azimuth_degrees))
+    }
+
+    /// [`Horizon::altitude`] of a horizon already validated, at a finite
+    /// azimuth.
+    fn curve_at(&self, azimuth_degrees: f64) -> Option<f64> {
         let Self::Custom { points } = self else {
-            return Ok(None);
+            return None;
         };
         let azimuth = azimuth_degrees.rem_euclid(360.0);
         // Rust's remainder can round an extremely small negative input to 360.
         // NINA uses the same floating-point result rather than snapping to zero.
         let upper = points.partition_point(|p| p.azimuth_degrees < azimuth);
         if upper == 0 {
-            return Ok(Some(points[0].altitude_degrees));
+            return Some(points[0].altitude_degrees);
         }
         let right = points[upper];
         let left = points[upper - 1];
         let fraction =
             (azimuth - left.azimuth_degrees) / (right.azimuth_degrees - left.azimuth_degrees);
-        Ok(Some(
-            left.altitude_degrees + fraction * (right.altitude_degrees - left.altitude_degrees),
-        ))
+        Some(left.altitude_degrees + fraction * (right.altitude_degrees - left.altitude_degrees))
     }
 }
 
@@ -190,18 +194,46 @@ pub fn altitude_allowed(
     if !bounded(altitude_degrees, -90.0, 90.0) {
         return Err(VisibilityError::InvalidPosition);
     }
-    let curve = horizon.altitude(azimuth_degrees)?;
-    let mut minimum = limits
-        .rig_minimum_degrees
-        .max(limits.project_minimum_degrees);
-    if let Some(curve) = curve {
-        minimum = minimum.max(curve + limits.horizon_offset_degrees);
+    AltitudeTest::new(horizon, limits)?.allowed(azimuth_degrees, altitude_degrees)
+}
+
+/// [`altitude_allowed`] for many directions under one horizon and one set
+/// of limits: both are validated once, so each direction costs a lookup in
+/// the curve rather than a pass over it. The answers are the same.
+#[derive(Clone, Copy, Debug)]
+pub struct AltitudeTest<'a> {
+    horizon: &'a Horizon,
+    limits: AltitudeLimits,
+}
+
+impl<'a> AltitudeTest<'a> {
+    pub fn new(horizon: &'a Horizon, limits: AltitudeLimits) -> Result<Self, VisibilityError> {
+        limits.validate()?;
+        horizon.validate()?;
+        Ok(Self { horizon, limits })
     }
-    Ok(altitude_degrees > minimum
-        && altitude_degrees
-            < limits
-                .rig_maximum_degrees
-                .min(limits.project_maximum_degrees))
+
+    pub fn allowed(
+        &self,
+        azimuth_degrees: f64,
+        altitude_degrees: f64,
+    ) -> Result<bool, VisibilityError> {
+        if !bounded(altitude_degrees, -90.0, 90.0) || !azimuth_degrees.is_finite() {
+            return Err(VisibilityError::InvalidPosition);
+        }
+        let limits = self.limits;
+        let mut minimum = limits
+            .rig_minimum_degrees
+            .max(limits.project_minimum_degrees);
+        if let Some(curve) = self.horizon.curve_at(azimuth_degrees) {
+            minimum = minimum.max(curve + limits.horizon_offset_degrees);
+        }
+        Ok(altitude_degrees > minimum
+            && altitude_degrees
+                < limits
+                    .rig_maximum_degrees
+                    .min(limits.project_maximum_degrees))
+    }
 }
 
 /// SOFA ICRS J2000 to topocentric position without atmospheric refraction or

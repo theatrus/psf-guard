@@ -12,6 +12,9 @@ use crate::visibility::{
 use crate::windows::{Interval, MeridianExclusion};
 use serde::{Deserialize, Serialize};
 
+mod visible;
+pub use visible::{longest_dark_run_ms, DarkRuns};
+
 pub const MAX_NIGHTS: u32 = 31;
 pub const MAX_TARGETS: usize = 16;
 pub const MIN_STEP_MS: u64 = 60_000;
