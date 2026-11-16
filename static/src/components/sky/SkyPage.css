@@ -98,38 +98,6 @@
   margin-bottom: 12px;
 }
 
-.sky-control-group {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.sky-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  border-radius: 999px;
-  border: 1px solid var(--color-border-primary);
-  background: var(--color-bg-secondary);
-  color: var(--color-text-secondary);
-  font: inherit;
-  font-size: 0.85em;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
-}
-
-.sky-chip:hover {
-  border-color: var(--color-primary);
-}
-
-.sky-chip[aria-pressed='true'],
-.sky-chip[aria-checked='true'] {
-  background: var(--state-on-bg);
-  border-color: var(--state-on-border);
-  color: var(--color-text-primary);
-}
-
 .sky-chip-filter .sky-chip-swatch {
   width: 10px;
   height: 10px;

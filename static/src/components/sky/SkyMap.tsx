@@ -46,9 +46,11 @@ export interface SkyMark {
   kind: 'target' | 'pick';
 }
 
-/** The shading raster: a quarter of the map's size each way, drawn smooth. */
-const SHADE_WIDTH = 400;
-const SHADE_HEIGHT = 216;
+/** The shading raster: a fraction of the map's size each way, drawn
+ *  smooth. While the sky is being turned it is made smaller still, once
+ *  an animation frame at most, and at full size when the turn ends. */
+const SHADE_SIZE = [400, 216] as const;
+const SHADE_SIZE_TURNING = [160, 86] as const;
 
 interface Props {
   /** What was imaged, drawn as fields; none on a map that only plans. */
@@ -171,6 +173,9 @@ export default function SkyMap({
   });
   // The frame and shape this map was made for; a change to either starts
   // the view over, but the first render keeps what was remembered.
+  // Whether the sky is being turned by a drag: the shading is drawn small
+  // until it stops.
+  const [turning, setTurning] = useState(false);
   const made = useRef({ frame, mode });
   const wrapper = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -246,6 +251,7 @@ export default function SkyMap({
       event.currentTarget.setPointerCapture(event.pointerId);
     }
     start.moved = true;
+    setTurning(true);
     // A drag turns the sky, in both directions and at every zoom. The globe
     // is seen from outside and the flat map from inside, so the sky under
     // the pointer follows the pointer in both.
@@ -260,6 +266,7 @@ export default function SkyMap({
     if (drag.current && event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
+    setTurning(false);
     // Leave `moved` for the click that follows, then forget the drag.
     window.setTimeout(() => {
       drag.current = null;
@@ -372,9 +379,28 @@ export default function SkyMap({
     };
   }, [visible, sky, view.k]);
 
-  // The shading: a small picture of the whole map, made again as the sky
-  // turns. Its pixels are white; how clear each is carries the share.
-  const shadeUrl = useMemo(() => (shade ? shadeImage(shade, sky, AT, MAP_WIDTH, SHADE_WIDTH, SHADE_HEIGHT) : null), [shade, sky]);
+  // The shading: a small picture of the whole map. Its pixels are white;
+  // how clear each is carries the share. It is made on an animation frame,
+  // so however many times the pointer moves in a frame it is made once,
+  // and a frame not yet drawn when the sky turns again is dropped. The
+  // picture is handed straight to its element: drawing the map again to
+  // show it would cost more than making it.
+  const shadeImageRef = useRef<SVGImageElement>(null);
+  useEffect(() => {
+    if (!shade) return;
+    const [width, height] = turning ? SHADE_SIZE_TURNING : SHADE_SIZE;
+    const paint = () => {
+      const url = shadeImage(shade, sky, AT, MAP_WIDTH, width, height);
+      if (url) shadeImageRef.current?.setAttribute('href', url);
+      else shadeImageRef.current?.removeAttribute('href');
+    };
+    if (typeof requestAnimationFrame !== 'function') {
+      paint();
+      return;
+    }
+    const frame = requestAnimationFrame(paint);
+    return () => cancelAnimationFrame(frame);
+  }, [shade, sky, turning]);
 
   const placedMarks = useMemo(
     () => marks.map((mark) => ({ mark, at: projectedPoint(mark.ra, mark.dec, sky, AT) })).filter((entry) => entry.at.visible),
@@ -555,14 +581,10 @@ export default function SkyMap({
         )}
         {shade && (
           <g className="sky-visible-shade" pointerEvents="none" data-nights={shade.nights}>
-            {shadeUrl && (
-              <>
-                <mask id="sky-visible-shade-mask" maskUnits="userSpaceOnUse" x={0} y={0} width={MAP_WIDTH} height={MAP_HEIGHT}>
-                  <image href={shadeUrl} x={0} y={0} width={MAP_WIDTH} height={MAP_HEIGHT} preserveAspectRatio="none" />
-                </mask>
-                <rect x={0} y={0} width={MAP_WIDTH} height={MAP_HEIGHT} mask="url(#sky-visible-shade-mask)" />
-              </>
-            )}
+            <mask id="sky-visible-shade-mask" maskUnits="userSpaceOnUse" x={0} y={0} width={MAP_WIDTH} height={MAP_HEIGHT}>
+              <image ref={shadeImageRef} x={0} y={0} width={MAP_WIDTH} height={MAP_HEIGHT} preserveAspectRatio="none" />
+            </mask>
+            <rect x={0} y={0} width={MAP_WIDTH} height={MAP_HEIGHT} mask="url(#sky-visible-shade-mask)" />
           </g>
         )}
         {visibleDrawn && (

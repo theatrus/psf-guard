@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { SKY_INPUTS_MUTATION } from './skyInputs';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowDown, ArrowUp, RefreshCw, Save } from 'lucide-react';
 import { apiClient } from '../../api/client';
@@ -75,7 +76,7 @@ function PriorityEditor({ initial, globalOrder, globalScheduling, projects, curr
     initial.scope === 'rig' && draft.site_id ? { overrides: site.data?.scheduling, from: 'from the site' } : null,
   ]);
   const reload = useMutation({ mutationFn: () => apiClient.getObservingSettings(initial.scope, initial.scope_id), retry: false, onSuccess: fresh => { setDraft(fresh); setStored(fresh); setSaved(false); save.reset(); } });
-  const save = useMutation({ mutationFn: () => apiClient.saveObservingSettings({ ...draft, project_order: inherit ? null : list.map(p => p.id) }), retry: false, onSuccess: result => {
+  const save = useMutation({ mutationKey: SKY_INPUTS_MUTATION, mutationFn: () => apiClient.saveObservingSettings({ ...draft, project_order: inherit ? null : list.map(p => p.id) }), retry: false, onSuccess: result => {
     setSaved(true); setDraft(result); setStored(result);
     client.setQueryData(['observingSettings', result.scope, result.scope_id], result);
     void client.invalidateQueries({ queryKey: ['observingEffective'] });

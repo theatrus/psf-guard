@@ -999,6 +999,18 @@ export interface DirectorVisibleSky {
   /** Null for one night, when it is the same sky as `every_night`. */
   any_night: DirectorVisibleSkyRegion | null;
 }
+/** What `/sky/visible-places` is asked: the rig, minimum and nights as for
+ *  the picture, and up to 16 places in ICRS degrees. */
+export interface DirectorVisiblePlacesRequest extends DirectorVisibleSkyRequest {
+  places: DirectorSkyPosition[];
+}
+/** On how many of the nights counted each place is in view, measured for
+ *  the place itself. */
+export interface DirectorVisiblePlaces {
+  first_night: string;
+  nights_counted: number;
+  places: Array<{ ra_degrees: number; dec_degrees: number; nights_in_view: number }>;
+}
 export interface DirectorFeasibility {
   center: DirectorSkyPosition;
   target_name: string;

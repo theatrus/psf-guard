@@ -31,19 +31,25 @@ export function horizonText(view: DirectorVisibleSky): string {
   return `${from} custom horizon${offset}, at least ${minimum}`;
 }
 
-/** Which nights were counted, in a few words. */
-export function nightsText(view: DirectorVisibleSky): string {
+/**
+ * Which nights were counted, in a few words. `fromTonight` is for nights
+ * asked for without a date: the server starts those from the night under
+ * way at the rig's site, or from the next once its dark has ended, which
+ * either way is the night a person there calls tonight.
+ */
+export function nightsText(view: DirectorVisibleSky, fromTonight: boolean): string {
   const first = view.nights[0]?.date;
   const last = view.nights[view.nights.length - 1]?.date;
   if (!first || !last) return '';
-  if (view.span === 'year') return `one night a week for a year, ${formatNight(first)} to ${formatNight(last)}`;
-  if (view.nights.length === 1) return formatNightDate(first);
-  return `${view.nights.length} nights, ${formatNightDate(first)} to ${formatNightDate(last)}`;
+  const from = fromTonight ? 'from tonight, ' : '';
+  if (view.span === 'year') return `one night a week for a year ${from}${formatNight(first)}${fromTonight ? ',' : ''} to ${formatNight(last)}`;
+  if (view.nights.length === 1) return fromTonight ? `tonight, ${formatNightDate(first)}` : formatNightDate(first);
+  return `${view.nights.length} nights ${from}${formatNightDate(first)}${fromTonight ? ',' : ''} to ${formatNightDate(last)}`;
 }
 
 /** The legend: the rig, the minimum time, the nights and the horizon. */
-export function visibleSkyLegend(view: DirectorVisibleSky, rigName: string): string {
-  return [`${rigName}: in view ${formatMinutes(view.minimum_minutes)} or more`, nightsText(view), horizonText(view)].filter(Boolean).join(' · ');
+export function visibleSkyLegend(view: DirectorVisibleSky, rigName: string, fromTonight = true): string {
+  return [`${rigName}: in view ${formatMinutes(view.minimum_minutes)} or more`, nightsText(view, fromTonight), horizonText(view)].filter(Boolean).join(' · ');
 }
 
 const percent = (fraction: number) => `${Math.round(fraction * 100)}%`;

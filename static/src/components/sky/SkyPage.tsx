@@ -28,6 +28,7 @@ import { usePlans } from '../header/useCurrentPlan';
 import { retryWhenBusy } from '../director/retry';
 import { placeRigs, type PlacedRig } from './liveRigs';
 import SkyLive from './SkyLive';
+import { SkyShapeChoices } from './SkyChoices';
 import './SkyPage.css';
 import { useDirectorClock } from '../../hooks/useDirectorClock';
 
@@ -290,34 +291,7 @@ export default function SkyPage() {
       </header>
 
       <div className="sky-controls">
-        <div className="sky-control-group" role="radiogroup" aria-label="Coordinate frame">
-          {(['equatorial', 'galactic'] as SkyFrame[]).map((option) => (
-            <button
-              key={option}
-              type="button"
-              role="radio"
-              aria-checked={frame === option}
-              className="sky-chip"
-              onClick={() => setFrame(option)}
-            >
-              {option === 'equatorial' ? 'Equatorial' : 'Galactic'}
-            </button>
-          ))}
-        </div>
-        <div className="sky-control-group" role="radiogroup" aria-label="Map shape">
-          {(['aitoff', 'globe'] as SkyMode[]).map((option) => (
-            <button
-              key={option}
-              type="button"
-              role="radio"
-              aria-checked={mode === option}
-              className="sky-chip"
-              onClick={() => setMode(option)}
-            >
-              {option === 'aitoff' ? 'Flat' : 'Globe'}
-            </button>
-          ))}
-        </div>
+        <SkyShapeChoices frame={frame} mode={mode} onFrame={setFrame} onMode={setMode} />
         <label className="sky-check">
           <input type="checkbox" checked={acceptedOnly} onChange={(event) => setAcceptedOnly(event.target.checked)} />
           Accepted frames only

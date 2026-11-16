@@ -1,19 +1,28 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, configure, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { DirectorVisibleSky, DirectorVisibleSkyRequest } from '../../api/directorTypes';
+import type { DirectorVisiblePlacesRequest, DirectorVisibleSky, DirectorVisibleSkyRequest } from '../../api/directorTypes';
+import { SKY_INPUTS_MUTATION } from '../director/skyInputs';
 import { formatNightDate } from '../nights/nightsModel';
 import PlanSky, { MINIMUM_SETTLE_MS } from '../director/PlanSky';
 
 // The map is a heavy thing to draw; a busy machine needs more than a second.
 configure({ asyncUtilTimeout: 5000 });
 
-const asked = vi.hoisted(() => ({ calls: [] as DirectorVisibleSkyRequest[], answer: (request: DirectorVisibleSkyRequest): Promise<unknown> => Promise.reject(new Error(`unset ${request.rig}`)) }));
+const asked = vi.hoisted(() => ({ calls: [] as DirectorVisibleSkyRequest[], places: [] as DirectorVisiblePlacesRequest[], placesFail: false, answer: (request: DirectorVisibleSkyRequest): Promise<unknown> => Promise.reject(new Error(`unset ${request.rig}`)) }));
 const openSettings = vi.hoisted(() => vi.fn());
 vi.mock('../../utils/settingsIntent', () => ({ openSettings }));
 vi.mock('../../api/client', () => ({
   apiClient: {
     getDirectorVisibleSky: (request: DirectorVisibleSkyRequest) => { asked.calls.push(request); return asked.answer(request); },
+    // Each place counted for itself, by the same rule as the counts: every
+    // night north of +40°, 12 nights down to −30°, none south of that.
+    getDirectorVisiblePlaces: async (request: DirectorVisiblePlacesRequest) => {
+      asked.places.push(request);
+      if (asked.placesFail) throw new Error('boom');
+      const counted = request.span === 'year' ? 53 : 31;
+      return { first_night: request.first_night ?? '2026-09-24', nights_counted: counted, places: request.places.map((place) => ({ ...place, nights_in_view: place.dec_degrees >= 40 ? counted : place.dec_degrees >= -30 ? 12 : 0 })) };
+    },
     searchDirectorNames: async (query: string) => ({ query, local: { available: true, items: query.toLowerCase().startsWith('m 3') ? [{ name: 'M 31', common_name: 'Andromeda Galaxy', kind: 'galaxy', ra_degrees: 10.68, dec_degrees: 41.27, matched: 'M 31', source: 'Seiza object catalog' }] : [] }, online: null, online_state: 'skipped', online_cached: false }),
     resolveDirectorName: async (name: string) => { throw new Error(`No catalog knows "${name}"`); },
   },
@@ -56,13 +65,20 @@ const target = { name: 'IC 1805', center: { ra_degrees: 38.2, dec_degrees: 61.45
 function show(props: Partial<Parameters<typeof PlanSky>[0]> = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   const handlers = { onFrame: vi.fn(), onRigs: vi.fn() };
-  const rendered = render(<QueryClientProvider client={client}><PlanSky rigs={rigs} target={target} frameBlocked={null} shown {...handlers} {...props} /></QueryClientProvider>);
-  return { ...handlers, ...rendered };
+  const tree = (over: Partial<Parameters<typeof PlanSky>[0]> = {}) => <QueryClientProvider client={client}><PlanSky rigs={rigs} target={target} frameBlocked={null} shown {...handlers} {...props} {...over} /></QueryClientProvider>;
+  const rendered = render(tree());
+  return { ...handlers, ...rendered, client, again: (over: Partial<Parameters<typeof PlanSky>[0]>) => rendered.rerender(tree(over)) };
 }
+/** A save, as a form elsewhere on the page makes one. */
+const save = (client: QueryClient, mutationKey: readonly string[]) => act(async () => { await client.getMutationCache().build(client, { mutationKey, mutationFn: async () => 'saved' }).execute(undefined); });
 const legend = () => screen.getByRole('status').textContent ?? '';
 
 describe("the plan's Sky tab", () => {
-  beforeEach(() => { asked.calls.length = 0; asked.answer = async (request) => view(request); openSettings.mockClear(); });
+  beforeEach(() => {
+    asked.calls.length = 0; asked.places.length = 0; asked.placesFail = false; asked.answer = async (request) => view(request); openSettings.mockClear();
+    // No canvas under the tests: the map draws without the shading's picture.
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
+  });
   afterEach(() => vi.restoreAllMocks());
 
   it('asks for nothing until the tab is opened', async () => {
@@ -77,7 +93,7 @@ describe("the plan's Sky tab", () => {
     const { container } = show();
     await waitFor(() => expect(legend()).toContain('C925: in view 30 min or more'));
     expect(asked.calls).toEqual([{ rig: 'rig-1', span: 'now' }]);
-    expect(legend()).toBe(`C925: in view 30 min or more · 31 nights, ${formatNightDate('2026-09-24')} to ${formatNightDate('2026-10-24')} · the site's custom horizon, at least 25°. In view every night: 18% of the sky, declination +40° to +90°. On at least one night: 75% of the sky, declination −30° to +90°.`);
+    expect(legend()).toBe(`C925: in view 30 min or more · 31 nights from tonight, ${formatNightDate('2026-09-24')}, to ${formatNightDate('2026-10-24')} · the site's custom horizon, at least 25°. In view every night: 18% of the sky, declination +40° to +90°. On at least one night: 75% of the sky, declination −30° to +90°.`);
     expect((screen.getByLabelText('Rig') as HTMLSelectElement).value).toBe('rig-1');
     expect((screen.getByLabelText('Minimum minutes') as HTMLInputElement).value).toBe('30');
     expect(screen.getByRole('radio', { name: 'Now' }).getAttribute('aria-checked')).toBe('true');
@@ -95,7 +111,9 @@ describe("the plan's Sky tab", () => {
     // The plan's target is marked, with the nights it is in view.
     expect(container.querySelector('.sky-mark-target')?.getAttribute('data-mark')).toBe('IC 1805');
     expect(screen.getByTestId('plan-sky-target').textContent).toContain('Target: IC 1805');
-    expect(screen.getByTestId('plan-sky-target').textContent).toContain('In view on 31 of the next 31 nights. Inside the every-night line.');
+    // The card asks about the target itself, for the picture's own nights.
+    await waitFor(() => expect(screen.getByTestId('plan-sky-target').textContent).toContain('In view on 31 of the 31 nights counted. Inside the every-night line.'));
+    expect(asked.places).toEqual([{ rig: 'rig-1', span: 'now', minimum_minutes: 30, first_night: '2026-09-24', places: [{ ra_degrees: 38.2, dec_degrees: 61.45 }] }]);
     // A fetch marks the tab busy; it adds no words.
     expect(screen.getByRole('region', { name: 'Sky in view' }).getAttribute('aria-busy')).toBe('false');
   });
@@ -107,7 +125,9 @@ describe("the plan's Sky tab", () => {
     await waitFor(() => expect(legend()).toContain('one night a week for a year'));
     expect(asked.calls.at(-1)).toEqual({ rig: 'rig-1', span: 'year' });
     expect(container.querySelector('.sky-visible-shade')?.getAttribute('data-nights')).toBe('53');
-    expect(screen.getByTestId('plan-sky-target').textContent).toContain('In view on 53 of the 53 nights sampled over the year.');
+    await waitFor(() => expect(screen.getByTestId('plan-sky-target').textContent).toContain('In view on 53 of the 53 nights counted over the year. Inside the every-night line.'));
+    // A year's solid line is rough, and the key says what to make of it.
+    expect(screen.getByLabelText('How to read the map').textContent).toContain('Year counts one night a week. Sky just inside the solid line may be out of view on the nights between, so read that line as rough to a few degrees.');
     fireEvent.change(screen.getByLabelText('Rig'), { target: { value: 'rig-2' } });
     await waitFor(() => expect(legend()).toContain('RC51: in view'));
     expect(asked.calls.at(-1)).toEqual({ rig: 'rig-2', span: 'year' });
@@ -156,7 +176,10 @@ describe("the plan's Sky tab", () => {
     fireEvent.click(svg, { clientX: 500, clientY: 270 });
     const card = screen.getByRole('group', { name: 'Picked place' });
     expect(card.textContent).toContain('12h 00m, +0° 00′');
-    expect(card.textContent).toContain('In view on 12 of the next 31 nights. Between the lines: in view on some nights.');
+    // Until the server has counted the place, the card claims nothing.
+    expect(card.textContent).toContain('Counting its nights in view…');
+    await waitFor(() => expect(card.textContent).toContain('In view on 12 of the 31 nights counted. Between the lines: in view on some nights.'));
+    expect(asked.places.at(-1)?.places).toHaveLength(2);
     expect(container.querySelector('.sky-mark-pick')).not.toBeNull();
     // Picking changes nothing in the plan.
     expect(onFrame).not.toHaveBeenCalled();
@@ -177,7 +200,7 @@ describe("the plan's Sky tab", () => {
     fireEvent.click(await screen.findByText('Andromeda Galaxy'));
     const card = await screen.findByRole('group', { name: 'Picked place' });
     expect(card.textContent).toContain('M 31');
-    expect(card.textContent).toContain('In view on 31 of the next 31 nights. Inside the every-night line.');
+    await waitFor(() => expect(card.textContent).toContain('In view on 31 of the 31 nights counted. Inside the every-night line.'));
     expect(within(card).getByRole('button', { name: 'Frame this' })).toBeDisabled();
     expect(card.textContent).toContain('Locked panels prevent changes');
     expect(onFrame).not.toHaveBeenCalled();
@@ -186,8 +209,76 @@ describe("the plan's Sky tab", () => {
   it('says a place far south is never in view', async () => {
     const { container } = show({ target: { name: 'Carina', center: { ra_degrees: 160, dec_degrees: -60 } } });
     await waitFor(() => expect(legend()).toContain('31 nights'));
-    expect(screen.getByTestId('plan-sky-target').textContent).toContain('In view on 0 of the next 31 nights. Outside both lines: never in view for long enough.');
+    await waitFor(() => expect(screen.getByTestId('plan-sky-target').textContent).toContain('In view on 0 of the 31 nights counted. Outside both lines: never in view for long enough.'));
     expect(container.querySelector('.sky-mark-target')?.getAttribute('data-mark')).toBe('Carina');
+  });
+
+  it('counts a place on the edge for itself, not from the grid node beside it', async () => {
+    // A target at −29.2°: inside the dashed line at −30°, though the node
+    // nearest it on the 2° grid, at −30°, could read either way and the one
+    // at −28° is another place. The server counts the place itself.
+    show({ target: { name: 'Edge', center: { ra_degrees: 100, dec_degrees: -29.2 } } });
+    await waitFor(() => expect(screen.getByTestId('plan-sky-target').textContent).toContain('In view on 12 of the 31 nights counted. Between the lines: in view on some nights.'));
+    expect(asked.places.at(-1)?.places).toEqual([{ ra_degrees: 100, dec_degrees: -29.2 }]);
+  });
+
+  it('says so when the nights of a place cannot be counted, and claims no number', async () => {
+    asked.placesFail = true;
+    show();
+    await waitFor(() => expect(screen.getByTestId('plan-sky-target').textContent).toContain('Its nights in view could not be counted.'));
+    expect(screen.getByTestId('plan-sky-target').textContent).not.toMatch(/In view on/);
+  });
+
+  it('keeps the picture and the minimum on screen, dimmed, while another time frame loads', async () => {
+    const { container } = show();
+    await waitFor(() => expect(legend()).toContain('31 nights'));
+    let arrive: (value: DirectorVisibleSky) => void = () => {};
+    asked.answer = (request) => new Promise((resolve) => { arrive = () => resolve(view(request)); });
+    fireEvent.click(screen.getByRole('radio', { name: 'Year' }));
+    // The month's picture stays, marked busy, and the legend says which is which.
+    await waitFor(() => expect(legend()).toMatch(/^Now is shown while Year loads\. C925: in view 30 min or more · 31 nights/));
+    expect(screen.getByRole('region', { name: 'Sky in view' }).getAttribute('aria-busy')).toBe('true');
+    expect(container.querySelector('.sky-visible-shade')?.getAttribute('data-nights')).toBe('31');
+    expect(container.querySelector('.sky-visible-line.sky-visible-every')?.getAttribute('d')).toMatch(/^M/);
+    expect((screen.getByLabelText('Minimum minutes') as HTMLInputElement).value).toBe('30');
+    expect(screen.getByRole('radio', { name: 'Year' }).getAttribute('aria-checked')).toBe('true');
+    await act(async () => { arrive(view({ rig: 'rig-1', span: 'year' })); });
+    await waitFor(() => expect(legend()).toMatch(/^C925: in view 30 min or more · one night a week for a year/));
+    expect(container.querySelector('.sky-visible-shade')?.getAttribute('data-nights')).toBe('53');
+    expect(screen.getByRole('region', { name: 'Sky in view' }).getAttribute('aria-busy')).toBe('false');
+    // Another rig's picture is never shown for this one: the map clears.
+    asked.answer = () => new Promise(() => {});
+    fireEvent.change(screen.getByLabelText('Rig'), { target: { value: 'rig-2' } });
+    await waitFor(() => expect(legend()).toBe('Working out the sky in view…'));
+    expect(container.querySelector('.sky-visible-shade')).toBeNull();
+    // Back on the first rig, its minimum is known before the answer is.
+    fireEvent.change(screen.getByLabelText('Rig'), { target: { value: 'rig-1' } });
+    expect((screen.getByLabelText('Minimum minutes') as HTMLInputElement).value).toBe('30');
+  });
+
+  it('reads the picture again after a save that can change it, and after no other', async () => {
+    const { client, again } = show();
+    await waitFor(() => expect(legend()).toContain('31 nights'));
+    await waitFor(() => expect(asked.places).toHaveLength(1));
+    expect(asked.calls).toHaveLength(1);
+    // A save of something else, such as a name lookup or a plan's exposures.
+    await save(client, ['director', 'something-else']);
+    await save(client, []);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    expect(asked.calls).toHaveLength(1);
+    expect(asked.places).toHaveLength(1);
+    // A save of the rig's site, horizon, limits or minimum time.
+    await save(client, [...SKY_INPUTS_MUTATION]);
+    await waitFor(() => expect(asked.calls).toHaveLength(2));
+    await waitFor(() => expect(asked.places).toHaveLength(2));
+    // Behind another tab it asks for nothing, and catches up when shown.
+    again({ shown: false });
+    await save(client, [...SKY_INPUTS_MUTATION]);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    expect(asked.calls).toHaveLength(2);
+    again({ shown: true });
+    await waitFor(() => expect(asked.calls).toHaveLength(3));
+    expect(asked.calls.at(-1)).toEqual({ rig: 'rig-1', span: 'now' });
   });
 
   it('says a plan has no rig yet and leads to the Rigs tab', () => {

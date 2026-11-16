@@ -934,6 +934,13 @@ export const apiClient = {
     return data.data;
   },
 
+  getDirectorVisiblePlaces: async (request: import('./directorTypes').DirectorVisiblePlacesRequest, signal?: AbortSignal): Promise<import('./directorTypes').DirectorVisiblePlaces> => {
+    const api = await getApi();
+    const { data } = await api.post<ApiResponse<import('./directorTypes').DirectorVisiblePlaces>>('/director/v1/sky/visible-places', request, { signal });
+    if (!data.data) throw new Error(data.error || 'Failed to count the nights in view');
+    return data.data;
+  },
+
   getNightPlans: async (request: NightPlansRequest): Promise<NightPlans> => {
     const api = await getApi();
     const { data } = await api.post<ApiResponse<NightPlans>>('/director/v1/night-plans', request);

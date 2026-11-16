@@ -34,40 +34,15 @@
   width: 5.5em;
 }
 
-.plan-sky-choice {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.plan-sky-choice button {
-  padding: 4px 10px;
-  border-radius: 999px;
-  border: 1px solid var(--color-border-primary);
-  background: var(--color-bg-secondary);
-  color: var(--color-text-secondary);
-  font: inherit;
-  cursor: pointer;
-}
-
-.plan-sky-choice button:hover {
-  border-color: var(--color-primary);
-}
-
-.plan-sky-choice button[aria-checked='true'] {
-  background: var(--state-on-bg);
-  border-color: var(--state-on-border);
-  color: var(--color-text-primary);
-}
-
 .plan-sky-legend {
   margin: 0;
   font-size: 0.85em;
   color: var(--color-text-secondary);
 }
 
-/* A new picture is on its way: the legend still describes the old one. */
-.plan-sky[aria-busy='true'] .plan-sky-legend {
+/* A new picture is on its way: the old one and its legend stay, dimmed. */
+.plan-sky[aria-busy='true'] .plan-sky-legend,
+.plan-sky[aria-busy='true'] .plan-sky-map {
   opacity: 0.6;
 }
 

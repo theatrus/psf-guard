@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { keepPreviousData, useIsMutating, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutationState, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../../api/client';
-import type { DirectorSkyPosition, DirectorVisibleSky, DirectorVisibleSkyRequest } from '../../api/directorTypes';
+import type { DirectorSkyPosition, DirectorVisiblePlacesRequest, DirectorVisibleSky, DirectorVisibleSkyRequest } from '../../api/directorTypes';
 import { useDirectorClock } from '../../hooks/useDirectorClock';
 import { openSettings } from '../../utils/settingsIntent';
 import { formatDecShort, formatRaShort, type SkyFrame, type SkyMode } from '../../utils/skyProjection';
 import SkyMap, { type SkyMark } from '../sky/SkyMap';
-import { nightsAt, unpackCounts } from '../sky/skyShade';
+import { SkyChoice, SkyShapeChoices } from '../sky/SkyChoices';
+import { unpackCounts } from '../sky/skyShade';
 import {
   darknessNote,
   nightCount,
@@ -18,6 +19,7 @@ import {
   visibleSkySummary,
 } from '../sky/visibleSky';
 import { retryWhenBusy } from './retry';
+import { SKY_INPUTS_MUTATION } from './skyInputs';
 import TargetSearch, { type TargetPick } from './TargetSearch';
 import './PlanSky.css';
 
@@ -48,7 +50,11 @@ const MAX_MINUTES = 24 * 60;
 /** How long the minimum field waits after the last keystroke or spinner
  *  step before it asks for a new picture. */
 export const MINIMUM_SETTLE_MS = 500;
+const SPANS: ReadonlyArray<readonly [Span, string]> = [['now', 'Now'], ['year', 'Year']];
 const SPAN_LABEL: Record<Span, string> = { now: 'Now', year: 'Year' };
+/** A place to a millionth of a degree: enough to tell two places apart,
+ *  and steady from one render to the next. */
+const rounded = (center: DirectorSkyPosition): DirectorSkyPosition => ({ ra_degrees: Math.round(center.ra_degrees * 1e6) / 1e6 % 360, dec_degrees: Math.round(center.dec_degrees * 1e6) / 1e6 });
 
 const placeName = (center: DirectorSkyPosition) => `${formatRaShort(center.ra_degrees)}, ${formatDecShort(center.dec_degrees)}`;
 
@@ -88,32 +94,40 @@ export default function PlanSky({ rigs, target, frameBlocked, onFrame, onRigs, s
     refetchOnWindowFocus: false,
     placeholderData: keepPreviousData,
   });
-  // The picture belongs to the rig and time frame it was worked out for.
-  const view: DirectorVisibleSky | undefined =
-    request && !query.isError && query.data?.rig.id === request.rig && query.data.span === span ? query.data : undefined;
-  // The nights start again at the next local noon at the rig's site.
+  // The picture on screen: the one asked for, or, while that loads, the
+  // last one for this rig, dimmed. Another rig's picture is never shown.
+  const view: DirectorVisibleSky | undefined = request && !query.isError && query.data?.rig.id === request.rig ? query.data : undefined;
+  const awaited = view !== undefined && view.span !== span;
+  // The nights start again at the next local noon at the rig's site. A
+  // tab behind another asks for nothing; it catches up when it is shown.
   const longitude = query.data?.site.longitude_degrees;
   const nightIsOver = shown && request !== null && longitude !== undefined && !query.isPlaceholderData && nightCount(now, longitude) !== nightCount(query.dataUpdatedAt, longitude);
   const refetch = query.refetch;
   useEffect(() => {
     if (nightIsOver) void refetch();
   }, [nightIsOver, refetch]);
-  // A saved setting may have moved the rig's site, horizon or limits.
+  // A save that can move the rig's site, horizon, limits or minimum time
+  // makes the picture out of date; no other save does. A shown tab reads
+  // it again at once, a hidden one when it is next shown.
   const client = useQueryClient();
-  const saving = useIsMutating();
-  const sawSaving = useRef(false);
+  const lastSave = Math.max(0, ...useMutationState({ filters: { mutationKey: SKY_INPUTS_MUTATION, status: 'success' }, select: (mutation) => mutation.state.submittedAt }));
+  const seenSave = useRef(lastSave);
   useEffect(() => {
-    if (saving > 0) sawSaving.current = true;
-    else if (sawSaving.current) {
-      sawSaving.current = false;
-      void client.invalidateQueries({ queryKey: ['directorVisibleSky'] });
-    }
-  }, [saving, client]);
+    if (lastSave <= seenSave.current) return;
+    seenSave.current = lastSave;
+    void client.invalidateQueries({ queryKey: ['directorVisibleSky'] });
+  }, [lastSave, client]);
+
+  // The rig's own minimum time, from any answer about that rig: kept so
+  // the field does not empty while another time frame loads.
+  const rigMinimums = useRef(new Map<string, number>());
+  if (query.data && !query.isError) rigMinimums.current.set(query.data.rig.id, query.data.rig_minimum_minutes);
+  const rigMinimum = rig ? rigMinimums.current.get(rig.id) ?? null : null;
 
   // What is typed in the minimum field, which may not be a number yet.
   // Each value asked for measures the whole sky, so a value is sent once
   // the person stops, or at once on Enter or on leaving the field.
-  const shownMinutes = minimum ?? view?.rig_minimum_minutes ?? null;
+  const shownMinutes = minimum ?? rigMinimum;
   const [typed, setTyped] = useState<string>(shownMinutes === null ? '' : String(shownMinutes));
   const settle = useRef<number | null>(null);
   const cancelSettle = () => {
@@ -147,19 +161,46 @@ export default function PlanSky({ rigs, target, frameBlocked, onFrame, onRigs, s
     if (picked) list.push({ id: 'pick', ra: picked.center.ra_degrees, dec: picked.center.dec_degrees, label: picked.name, kind: 'pick' });
     return list;
   }, [target, picked]);
-  // How many of the nights a place is in view, at the nearest node counted.
-  const inView = (center: DirectorSkyPosition) => (counts ? nightsAt(counts, center.ra_degrees, center.dec_degrees) : null);
-  const nightsWords = (nights: number) =>
-    view?.span === 'year' ? `In view on ${nights} of the ${view.nights.length} nights sampled over the year` : `In view on ${nights} of the next ${view?.nights.length ?? 0} nights`;
+  // The cards ask the server about each place itself, for the nights of
+  // the picture on screen, so a card never disagrees with the lines: a
+  // grid node two degrees off may be on the other side of one.
+  const placesRequest: DirectorVisiblePlacesRequest | null = useMemo(() => {
+    const places = [target?.center, picked?.center].filter((place): place is DirectorSkyPosition => !!place).map(rounded);
+    const first = view?.nights[0]?.date;
+    if (!view || !first || places.length === 0) return null;
+    return { rig: view.rig.id, span: view.span, minimum_minutes: view.minimum_minutes, first_night: first, places };
+  }, [view, target, picked]);
+  const placesQuery = useQuery({
+    queryKey: ['directorVisibleSky', 'places', placesRequest],
+    queryFn: ({ signal }) => apiClient.getDirectorVisiblePlaces(placesRequest!, signal),
+    enabled: shown && placesRequest !== null,
+    retry: retryWhenBusy,
+    retryDelay: 1200,
+    staleTime: 5 * 60_000,
+    refetchInterval: false,
+    refetchOnWindowFocus: false,
+  });
+  /** On how many nights a place is in view: null until the server says. */
+  const inView = (center: DirectorSkyPosition): number | null => {
+    const at = rounded(center);
+    const found = placesQuery.data?.places.find((place) => place.ra_degrees === at.ra_degrees && place.dec_degrees === at.dec_degrees);
+    return found && placesQuery.data?.nights_counted === view?.nights.length ? found.nights_in_view : null;
+  };
+  const counted = view?.nights.length ?? 0;
+  const nightsWords = (nights: number) => (view?.span === 'year' ? `In view on ${nights} of the ${counted} nights counted over the year` : `In view on ${nights} of the ${counted} nights counted`);
   const standingWords = (nights: number) => {
-    const where = standing(nights, view?.nights.length ?? 0);
+    const where = standing(nights, counted);
     return where === 'every' ? 'Inside the every-night line.' : where === 'some' ? 'Between the lines: in view on some nights.' : 'Outside both lines: never in view for long enough.';
+  };
+  const placeWords = (center: DirectorSkyPosition) => {
+    if (!view) return null;
+    const nights = inView(center);
+    if (nights === null) return placesQuery.isError ? 'Its nights in view could not be counted.' : 'Counting its nights in view…';
+    return `${nightsWords(nights)}. ${standingWords(nights)}`;
   };
 
   const failure = query.isError ? visibleSkyError(query.error) : null;
-  const changed = minimum !== null && view !== undefined && minimum !== view.rig_minimum_minutes;
-  const targetNights = target ? inView(target.center) : null;
-  const pickedNights = picked ? inView(picked.center) : null;
+  const changed = minimum !== null && rigMinimum !== null && minimum !== rigMinimum;
 
   // Until the tab is opened there is nothing to draw: the map is a heavy
   // thing to lay out behind another tab.
@@ -209,30 +250,11 @@ export default function PlanSky({ rigs, target, frameBlocked, onFrame, onRigs, s
         </label>
         {changed && (
           <button type="button" className="link-button" onClick={() => setMinimum(null)}>
-            Use rig's {view.rig_minimum_minutes} min
+            Use rig's {rigMinimum} min
           </button>
         )}
-        <div className="plan-sky-choice" role="radiogroup" aria-label="Time frame">
-          {(['now', 'year'] as Span[]).map((option) => (
-            <button key={option} type="button" role="radio" aria-checked={span === option} onClick={() => setSpan(option)}>
-              {SPAN_LABEL[option]}
-            </button>
-          ))}
-        </div>
-        <div className="plan-sky-choice" role="radiogroup" aria-label="Map shape">
-          {(['aitoff', 'globe'] as SkyMode[]).map((option) => (
-            <button key={option} type="button" role="radio" aria-checked={mode === option} onClick={() => setMode(option)}>
-              {option === 'aitoff' ? 'Flat' : 'Globe'}
-            </button>
-          ))}
-        </div>
-        <div className="plan-sky-choice" role="radiogroup" aria-label="Coordinate frame">
-          {(['equatorial', 'galactic'] as SkyFrame[]).map((option) => (
-            <button key={option} type="button" role="radio" aria-checked={frame === option} onClick={() => setFrame(option)}>
-              {option === 'equatorial' ? 'Equatorial' : 'Galactic'}
-            </button>
-          ))}
-        </div>
+        <SkyChoice label="Time frame" options={SPANS} value={span} onChange={setSpan} />
+        <SkyShapeChoices frame={frame} mode={mode} onFrame={setFrame} onMode={setMode} shapeFirst />
       </div>
 
       <p className="plan-sky-legend" role="status">
@@ -247,6 +269,7 @@ export default function PlanSky({ rigs, target, frameBlocked, onFrame, onRigs, s
           </>
         ) : view && rig ? (
           <>
+            {awaited ? `${SPAN_LABEL[view.span]} is shown while ${SPAN_LABEL[span]} loads. ` : ''}
             {visibleSkyLegend(view, rig.name)}. {visibleSkyShares(view)}
             {darknessNote(view) ? ` ${darknessNote(view)}` : ''}
           </>
@@ -281,7 +304,9 @@ export default function PlanSky({ rigs, target, frameBlocked, onFrame, onRigs, s
               Edge of the sky in view on any night
             </span>
             <span className="plan-sky-key-line">Marks point into the sky in view.</span>
-            {span === 'year' && <span className="plan-sky-key-line">A year counts one night a week, which gives the solid line its teeth.</span>}
+            {view?.span === 'year' && (
+              <span className="plan-sky-key-line">Year counts one night a week. Sky just inside the solid line may be out of view on the nights between, so read that line as rough to a few degrees.</span>
+            )}
           </div>
         </div>
 
@@ -291,22 +316,14 @@ export default function PlanSky({ rigs, target, frameBlocked, onFrame, onRigs, s
             <div className="plan-sky-place" data-testid="plan-sky-target">
               <strong>Target: {target.name || 'Target'}</strong>
               <span>{placeName(target.center)}</span>
-              {targetNights !== null && view && (
-                <span>
-                  {nightsWords(targetNights)}. {standingWords(targetNights)}
-                </span>
-              )}
+              {placeWords(target.center) && <span>{placeWords(target.center)}</span>}
             </div>
           )}
           {picked && (
             <div className="plan-sky-place plan-sky-picked" role="group" aria-label="Picked place">
               <strong>{picked.name}</strong>
               {picked.source !== 'the map' && <span>{placeName(picked.center)}</span>}
-              {pickedNights !== null && view && (
-                <span>
-                  {nightsWords(pickedNights)}. {standingWords(pickedNights)}
-                </span>
-              )}
+              {placeWords(picked.center) && <span>{placeWords(picked.center)}</span>}
               <span className="plan-sky-actions">
                 <button type="button" disabled={frameBlocked !== null} title={frameBlocked ?? undefined} onClick={() => onFrame(picked)}>
                   Frame this

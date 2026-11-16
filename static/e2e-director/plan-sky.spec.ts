@@ -6,15 +6,18 @@ import path from 'node:path';
 import { applyRealSchema } from '../e2e/fixtures/sync';
 import { addRig } from './nightsFixtures';
 
-/** A rig database with one Target Scheduler project and its target, M31:
- *  enough for a plan. No frame has been taken. */
+/** A rig database with one Target Scheduler project and its target, at
+ *  declination +85°: enough for a plan. From 34° north with a 25° minimum
+ *  that place never sets below the limit, so it is in view on every night
+ *  of any month and year, whatever the date the suite runs on. No frame
+ *  has been taken. */
 function planDatabase(name: string, guid: string): string {
   const root = mkdtempSync(path.join(process.env.PSF_GUARD_DIRECTOR_E2E_TMP!, 'plan-sky-'));
   const dbPath = path.join(root, 'catalog.sqlite');
   const db = new Database(dbPath);
   applyRealSchema(db);
   db.prepare("INSERT INTO project (Id,profileId,name,description,state,priority,isMosaic,flatsHandling,guid) VALUES(1,'current-profile',?,'',1,1,0,0,?)").run(`${name} project`, guid);
-  db.prepare('INSERT INTO target (Id,name,active,ra,dec,epochcode,projectid,guid) VALUES(1,?,1,0.712313,41.2687,2,1,?)').run(`${name} target`, randomUUID());
+  db.prepare('INSERT INTO target (Id,name,active,ra,dec,epochcode,projectid,guid) VALUES(1,?,1,0.712313,85.0,2,1,?)').run(`${name} target`, randomUUID());
   db.prepare("INSERT INTO exposuretemplate (Id,profileId,name,filtername,gain,offset,bin,readoutmode,guid) VALUES(1,'current-profile','Ha','Ha',100,30,1,0,?)").run(randomUUID());
   db.prepare("INSERT INTO exposureplan (Id,profileId,exposure,desired,acquired,accepted,targetid,exposureTemplateId,enabled,guid) VALUES(1,'current-profile',300,40,0,0,1,1,1,?)").run(randomUUID());
   db.close();
@@ -62,8 +65,10 @@ test("a plan's Sky tab shades the sky its rig can shoot, for the month and the y
     bare = (await created.json()).data.id as string;
 
     await page.setViewportSize({ width: 1440, height: 1000 });
-    const posts: Array<{ span?: string; minimum_minutes?: number }> = [];
-    page.on('request', sent => { if (sent.url().endsWith('/sky/visible-region')) posts.push(JSON.parse(sent.postData() ?? '{}')); });
+    // Every request for the picture or for a place's nights.
+    const posts: Array<{ span?: string; minimum_minutes?: number; places?: unknown[] }> = [];
+    page.on('request', sent => { if (/\/sky\/visible-(region|places)$/.test(sent.url())) posts.push(JSON.parse(sent.postData() ?? '{}')); });
+    const pictures = () => posts.filter(body => !('places' in body));
     await page.goto(`/#/plan?plan=${placedPlan}`);
     // The tab sits after Framing and asks for nothing until it is opened.
     await expect(page.getByRole('tablist', { name: 'Plan sections' }).getByRole('tab')).toHaveText(['Framing', 'Sky', 'Exposures', 'Rigs', 'Priority and defaults']);
@@ -75,7 +80,7 @@ test("a plan's Sky tab shades the sky its rig can shoot, for the month and the y
     const legend = tab.getByRole('status');
 
     // Now: the month, shaded, with both lines and the numbers in words.
-    await expect(legend).toContainText('Sky placed: in view 30 min or more · 31 nights', { timeout: 120_000 });
+    await expect(legend).toContainText('Sky placed: in view 30 min or more · 31 nights from tonight, ', { timeout: 120_000 });
     await expect(legend).toContainText('flat horizon at 25°');
     await expect(legend).toContainText(/In view every night: \d+% of the sky, declination [−+]\d+° to \+90°\. On at least one night: \d+% of the sky, declination −3[01]° to \+90°\./);
     await expect(tab.getByRole('radio', { name: 'Now' })).toHaveAttribute('aria-checked', 'true');
@@ -92,8 +97,11 @@ test("a plan's Sky tab shades the sky its rig can shoot, for the month and the y
     await expect(tab.getByLabel('How to read the map')).toContainText('Every night');
     // The plan's target is marked and counted.
     await expect(tab.locator('.sky-mark-target')).toHaveAttribute('data-mark', 'Sky placed target');
-    await expect(tab.getByTestId('plan-sky-target')).toContainText('In view on 31 of the next 31 nights. Inside the every-night line.');
-    expect(posts).toEqual([{ rig: expect.any(String), span: 'now' }]);
+    // The target is circumpolar for this rig: in view every night on any date.
+    await expect(tab.getByTestId('plan-sky-target')).toContainText('In view on 31 of the 31 nights counted. Inside the every-night line.');
+    // One request counted the target's nights, for the place itself.
+    expect(posts.filter(body => 'places' in body)).toHaveLength(1);
+    expect(pictures()).toEqual([{ rig: expect.any(String), span: 'now' }]);
     await page.screenshot({ path: testInfo.outputPath('plan-sky-now.png') });
 
     // Year: a night a week; every right ascension has its season.
@@ -101,8 +109,9 @@ test("a plan's Sky tab shades the sky its rig can shoot, for the month and the y
     await expect(legend).toContainText('one night a week for a year', { timeout: 120_000 });
     await expect(shade).toHaveAttribute('data-nights', '53');
     await expect(legend).toContainText(/On at least one night: \d+% of the sky, declination −3[01]° to \+90°\./);
-    await expect(tab.getByTestId('plan-sky-target')).toContainText('of the 53 nights sampled over the year');
-    expect(posts.at(-1)).toEqual({ rig: expect.any(String), span: 'year' });
+    await expect(tab.getByTestId('plan-sky-target')).toContainText('In view on 53 of the 53 nights counted over the year. Inside the every-night line.');
+    await expect(tab.getByLabel('How to read the map')).toContainText('Year counts one night a week.');
+    expect(pictures().at(-1)).toEqual({ rig: expect.any(String), span: 'year' });
     // The globe draws them too, and turning the map asks for nothing.
     await tab.getByRole('radio', { name: 'Globe' }).click();
     await expect(every).toHaveAttribute('d', /^M[\d.,-]+L/);
@@ -110,14 +119,14 @@ test("a plan's Sky tab shades the sky its rig can shoot, for the month and the y
     await tab.getByRole('radio', { name: 'Flat' }).click();
     await tab.getByRole('radio', { name: 'Now' }).click();
     await expect(legend).toContainText('31 nights');
-    expect(posts).toHaveLength(2);
+    expect(pictures()).toHaveLength(2);
 
     // A longer minimum, typed a key at a time, is asked for once.
     await tab.getByLabel('Minimum minutes').click();
     await tab.getByLabel('Minimum minutes').press('ControlOrMeta+a');
     await tab.getByLabel('Minimum minutes').pressSequentially('240', { delay: 60 });
     await expect(legend).toContainText('in view 4 h or more', { timeout: 60_000 });
-    expect(posts.slice(2).map(body => body.minimum_minutes)).toEqual([240]);
+    expect(pictures().slice(2).map(body => body.minimum_minutes)).toEqual([240]);
     await tab.getByRole('button', { name: "Use rig's 30 min" }).click();
     await expect(legend).toContainText('in view 30 min or more');
     // Nothing is fetched again while the tab sits open.
@@ -139,7 +148,8 @@ test("a plan's Sky tab shades the sky its rig can shoot, for the month and the y
     const box = (await map.boundingBox())!;
     await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.3);
     const card = tab.getByRole('group', { name: 'Picked place' });
-    await expect(card).toContainText(/In view on \d+ of the next 31 nights\./);
+    // Whatever the date, the place is counted for itself and placed among the lines.
+    await expect(card).toContainText(/In view on \d+ of the 31 nights counted\. (Inside the every-night line|Between the lines: in view on some nights|Outside both lines: never in view for long enough)\./);
     await expect(tab.locator('.sky-mark-pick')).toHaveCount(1);
     const pickedName = (await card.locator('strong').textContent())!;
     expect(pickedName).toMatch(/^\d+h \d+m, [+−]\d+° \d+′$/);

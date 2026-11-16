@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { SKY_INPUTS_MUTATION } from './skyInputs';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { Check, ChevronDown, ChevronRight, CloudDownload, Plus } from 'lucide-react';
@@ -129,6 +130,7 @@ function SiteProfileCard({ site, focusForecast = false }: { site: DirectorIdenti
   // next Save starts from it rather than renaming again and conflicting.
   const renamed = useRef<DirectorIdentity | null>(null);
   const save = useMutation({
+    mutationKey: SKY_INPUTS_MUTATION,
     retry: false,
     mutationFn: async ({ view, next }: { view: DirectorSiteProfileView; next: SiteForm }) => {
       const [lat, lon, elev] = [next.latitude, next.longitude, next.elevation].map(num);

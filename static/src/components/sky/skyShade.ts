@@ -1,4 +1,4 @@
-import { unprojectPoint, type PathScale, type SkyView } from '../../utils/skyProjection';
+import { unprojectPoint, wrap360, type PathScale, type SkyView } from '../../utils/skyProjection';
 
 /**
  * On how many nights each part of the sky is in view: one count for each
@@ -32,7 +32,7 @@ export function unpackCounts(base64: string, nights: number, columns: number, ro
  * poles.
  */
 export function countAt(sky: SkyCounts, raDeg: number, decDeg: number): number {
-  const across = ((((raDeg % 360) + 360) % 360) / 360) * sky.columns;
+  const across = (wrap360(raDeg) / 360) * sky.columns;
   const up = Math.min(sky.rows - 1, Math.max(0, ((decDeg + 90) / 180) * (sky.rows - 1)));
   const col = Math.floor(across);
   const row = Math.min(sky.rows - 2, Math.floor(up));
@@ -42,13 +42,6 @@ export function countAt(sky: SkyCounts, raDeg: number, decDeg: number): number {
   const low = at(col, row) * (1 - fx) + at(col + 1, row) * fx;
   const high = at(col, row + 1) * (1 - fx) + at(col + 1, row + 1) * fx;
   return low * (1 - fy) + high * fy;
-}
-
-/** The count at the node nearest a place: a whole number of nights. */
-export function nightsAt(sky: SkyCounts, raDeg: number, decDeg: number): number {
-  const col = Math.round(((((raDeg % 360) + 360) % 360) / 360) * sky.columns) % sky.columns;
-  const row = Math.min(sky.rows - 1, Math.max(0, Math.round(((decDeg + 90) / 180) * (sky.rows - 1))));
-  return sky.counts[row * sky.columns + col];
 }
 
 /**
@@ -82,10 +75,10 @@ export function shadeRaster(sky: SkyCounts, view: SkyView, at: PathScale, mapWid
 
 /**
  * [`shadeRaster`] as an image address for the map to draw, or null where
- * there is no canvas to paint on, as under the unit tests.
+ * there is no canvas to paint on.
  */
 export function shadeImage(sky: SkyCounts, view: SkyView, at: PathScale, mapWidth: number, width: number, height: number): string | null {
-  if (typeof document === 'undefined' || (typeof navigator !== 'undefined' && /jsdom/i.test(navigator.userAgent))) return null;
+  if (typeof document === 'undefined') return null;
   try {
     const canvas = document.createElement('canvas');
     canvas.width = width;

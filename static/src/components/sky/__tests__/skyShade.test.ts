@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { projectPoint, unprojectPoint, type PathScale, type SkyView } from '../../../utils/skyProjection';
-import { countAt, nightsAt, shadeImage, shadeRaster, unpackCounts, type SkyCounts } from '../skyShade';
+import { countAt, shadeImage, shadeRaster, unpackCounts, type SkyCounts } from '../skyShade';
 
 const AT: PathScale = { cx: 500, cy: 270, scale: 236 };
 const VIEWS: SkyView[] = [
@@ -64,12 +64,10 @@ describe('the counts', () => {
     expect(unpackCounts(packed, 0, 3, 2)).toBeNull();
   });
 
-  it('reads a place at its nearest node, and between nodes for the shading', () => {
-    const sky = grid((ra, dec) => (dec >= 0 ? 31 : 0) + (ra === 0 && dec === -90 ? 7 : 0), 31);
-    expect(nightsAt(sky, 123, 0.9)).toBe(31);
-    expect(nightsAt(sky, 123, -1.1)).toBe(0);
-    expect(nightsAt(sky, 359.5, 40)).toBe(31);
-    expect(nightsAt(sky, 0, -90)).toBe(7);
+  it('reads a place between the nodes around it, for the shading', () => {
+    const sky = grid((_, dec) => (dec >= 0 ? 31 : 0), 31);
+    expect(countAt(sky, 123, 0)).toBe(31);
+    expect(countAt(sky, 123, -2)).toBe(0);
     // Half way from a node at 0 to one at 31.
     expect(countAt(sky, 50, -1)).toBeCloseTo(15.5, 6);
     expect(countAt(sky, 50, 90)).toBe(31);
@@ -120,7 +118,26 @@ describe('the shading picture', () => {
     expect(pixels[(10 * 200 + 100) * 4]).toBe(255);
   });
 
-  it('has no picture where there is no canvas, and the map still draws', () => {
-    expect(shadeImage(grid(() => 1, 1), VIEWS[0], AT, 1000, 20, 10)).toBeNull();
+  describe('as an image', () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    it('has no picture where a canvas cannot be painted on', () => {
+      vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
+      expect(shadeImage(grid(() => 1, 1), VIEWS[0], AT, 1000, 20, 10)).toBeNull();
+    });
+
+    it('paints the raster on a canvas of its size and hands back its address', () => {
+      const put = vi.fn();
+      const image = { data: new Uint8ClampedArray(20 * 10 * 4) };
+      const context = { createImageData: vi.fn(() => image), putImageData: put } as unknown as CanvasRenderingContext2D;
+      vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(context as never);
+      vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue('data:image/png;base64,AAAA');
+      expect(shadeImage(grid(() => 1, 1), VIEWS[0], AT, 1000, 20, 10)).toBe('data:image/png;base64,AAAA');
+      expect(context.createImageData).toHaveBeenCalledWith(20, 10);
+      expect(put).toHaveBeenCalledWith(image, 0, 0);
+      // The middle of the map is sky, and full: one night of one.
+      expect(image.data[(5 * 20 + 10) * 4 + 3]).toBe(255);
+      expect(image.data[3]).toBe(0);
+    });
   });
 });

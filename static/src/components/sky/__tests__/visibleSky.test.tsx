@@ -1,5 +1,5 @@
 import { fireEvent, render } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DirectorVisibleSky } from '../../../api/directorTypes';
 import { defaultView, projectedPoint, type LonLat, type PathScale, type SkyView } from '../../../utils/skyProjection';
 import { formatNightDate } from '../../nights/nightsModel';
@@ -53,9 +53,12 @@ const view = (over: Partial<DirectorVisibleSky> = {}): DirectorVisibleSky => ({
 describe('the legend', () => {
   it('gives the rig, the minimum time, the nights and the horizon used', () => {
     const [first, last] = [formatNightDate('2026-09-24'), formatNightDate('2026-10-24')];
-    expect(visibleSkyLegend(view(), 'C925')).toBe(`C925: in view 30 min or more · 31 nights, ${first} to ${last} · the site's custom horizon, at least 25°`);
+    // Nights asked for without a date start from tonight at the rig's site.
+    expect(visibleSkyLegend(view(), 'C925')).toBe(`C925: in view 30 min or more · 31 nights from tonight, ${first}, to ${last} · the site's custom horizon, at least 25°`);
+    expect(visibleSkyLegend(view(), 'C925', false)).toBe(`C925: in view 30 min or more · 31 nights ${first} to ${last} · the site's custom horizon, at least 25°`);
+    expect(visibleSkyLegend(view({ nights: nights('2026-09-24', 1, 1) }), 'C925')).toContain(`· tonight, ${first} ·`);
     const year = view({ span: 'year', every_nights: 7, nights: nights('2026-09-24', 53, 7), minimum_minutes: 90, horizon: 'flat', horizon_from: 'none' });
-    expect(visibleSkyLegend(year, 'C925')).toBe(`C925: in view 1 h 30 min or more · one night a week for a year, ${formatNight('2026-09-24')} to ${formatNight('2027-09-23')} · flat horizon at 25°`);
+    expect(visibleSkyLegend(year, 'C925')).toBe(`C925: in view 1 h 30 min or more · one night a week for a year from tonight, ${formatNight('2026-09-24')}, to ${formatNight('2027-09-23')} · flat horizon at 25°`);
     expect(formatMinutes(120)).toBe('2 h');
   });
 
@@ -64,7 +67,7 @@ describe('the legend', () => {
     const never = view({ every_night: { lines: [], sky_fraction: 0, declinations: null } });
     expect(visibleSkyShares(never)).toMatch(/^In view every night: none of the sky\. On at least one night: 62%/);
     expect(visibleSkyShares(view({ any_night: null }))).toBe('In view: 41% of the sky, declination −12° to +90°.');
-    expect(visibleSkySummary(view(), 'C925')).toMatch(/^Map of the sky C925: in view 30 min or more · 31 nights.*In view every night: 41% of the sky/);
+    expect(visibleSkySummary(view(), 'C925')).toMatch(/^Map of the sky C925: in view 30 min or more · 31 nights from tonight.*In view every night: 41% of the sky/);
   });
 
   it('places a count among the lines', () => {
@@ -133,6 +136,8 @@ describe('marks on the visible side', () => {
 });
 
 describe('the map', () => {
+  // No canvas under the tests: the map draws without the shading's picture.
+  beforeEach(() => { vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null); });
   afterEach(() => vi.restoreAllMocks());
   const map = (props: Partial<Parameters<typeof SkyMap>[0]> = {}) => render(<SkyMap frame="equatorial" mode="aitoff" showBackdrop={false} showStacks={false} {...props} />).container;
 
