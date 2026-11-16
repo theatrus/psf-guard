@@ -69,9 +69,6 @@ pub enum TaskNeeds {
         stacking_version: String,
         release: String,
     },
-    /// The one worker with this session, which answers RC-Astro license
-    /// checks: the check is about that machine and its account.
-    LicenseCheck { session: String },
 }
 
 impl TaskNeeds {
@@ -109,8 +106,6 @@ impl TaskNeeds {
                     && offers.stacking_version.as_deref() == Some(stacking_version)
                     && offers.stacking_release.as_deref() == Some(release)
             }
-            // Which session it is, `may_run_queued` checks.
-            TaskNeeds::LicenseCheck { .. } => offers.license_check,
         }
     }
 
@@ -125,7 +120,6 @@ impl TaskNeeds {
                 stacking_version,
                 release,
             } => format!("stacking with PSF Guard {release} and Seiza stacking {stacking_version}"),
-            TaskNeeds::LicenseCheck { .. } => "an RC-Astro license check on its worker".into(),
         }
     }
 }
@@ -435,6 +429,16 @@ impl Default for Timings {
             no_worker_grace: NO_WORKER_GRACE,
         }
     }
+}
+
+/// Which worker a session is: the token it joined with and its name. They
+/// stay the same when the worker registers again.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct WorkerIdentity {
+    pub token_id: String,
+    pub name: String,
+    /// This server's own worker.
+    pub local: bool,
 }
 
 /// One RC-Astro tool on a worker and its local license state.
@@ -1386,9 +1390,9 @@ impl Board {
         Ok(())
     }
 
-    /// Whether the worker with `session` can be asked for an online license
-    /// check: its name and whether it is this server's own, or why not.
-    pub fn license_checkable(&self, session: &str) -> Result<(String, bool), String> {
+    /// The worker with `session`, when it can be asked for an online license
+    /// check, or why it cannot.
+    pub fn license_checkable(&self, session: &str) -> Result<WorkerIdentity, String> {
         let now = Instant::now();
         let inner = self.lock();
         let found = inner
@@ -1396,14 +1400,30 @@ impl Board {
             .get(session)
             .filter(|found| found.online(now))
             .ok_or_else(|| "That worker is not connected".to_string())?;
-        if !found.offers.license_check {
+        if !found.local && !found.offers.license_check {
             return Err(format!(
                 "{} cannot be asked for a license check: it has no rc-astro, or runs a PSF Guard \
                  from before the check. On that computer, run `psf-guard-cli rc-astro license`",
                 found.name
             ));
         }
-        Ok((found.name.clone(), found.local))
+        Ok(WorkerIdentity {
+            token_id: found.token_id.clone(),
+            name: found.name.clone(),
+            local: found.local,
+        })
+    }
+
+    /// The token and name of the worker with `session`. A worker that
+    /// registers again gets a new session and keeps these.
+    pub fn identity_of(&self, session: &str) -> Option<WorkerIdentity> {
+        let inner = self.lock();
+        let found = inner.sessions.get(session)?;
+        Some(WorkerIdentity {
+            token_id: found.token_id.clone(),
+            name: found.name.clone(),
+            local: found.local,
+        })
     }
 
     /// The providers each connected worker offers and may run under the
@@ -1831,17 +1851,7 @@ impl Inner {
     /// rule: this server's worker counts too, since it takes over once the
     /// other workers are gone.
     fn may_run_queued(&self, session: &Session, task: &Task) -> bool {
-        let this_one = match &task.needs {
-            TaskNeeds::LicenseCheck { session: wanted } => self
-                .sessions
-                .get(wanted)
-                // A worker that registers again under its token and name
-                // replaces its session, so the pair is one worker.
-                .is_some_and(|found| found.token_and_name() == session.token_and_name()),
-            _ => true,
-        };
-        this_one
-            && task.needs.met_by(&session.offers)
+        task.needs.met_by(&session.offers)
             && self.placement(task.kind).allows(session.local)
             && !task.refused_by.contains(&session.token_and_name())
     }

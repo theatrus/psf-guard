@@ -7,6 +7,7 @@
 //! so every task this server runs takes the path a remote one does.
 
 pub mod board;
+pub mod license;
 mod local;
 pub mod rc_astro;
 pub mod routes;
@@ -40,6 +41,8 @@ pub struct Workers {
     local_offers: Mutex<Option<(Instant, Offers, Option<String>)>>,
     /// Finds the tools installed on this server.
     tools: RwLock<ToolSource>,
+    /// The RC-Astro license checks people started.
+    pub license_checks: Arc<license::LicenseChecks>,
 }
 
 /// Finds the tools installed on this server: [`local_tools`], or a test's
@@ -61,6 +64,7 @@ impl Workers {
             local: OnceLock::new(),
             local_offers: Mutex::new(None),
             tools: RwLock::new(Arc::new(local_tools)),
+            license_checks: Arc::default(),
         }
     }
 }

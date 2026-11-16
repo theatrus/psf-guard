@@ -407,6 +407,46 @@ impl Client {
             .map_err(|error| ClientError::Other(format!("The task could not be read: {error}")))
     }
 
+    /// Ask the server for a side request: something a person asked this
+    /// worker for that is not work for a slot.
+    async fn side_request(
+        &self,
+        session: &str,
+        poll: Duration,
+    ) -> Result<Option<crate::remote_work::protocol::SideRequest>, ClientError> {
+        let response = self
+            .send(
+                self.request(reqwest::Method::POST, &format!("/sessions/{session}/side"))
+                    .timeout(poll + Duration::from_secs(30)),
+            )
+            .await?;
+        if response.status() == StatusCode::NO_CONTENT {
+            return Ok(None);
+        }
+        response
+            .json()
+            .await
+            .map(Some)
+            .map_err(|error| ClientError::Other(format!("The request could not be read: {error}")))
+    }
+
+    async fn side_answer(
+        &self,
+        session: &str,
+        id: &str,
+        answer: &crate::remote_work::protocol::SideAnswer,
+    ) -> Result<(), ClientError> {
+        self.send(
+            self.request(
+                reqwest::Method::POST,
+                &format!("/sessions/{session}/side/{id}"),
+            )
+            .json(answer),
+        )
+        .await
+        .map(|_| ())
+    }
+
     async fn leave(&self, session: &str) {
         let _ = self
             .send(
@@ -755,6 +795,12 @@ pub async fn serve(options: WorkerOptions, shutdown: impl Future<Output = ()>) -
         for _ in 0..joined.options.slots {
             slots.spawn(run_slot(Arc::clone(&joined), stop_receiver.clone()));
         }
+        // Side requests are answered on a connection of their own, so a
+        // worker with every slot busy still answers one.
+        let side = tokio::spawn(answer_side_requests(
+            Arc::clone(&joined),
+            stop_receiver.clone(),
+        ));
         let mut shutting_down = false;
         let mut ended = None;
         loop {
@@ -777,6 +823,8 @@ pub async fn serve(options: WorkerOptions, shutdown: impl Future<Output = ()>) -
                 },
             }
         }
+        side.abort();
+        let _ = side.await;
         let joined = Arc::into_inner(joined).expect("every slot has ended");
         if shutting_down {
             joined.client.leave(&joined.session).await;
@@ -789,6 +837,81 @@ pub async fn serve(options: WorkerOptions, shutdown: impl Future<Output = ()>) -
         control.update(|status| status.connection = control::Connection::Connecting);
         client = Some(joined.client);
         options = Some(joined.options);
+    }
+}
+
+/// Answer the server's side requests until the worker stops or the server
+/// has no such route. A server from before side requests answers `404`,
+/// as a server that forgot the session does; either way this ends, and a
+/// worker that joins again starts it anew.
+async fn answer_side_requests(
+    joined: Arc<Joined>,
+    mut stopping: tokio::sync::watch::Receiver<bool>,
+) {
+    use crate::remote_work::protocol::{SideAnswer, SideKind};
+    let refused = |error: String| SideAnswer {
+        result: serde_json::Value::Null,
+        error: Some(error),
+    };
+    let mut backoff = Duration::from_secs(1);
+    loop {
+        if *stopping.borrow() {
+            return;
+        }
+        let asked = tokio::select! {
+            _ = stopping.changed() => return,
+            asked = joined.client.side_request(&joined.session, joined.poll) => asked,
+        };
+        let request = match asked {
+            Ok(Some(request)) => request,
+            Ok(None) => {
+                backoff = Duration::from_secs(1);
+                continue;
+            }
+            Err(ClientError::UnknownSession | ClientError::Denied(_)) => return,
+            Err(_) => {
+                tokio::select! {
+                    _ = stopping.changed() => return,
+                    () = tokio::time::sleep(backoff) => {}
+                }
+                backoff = (backoff * 2).min(MAX_BACKOFF);
+                continue;
+            }
+        };
+        let answer = match request.kind {
+            SideKind::RcAstroLicense => match joined.options.tools.rc_astro.clone() {
+                Some(cli) => {
+                    tracing::info!("Checking the RC-Astro license, as the server asked");
+                    let checked = tokio::task::spawn_blocking(move || {
+                        crate::remote_work::rc_astro::check_license(
+                            &cli,
+                            crate::remote_work::rc_astro::LICENSE_CHECK_LIMIT,
+                            &|| false,
+                        )
+                    })
+                    .await;
+                    match checked.map(serde_json::to_value) {
+                        Ok(Ok(result)) => SideAnswer {
+                            result,
+                            error: None,
+                        },
+                        Ok(Err(error)) => refused(error.to_string()),
+                        Err(error) => refused(format!("the check stopped unexpectedly: {error}")),
+                    }
+                }
+                None => refused("rc-astro is not installed on this worker".into()),
+            },
+            SideKind::Unknown => {
+                refused("this worker's PSF Guard does not know that request".into())
+            }
+        };
+        if let Err(error) = joined
+            .client
+            .side_answer(&joined.session, &request.id, &answer)
+            .await
+        {
+            tracing::warn!("The answer to the server's request was not delivered: {error}");
+        }
     }
 }
 

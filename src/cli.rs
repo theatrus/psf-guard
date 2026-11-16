@@ -45,6 +45,10 @@ pub enum NoiseModelAction {
 pub enum RcAstroAction {
     /// Show RC-Astro's account and license state on this computer. This
     /// makes one online check with RC-Astro, as the account you run it as.
+    ///
+    /// Exits 0 when RC-Astro gave a report with no error, 77 when RC-Astro
+    /// reported an error such as a refusal or no connection, and 1 when
+    /// rc-astro could not be started, took too long or printed no report.
     License {
         /// Print the report as JSON.
         #[arg(long)]

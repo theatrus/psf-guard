@@ -21,6 +21,7 @@ use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
 
 use super::board::{QueuedSummary, Refusal, SessionSummary, WorkPlacement, POLL};
+use super::license;
 use crate::remote_work::protocol::{
     valid_file_name, Completion, Failure, ProbeAnswer, Progress, Registered, Registration,
     TaskKind, DIGEST_HEADER, FRAMES_HEADER, LEASE_HEADER, PROTOCOL_VERSION,
@@ -46,6 +47,8 @@ pub fn worker_routes() -> Router<Arc<AppState>> {
         .route("/register", post(register))
         .route("/sessions/{session}/probe", post(answer_probe))
         .route("/sessions/{session}/claim", post(claim))
+        .route("/sessions/{session}/side", post(side_request))
+        .route("/sessions/{session}/side/{id}", post(side_answer))
         .route("/sessions/{session}/leave", post(leave))
         .route(
             "/sessions/{session}/tasks/{task}/progress",
@@ -79,53 +82,94 @@ pub fn settings_routes() -> Router<Arc<AppState>> {
         .route("/workers/tokens/{id}", delete(revoke_token))
         .route("/workers/exchange", put(set_exchange))
         .route("/workers/placement", put(set_placement))
+        .route("/tools/rc-astro/license-check", post(start_license_check))
+        .route("/tools/rc-astro/license-check/{key}", get(license_check))
         .route(
-            "/workers/{session}/license-check",
-            post(check_worker_license),
+            "/tools/rc-astro/license-check/{key}/stop",
+            post(stop_license_check),
         )
-        .route("/tools/rc-astro/license-check", post(check_license))
+}
+
+/// The report holds the RC-Astro account's address, so a license check is
+/// for accounts that may write: the auth layer already refuses a read-only
+/// account's POST, and this covers the GET that reads the result.
+fn require_writer(access: &RequestAccess) -> Result<(), AppError> {
+    if access.role != AccessRole::ReadWrite {
+        return Err(AppError::Forbidden(
+            "An RC-Astro license check needs read-write access".into(),
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct StartLicenseCheck {
+    /// The session of the worker to ask; absent checks this server.
+    #[serde(default)]
+    worker: Option<String>,
 }
 
 /// POST /api/tools/rc-astro/license-check
 ///
-/// RC-Astro's account status on this server, checked online because a
-/// person asked. The check is one short rc-astro run with a time limit, so
-/// it runs off the async runtime and answers in the request; it is not a
-/// tracked job. The account's address goes only to a caller who may write.
-async fn check_license(
+/// Start an online check of RC-Astro's account status, on this server or,
+/// with `worker`, on one connected worker, and return at once with the
+/// check's state. While a check for that computer runs, this returns the
+/// running one: no second online check is made. Read the result with the
+/// GET below.
+async fn start_license_check(
     State(state): State<Arc<AppState>>,
     Extension(access): Extension<RequestAccess>,
-) -> Result<Json<ApiResponse<crate::remote_work::rc_astro::LicenseCheck>>, AppError> {
-    let checked = Arc::clone(&state);
-    let check = tokio::task::spawn_blocking(move || checked.workers.check_local_license())
-        .await
-        .map_err(|error| AppError::InternalError(format!("License check failed: {error}")))?
-        .map_err(AppError::BadRequest)?;
-    Ok(Json(ApiResponse::success(
-        if access.role == AccessRole::ReadWrite {
-            check
-        } else {
-            check.without_addresses()
-        },
-    )))
+    Json(request): Json<StartLicenseCheck>,
+) -> Result<Json<ApiResponse<license::CheckStatus>>, AppError> {
+    require_writer(&access)?;
+    let checks = &state.workers.license_checks;
+    let status = match request.worker {
+        None => checks.start_local(&state),
+        Some(session) => {
+            // Which worker's files and accounts are looked at is for the
+            // people who run the server.
+            require_operator(&state, &access)?;
+            let worker = state
+                .workers
+                .board
+                .license_checkable(&session)
+                .map_err(AppError::BadRequest)?;
+            if worker.local {
+                checks.start_local(&state)
+            } else {
+                checks.start_worker(worker)
+            }
+        }
+    };
+    Ok(Json(ApiResponse::success(status)))
 }
 
-/// POST /api/workers/{session}/license-check
-///
-/// The same check, made by one connected worker as the account it runs
-/// under.
-async fn check_worker_license(
+/// GET /api/tools/rc-astro/license-check/{key}: a check's state, and its
+/// report once it has ended.
+async fn license_check(
     State(state): State<Arc<AppState>>,
     Extension(access): Extension<RequestAccess>,
-    Path(session): Path<String>,
-) -> Result<Json<ApiResponse<crate::remote_work::rc_astro::LicenseCheck>>, AppError> {
-    require_operator(&state, &access)?;
-    let checked = Arc::clone(&state);
-    let check = tokio::task::spawn_blocking(move || checked.workers.check_worker_license(&session))
-        .await
-        .map_err(|error| AppError::InternalError(format!("License check failed: {error}")))?
-        .map_err(AppError::BadRequest)?;
-    Ok(Json(ApiResponse::success(check)))
+    Path(key): Path<String>,
+) -> Result<Json<ApiResponse<license::CheckStatus>>, AppError> {
+    require_writer(&access)?;
+    state
+        .workers
+        .license_checks
+        .status(&key)
+        .map(|status| Json(ApiResponse::success(status)))
+        .ok_or(AppError::NotFound)
+}
+
+/// POST /api/tools/rc-astro/license-check/{key}/stop
+async fn stop_license_check(
+    State(state): State<Arc<AppState>>,
+    Extension(access): Extension<RequestAccess>,
+    Path(key): Path<String>,
+) -> Result<Json<ApiResponse<bool>>, AppError> {
+    require_writer(&access)?;
+    Ok(Json(ApiResponse::success(
+        state.workers.license_checks.stop(&key),
+    )))
 }
 
 fn refusal(status: StatusCode, message: impl Into<String>) -> Response {
@@ -264,6 +308,50 @@ async fn claim(
         Ok(None) => StatusCode::NO_CONTENT.into_response(),
         Err(refused) => refused.into_response(),
     }
+}
+
+/// POST /api/workers/v1/sessions/{session}/side: something a person asked
+/// this worker for that is not work for a slot, or `204` once nothing was
+/// asked for the poll time. The worker asks on a connection of its own, so
+/// a worker with every slot busy still answers.
+async fn side_request(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(session): Path<String>,
+) -> Response {
+    if let Err(response) = session_of_token(&state, &headers, &session) {
+        return response;
+    }
+    let Some(worker) = state.workers.board.identity_of(&session) else {
+        return Refusal::UnknownSession.into_response();
+    };
+    let deadline = tokio::time::Instant::now() + POLL;
+    loop {
+        if let Some(request) = state.workers.license_checks.take_for(&worker) {
+            return Json(request).into_response();
+        }
+        if tokio::time::Instant::now() >= deadline || state.workers.board.is_closed() {
+            return StatusCode::NO_CONTENT.into_response();
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+}
+
+/// POST /api/workers/v1/sessions/{session}/side/{id}: the worker's answer.
+async fn side_answer(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((session, id)): Path<(String, String)>,
+    Json(answer): Json<crate::remote_work::protocol::SideAnswer>,
+) -> Response {
+    if let Err(response) = session_of_token(&state, &headers, &session) {
+        return response;
+    }
+    let Some(worker) = state.workers.board.identity_of(&session) else {
+        return Refusal::UnknownSession.into_response();
+    };
+    state.workers.license_checks.answer(&worker, &id, answer);
+    StatusCode::NO_CONTENT.into_response()
 }
 
 /// POST /api/workers/v1/sessions/{session}/leave

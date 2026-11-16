@@ -79,9 +79,9 @@ pub struct Offers {
     /// The rc-astro the worker found, for Settings › Workers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rc_astro_path: Option<String>,
-    /// Whether the worker answers [`TaskKind::RcAstroLicense`]: it has
-    /// rc-astro and is new enough to know the task. `work` does not list
-    /// the kind, so an older server still reads the registration.
+    /// Whether the worker asks the server for side requests, such as an
+    /// RC-Astro license check, and has rc-astro to answer one. A worker
+    /// from before side requests lacks the field and is never asked.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub license_check: bool,
 }
@@ -195,12 +195,6 @@ pub enum TaskKind {
     RcAstroStep,
     /// One channel of a stack build: its frames integrated into a stack.
     StackChannel,
-    /// RC-Astro's account status on the worker, checked online because a
-    /// person asked: `rc-astro license --json`, run as the worker's
-    /// account. The result is a
-    /// [`crate::remote_work::rc_astro::LicenseCheck`]. Sent only to the
-    /// worker it is about, and only to one that offers `license_check`.
-    RcAstroLicense,
     /// One provider's step over one image: an RC-Astro tool or one of
     /// Seiza's models. See [`crate::remote_work::steps`]. A worker older
     /// than providers is sent an RC-Astro provider's step as
@@ -396,4 +390,41 @@ mod tests {
             assert!(!valid_file_name(name), "{name}");
         }
     }
+}
+
+/// `POST /api/workers/v1/sessions/{session}/side`: something a person asked
+/// this worker for that is not work for a slot, answered with `200`. `204`
+/// means nothing was asked within the poll time. A worker asks on a
+/// connection of its own, so a worker with every slot busy still answers.
+/// A server from before side requests answers `404`, and the worker stops
+/// asking.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SideRequest {
+    pub id: String,
+    pub kind: SideKind,
+}
+
+/// What a side request asks for. A kind a worker does not know is answered
+/// with a refusal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SideKind {
+    /// RC-Astro's account status, checked online: `rc-astro license
+    /// --json`, run as the worker's account. The answer is a
+    /// [`crate::remote_work::rc_astro::LicenseCheck`].
+    RcAstroLicense,
+    /// A kind from a later server.
+    #[serde(other)]
+    Unknown,
+}
+
+/// `POST /api/workers/v1/sessions/{session}/side/{id}`: the worker's answer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SideAnswer {
+    /// The answer, as the request's kind defines it.
+    #[serde(default)]
+    pub result: serde_json::Value,
+    /// Why the worker could not answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }

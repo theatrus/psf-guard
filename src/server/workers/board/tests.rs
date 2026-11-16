@@ -1425,28 +1425,18 @@ fn a_person_s_step_takes_this_server_s_worker_from_automatic_work() {
 }
 
 #[test]
-fn a_license_check_goes_to_the_worker_it_is_about_and_an_older_worker_cannot_be_asked() {
+fn a_worker_s_row_shows_its_rc_astro_and_an_older_worker_cannot_be_asked() {
     let dir = tempfile::tempdir().unwrap();
     let board = board(dir.path(), Timings::default());
-    let checks = |path: &str| Offers {
-        rc_astro_path: Some(path.into()),
-        license_check: true,
-        ..step_offers(vec![schema("nxt", "2.6.6", false)])
-    };
     let studio = board.register(
         "a",
         registration(
             "studio",
-            checks("C:\\RC-Astro\\rc-astro.exe"),
-            FileAccess::default(),
-        ),
-        false,
-    );
-    let attic = board.register(
-        "b",
-        registration(
-            "attic",
-            checks("/opt/rc-astro/rc-astro"),
+            Offers {
+                rc_astro_path: Some("C:\\RC-Astro\\rc-astro.exe".into()),
+                license_check: true,
+                ..step_offers(vec![schema("nxt", "2.6.6", false)])
+            },
             FileAccess::default(),
         ),
         false,
@@ -1457,9 +1447,10 @@ fn a_license_check_goes_to_the_worker_it_is_about_and_an_older_worker_cannot_be_
         registration("old", offers(&[("nxt", "2.6.6")]), FileAccess::default()),
         false,
     );
+    let asked = board.license_checkable(&studio).unwrap();
     assert_eq!(
-        board.license_checkable(&attic).unwrap(),
-        ("attic".to_string(), false)
+        (asked.token_id.as_str(), asked.name.as_str()),
+        ("a", "studio")
     );
     let refused = board.license_checkable(&old).unwrap_err();
     assert!(
@@ -1467,26 +1458,6 @@ fn a_license_check_goes_to_the_worker_it_is_about_and_an_older_worker_cannot_be_
         "{refused}"
     );
     assert!(board.license_checkable("gone").is_err());
-
-    let ticket = board.ticket().unwrap();
-    ticket
-        .submit(NewTask {
-            kind: TaskKind::RcAstroLicense,
-            ..task(
-                "license",
-                true,
-                TaskNeeds::LicenseCheck {
-                    session: attic.clone(),
-                },
-            )
-        })
-        .unwrap();
-    // Another worker that could answer a check of its own is not sent this
-    // one: the report is about one machine and its account.
-    assert!(board.try_claim(&studio).unwrap().is_none());
-    assert!(board.try_claim(&old).unwrap().is_none());
-    let sent = board.try_claim(&attic).unwrap().unwrap();
-    assert_eq!(sent.kind, TaskKind::RcAstroLicense);
 
     // Settings › Workers shows where each worker found rc-astro and what
     // each tool says of its license, with no online check.
@@ -1502,7 +1473,6 @@ fn a_license_check_goes_to_the_worker_it_is_about_and_an_older_worker_cannot_be_
     assert!(row.license_check);
     assert_eq!(row.rc_astro_tools.len(), 1);
     assert!(!row.rc_astro_tools[0].licensed);
-    assert_eq!(row.rc_astro_tools[0].name, "RC-Astro nxt");
     let row = sessions.iter().find(|found| found.name == "old").unwrap();
     assert!(!row.license_check);
     assert_eq!(row.rc_astro_path, None);

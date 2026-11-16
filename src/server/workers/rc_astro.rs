@@ -273,67 +273,6 @@ pub(crate) fn run_on_board(
     })
 }
 
-/// How long the server waits for a worker to answer a license check: the
-/// check's own limit, and time for the worker to claim the task.
-const WORKER_LICENSE_LIMIT: std::time::Duration = std::time::Duration::from_secs(
-    crate::remote_work::rc_astro::LICENSE_CHECK_LIMIT.as_secs() + 30,
-);
-
-impl Workers {
-    /// RC-Astro's account status on this server, checked online now. Runs
-    /// `rc-astro license --json` once, so call it only when a person asks.
-    /// Blocks for as long as rc-astro takes, up to its limit.
-    pub fn check_local_license(
-        &self,
-    ) -> Result<crate::remote_work::rc_astro::LicenseCheck, String> {
-        let cli = crate::remote_work::rc_astro::locate(None).ok_or_else(|| {
-            format!(
-                "rc-astro was not found on this server (looked in {})",
-                crate::remote_work::rc_astro::searched_places()
-            )
-        })?;
-        Ok(crate::remote_work::rc_astro::check_license(
-            cli.executable(),
-            crate::remote_work::rc_astro::LICENSE_CHECK_LIMIT,
-        ))
-    }
-
-    /// RC-Astro's account status on one connected worker, checked online
-    /// now by that worker, as the account it runs under. Blocks until the
-    /// worker answers.
-    pub fn check_worker_license(
-        &self,
-        session: &str,
-    ) -> Result<crate::remote_work::rc_astro::LicenseCheck, String> {
-        let (name, local) = self.board.license_checkable(session)?;
-        if local {
-            return self.check_local_license();
-        }
-        let ticket = self.board.ticket()?;
-        ticket.submit(NewTask {
-            kind: TaskKind::RcAstroLicense,
-            label: format!("RC-Astro license check on {name}"),
-            person: true,
-            needs: TaskNeeds::LicenseCheck {
-                session: session.to_string(),
-            },
-            spec: serde_json::json!({}),
-            inputs: Vec::new(),
-            // A task has an output folder; the report is its result.
-            outputs: vec![("report.json".into(), false)],
-        })?;
-        let began = std::time::Instant::now();
-        let finished = ticket
-            .wait(&|| began.elapsed() >= WORKER_LICENSE_LIMIT, &mut |_, _| {})
-            .map_err(|error| match error {
-                WaitError::Stopped => format!("{name} did not answer the license check"),
-                WaitError::Failed(message) => message,
-            })?;
-        serde_json::from_value(finished.result)
-            .map_err(|error| format!("{name} sent back a report that could not be read: {error}"))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

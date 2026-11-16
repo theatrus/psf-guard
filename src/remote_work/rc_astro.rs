@@ -61,7 +61,7 @@ pub fn locate(executable: Option<&Path>) -> Option<RcAstroCli> {
                 .map(RcAstroCli::with_executable)
         }),
     };
-    located.map(|cli| cli.with_host(format!("psf-guard-{}", env!("CARGO_PKG_VERSION"))))
+    located.map(|cli| cli.with_host(host_identity()))
 }
 
 /// Whether `PSF_GUARD_RC_ASTRO=off` leaves rc-astro to the connected
@@ -265,22 +265,21 @@ pub struct LicenseCheck {
     pub cli_version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub report: Option<LicenseReport>,
-    /// Why there is no report, or what RC-Astro refused, as it said it.
+    /// What RC-Astro itself reported as an error, in its words: a refusal,
+    /// or that it could not reach its server.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Why PSF Guard got no answer from rc-astro, in PSF Guard's words:
+    /// it could not be started, it ended without a report, it took too
+    /// long, or it is too old to have the check.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<String>,
 }
 
 impl LicenseCheck {
-    /// The check without the addresses of the RC-Astro account, for a
-    /// reader who may not see them.
-    pub fn without_addresses(mut self) -> Self {
-        if let Some(report) = &mut self.report {
-            report.account_email = report.account_email.take().map(|_| "(hidden)".into());
-            for product in &mut report.products {
-                product.email = None;
-            }
-        }
-        self
+    /// Whether the check gave a report and RC-Astro reported no error.
+    pub fn succeeded(&self) -> bool {
+        self.report.is_some() && self.error.is_none() && self.failure.is_none()
     }
 }
 
@@ -359,41 +358,94 @@ pub fn parse_license_stream(executable: &str, stdout: &str) -> LicenseCheck {
         && check.error.is_none()
         && schema_version.is_some_and(|version| version < LICENSE_COMMAND_SCHEMA)
     {
-        check.error = Some(TOO_OLD.into());
+        check.failure = Some(TOO_OLD.into());
     }
     check
 }
 
-/// The message for an rc-astro from before the account system.
-const TOO_OLD: &str = "The installed rc-astro is too old for the account check. \
-     Update RC-Astro's tools; the license state each tool reports still shows";
+/// The message for an rc-astro from before RC-Astro's account system.
+const TOO_OLD: &str =
+    "The installed rc-astro is too old for the account check. Update RC-Astro's tools.";
+
+/// How PSF Guard identifies itself to rc-astro, on every run.
+pub fn host_identity() -> String {
+    format!("psf-guard-{}", env!("CARGO_PKG_VERSION"))
+}
+
+/// A process for `executable` that opens no console window on Windows, as a
+/// worker in the tray or a service needs.
+fn quiet_command(executable: &Path) -> std::process::Command {
+    #[allow(unused_mut)]
+    let mut command = std::process::Command::new(executable);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    command
+}
+
+/// Whether rc-astro's plain-text complaint is that it does not know the
+/// `license` command, as a CLI from before the account system says.
+fn rejects_license_command(stderr: &str) -> bool {
+    let said = stderr.to_ascii_lowercase();
+    said.contains("license")
+        && [
+            "not expected",
+            "unknown",
+            "unrecognized",
+            "invalid",
+            "no such",
+        ]
+        .iter()
+        .any(|phrase| said.contains(phrase))
+}
 
 /// Run `rc-astro license --json` once and read its report. It makes an
 /// online check, so run it only when a person asks. No retries: an offline
-/// computer answers with RC-Astro's own error. A run past `limit` is
-/// killed.
-pub fn check_license(executable: &Path, limit: std::time::Duration) -> LicenseCheck {
+/// computer answers with RC-Astro's own error. A run past `limit`, or one
+/// `stop` ends, is killed.
+///
+/// `seiza_stacking::RcAstroCli` has no way to run a command of its own
+/// choosing, so this builds the process itself, with the host identity
+/// [`locate`] gives the CLI and the no-window flag Seiza uses. The
+/// follow-up is a `license` method on `RcAstroCli`, which would own the
+/// process, the version event and the schema rule.
+pub fn check_license(
+    cli: &RcAstroCli,
+    limit: std::time::Duration,
+    stop: &dyn Fn() -> bool,
+) -> LicenseCheck {
+    let executable = cli.executable();
     let shown = executable.display().to_string();
-    let failed = |error: String| LicenseCheck {
+    let failed = |failure: String| LicenseCheck {
         executable: shown.clone(),
-        error: Some(error),
+        failure: Some(failure),
         ..Default::default()
     };
-    let mut command = std::process::Command::new(executable);
+    // The contract version, from a tool's local document: no network. It
+    // says whether this CLI has the command at all, and whether it takes
+    // `--host`.
+    let schema_version = TOOLS
+        .iter()
+        .find_map(|tool| cli.tool_schema(tool).ok())
+        .map(|schema| u64::from(schema.schema_version));
+    if schema_version.is_some_and(|version| version < LICENSE_COMMAND_SCHEMA) {
+        return failed(TOO_OLD.into());
+    }
+    let mut command = quiet_command(executable);
+    command.args(["license", "--json"]);
+    if schema_version.is_some_and(|version| version >= 6) {
+        command.arg("--host").arg(host_identity());
+    }
     command
-        .args(["license", "--json"])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
-    #[cfg(windows)]
-    {
-        // No console window for a worker in the tray.
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x0800_0000);
-    }
     let mut child = match command.spawn() {
         Ok(child) => child,
-        Err(error) => return failed(format!("rc-astro could not be started: {error}")),
+        Err(error) => return failed(format!("PSF Guard could not start {shown}: {error}.")),
     };
     // The report is a few lines, well inside a pipe's buffer, so it is read
     // once the process has ended.
@@ -401,16 +453,22 @@ pub fn check_license(executable: &Path, limit: std::time::Duration) -> LicenseCh
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
+            Ok(None) if stop() => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return failed("The license check was stopped.".into());
+            }
             Ok(None) if began.elapsed() >= limit => {
                 let _ = child.kill();
                 let _ = child.wait();
                 return failed(format!(
-                    "rc-astro did not answer the license check within {} seconds",
+                    "rc-astro did not answer the license check within {} seconds, so PSF Guard \
+                     stopped it.",
                     limit.as_secs()
                 ));
             }
             Ok(None) => std::thread::sleep(std::time::Duration::from_millis(50)),
-            Err(error) => return failed(format!("Waiting for rc-astro: {error}")),
+            Err(error) => return failed(format!("PSF Guard lost track of rc-astro: {error}.")),
         }
     };
     let read = |pipe: Option<&mut dyn std::io::Read>| {
@@ -433,17 +491,27 @@ pub fn check_license(executable: &Path, limit: std::time::Duration) -> LicenseCh
             .map(|pipe| pipe as &mut dyn std::io::Read),
     );
     let mut check = parse_license_stream(&shown, &stdout);
-    if check.report.is_none() && check.error.is_none() {
-        // An rc-astro from before the account system does not know the
-        // command, and says so in plain text.
-        check.error = Some(if status.success() {
-            "rc-astro printed no license report".to_string()
+    if check.report.is_none() && check.error.is_none() && check.failure.is_none() {
+        // rc-astro printed neither a report nor an error event. Only a CLI
+        // that turns the command down is too old; anything else is its own
+        // failure, such as a library it could not load, and is reported as
+        // that.
+        let said: Vec<&str> = stderr
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .take(3)
+            .collect();
+        check.failure = Some(if !status.success() && rejects_license_command(&stderr) {
+            TOO_OLD.to_string()
         } else {
-            let said = stderr.lines().find(|line| !line.trim().is_empty());
             format!(
-                "{TOO_OLD}{}",
-                said.map(|line| format!(" (rc-astro: {})", line.trim()))
-                    .unwrap_or_default()
+                "rc-astro ended ({status}) without a license report{}",
+                if said.is_empty() {
+                    " and printed nothing.".to_string()
+                } else {
+                    format!(". It printed: {}", said.join(" | "))
+                }
             )
         });
     }
@@ -567,10 +635,6 @@ mod license_tests {
             (report.products[3].used, report.products[3].limit),
             (Some(3), Some(3))
         );
-        // A reader who may not see the account gets the report without it.
-        let hidden = serde_json::to_string(&check.without_addresses()).unwrap();
-        assert!(!hidden.contains("example.com"), "{hidden}");
-        assert!(hidden.contains("ann@studio"));
     }
 
     #[test]
@@ -657,71 +721,149 @@ mod license_tests {
             r#"{"event":"info","topic":"version","cliVersion":"2.5.0","schemaVersion":4}"#,
         );
         assert_eq!(check.report, None);
-        assert!(check.error.unwrap().contains("too old"));
+        assert_eq!(check.error, None);
+        assert!(check.failure.unwrap().contains("too old"));
     }
 
+    /// A stand-in rc-astro. `schema` is the contract version its tools'
+    /// documents give, or `None` for one whose documents cannot be read;
+    /// `license` is what it does when asked for the license report.
     #[cfg(unix)]
-    fn script(folder: &Path, body: &str) -> PathBuf {
+    fn stand_in(folder: &Path, schema: Option<u32>, license: &str) -> RcAstroCli {
         use std::os::unix::fs::PermissionsExt;
         let path = folder.join("rc-astro");
-        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        path
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn the_check_runs_rc_astro_once_and_reads_what_it_printed() {
-        let folder = tempfile::tempdir().unwrap();
-        // The stand-in logs its arguments, prints a report, and exits 77
-        // after an error, as a refusal does.
-        let path = script(
-            folder.path(),
-            &format!(
-                r#"echo "$@" >> "{0}/calls"
-echo '{{"event":"info","topic":"version","cliVersion":"9.9.9-test","schemaVersion":6}}'
-echo '{{"event":"info","topic":"licenseReport","operation":"check","computer":"ann@studio","account":{{"email":"user@example.com"}},"activationUrl":"https://www.rc-astro.com/account","licenseStatus":[{{"product":"nxt","name":"NoiseXTerminator","status":"permanent","message":"Permanent license"}}]}}'
-echo '{{"event":"error","message":"One product refused"}}'
-exit 77"#,
-                folder.path().display()
+        let document = match schema {
+            Some(version) => format!(
+                r#"echo '{{"schemaVersion":{version},"cliVersion":"9.9.9-test","key":"'"$1"'","name":"RC-Astro '"$1"'","mlVersion":4,"parameters":[]}}'; exit 0"#
             ),
+            None => "exit 1".to_string(),
+        };
+        std::fs::write(
+            &path,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" != license ]; then {document}; fi\necho \"$@\" >> \"{}/calls\"\n{license}\n",
+                folder.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        RcAstroCli::with_executable(path)
+    }
+
+    #[cfg(unix)]
+    fn calls(folder: &Path) -> String {
+        std::fs::read_to_string(folder.join("calls")).unwrap_or_default()
+    }
+
+    const NEVER: &dyn Fn() -> bool = &|| false;
+
+    #[cfg(unix)]
+    #[test]
+    fn the_check_runs_rc_astro_once_as_psf_guard_and_reads_what_it_printed() {
+        let folder = tempfile::tempdir().unwrap();
+        // A refusal: a report, then an error, then exit 77.
+        let cli = stand_in(
+            folder.path(),
+            Some(6),
+            r#"echo '{"event":"info","topic":"version","cliVersion":"9.9.9-test","schemaVersion":6}'
+echo '{"event":"info","topic":"licenseReport","operation":"check","computer":"ann@studio","account":{"email":"user@example.com"},"activationUrl":"https://www.rc-astro.com/account","licenseStatus":[{"product":"nxt","name":"NoiseXTerminator","status":"permanent","message":"Permanent license"}]}'
+echo '{"event":"error","message":"One product refused"}'
+exit 77"#,
         );
-        let check = check_license(&path, LICENSE_CHECK_LIMIT);
-        assert_eq!(check.executable, path.display().to_string());
+        let check = check_license(&cli, LICENSE_CHECK_LIMIT, NEVER);
+        assert_eq!(check.executable, cli.executable().display().to_string());
         assert_eq!(check.cli_version.as_deref(), Some("9.9.9-test"));
-        assert_eq!(check.report.unwrap().products[0].product, "nxt");
+        assert_eq!(check.report.as_ref().unwrap().products[0].product, "nxt");
+        // RC-Astro's words are RC-Astro's; PSF Guard adds none of its own.
         assert_eq!(check.error.as_deref(), Some("One product refused"));
-        // One run, the bare check, and no retry after the refusal.
+        assert_eq!(check.failure, None);
+        assert!(!check.succeeded());
+        // One run, no retry after the refusal, with the host identity every
+        // other rc-astro run carries.
         assert_eq!(
-            std::fs::read_to_string(folder.path().join("calls")).unwrap(),
-            "license --json\n"
+            calls(folder.path()),
+            format!("license --json --host {}\n", host_identity())
         );
     }
 
     #[cfg(unix)]
     #[test]
-    fn an_old_rc_astro_a_silent_one_and_a_missing_one_each_explain_themselves() {
+    fn only_an_rc_astro_without_the_command_is_called_too_old() {
+        // A contract before the account system: no online check is made.
         let folder = tempfile::tempdir().unwrap();
-        let old = script(
+        let cli = stand_in(folder.path(), Some(4), "exit 0");
+        let said = check_license(&cli, LICENSE_CHECK_LIMIT, NEVER)
+            .failure
+            .unwrap();
+        assert!(said.contains("too old"), "{said}");
+        assert_eq!(calls(folder.path()), "");
+
+        // Its documents unreadable, and it turns the command down itself.
+        let folder = tempfile::tempdir().unwrap();
+        let cli = stand_in(
             folder.path(),
+            None,
             "echo 'The following argument was not expected: license' >&2; exit 109",
         );
-        let said = check_license(&old, LICENSE_CHECK_LIMIT).error.unwrap();
-        assert!(said.contains("too old"), "{said}");
-        assert!(said.contains("was not expected"), "{said}");
-
-        let slow = script(folder.path(), "sleep 30");
-        let began = std::time::Instant::now();
-        let said = check_license(&slow, std::time::Duration::from_millis(300))
-            .error
+        let said = check_license(&cli, LICENSE_CHECK_LIMIT, NEVER)
+            .failure
             .unwrap();
-        assert!(said.contains("did not answer"), "{said}");
+        assert!(said.contains("too old"), "{said}");
+        // No --host for a CLI whose contract version is unknown.
+        assert_eq!(calls(folder.path()), "license --json\n");
+
+        // A current rc-astro that dies before it prints a report, such as
+        // one that cannot load a library under a service account, is not
+        // too old: its exit status and its own words are reported.
+        let folder = tempfile::tempdir().unwrap();
+        let cli = stand_in(
+            folder.path(),
+            Some(6),
+            "echo 'error while loading shared libraries: libtorch.so' >&2; exit 127",
+        );
+        let check = check_license(&cli, LICENSE_CHECK_LIMIT, NEVER);
+        let said = check.failure.unwrap();
+        assert!(!said.contains("too old"), "{said}");
+        assert!(said.contains("127"), "{said}");
+        assert!(said.contains("libtorch.so"), "{said}");
+        assert_eq!(check.error, None);
+
+        // One that printed its version and then crashed, likewise.
+        let folder = tempfile::tempdir().unwrap();
+        let cli = stand_in(
+            folder.path(),
+            None,
+            r#"echo '{"event":"info","topic":"version","cliVersion":"2.6.10","schemaVersion":6}'; exit 3"#,
+        );
+        let check = check_license(&cli, LICENSE_CHECK_LIMIT, NEVER);
+        let said = check.failure.unwrap();
+        assert!(!said.contains("too old"), "{said}");
+        assert!(said.contains("printed nothing"), "{said}");
+        assert_eq!(check.cli_version.as_deref(), Some("2.6.10"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_slow_a_stopped_and_a_missing_rc_astro_each_fail_in_psf_guard_s_words() {
+        let folder = tempfile::tempdir().unwrap();
+        let slow = stand_in(folder.path(), None, "sleep 30");
+        let began = std::time::Instant::now();
+        let check = check_license(&slow, std::time::Duration::from_millis(300), NEVER);
+        assert!(check.failure.unwrap().contains("did not answer"));
+        assert_eq!(check.error, None);
+        // Stop ends a check under way.
+        let stopped = check_license(&slow, LICENSE_CHECK_LIMIT, &|| true);
+        assert_eq!(
+            stopped.failure.as_deref(),
+            Some("The license check was stopped.")
+        );
         assert!(began.elapsed() < std::time::Duration::from_secs(10));
 
-        let said = check_license(&folder.path().join("nowhere"), LICENSE_CHECK_LIMIT)
-            .error
+        let missing = RcAstroCli::with_executable(folder.path().join("nowhere"));
+        let said = check_license(&missing, LICENSE_CHECK_LIMIT, NEVER)
+            .failure
             .unwrap();
-        assert!(said.contains("could not be started"), "{said}");
+        assert!(said.starts_with("PSF Guard could not start"), "{said}");
     }
 }
 

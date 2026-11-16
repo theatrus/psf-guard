@@ -784,8 +784,6 @@ impl WorkPlacement {
             crate::remote_work::protocol::TaskKind::StackChannel => Self::this_server(),
             crate::remote_work::protocol::TaskKind::RcAstroStep
             | crate::remote_work::protocol::TaskKind::ProcessingStep => Self::default(),
-            // A license check goes to the one machine it is about.
-            crate::remote_work::protocol::TaskKind::RcAstroLicense => Self::default(),
         }
     }
 

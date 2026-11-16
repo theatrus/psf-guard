@@ -17,14 +17,31 @@ pub fn run(action: RcAstroAction) -> Result<()> {
                     rc_astro::searched_places()
                 );
             };
-            let check = rc_astro::check_license(cli.executable(), rc_astro::LICENSE_CHECK_LIMIT);
+            let check = rc_astro::check_license(&cli, rc_astro::LICENSE_CHECK_LIMIT, &|| false);
             if json {
                 println!("{}", serde_json::to_string_pretty(&check)?);
             } else {
                 print!("{}", describe(&check));
             }
+            // A script can tell a clean report from anything else.
+            if !check.succeeded() {
+                std::process::exit(exit_status(&check));
+            }
             Ok(())
         }
+    }
+}
+
+/// The command's exit status: 0 for a report with no error, 77 when
+/// RC-Astro reported an error, as rc-astro itself exits for a licensing
+/// refusal, and 1 when PSF Guard got no answer from rc-astro.
+pub fn exit_status(check: &LicenseCheck) -> i32 {
+    if check.succeeded() {
+        0
+    } else if check.failure.is_none() && check.error.is_some() {
+        77
+    } else {
+        1
     }
 }
 
@@ -62,8 +79,13 @@ pub fn describe(check: &LicenseCheck) -> String {
             }
         }
     }
+    // RC-Astro's words are marked as RC-Astro's; PSF Guard's own failure
+    // to get an answer is said plainly.
     if let Some(error) = &check.error {
         lines.push(format!("RC-Astro reported: {error}"));
+    }
+    if let Some(failure) = &check.failure {
+        lines.push(failure.clone());
     }
     lines.join("\n") + "\n"
 }
@@ -94,5 +116,39 @@ mod tests {
              Run in a terminal: rc-astro license <code>\n\
              RC-Astro reported: No license\n"
         );
+    }
+
+    #[test]
+    fn the_exit_status_tells_a_clean_report_from_a_refusal_and_from_no_answer() {
+        let report = Some(rc_astro::LicenseReport::default());
+        let clean = LicenseCheck {
+            report: report.clone(),
+            ..Default::default()
+        };
+        assert_eq!(exit_status(&clean), 0);
+        // A refusal carries its report and RC-Astro's error.
+        let refused = LicenseCheck {
+            report,
+            error: Some("One product refused".into()),
+            ..Default::default()
+        };
+        assert_eq!(exit_status(&refused), 77);
+        // Offline: RC-Astro's error and no report.
+        let offline = LicenseCheck {
+            error: Some("Could not reach the RC-Astro license server".into()),
+            ..Default::default()
+        };
+        assert_eq!(exit_status(&offline), 77);
+        // rc-astro could not be started, timed out or crashed: PSF Guard's
+        // own words, and never "RC-Astro reported".
+        let failed = LicenseCheck {
+            executable: "/nowhere/rc-astro".into(),
+            failure: Some("PSF Guard could not start /nowhere/rc-astro: not found.".into()),
+            ..Default::default()
+        };
+        assert_eq!(exit_status(&failed), 1);
+        let said = describe(&failed);
+        assert!(!said.contains("RC-Astro reported"), "{said}");
+        assert!(said.ends_with("PSF Guard could not start /nowhere/rc-astro: not found.\n"));
     }
 }
