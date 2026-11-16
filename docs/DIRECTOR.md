@@ -2270,7 +2270,7 @@ estimates for choosing targets and nights, not the rig's dispatch decision.
 ## Sky in view
 
 A plan's **Sky** tab shows where its rig can point for long enough: the
-whole sky, shaded by how many nights each part is in view. Use it to see
+whole sky, with the sky the rig cannot shoot covered. Use it to see
 what a site's horizon leaves you before you choose a target, and to check
 that a target sits in sky the rig can reach.
 
@@ -2309,13 +2309,16 @@ limits come from Rig setup; see [Sites and horizons](#sites-and-horizons).
 
 How to read the map:
 
-- The shading is strongest where the sky is in view on every night
-  counted and fades to nothing where it never is. The scale under the map
-  runs from **No night** to **Every night**.
+- Sky in view on every night counted is clear: the map shows as it is.
+  Sky in view on fewer nights is covered with grey, more heavily the
+  fewer the nights. Sky never in view is covered whole and hatched with
+  diagonal stripes. Stars and names stay faintly readable under the
+  cover. The scale under the map runs from **No night**, the covered
+  end, to **Every night**.
 - The solid line is the edge of the sky in view every night. The dashed
   line is the edge of the sky in view on at least one night. Short marks
   on each line point into the sky in view, so the lines can be read
-  without the shading or its colour.
+  without the cover or its colour.
 - The line of text over the map shows the rig, the minimum time, the
   nights counted, the horizon used, and the share of the sky and the
   declinations inside each line.
@@ -2341,7 +2344,7 @@ and it errs toward too few nights:
   night would draw, and nearly always inside it. At a few points it runs
   up to one grid step (2°) outside, around sky that is out of view on one
   or two nights of the year.
-- The shading and the cards count at most two nights too many. They can
+- The cover and the cards count at most two nights too many. They can
   count too few: about one night in the year on average, and up to 60 at
   a place right on the edge of the sky in view.
 - At high latitudes, where the dark hours come and go within a few weeks,

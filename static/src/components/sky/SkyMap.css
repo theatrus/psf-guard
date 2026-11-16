@@ -307,10 +307,10 @@
   stroke: var(--sky-visible-line-any);
 }
 
-/* How often each part of the sky is in view: a picture whose clearness is
-   the share of nights, tinted here. */
+/* Sky a rig cannot shoot is covered: a picture whose solidness is the
+   share of nights out of view, given the cover's colour here. */
 .sky-visible-shade rect {
-  fill: var(--sky-visible-shade);
+  fill: var(--sky-out-of-view-cover);
 }
 
 /* A plan's target, and a spot picked on the map. */

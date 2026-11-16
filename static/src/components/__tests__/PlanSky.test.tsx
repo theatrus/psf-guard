@@ -110,7 +110,7 @@ describe("the plan's Sky tab", () => {
     expect(container.querySelector('.sky-visible-line.sky-visible-any')?.getAttribute('d')).toMatch(/^M/);
     // The scale and the lines are explained in words.
     const key = screen.getByLabelText('How to read the map');
-    expect(key.textContent).toBe('No nightEvery nightEdge of the sky in view every nightEdge of the sky in view on any nightMarks point into the sky in view.');
+    expect(key.textContent).toBe('No nightEvery nightEdge of the sky in view every nightEdge of the sky in view on any nightMarks point into the sky in view.Covered sky is out of view on some nights. Hatched sky is never in view.');
     // The plan's target is marked, with the nights it is in view.
     expect(container.querySelector('.sky-mark-target')?.getAttribute('data-mark')).toBe('IC 1805');
     expect(screen.getByTestId('plan-sky-target').textContent).toContain('Target: IC 1805');

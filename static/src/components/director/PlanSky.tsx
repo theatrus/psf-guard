@@ -59,8 +59,8 @@ const rounded = (center: DirectorSkyPosition): DirectorSkyPosition => ({ ra_degr
 const placeName = (center: DirectorSkyPosition) => `${formatRaShort(center.ra_degrees)}, ${formatDecShort(center.dec_degrees)}`;
 
 /**
- * The sky a plan's rig can shoot: shaded by how many nights each part is
- * in view for the minimum time, with a solid line round the sky in view
+ * The sky a plan's rig can shoot: sky it cannot shoot is covered, more
+ * heavily the fewer nights it is in view for the minimum time, with a solid line round the sky in view
  * every night and a dashed one round the sky in view on any. Now counts
  * tonight and the 30 nights after; Year counts every night of a year,
  * of which the server measures one a week and works out the rest.
@@ -305,6 +305,7 @@ export default function PlanSky({ rigs, target, frameBlocked, onFrame, onRigs, s
               Edge of the sky in view on any night
             </span>
             <span className="plan-sky-key-line">Marks point into the sky in view.</span>
+            <span className="plan-sky-key-line">Covered sky is out of view on some nights. Hatched sky is never in view.</span>
             {view?.span === 'year' && (
               <span className="plan-sky-key-line">Year counts every night. One night a week is measured and the nights between are worked out from the measured nights. The solid line is within about 2° of a line measured on every night.</span>
             )}

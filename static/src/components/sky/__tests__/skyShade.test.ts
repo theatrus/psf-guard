@@ -83,7 +83,8 @@ describe('the shading picture', () => {
   const alpha = (pixels: Uint8ClampedArray, width: number, x: number, y: number) => pixels[(y * width + x) * 4 + 3];
 
   it('covers the whole sky with no seam and nothing beyond it, flat and globe', () => {
-    const full = grid(() => 31, 31);
+    // In view on one night of 31: covered nearly whole, with no hatch.
+    const full = grid(() => 1, 31);
     const [width, height] = [200, 108];
     for (const view of VIEWS) {
       const pixels = shadeRaster(full, view, AT, 1000, width, height);
@@ -93,8 +94,8 @@ describe('the shading picture', () => {
           const x = ((px + 0.5) * 5 - AT.cx) / AT.scale;
           const y = -((py + 0.5) * 5 - AT.cy) / AT.scale;
           const inside = view.mode === 'globe' ? x * x + y * y <= 1 : (x * x) / 4 + y * y <= 1;
-          // Every pixel on the sky is full, and every one off it clear.
-          expect(alpha(pixels, width, px, py), `${px},${py} in ${JSON.stringify(view)}`).toBe(inside ? 255 : 0);
+          // Every pixel on the sky is covered alike, and every one off it clear.
+          expect(alpha(pixels, width, px, py), `${px},${py} in ${JSON.stringify(view)}`).toBe(inside ? 247 : 0);
           if (inside) on += 1;
         }
       }
@@ -102,7 +103,7 @@ describe('the shading picture', () => {
     }
   });
 
-  it('is strongest where the count is highest and clear where it is none', () => {
+  it('covers sky more the fewer nights it is in view, and leaves sky in view every night clear', () => {
     // In view every night north of +40°, on half the nights down to 0°.
     const sky = grid((_, dec) => (dec >= 40 ? 30 : dec >= 0 ? 15 : 0), 30);
     const pixels = shadeRaster(sky, VIEWS[0], AT, 1000, 200, 108);
@@ -110,14 +111,42 @@ describe('the shading picture', () => {
       const drawn = projectPoint(ra, dec, VIEWS[0]);
       return alpha(pixels, 200, Math.floor((AT.cx + drawn.x * AT.scale) / 5), Math.floor((AT.cy - drawn.y * AT.scale) / 5));
     };
-    expect(at(10, 70)).toBe(255);
-    expect(at(300, 60)).toBe(255);
+    expect(at(10, 70)).toBe(0);
+    expect(at(300, 60)).toBe(0);
     expect(at(10, 20)).toBe(128);
     expect(at(170, 20)).toBe(128);
-    expect(at(10, -30)).toBe(0);
-    expect(at(200, -70)).toBe(0);
-    // White throughout: the map tints it.
-    expect(pixels[(10 * 200 + 100) * 4]).toBe(255);
+    // This raster is too coarse for the hatch: sky never in view is
+    // covered whole.
+    expect(at(10, -30)).toBe(255);
+    expect(at(200, -70)).toBe(255);
+    // White throughout: the map gives the cover its colour.
+    expect(pixels[(100 * 200 + 100) * 4]).toBe(255);
+  });
+
+  it('hatches sky never in view, in stripes that stay put when the sky turns', () => {
+    // Never in view south of the equator; half the nights north of it.
+    const sky = grid((_, dec) => (dec >= 0 ? 15 : 0), 30);
+    const [width, height] = [400, 216];
+    const south = (view: SkyView) => {
+      const pixels = shadeRaster(sky, view, AT, 1000, width, height);
+      // Along a row well inside the never-in-view sky.
+      return Array.from({ length: 60 }, (_, i) => alpha(pixels, width, 170 + i, 190));
+    };
+    const row = south(VIEWS[0]);
+    // The cover goes from whole to about 70% and back, every 12 map units:
+    // 4.8 pixels of this raster.
+    expect(Math.max(...row)).toBeGreaterThanOrEqual(253);
+    expect(Math.min(...row)).toBeLessThanOrEqual(182);
+    expect(Math.min(...row)).toBeGreaterThanOrEqual(178);
+    const tops = row.filter((value, i) => i > 0 && i < 59 && value >= row[i - 1] && value > row[i + 1]).length;
+    expect(tops).toBeGreaterThanOrEqual(11);
+    expect(tops).toBeLessThanOrEqual(13);
+    // The same stripes with the sky turned a quarter of the way round.
+    expect(south({ ...VIEWS[0], centerLon: 90 })).toEqual(row);
+    // Sky in view on some nights has no hatch.
+    const pixels = shadeRaster(sky, VIEWS[0], AT, 1000, width, height);
+    const north = Array.from({ length: 60 }, (_, i) => alpha(pixels, width, 170 + i, 40));
+    expect(new Set(north)).toEqual(new Set([128]));
   });
 
   describe('as an image', () => {
@@ -134,10 +163,10 @@ describe('the shading picture', () => {
       const context = { createImageData: vi.fn(() => image), putImageData: put } as unknown as CanvasRenderingContext2D;
       vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(context as never);
       vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue('data:image/png;base64,AAAA');
-      expect(shadeImage(grid(() => 1, 1), VIEWS[0], AT, 1000, 20, 10)).toBe('data:image/png;base64,AAAA');
+      expect(shadeImage(grid(() => 0, 1), VIEWS[0], AT, 1000, 20, 10)).toBe('data:image/png;base64,AAAA');
       expect(context.createImageData).toHaveBeenCalledWith(20, 10);
       expect(put).toHaveBeenCalledWith(image, 0, 0);
-      // The middle of the map is sky, and full: one night of one.
+      // The middle of the map is sky, and covered whole: never in view.
       expect(image.data[(5 * 20 + 10) * 4 + 3]).toBe(255);
       expect(image.data[3]).toBe(0);
     });

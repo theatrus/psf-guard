@@ -71,7 +71,7 @@ export function visibleSkyShares(view: DirectorVisibleSky): string {
 
 /** The map in words: what it shows, for whom, and the numbers. */
 export function visibleSkySummary(view: DirectorVisibleSky, rigName: string): string {
-  return `Map of the sky ${visibleSkyLegend(view, rigName)}. ${visibleSkyShares(view)}`;
+  return `Map of the sky ${visibleSkyLegend(view, rigName)}. ${visibleSkyShares(view)} Sky out of view is covered.`;
 }
 
 /** Where a place stands, from the nights it is in view out of those counted. */

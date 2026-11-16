@@ -46,7 +46,7 @@ export interface SkyMark {
   kind: 'target' | 'pick';
 }
 
-/** The shading raster: a fraction of the map's size each way, drawn
+/** The cover's raster: a fraction of the map's size each way, drawn
  *  smooth. While the sky is being turned it is made smaller still, once
  *  an animation frame at most, and at full size when the turn ends. */
 const SHADE_SIZE = [400, 216] as const;
@@ -71,7 +71,8 @@ interface Props {
   focus?: { ra: number; dec: number; nonce: number } | null;
   /** Lines around the sky a rig has in view for long enough, if asked for. */
   visible?: VisibleSkyLines | null;
-  /** How many nights each part of the sky is in view, shaded under the lines. */
+  /** How many nights each part of the sky is in view: sky in view on
+   *  fewer nights is covered more, under the lines. */
   shade?: SkyCounts | null;
   /** Places to mark and label. */
   marks?: SkyMark[];
@@ -379,8 +380,8 @@ export default function SkyMap({
     };
   }, [visible, sky, view.k]);
 
-  // The shading: a small picture of the whole map. Its pixels are white;
-  // how clear each is carries the share. It is made on an animation frame,
+  // The cover: a small picture of the whole map. Its pixels are white;
+  // how solid each is carries how much of the sky under it is covered. It is made on an animation frame,
   // so however many times the pointer moves in a frame it is made once,
   // and a frame not yet drawn when the sky turns again is dropped. The
   // picture is handed straight to its element: drawing the map again to
