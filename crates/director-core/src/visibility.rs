@@ -194,12 +194,30 @@ pub fn altitude_allowed(
     if !bounded(altitude_degrees, -90.0, 90.0) {
         return Err(VisibilityError::InvalidPosition);
     }
-    AltitudeTest::new(horizon, limits)?.allowed(azimuth_degrees, altitude_degrees)
+    let curve = horizon.altitude(azimuth_degrees)?;
+    Ok(inside(limits, curve, altitude_degrees))
+}
+
+/// Whether an altitude is strictly inside valid limits, above the horizon
+/// curve's altitude at its azimuth when there is a curve.
+fn inside(limits: AltitudeLimits, curve: Option<f64>, altitude_degrees: f64) -> bool {
+    let mut minimum = limits
+        .rig_minimum_degrees
+        .max(limits.project_minimum_degrees);
+    if let Some(curve) = curve {
+        minimum = minimum.max(curve + limits.horizon_offset_degrees);
+    }
+    altitude_degrees > minimum
+        && altitude_degrees
+            < limits
+                .rig_maximum_degrees
+                .min(limits.project_maximum_degrees)
 }
 
 /// [`altitude_allowed`] for many directions under one horizon and one set
-/// of limits: both are validated once, so each direction costs a lookup in
-/// the curve rather than a pass over it. The answers are the same.
+/// of limits. [`altitude_allowed`] validates both on every call, which for
+/// a horizon curve is a pass over all its points; this validates them once,
+/// so each direction costs a lookup in the curve. The answers are the same.
 #[derive(Clone, Copy, Debug)]
 pub struct AltitudeTest<'a> {
     horizon: &'a Horizon,
@@ -207,6 +225,8 @@ pub struct AltitudeTest<'a> {
 }
 
 impl<'a> AltitudeTest<'a> {
+    /// Limits are checked before the horizon, as [`altitude_allowed`]
+    /// checks them.
     pub fn new(horizon: &'a Horizon, limits: AltitudeLimits) -> Result<Self, VisibilityError> {
         limits.validate()?;
         horizon.validate()?;
@@ -221,18 +241,11 @@ impl<'a> AltitudeTest<'a> {
         if !bounded(altitude_degrees, -90.0, 90.0) || !azimuth_degrees.is_finite() {
             return Err(VisibilityError::InvalidPosition);
         }
-        let limits = self.limits;
-        let mut minimum = limits
-            .rig_minimum_degrees
-            .max(limits.project_minimum_degrees);
-        if let Some(curve) = self.horizon.curve_at(azimuth_degrees) {
-            minimum = minimum.max(curve + limits.horizon_offset_degrees);
-        }
-        Ok(altitude_degrees > minimum
-            && altitude_degrees
-                < limits
-                    .rig_maximum_degrees
-                    .min(limits.project_maximum_degrees))
+        Ok(inside(
+            self.limits,
+            self.horizon.curve_at(azimuth_degrees),
+            altitude_degrees,
+        ))
     }
 }
 

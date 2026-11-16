@@ -6,7 +6,7 @@
 use crate::ephemeris::{moon_illumination, moon_position, separation_degrees, sun_position};
 use crate::moon::{MoonCell, MoonPolicy, MoonTrack};
 use crate::visibility::{
-    altitude_allowed, meridian_windows, AltitudeLimits, EarthOrientation, Horizon, IcrsPosition,
+    meridian_windows, AltitudeLimits, AltitudeTest, EarthOrientation, Horizon, IcrsPosition,
     ObservedPosition, Observer, Site, VisibilityError,
 };
 use crate::windows::{Interval, MeridianExclusion};
@@ -813,6 +813,9 @@ fn one_night(
         })
         .collect::<Result<_, VisibilityError>>()?;
     let mut last_hour_angle: Vec<Option<f64>> = vec![None; request.targets.len()];
+    // The request's horizon and limits were validated with it: once here
+    // for every sample, not a pass over the horizon curve at each.
+    let in_limits = AltitudeTest::new(&request.horizon, request.limits)?;
     for step in &sky.steps {
         // One prepared observer per instant: the Earth's part of the sum is
         // the same for the Sun, the Moon and every target.
@@ -865,13 +868,8 @@ fn one_night(
             if !wanted {
                 continue;
             }
-            let allowed = altitude_allowed(
-                &request.horizon,
-                request.limits,
-                observed.azimuth_degrees,
-                observed.altitude_degrees,
-            )? && window_degrees
-                .is_none_or(|limit| observed.hour_angle_degrees.abs() <= limit);
+            let allowed = in_limits.allowed(observed.azimuth_degrees, observed.altitude_degrees)?
+                && window_degrees.is_none_or(|limit| observed.hour_angle_degrees.abs() <= limit);
             let meridian_blocked = allowed_by_meridian[index].as_ref().is_some_and(|windows| {
                 span.start_ms >= span.end_ms
                     || (t >= span.start_ms
@@ -1352,6 +1350,7 @@ mod tests {
     /// shared sky changes nothing.
     mod before {
         use super::super::*;
+        use crate::visibility::altitude_allowed;
 
         fn one_night_before(
             request: &NightRequest,

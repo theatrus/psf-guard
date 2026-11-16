@@ -2,7 +2,7 @@ use super::span::{
     classify_cap, midpoint_and_radius, validate_span, CapClearance, MAX_OBSERVATIONS,
 };
 use super::{
-    altitude_allowed, observe, AltitudeLimits, EarthOrientation, Horizon, IcrsPosition, Site,
+    observe, AltitudeLimits, AltitudeTest, EarthOrientation, Horizon, IcrsPosition, Site,
     VisibilityError,
 };
 use crate::windows::{Interval, MAX_WINDOWS};
@@ -57,13 +57,9 @@ fn find_windows(
     budget: usize,
 ) -> Result<AltitudeWindows, VisibilityError> {
     let endpoints = validate_span(position, site, orientation, searched)?;
+    let test = AltitudeTest::new(horizon, limits)?;
     for point in endpoints {
-        altitude_allowed(
-            horizon,
-            limits,
-            point.azimuth_degrees,
-            point.altitude_degrees,
-        )?;
+        test.allowed(point.azimuth_degrees, point.altitude_degrees)?;
     }
     let mut result = AltitudeWindows {
         searched,
