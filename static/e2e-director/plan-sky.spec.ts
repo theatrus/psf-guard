@@ -104,13 +104,14 @@ test("a plan's Sky tab shades the sky its rig can shoot, for the month and the y
     expect(pictures()).toEqual([{ rig: expect.any(String), span: 'now' }]);
     await page.screenshot({ path: testInfo.outputPath('plan-sky-now.png') });
 
-    // Year: a night a week; every right ascension has its season.
+    // Year: every night, one a week measured; every right ascension has its season.
     await tab.getByRole('radio', { name: 'Year' }).click();
-    await expect(legend).toContainText('one night a week for a year', { timeout: 120_000 });
-    await expect(shade).toHaveAttribute('data-nights', '53');
+    await expect(legend).toContainText('365 nights from tonight, ', { timeout: 120_000 });
+    await expect(legend).toContainText(', one a week measured');
+    await expect(shade).toHaveAttribute('data-nights', '365');
     await expect(legend).toContainText(/On at least one night: \d+% of the sky, declination −3[01]° to \+90°\./);
-    await expect(tab.getByTestId('plan-sky-target')).toContainText('In view on 53 of the 53 nights counted over the year. Inside the every-night line.');
-    await expect(tab.getByLabel('How to read the map')).toContainText('Year counts one night a week.');
+    await expect(tab.getByTestId('plan-sky-target')).toContainText('In view on 365 of the 365 nights of the year. Inside the every-night line.');
+    await expect(tab.getByLabel('How to read the map')).toContainText('Year counts every night. One night a week is measured');
     expect(pictures().at(-1)).toEqual({ rig: expect.any(String), span: 'year' });
     // The globe draws them too, and turning the map asks for nothing.
     await tab.getByRole('radio', { name: 'Globe' }).click();

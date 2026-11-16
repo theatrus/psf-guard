@@ -947,7 +947,7 @@ export interface DirectorRigProjection {
 }
 /** What `/sky/visible-region` is asked: a rig, and optionally a minimum
  *  time and which nights. `span: 'now'` is tonight and the 30 nights after;
- *  `span: 'year'` is one night a week for a year. Without `span`: `nights`
+ *  `span: 'year'` is every night of a year, one a week measured. Without `span`: `nights`
  *  in a row (one when left out) from `first_night` (`YYYY-MM-DD`, the
  *  evening's date at the rig's site; tonight when left out). */
 export interface DirectorVisibleSkyRequest {
@@ -992,8 +992,13 @@ export interface DirectorVisibleSky {
   /** The grid the nights were counted on: nodes every `degrees`, columns
    *  of right ascension from 0h, rows from the south pole. */
   grid: { degrees: number; columns: number; rows: number };
-  /** For each node, on how many of `nights` it is in view: one byte a
-   *  node, row by row, in base64. */
+  /** How many nights are counted. For nights in a row, the length of
+   *  `nights`. For a year, every night from the first of `nights` to the
+   *  last: `nights` are the ones measured, one a week, and the server
+   *  works out the six between each two from them. */
+  nights_counted: number;
+  /** For each node, on how many of the nights counted it is in view: two
+   *  bytes a node, low byte first, row by row, in base64. */
   counts: string;
   every_night: DirectorVisibleSkyRegion;
   /** Null for one night, when it is the same sky as `every_night`. */

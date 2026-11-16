@@ -20,7 +20,7 @@ vi.mock('../../api/client', () => ({
     getDirectorVisiblePlaces: async (request: DirectorVisiblePlacesRequest) => {
       asked.places.push(request);
       if (asked.placesFail) throw new Error('boom');
-      const counted = request.span === 'year' ? 53 : 31;
+      const counted = request.span === 'year' ? 365 : 31;
       return { first_night: request.first_night ?? '2026-09-24', nights_counted: counted, places: request.places.map((place) => ({ ...place, nights_in_view: place.dec_degrees >= 40 ? counted : place.dec_degrees >= -30 ? 12 : 0 })) };
     },
     searchDirectorNames: async (query: string) => ({ query, local: { available: true, items: query.toLowerCase().startsWith('m 3') ? [{ name: 'M 31', common_name: 'Andromeda Galaxy', kind: 'galaxy', ra_degrees: 10.68, dec_degrees: 41.27, matched: 'M 31', source: 'Seiza object catalog' }] : [] }, online: null, online_state: 'skipped', online_cached: false }),
@@ -31,10 +31,12 @@ vi.mock('../../api/client', () => ({
 /** Counts as the server packs them: in view every night north of +40°,
  *  on 12 nights down to −30°, never south of that. */
 const counts = (nights: number) => {
-  const bytes = new Uint8Array(180 * 91);
-  for (let row = 0; row < 91; row += 1) bytes.fill(-90 + row * 2 >= 40 ? nights : -90 + row * 2 >= -30 ? 12 : 0, row * 180, (row + 1) * 180);
   let text = '';
-  for (const byte of bytes) text += String.fromCharCode(byte);
+  for (let row = 0; row < 91; row += 1) {
+    const count = -90 + row * 2 >= 40 ? nights : -90 + row * 2 >= -30 ? 12 : 0;
+    // Two bytes a node, low byte first.
+    text += String.fromCharCode(count & 255, count >> 8).repeat(180);
+  }
   return btoa(text);
 };
 const ring = (dec: number) => Array.from({ length: 181 }, (_, i) => [(i * 2) % 360, dec] as [number, number]);
@@ -50,7 +52,8 @@ const view = (request: DirectorVisibleSkyRequest, over: Partial<DirectorVisibleS
     limits: { minimum_altitude_degrees: 25, maximum_altitude_degrees: 90, horizon_offset_degrees: 0 },
     minimum_minutes: request.minimum_minutes ?? 30, rig_minimum_minutes: 30, step_minutes: 5, dark_below_degrees: -12,
     nights: nightList(year ? 53 : 31, year ? 7 : 1), span: year ? 'year' : 'now', every_nights: year ? 7 : 1,
-    grid: { degrees: 2, columns: 180, rows: 91 }, counts: counts(year ? 53 : 31),
+    nights_counted: year ? 365 : 31,
+    grid: { degrees: 2, columns: 180, rows: 91 }, counts: counts(year ? 365 : 31),
     every_night: { lines: [ring(40)], sky_fraction: 0.18, declinations: [39.6, 90] },
     any_night: { lines: [ring(-30)], sky_fraction: 0.75, declinations: [-30.4, 90] },
     ...over,
@@ -118,16 +121,17 @@ describe("the plan's Sky tab", () => {
     expect(screen.getByRole('region', { name: 'Sky in view' }).getAttribute('aria-busy')).toBe('false');
   });
 
-  it('counts a night a week for a year, and takes another rig, map shape and frame', async () => {
+  it('counts every night of a year, and takes another rig, map shape and frame', async () => {
     const { container } = show();
     await waitFor(() => expect(legend()).toContain('31 nights'));
     fireEvent.click(screen.getByRole('radio', { name: 'Year' }));
-    await waitFor(() => expect(legend()).toContain('one night a week for a year'));
+    await waitFor(() => expect(legend()).toContain('365 nights from tonight, '));
+    expect(legend()).toContain(', one a week measured');
     expect(asked.calls.at(-1)).toEqual({ rig: 'rig-1', span: 'year' });
-    expect(container.querySelector('.sky-visible-shade')?.getAttribute('data-nights')).toBe('53');
-    await waitFor(() => expect(screen.getByTestId('plan-sky-target').textContent).toContain('In view on 53 of the 53 nights counted over the year. Inside the every-night line.'));
-    // A year's solid line is rough, and the key says what to make of it.
-    expect(screen.getByLabelText('How to read the map').textContent).toContain('Year counts one night a week. Sky just inside the solid line may be out of view on the nights between, so read that line as rough to a few degrees.');
+    expect(container.querySelector('.sky-visible-shade')?.getAttribute('data-nights')).toBe('365');
+    await waitFor(() => expect(screen.getByTestId('plan-sky-target').textContent).toContain('In view on 365 of the 365 nights of the year. Inside the every-night line.'));
+    // The key explains which nights are measured and how close the line is.
+    expect(screen.getByLabelText('How to read the map').textContent).toContain('Year counts every night. One night a week is measured and the nights between are worked out from the measured nights. The solid line is within about 2° of a line measured on every night.');
     fireEvent.change(screen.getByLabelText('Rig'), { target: { value: 'rig-2' } });
     await waitFor(() => expect(legend()).toContain('RC51: in view'));
     expect(asked.calls.at(-1)).toEqual({ rig: 'rig-2', span: 'year' });
@@ -243,8 +247,8 @@ describe("the plan's Sky tab", () => {
     expect((screen.getByLabelText('Minimum minutes') as HTMLInputElement).value).toBe('30');
     expect(screen.getByRole('radio', { name: 'Year' }).getAttribute('aria-checked')).toBe('true');
     await act(async () => { arrive(view({ rig: 'rig-1', span: 'year' })); });
-    await waitFor(() => expect(legend()).toMatch(/^C925: in view 30 min or more · one night a week for a year/));
-    expect(container.querySelector('.sky-visible-shade')?.getAttribute('data-nights')).toBe('53');
+    await waitFor(() => expect(legend()).toMatch(/^C925: in view 30 min or more · 365 nights from tonight/));
+    expect(container.querySelector('.sky-visible-shade')?.getAttribute('data-nights')).toBe('365');
     expect(screen.getByRole('region', { name: 'Sky in view' }).getAttribute('aria-busy')).toBe('false');
     // Another rig's picture is never shown for this one: the map clears.
     asked.answer = () => new Promise(() => {});

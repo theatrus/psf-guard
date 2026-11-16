@@ -6,20 +6,20 @@ import { unprojectPoint, wrap360, type PathScale, type SkyView } from '../../uti
  * row running from 0h of right ascension.
  */
 export interface SkyCounts {
-  counts: Uint8Array;
+  counts: Uint16Array;
   /** The nights counted: the most a node can have. */
   nights: number;
   columns: number;
   rows: number;
 }
 
-/** Unpack counts sent as base64, one byte a node. */
+/** Unpack counts sent as base64, two bytes a node with the low byte first. */
 export function unpackCounts(base64: string, nights: number, columns: number, rows: number): SkyCounts | null {
   try {
     const text = atob(base64);
-    if (text.length !== columns * rows || nights < 1) return null;
-    const counts = new Uint8Array(text.length);
-    for (let i = 0; i < text.length; i += 1) counts[i] = text.charCodeAt(i);
+    if (text.length !== columns * rows * 2 || nights < 1) return null;
+    const counts = new Uint16Array(columns * rows);
+    for (let i = 0; i < counts.length; i += 1) counts[i] = text.charCodeAt(2 * i) | (text.charCodeAt(2 * i + 1) << 8);
     return { counts, nights, columns, rows };
   } catch {
     return null;

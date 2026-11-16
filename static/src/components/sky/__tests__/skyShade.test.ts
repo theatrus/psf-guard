@@ -15,7 +15,7 @@ const VIEWS: SkyView[] = [
 
 /** A grid as the server sends it: 2° nodes, 180 by 91, from the south pole. */
 function grid(count: (ra: number, dec: number) => number, nights: number): SkyCounts {
-  const counts = new Uint8Array(180 * 91);
+  const counts = new Uint16Array(180 * 91);
   for (let row = 0; row < 91; row += 1) for (let col = 0; col < 180; col += 1) counts[row * 180 + col] = count(col * 2, -90 + row * 2);
   return { counts, nights, columns: 180, rows: 91 };
 }
@@ -55,12 +55,14 @@ describe('reading a place back from the map', () => {
 });
 
 describe('the counts', () => {
-  it('unpacks one byte a node and refuses a grid of the wrong size', () => {
-    const bytes = new Uint8Array(6).map((_, i) => i * 10);
-    const packed = btoa(String.fromCharCode(...bytes));
-    expect(unpackCounts(packed, 53, 3, 2)).toEqual({ counts: bytes, nights: 53, columns: 3, rows: 2 });
-    expect(unpackCounts(packed, 53, 4, 2)).toBeNull();
-    expect(unpackCounts('not base64!', 53, 3, 2)).toBeNull();
+  it('unpacks two bytes a node and refuses a grid of the wrong size', () => {
+    // A year's counts pass 255: 365 is 109 and 1, low byte first.
+    const wanted = [0, 10, 255, 256, 364, 365];
+    const packed = btoa(wanted.map((count) => String.fromCharCode(count & 255, count >> 8)).join(''));
+    expect(unpackCounts(packed, 365, 3, 2)).toEqual({ counts: Uint16Array.from(wanted), nights: 365, columns: 3, rows: 2 });
+    expect(unpackCounts(packed, 365, 4, 2)).toBeNull();
+    expect(unpackCounts(packed, 365, 6, 2)).toBeNull();
+    expect(unpackCounts('not base64!', 365, 3, 2)).toBeNull();
     expect(unpackCounts(packed, 0, 3, 2)).toBeNull();
   });
 

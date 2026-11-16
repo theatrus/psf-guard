@@ -24,7 +24,7 @@ const flat: SkyView = { frame: 'equatorial', mode: 'aitoff', centerLon: 0, cente
  *  ascension rising. */
 const ring = (dec: number): LonLat[] => Array.from({ length: 181 }, (_, i) => [(i * 2) % 360, dec]);
 
-const counts = () => btoa(String.fromCharCode(...new Uint8Array(180 * 91)));
+const counts = () => btoa('\0'.repeat(180 * 91 * 2));
 const nights = (first: string, count: number, every: number) =>
   Array.from({ length: count }, (_, i) => ({ date: new Date(Date.parse(`${first}T00:00:00Z`) + i * every * 86_400_000).toISOString().slice(0, 10), dusk_ms: 1, dawn_ms: 2 }));
 
@@ -43,6 +43,7 @@ const view = (over: Partial<DirectorVisibleSky> = {}): DirectorVisibleSky => ({
   nights: nights('2026-09-24', 31, 1),
   span: 'now',
   every_nights: 1,
+  nights_counted: 31,
   grid: { degrees: 2, columns: 180, rows: 91 },
   counts: counts(),
   every_night: { lines: [ring(-12) as Array<[number, number]>], sky_fraction: 0.41, declinations: [-12.4, 90] },
@@ -57,8 +58,8 @@ describe('the legend', () => {
     expect(visibleSkyLegend(view(), 'C925')).toBe(`C925: in view 30 min or more · 31 nights from tonight, ${first}, to ${last} · the site's custom horizon, at least 25°`);
     expect(visibleSkyLegend(view(), 'C925', false)).toBe(`C925: in view 30 min or more · 31 nights ${first} to ${last} · the site's custom horizon, at least 25°`);
     expect(visibleSkyLegend(view({ nights: nights('2026-09-24', 1, 1) }), 'C925')).toContain(`· tonight, ${first} ·`);
-    const year = view({ span: 'year', every_nights: 7, nights: nights('2026-09-24', 53, 7), minimum_minutes: 90, horizon: 'flat', horizon_from: 'none' });
-    expect(visibleSkyLegend(year, 'C925')).toBe(`C925: in view 1 h 30 min or more · one night a week for a year from tonight, ${formatNight('2026-09-24')}, to ${formatNight('2027-09-23')} · flat horizon at 25°`);
+    const year = view({ span: 'year', every_nights: 7, nights: nights('2026-09-24', 53, 7), nights_counted: 365, minimum_minutes: 90, horizon: 'flat', horizon_from: 'none' });
+    expect(visibleSkyLegend(year, 'C925')).toBe(`C925: in view 1 h 30 min or more · 365 nights from tonight, ${formatNight('2026-09-24')}, to ${formatNight('2027-09-23')}, one a week measured · flat horizon at 25°`);
     expect(formatMinutes(120)).toBe('2 h');
   });
 
@@ -80,6 +81,8 @@ describe('the legend', () => {
   it('notes nights that never get dark', () => {
     const light = view({ nights: [...nights('2026-06-10', 2, 1), { date: '2026-06-12', dusk_ms: null, dawn_ms: null }] });
     expect(darknessNote(light)).toBe('It does not get dark on 1 of these nights.');
+    // A year's note is about the nights measured, one a week.
+    expect(darknessNote({ ...light, span: 'year' })).toBe('It does not get dark on 1 of the 3 nights measured.');
     expect(darknessNote(view())).toBeNull();
   });
 
@@ -164,7 +167,7 @@ describe('the map', () => {
   });
 
   it('holds a place for the shading under the lines', () => {
-    const shade = { counts: new Uint8Array(180 * 91).fill(3), nights: 31, columns: 180, rows: 91 };
+    const shade = { counts: new Uint16Array(180 * 91).fill(3), nights: 31, columns: 180, rows: 91 };
     const drawn = map({ shade });
     const group = drawn.querySelector('.sky-visible-shade');
     expect(group?.getAttribute('data-nights')).toBe('31');

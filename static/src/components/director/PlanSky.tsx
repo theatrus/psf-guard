@@ -62,7 +62,8 @@ const placeName = (center: DirectorSkyPosition) => `${formatRaShort(center.ra_de
  * The sky a plan's rig can shoot: shaded by how many nights each part is
  * in view for the minimum time, with a solid line round the sky in view
  * every night and a dashed one round the sky in view on any. Now counts
- * tonight and the 30 nights after; Year counts a night a week for a year.
+ * tonight and the 30 nights after; Year counts every night of a year,
+ * of which the server measures one a week and works out the rest.
  * A place found by name or clicked on the map can be sent to Framing.
  */
 export default function PlanSky({ rigs, target, frameBlocked, onFrame, onRigs, shown }: Props) {
@@ -153,7 +154,7 @@ export default function PlanSky({ rigs, target, frameBlocked, onFrame, onRigs, s
     settle.current = window.setTimeout(() => sendMinutes(text), MINIMUM_SETTLE_MS);
   };
 
-  const counts = useMemo(() => (view ? unpackCounts(view.counts, view.nights.length, view.grid.columns, view.grid.rows) : null), [view]);
+  const counts = useMemo(() => (view ? unpackCounts(view.counts, view.nights_counted, view.grid.columns, view.grid.rows) : null), [view]);
   const lines = useMemo(() => (view ? visibleSkyLines(view) : null), [view]);
   const marks: SkyMark[] = useMemo(() => {
     const list: SkyMark[] = [];
@@ -184,10 +185,10 @@ export default function PlanSky({ rigs, target, frameBlocked, onFrame, onRigs, s
   const inView = (center: DirectorSkyPosition): number | null => {
     const at = rounded(center);
     const found = placesQuery.data?.places.find((place) => place.ra_degrees === at.ra_degrees && place.dec_degrees === at.dec_degrees);
-    return found && placesQuery.data?.nights_counted === view?.nights.length ? found.nights_in_view : null;
+    return found && placesQuery.data?.nights_counted === view?.nights_counted ? found.nights_in_view : null;
   };
-  const counted = view?.nights.length ?? 0;
-  const nightsWords = (nights: number) => (view?.span === 'year' ? `In view on ${nights} of the ${counted} nights counted over the year` : `In view on ${nights} of the ${counted} nights counted`);
+  const counted = view?.nights_counted ?? 0;
+  const nightsWords = (nights: number) => (view?.span === 'year' ? `In view on ${nights} of the ${counted} nights of the year` : `In view on ${nights} of the ${counted} nights counted`);
   const standingWords = (nights: number) => {
     const where = standing(nights, counted);
     return where === 'every' ? 'Inside the every-night line.' : where === 'some' ? 'Between the lines: in view on some nights.' : 'Outside both lines: never in view for long enough.';
@@ -305,7 +306,7 @@ export default function PlanSky({ rigs, target, frameBlocked, onFrame, onRigs, s
             </span>
             <span className="plan-sky-key-line">Marks point into the sky in view.</span>
             {view?.span === 'year' && (
-              <span className="plan-sky-key-line">Year counts one night a week. Sky just inside the solid line may be out of view on the nights between, so read that line as rough to a few degrees.</span>
+              <span className="plan-sky-key-line">Year counts every night. One night a week is measured and the nights between are worked out from the measured nights. The solid line is within about 2° of a line measured on every night.</span>
             )}
           </div>
         </div>

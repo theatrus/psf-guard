@@ -42,7 +42,7 @@ export function nightsText(view: DirectorVisibleSky, fromTonight: boolean): stri
   const last = view.nights[view.nights.length - 1]?.date;
   if (!first || !last) return '';
   const from = fromTonight ? 'from tonight, ' : '';
-  if (view.span === 'year') return `one night a week for a year ${from}${formatNight(first)}${fromTonight ? ',' : ''} to ${formatNight(last)}`;
+  if (view.span === 'year') return `${view.nights_counted} nights ${from}${formatNight(first)}${fromTonight ? ',' : ''} to ${formatNight(last)}, one a week measured`;
   if (view.nights.length === 1) return fromTonight ? `tonight, ${formatNightDate(first)}` : formatNightDate(first);
   return `${view.nights.length} nights ${from}${formatNightDate(first)}${fromTonight ? ',' : ''} to ${formatNightDate(last)}`;
 }
@@ -84,6 +84,7 @@ export function darknessNote(view: DirectorVisibleSky): string | null {
   const light = view.nights.filter((night) => night.dusk_ms === null).length;
   if (light === 0) return null;
   if (view.nights.length === 1) return 'It does not get dark on this night.';
+  if (view.span === 'year') return `It does not get dark on ${light} of the ${view.nights.length} nights measured.`;
   return light === view.nights.length ? 'It does not get dark on these nights.' : `It does not get dark on ${light} of these nights.`;
 }
 
