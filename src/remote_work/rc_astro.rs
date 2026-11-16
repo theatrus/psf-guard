@@ -755,6 +755,8 @@ mod license_tests {
         std::fs::read_to_string(folder.join("calls")).unwrap_or_default()
     }
 
+    // Only the stand-in script's tests, which run on Unix, stop a check.
+    #[cfg(unix)]
     const NEVER: &dyn Fn() -> bool = &|| false;
 
     #[cfg(unix)]
