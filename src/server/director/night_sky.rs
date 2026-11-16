@@ -158,6 +158,22 @@ impl Skies {
             .collect()
     }
 
+    /// The kept skies of the nights opening at each of `noons` at `site`,
+    /// in order: `None` where one is not kept. Nothing is computed, and a
+    /// sky found counts as read.
+    pub(super) fn kept(
+        &self,
+        site: Site,
+        noons: &[u64],
+        step_ms: u64,
+    ) -> Vec<Option<Arc<NightSky>>> {
+        let mut kept = self.kept.lock().unwrap_or_else(|e| e.into_inner());
+        noons
+            .iter()
+            .map(|noon| kept.get(&Key::of(site, *noon, step_ms)))
+            .collect()
+    }
+
     /// [`Skies::nights`], held in `held` for the rest of the request.
     pub(super) fn hold(
         &self,

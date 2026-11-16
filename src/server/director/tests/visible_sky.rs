@@ -134,7 +134,7 @@ async fn a_rig_without_a_location_is_told_what_to_set() {
         assert_eq!(refused["error"], reason, "{first}");
     }
     // Nothing was measured for any of them.
-    assert_eq!(state.director.as_ref().unwrap().visible_sky.computed(), 0);
+    assert_eq!(state.director.as_ref().unwrap().visible_sky.computed().0, 0);
     // Both ends of the range are nights.
     for first in ["1970-01-02", "2098-12-31"] {
         let body = json!({"rig": rig, "first_night": first});
@@ -146,7 +146,7 @@ async fn a_rig_without_a_location_is_told_what_to_set() {
 
 #[tokio::test]
 async fn requests_for_the_same_nights_measure_them_once_and_a_dropped_one_measures_nothing() {
-    use super::super::visible_sky::{compute, nights_asked, read_inputs, Span};
+    use super::super::visible_sky::{compute, nights_asked, read_inputs, Nights, Span, Wanted};
     use crate::concurrency::Stop;
     let (_dir, state, app, _instance, _catalog, rig) = fixture().await;
     rig_profile(&state, rig, true).await;
@@ -158,22 +158,21 @@ async fn requests_for_the_same_nights_measure_them_once_and_a_dropped_one_measur
         .await
         .ok()
         .unwrap();
-    let dates = nights_asked(Some("2026-09-24"), 2, 1, -118.3, 0)
-        .ok()
-        .unwrap();
+    let dates = nights_asked("2026-09-24", 2, 1).ok().unwrap();
     let gone = Stop::new();
     gone.request();
     assert!(compute(
         &state,
         &service,
         inputs,
-        dates.clone(),
+        Nights::Dates(dates.clone()),
         30,
         Span::Now,
+        Wanted::Picture,
         &gone
     )
     .is_err());
-    assert_eq!(service.visible_sky.computed(), 0);
+    assert_eq!(service.visible_sky.computed().0, 0);
     // Three requests at once for the same two nights: each night is
     // measured once, and all three get the same lines.
     let body = json!({"rig": rig, "first_night": "2026-09-24", "nights": 2});
@@ -187,7 +186,7 @@ async fn requests_for_the_same_nights_measure_them_once_and_a_dropped_one_measur
     }
     assert_eq!(a.1["data"]["every_night"], b.1["data"]["every_night"]);
     assert_eq!(a.1["data"]["any_night"], c.1["data"]["any_night"]);
-    assert_eq!(service.visible_sky.computed(), 2);
+    assert_eq!(service.visible_sky.computed().0, 2);
     // The same inputs, not stopped, read the kept grids.
     let inputs = service
         .clone()
@@ -195,8 +194,18 @@ async fn requests_for_the_same_nights_measure_them_once_and_a_dropped_one_measur
         .await
         .ok()
         .unwrap();
-    assert!(compute(&state, &service, inputs, dates, 30, Span::Now, &Stop::new()).is_ok());
-    assert_eq!(service.visible_sky.computed(), 2);
+    assert!(compute(
+        &state,
+        &service,
+        inputs,
+        Nights::Dates(dates),
+        30,
+        Span::Now,
+        Wanted::Picture,
+        &Stop::new()
+    )
+    .is_ok());
+    assert_eq!(service.visible_sky.computed().0, 2);
     // The workers it leased are back.
     assert_eq!(
         state.leased_workers(crate::concurrency::Priority::Interactive),
@@ -271,11 +280,11 @@ async fn one_night_is_one_set_of_lines_and_a_range_is_two() {
 
     // The night's grid is kept: the same request measures nothing, and a
     // longer minimum is another grid.
-    assert_eq!(service.visible_sky.computed(), 1);
+    assert_eq!(service.visible_sky.computed().0, 1);
     let (status, again) = call(&app, "POST", PATH, one.clone(), None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(again["data"]["every_night"], view["every_night"]);
-    assert_eq!(service.visible_sky.computed(), 1);
+    assert_eq!(service.visible_sky.computed().0, 1);
     let mut longer = one.clone();
     longer["minimum_minutes"] = json!(240);
     let (status, body) = call(&app, "POST", PATH, longer, None).await;
@@ -286,7 +295,7 @@ async fn one_night_is_one_set_of_lines_and_a_range_is_two() {
         .as_f64()
         .unwrap();
     assert!(longer_share < share - 0.05, "{longer_share} {share}");
-    assert_eq!(service.visible_sky.computed(), 2);
+    assert_eq!(service.visible_sky.computed().0, 2);
     // Minutes that round up to the same samples are the same grid: 26
     // minutes needs six five-minute samples, as 30 does.
     let mut rounded = one.clone();
@@ -294,7 +303,7 @@ async fn one_night_is_one_set_of_lines_and_a_range_is_two() {
     let (status, body) = call(&app, "POST", PATH, rounded, None).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["data"]["every_night"], view["every_night"]);
-    assert_eq!(service.visible_sky.computed(), 2);
+    assert_eq!(service.visible_sky.computed().0, 2);
 
     // Three nights: the sky slides west under the dark hours, so less of
     // it is in view every night than on at least one.
@@ -311,7 +320,7 @@ async fn one_night_is_one_set_of_lines_and_a_range_is_two() {
     assert!(!lines(&view["any_night"]).is_empty());
     assert_ne!(view["any_night"]["lines"], view["every_night"]["lines"]);
     // The first night was kept; two more were measured.
-    assert_eq!(service.visible_sky.computed(), 4);
+    assert_eq!(service.visible_sky.computed().0, 4);
 }
 
 #[tokio::test]
@@ -392,7 +401,7 @@ async fn a_site_horizon_counts_whatever_a_plan_turns_on() {
         open["every_night"]["sky_fraction"].as_f64() > view["every_night"]["sky_fraction"].as_f64()
     );
     // A changed horizon is a different sky: both were measured.
-    assert_eq!(state.director.as_ref().unwrap().visible_sky.computed(), 2);
+    assert_eq!(state.director.as_ref().unwrap().visible_sky.computed().0, 2);
 }
 
 /// The count at the grid node nearest a place, from the packed counts.
@@ -430,7 +439,7 @@ async fn the_month_and_the_year_count_the_nights_each_part_of_the_sky_is_in_view
         month["grid"],
         json!({"degrees": 2.0, "columns": 180, "rows": 91})
     );
-    assert_eq!(service.visible_sky.computed(), 31);
+    assert_eq!(service.visible_sky.computed().0, 31);
     // The pole is in view every night, the far south on none; from 34.2°
     // north with a 25° minimum nothing south of about −31° ever is.
     assert_eq!(count_at(&month, 0.0, 90.0), 31);
@@ -482,7 +491,7 @@ async fn the_month_and_the_year_count_the_nights_each_part_of_the_sky_is_in_view
             *sum += count;
         }
         // A night of the month is read from what was kept.
-        assert_eq!(service.visible_sky.computed(), 31);
+        assert_eq!(service.visible_sky.computed().0, 31);
     }
     assert!(summed.iter().zip(&counts).all(|(three, all)| three <= all));
     assert!(summed
@@ -510,8 +519,9 @@ async fn the_month_and_the_year_count_the_nights_each_part_of_the_sky_is_in_view
     assert_eq!(nights.len(), 53);
     assert_eq!(nights[1]["date"], "2026-10-01");
     assert_eq!(nights[52]["date"], "2027-09-23");
-    assert_eq!(service.visible_sky.computed(), 31);
-    assert_eq!(service.visible_sky_year.1.computed(), 53);
+    // Five of the year's nights are nights of the month, already
+    // measured: the year reads those and measures the other 48.
+    assert_eq!(service.visible_sky.computed(), (31, 48));
     assert_eq!(count_at(&view, 0.0, 90.0), 53);
     // Over a year every right ascension has its season: north of the
     // limit all of it is in view on some night, and south of it none.
@@ -536,15 +546,15 @@ async fn the_month_and_the_year_count_the_nights_each_part_of_the_sky_is_in_view
     // still there to be read.
     let (status, _) = call(&app, "POST", PATH, year, None).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(service.visible_sky_year.1.computed(), 53);
+    assert_eq!(service.visible_sky.computed(), (31, 48));
     let (status, _) = call(&app, "POST", PATH, now, None).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(service.visible_sky.computed(), 31);
+    assert_eq!(service.visible_sky.computed().0, 31);
     // A year is not a count of nights, and nights in a row stop at 31.
     for (body, reason) in [
         (
             json!({"rig": rig, "span": "year", "nights": 10}),
-            "nights is not taken with span year: a year is one night a week.",
+            "Leave nights out with span year: a year is always 53 nights, one a week.",
         ),
         (
             json!({"rig": rig, "span": "now", "nights": 32}),
@@ -559,4 +569,122 @@ async fn the_month_and_the_year_count_the_nights_each_part_of_the_sky_is_in_view
         assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
         assert_eq!(refused["error"], reason);
     }
+}
+
+#[tokio::test]
+async fn a_place_is_counted_for_itself_and_agrees_with_the_lines() {
+    let (_dir, state, app, _instance, _catalog, rig) = fixture().await;
+    rig_profile(&state, rig, true).await;
+    let service = state.director.clone().unwrap();
+    const PLACES: &str = "/sky/visible-places";
+    let nights = json!({"rig": rig, "first_night": "2026-09-24", "span": "now"});
+    let (status, picture) = call(&app, "POST", PATH, nights.clone(), None).await;
+    assert_eq!(status, StatusCode::OK, "{picture}");
+    let picture = &picture["data"];
+    // The southern limit, from the any-night line: about −30.6°.
+    let limit = picture["any_night"]["declinations"][0].as_f64().unwrap();
+    // Places a quarter of a degree either side of it, between grid nodes
+    // at −30° and −32°: the nearest node would call both the same.
+    let ask = |places: Value| {
+        let mut body = nights.clone();
+        body["places"] = places;
+        body
+    };
+    let places = json!([
+        {"ra_degrees": 0.0, "dec_degrees": 89.0},
+        {"ra_degrees": 20.0, "dec_degrees": limit + 0.25},
+        {"ra_degrees": 20.0, "dec_degrees": limit - 0.25},
+        {"ra_degrees": 190.0, "dec_degrees": 0.0},
+        {"ra_degrees": 20.0, "dec_degrees": -90.0},
+    ]);
+    let (status, body) = call(&app, "POST", PLACES, ask(places), None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let view = &body["data"];
+    assert_eq!(view["first_night"], "2026-09-24");
+    assert_eq!(view["nights_counted"], 31);
+    let counted: Vec<u64> = view["places"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|place| place["nights_in_view"].as_u64().unwrap())
+        .collect();
+    // The pole every night; just inside the line some nights and just
+    // outside it none; by the Sun none; the south pole none.
+    assert_eq!(counted[0], 31);
+    assert!(counted[1] > 0, "{counted:?}");
+    assert_eq!(counted[2..], [0, 0, 0]);
+    assert_eq!(view["places"][1]["dec_degrees"], limit + 0.25);
+    // Each agrees with a night counted alone for that place, and the
+    // grids were not measured again for any of it.
+    assert_eq!(service.visible_sky.computed(), (31, 0));
+    // A year for a place, and the same nights without a picture first.
+    let year = json!({"rig": rig, "first_night": "2026-09-24", "span": "year", "places": [{"ra_degrees": 190.0, "dec_degrees": 0.0}, {"ra_degrees": 0.0, "dec_degrees": 89.0}]});
+    let (status, body) = call(&app, "POST", PLACES, year, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["data"]["nights_counted"], 53);
+    let by_the_sun = body["data"]["places"][0]["nights_in_view"]
+        .as_u64()
+        .unwrap();
+    assert!((20..53).contains(&by_the_sun), "{by_the_sun}");
+    assert_eq!(body["data"]["places"][1]["nights_in_view"], 53);
+    // Counting places measures no grid.
+    assert_eq!(service.visible_sky.computed(), (31, 0));
+    for (places, why) in [
+        (json!([]), "none"),
+        (json!([{"ra_degrees": 360.0, "dec_degrees": 0.0}]), "ra"),
+        (json!([{"ra_degrees": 10.0, "dec_degrees": 91.0}]), "dec"),
+        (
+            Value::Array(vec![json!({"ra_degrees": 1.0, "dec_degrees": 1.0}); 17]),
+            "too many",
+        ),
+    ] {
+        let (status, refused) = call(&app, "POST", PLACES, ask(places), None).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{why}: {refused}");
+        assert_eq!(
+            refused["error"],
+            "places must be 1 to 16 positions, each with ra_degrees from 0 up to 360 and dec_degrees from -90 to 90."
+        );
+    }
+    // A rig with no site is told the same thing as for the picture.
+    let (_dir, _state, app, _instance, _catalog, bare) = fixture().await;
+    let body = json!({"rig": bare, "places": [{"ra_degrees": 1.0, "dec_degrees": 1.0}]});
+    let (status, refused) = call(&app, "POST", PLACES, body, None).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        refused["error"],
+        "Rig has no location. Choose a Planning site in Rig setup."
+    );
+}
+
+#[tokio::test]
+async fn a_request_with_no_date_starts_from_the_coming_night() {
+    // The handler takes the clock, so this checks only that the nights it
+    // counts begin today or tomorrow by the site's date and run on from
+    // there; the rule itself is tested on fixed instants beside it.
+    let (_dir, state, app, _instance, _catalog, rig) = fixture().await;
+    rig_profile(&state, rig, true).await;
+    let (status, body) = call(&app, "POST", PATH, json!({"rig": rig, "nights": 2}), None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let nights = body["data"]["nights"].as_array().unwrap();
+    assert_eq!(nights.len(), 2);
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    // The first night's dark has not ended.
+    let dawn = nights[0]["dawn_ms"].as_u64().unwrap();
+    assert!(dawn > now_ms, "{dawn} {now_ms}");
+    // And it is the nearest such night: the one before had ended.
+    assert!(dawn < now_ms + 2 * 86_400_000);
+    let (status, places) = call(
+        &app,
+        "POST",
+        "/sky/visible-places",
+        json!({"rig": rig, "nights": 2, "places": [{"ra_degrees": 0.0, "dec_degrees": 89.0}]}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{places}");
+    assert_eq!(places["data"]["first_night"], nights[0]["date"]);
+    assert_eq!(places["data"]["places"][0]["nights_in_view"], 2);
 }
