@@ -47,6 +47,7 @@ pub(crate) async fn transfer_jobs(state: &Arc<AppState>) -> Vec<serde_json::Valu
 mod framing;
 mod image_uploads;
 mod import_drafts;
+mod least_recent;
 mod live_rigs;
 #[cfg(test)]
 pub(crate) use activation::create_director_tables as create_rig_tables_for_tests;
@@ -80,6 +81,7 @@ mod star_detection;
 mod take_values;
 mod templates;
 mod ts_snapshot;
+mod visible_sky;
 mod weather;
 mod workload;
 
@@ -198,6 +200,9 @@ pub struct Service {
     night_plans: night_plans::Cache,
     /// The skies of each night at each site, kept across requests.
     skies: night_sky::Skies,
+    /// Each night's grid of how long the sky stays in view, kept across
+    /// requests.
+    visible_sky: visible_sky::Grids,
     /// The writer's [`MetaStore::planning_rows_written`] after its last
     /// write: night plans kept from an older count may be out of date.
     planning_rows: std::sync::atomic::AtomicU64,
@@ -275,6 +280,7 @@ impl Service {
             forecast_turn: tokio::sync::Mutex::new(()),
             night_plans: night_plans::Cache::default(),
             skies: night_sky::Skies::default(),
+            visible_sky: visible_sky::Grids::default(),
             live_rigs: live_rigs::LiveRigs::default(),
             liveness,
             live_table: checkin::LiveTable::default(),
@@ -912,6 +918,10 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
         .route("/sky/resolve", get(sky_image::resolve))
         .route("/sky/search", get(sky_search::search))
         .route("/sky/objects", get(sky_objects::marks))
+        .route(
+            "/sky/visible-region",
+            axum::routing::post(visible_sky::evaluate),
+        )
         .route("/projects/{id}", get(project).patch(rename_project))
         .route(
             "/projects/{id}/deletion",

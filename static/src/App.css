@@ -276,6 +276,10 @@
   --sky-milky-way: rgb(200 210 255 / 4.5%);
   --sky-panel-bg: rgb(14 18 34 / 95%);
   --sky-panel-border: rgb(120 140 200 / 35%);
+  /* The lines around the sky a rig has in view for long enough: every
+     night, and at least one night of a range. */
+  --sky-visible-line: rgb(110 231 183 / 92%);
+  --sky-visible-line-any: rgb(110 231 183 / 62%);
 }
 
 .app {

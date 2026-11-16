@@ -768,3 +768,101 @@
 .sky-live .early-beta-heading h2 {
   margin: 0;
 }
+
+/* Visible sky: the sky one rig has in view for long enough. A solid line
+   for every night, a dashed one for at least one night of a range, and
+   marks on the visible side of each. */
+.sky-visible-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--color-border-primary);
+  border-radius: 10px;
+  background: var(--color-bg-secondary);
+}
+
+/* With no targets, the note sits in one line over the empty map. */
+.sky-loading-above-map {
+  min-height: 0;
+  justify-content: flex-start;
+  margin-bottom: 12px;
+  font-size: 1em;
+}
+
+/* New lines are on their way: the legend still describes the old ones. */
+.sky-visible-panel[aria-busy='true'] .sky-visible-legend {
+  opacity: 0.6;
+}
+
+.sky-visible-fields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  font-size: 0.9em;
+  color: var(--color-text-secondary);
+}
+
+.sky-visible-minimum,
+.sky-visible-dates {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+}
+
+.sky-visible-fields select,
+.sky-visible-dates input {
+  max-width: 100%;
+}
+
+.sky-visible-fields select,
+.sky-visible-fields input {
+  font: inherit;
+}
+
+.sky-visible-minimum input {
+  width: 5.5em;
+}
+
+.sky-visible-legend {
+  margin: 0;
+  font-size: 0.85em;
+  color: var(--color-text-secondary);
+}
+
+.sky-visible-key {
+  display: inline-block;
+  width: 22px;
+  margin-right: 6px;
+  border-top: 2px solid var(--sky-visible-line);
+  vertical-align: middle;
+}
+
+.sky-visible-line,
+.sky-visible-marks {
+  fill: none;
+  stroke: var(--sky-visible-line);
+  stroke-linejoin: round;
+}
+
+.sky-visible-line {
+  stroke-width: 1.8;
+}
+
+.sky-visible-marks {
+  stroke-width: 1.2;
+}
+
+.sky-visible-line.sky-visible-any {
+  stroke: var(--sky-visible-line-any);
+  stroke-width: 1.4;
+  stroke-dasharray: 6 5;
+}
+
+.sky-visible-marks.sky-visible-any {
+  stroke: var(--sky-visible-line-any);
+}

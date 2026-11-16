@@ -24,8 +24,12 @@ use rusqlite::{OpenFlags, OptionalExtension};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const DEFAULT_NIGHTS: u32 = 7;
-const STEP_MS: u64 = 300_000;
-const DARK_BELOW_DEGREES: f64 = -12.0;
+/// The sample step of every night's hours: feasibility, night plans, a
+/// rig's availability and the visible sky count with the same one, so
+/// their hours agree.
+pub(super) const STEP_MS: u64 = 300_000;
+/// How far below the horizon the Sun is when those count the sky as dark.
+pub(super) const DARK_BELOW_DEGREES: f64 = -12.0;
 
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]

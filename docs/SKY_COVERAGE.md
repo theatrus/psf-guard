@@ -114,12 +114,82 @@ placed from the mount position its plugin reports, or failing that at its
 target; see the status payload in [DIRECTOR.md](DIRECTOR.md).
 The choice lives in the URL (`live=1`).
 
+## Visible sky
+
+With Director on, click **Visible sky** in the controls to draw a line
+around the sky a rig can shoot. The line works in **Flat** and **Globe**,
+and in both coordinate frames. It needs no frames: with an empty catalog
+the page shows the line on a map with no targets.
+
+1. Choose the rig. The line uses the rig's location, horizon and altitude
+   limits from Rig setup. A rig uses the location and horizon of its
+   **Planning site** unless it has its own.
+2. Set how long a place must stay in view, in minutes. The field starts at
+   the rig's Target Scheduler minimum time (30 minutes unless you changed
+   it). The line follows a new value when you stop typing, press Enter or
+   leave the field. After you type another value, **Use rig's 30 min**
+   restores the rig's value.
+3. Choose **Tonight**, or **Dates** and a first and last night. **Dates**
+   opens with the two weeks from the rig's coming night; a range covers up
+   to 31 nights, from 1970-01-02 to 2098-12-31. Nights are dated by their
+   evening at the rig's site, as on Nights. Between dawn and noon there,
+   **Tonight** is the night that has just ended, and the legend shows
+   "last night".
+
+A place is in view when the Sun is more than 12° below the horizon and the
+place is above the rig's horizon and minimum altitude and below its maximum
+altitude. These are the tests that Planning's Visibility and Nights use, on
+the same five-minute samples. A place meets the minimum time on a night
+when it stays in view that long without a break. A tree or a roof that
+hides a place in the middle of the night splits its time in view in two;
+the place counts only if one of the two parts is long enough.
+
+For one night the map shows one solid line. For a range it shows two:
+
+- The solid line surrounds the sky that meets the minimum time on every
+  night of the range.
+- The dashed line surrounds the sky that meets it on at least one night.
+
+Short marks on each line point into the visible sky, so you can tell the
+two sides apart without relying on colour. When the whole sky or none of it
+meets the minimum time, there is no line; the legend shows the share of the
+sky that does.
+
+The legend under the controls shows the rig, the minimum time, the night or
+range, and the horizon the line was drawn against: the site's or the rig's
+custom horizon, or a flat horizon at the rig's minimum altitude. The line
+always follows a custom horizon when the rig or its site has one. This
+differs from a plan's Visibility, which follows the custom horizon only
+when **Custom horizon** is on in the plan's Scheduling limits, as Target
+Scheduler does.
+
+When the rig has no location, the legend explains that and **Open Rig
+setup** opens the rig's settings, where you choose a **Planning site**. On
+a night when it never gets dark at the site, nothing is in view; the legend
+notes how many nights of a range are like that.
+
+PSF Guard remembers the rig, the minimum time and the nights for the
+browser session, with the rest of the Sky view. A remembered range whose
+last night has passed is dropped, and **Dates** opens with the coming two
+weeks again.
+
+To draw a night, the server measures the whole sky for that night and
+minimum time, then keeps the result, so an overlapping range is quicker
+the next time. A night takes well under a tenth of a second, and a month
+up to about a second on a server with two cores. The line for **Tonight** is
+drawn again when the next night begins at the rig's site, and after you
+save a setting. The request is `POST /sky/visible-region`, described with
+the other Director endpoints in [DIRECTOR.md](DIRECTOR.md).
+
 ## Saving a picture
 
 ![The saved poster: title, span, numbers, and the map](sky-coverage-poster.jpg)
 
 **Save PNG** renders the map at twice its on-screen size, as shown and as
 zoomed, with the title and the numbers above it, for a wallpaper or a post.
+The Visible sky lines are part of the picture when they are on, and a line
+under the map shows the rig, the minimum time, the nights and the horizon
+they were drawn for.
 The button is a browser feature and is not offered in the desktop app.
 
 ## Where the numbers come from

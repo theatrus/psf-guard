@@ -1,7 +1,7 @@
 //! Conservative whole-span altitude screening for the fixed-star SOFA model.
 
 use super::{
-    altitude_allowed, observe, AltitudeLimits, EarthOrientation, Horizon, IcrsPosition,
+    observe, AltitudeLimits, AltitudeTest, EarthOrientation, Horizon, IcrsPosition,
     ObservedPosition, Site, VisibilityError,
 };
 use crate::windows::Interval;
@@ -62,13 +62,11 @@ fn check_span(
     budget: usize,
 ) -> Result<AltitudeSpan, VisibilityError> {
     let [first, last] = validate_span(position, site, orientation, span)?;
+    // The limits and the horizon are checked once for every point of the
+    // span, where the first point used to check them.
+    let test = AltitudeTest::new(horizon, limits)?;
     for (at_ms, point) in [(span.start_ms, first), (span.end_ms, last)] {
-        if !altitude_allowed(
-            horizon,
-            limits,
-            point.azimuth_degrees,
-            point.altitude_degrees,
-        )? {
+        if !test.allowed(point.azimuth_degrees, point.altitude_degrees)? {
             return Ok(AltitudeSpan::Blocked { at_ms });
         }
     }
@@ -81,12 +79,7 @@ fn check_span(
         let (midpoint, radius) = midpoint_and_radius(part);
         let point = observe(position, site, orientation, midpoint)?;
         observations += 1;
-        if !altitude_allowed(
-            horizon,
-            limits,
-            point.azimuth_degrees,
-            point.altitude_degrees,
-        )? {
+        if !test.allowed(point.azimuth_degrees, point.altitude_degrees)? {
             return Ok(AltitudeSpan::Blocked { at_ms: midpoint });
         }
         if classify_cap(horizon, limits, point, radius)? == CapClearance::Clear {

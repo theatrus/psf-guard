@@ -24,6 +24,7 @@ import { blendFilterColors, filterColor } from '../../utils/filterColors';
 import { BRIGHT_STARS, CONSTELLATION_LINES, CONSTELLATION_NAMES } from '../../data/skyBackdrop';
 import { formatHours, formatNight, type ShownTarget } from './skyModel';
 import type { PlacedRig } from './liveRigs';
+import { visiblePaths, type VisibleSkyLines } from './visibleSky';
 
 export const MAP_WIDTH = 1000;
 export const MAP_HEIGHT = 540;
@@ -48,6 +49,8 @@ interface Props {
   rigs?: PlacedRig[];
   /** Turn the sky to put this place in the middle; a new `nonce` asks again. */
   focus?: { ra: number; dec: number; nonce: number } | null;
+  /** Lines around the sky a rig has in view for long enough, if asked for. */
+  visible?: VisibleSkyLines | null;
 }
 
 interface View {
@@ -120,6 +123,7 @@ export default function SkyMap({
   onOpen,
   rigs = [],
   focus = null,
+  visible = null,
 }: Props) {
   const [hovered, setHovered] = useState<ShownTarget | null>(null);
   const [pointer, setPointer] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -309,6 +313,18 @@ export default function SkyMap({
     [rigs, sky]
   );
 
+  // The lines around the visible sky, with marks on the visible side: a
+  // mark every few degrees, closer together as the view zooms in.
+  const visibleDrawn = useMemo(() => {
+    if (!visible) return null;
+    const every = Math.max(1, 6 / Math.sqrt(view.k));
+    const length = 7 / view.k;
+    return {
+      every: visiblePaths(visible.every, sky, AT, every, length),
+      any: visible.any ? visiblePaths(visible.any, sky, AT, every, length) : null,
+    };
+  }, [visible, sky, view.k]);
+
   // Which fields are inside the current view, for lazy stack previews.
   const visibleWidth = MAP_WIDTH / view.k;
   const visibleHeight = MAP_HEIGHT / view.k;
@@ -477,6 +493,18 @@ export default function SkyMap({
                   />
                 </g>
               ))}
+          </g>
+        )}
+        {visibleDrawn && (
+          <g className="sky-visible" pointerEvents="none" data-nights={visibleDrawn.any ? 'range' : 'one'}>
+            {visibleDrawn.any && (
+              <>
+                <path className="sky-visible-line sky-visible-any" d={visibleDrawn.any.line} vectorEffect="non-scaling-stroke" />
+                <path className="sky-visible-marks sky-visible-any" d={visibleDrawn.any.marks} vectorEffect="non-scaling-stroke" />
+              </>
+            )}
+            <path className="sky-visible-line sky-visible-every" d={visibleDrawn.every.line} vectorEffect="non-scaling-stroke" />
+            <path className="sky-visible-marks sky-visible-every" d={visibleDrawn.every.marks} vectorEffect="non-scaling-stroke" />
           </g>
         )}
         {placedRigs.length > 0 && (

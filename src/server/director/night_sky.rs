@@ -10,6 +10,7 @@
 //! so a kept sky never goes stale; the least recently used go first once
 //! [`MAX_KEPT`] are kept.
 
+use super::least_recent::LeastRecent;
 use psf_guard_director_core::night::{NightError, NightSky, SkyMoonCell, SkyStep};
 use psf_guard_director_core::visibility::Site;
 use rayon::prelude::*;
@@ -44,7 +45,7 @@ impl Key {
 
 #[derive(Default)]
 pub(super) struct Skies {
-    kept: Mutex<Kept>,
+    kept: Mutex<LeastRecent<Key, Arc<NightSky>>>,
     /// The most skies kept: [`MAX_KEPT`], or fewer in a test.
     #[cfg(test)]
     limit: std::sync::atomic::AtomicUsize,
@@ -78,13 +79,6 @@ impl Held {
     }
 }
 
-#[derive(Default)]
-struct Kept {
-    skies: HashMap<Key, (Arc<NightSky>, u64)>,
-    /// Counts reads, to find the least recently used.
-    reads: u64,
-}
-
 impl Skies {
     /// The skies of the nights opening at each of `noons` at `site`,
     /// sampled every `step_ms`, in order: kept, or computed now across the
@@ -102,16 +96,7 @@ impl Skies {
             .collect();
         let mut found: Vec<Option<Arc<NightSky>>> = {
             let mut kept = self.kept.lock().unwrap_or_else(|e| e.into_inner());
-            keys.iter()
-                .map(|key| {
-                    kept.reads += 1;
-                    let reads = kept.reads;
-                    kept.skies.get_mut(key).map(|(sky, read)| {
-                        *read = reads;
-                        Arc::clone(sky)
-                    })
-                })
-                .collect()
+            keys.iter().map(|key| kept.get(key)).collect()
         };
         // Every missing night's steps at once, so one night spreads over
         // the pool as well as many.
@@ -154,26 +139,12 @@ impl Skies {
         }
         // Keep what was computed, with its track when it has one.
         {
+            let limit = self.max_kept();
             let mut kept = self.kept.lock().unwrap_or_else(|e| e.into_inner());
             for (key, sky) in keys.iter().zip(&computed) {
                 if let Some(Ok(sky)) = sky {
-                    kept.reads += 1;
-                    let reads = kept.reads;
-                    kept.skies
-                        .entry(*key)
-                        .or_insert_with(|| (Arc::clone(sky), reads));
+                    kept.keep(*key, Arc::clone(sky), limit);
                 }
-            }
-            while kept.skies.len() > self.max_kept() {
-                let Some(oldest) = kept
-                    .skies
-                    .iter()
-                    .min_by_key(|(_, (_, read))| *read)
-                    .map(|(key, _)| *key)
-                else {
-                    break;
-                };
-                kept.skies.remove(&oldest);
             }
         }
         found
@@ -244,7 +215,7 @@ impl Skies {
     #[cfg(test)]
     pub(super) fn clear(&self) {
         let mut kept = self.kept.lock().unwrap_or_else(|e| e.into_inner());
-        kept.skies.clear();
+        kept.clear();
     }
 
     /// Give each sky without a Moon track its track, every missing
@@ -353,7 +324,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(skies.kept.lock().unwrap().skies.len(), 3);
+        assert_eq!(skies.kept.lock().unwrap().len(), 3);
     }
 
     #[test]
@@ -370,8 +341,8 @@ mod tests {
         skies.nights(site, &noons[..1], 3_600_000, false);
         skies.nights(site, &noons[MAX_KEPT..MAX_KEPT + 1], 3_600_000, false);
         let kept = skies.kept.lock().unwrap();
-        assert_eq!(kept.skies.len(), MAX_KEPT);
-        assert!(kept.skies.contains_key(&Key::of(site, noons[0], 3_600_000)));
-        assert!(!kept.skies.contains_key(&Key::of(site, noons[1], 3_600_000)));
+        assert_eq!(kept.len(), MAX_KEPT);
+        assert!(kept.contains(&Key::of(site, noons[0], 3_600_000)));
+        assert!(!kept.contains(&Key::of(site, noons[1], 3_600_000)));
     }
 }
