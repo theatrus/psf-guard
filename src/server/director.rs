@@ -203,6 +203,10 @@ pub struct Service {
     /// Each night's grid of how long the sky stays in view, kept across
     /// requests.
     visible_sky: visible_sky::Grids,
+    /// The same for the nights a year is sampled on, with their skies:
+    /// kept apart, so a year never pushes out the month's, which Nights
+    /// shares.
+    visible_sky_year: (night_sky::Skies, visible_sky::Grids),
     /// The writer's [`MetaStore::planning_rows_written`] after its last
     /// write: night plans kept from an older count may be out of date.
     planning_rows: std::sync::atomic::AtomicU64,
@@ -281,6 +285,7 @@ impl Service {
             night_plans: night_plans::Cache::default(),
             skies: night_sky::Skies::default(),
             visible_sky: visible_sky::Grids::default(),
+            visible_sky_year: Default::default(),
             live_rigs: live_rigs::LiveRigs::default(),
             liveness,
             live_table: checkin::LiveTable::default(),

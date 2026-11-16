@@ -1,5 +1,4 @@
 import type { SkyFrame, SkyMode } from '../../utils/skyProjection';
-import type { VisibleSkyChoice } from './visibleSky';
 
 /**
  * Where the Sky view was left: frame, shape, turn, zoom, and the cuts. Kept
@@ -20,9 +19,6 @@ export interface SkyViewMemory {
   hiddenFilters: string[];
   fromNight: string | null;
   asOfNight: string | null;
-  /** The Visible sky overlay: on or off, the rig, the minutes typed (null
-   *  is the rig's own), and tonight or a range of dates. */
-  visibleSky: VisibleSkyChoice;
 }
 
 const KEY = 'psf-guard:sky-view:v1';

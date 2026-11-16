@@ -1,6 +1,9 @@
-//! The sky a rig can shoot for long enough: for one night or a range, the
-//! lines around the sky that stays in view, in the dark, for at least a
-//! minimum time without a break. The Sky view draws them.
+//! The sky a rig can shoot for long enough: over a set of nights, on how
+//! many of them each part of the sky stays in view, in the dark, for at
+//! least a minimum time without a break, and the lines around the sky in
+//! view on every night and on any. A plan's Sky tab draws them. The nights
+//! are tonight and the 30 after ([`Span::Now`]), or one night a week for a
+//! year ([`Span::Year`]).
 //!
 //! In view is what Visibility and Nights count: the Sun below −12°, and the
 //! place inside the rig's altitude limits and above its horizon. The
@@ -30,7 +33,7 @@ use super::least_recent::LeastRecent;
 use super::*;
 use crate::concurrency::{plan_workers, ComputePool, Priority, Stop};
 use psf_guard_director_core::{
-    night::{place_over, DarkRuns, NightDate, NightError, NightSky, MAX_NIGHTS},
+    night::{place_over, DarkRuns, NightDate, NightError, NightSky},
     visibility::{AltitudeLimits, Horizon, IcrsPosition, Site},
 };
 use psf_guard_director_meta::{
@@ -53,8 +56,32 @@ const HALVINGS: u32 = 4;
 /// The longest minimum time: a day, as Scheduling limits allow.
 const MAX_MINIMUM_MINUTES: u32 = 24 * 60;
 /// The most night grids kept, about 16 kB each: a month of nights for
-/// eight rigs or minimum times.
+/// eight rigs or minimum times. The year's sampled nights are kept apart
+/// ([`Service::visible_sky_year`]), four rigs' or minimum times' worth, so
+/// a look at the year never lets go of the month's.
 const MAX_KEPT: usize = 256;
+/// The most nights in a row one request covers: tonight and the 30 after.
+/// The visible sky's own limit, whatever night plans allow.
+pub(super) const MOST_NIGHTS: u32 = 31;
+/// A year is sampled one night a week: 53 nights from the first to the
+/// same night a year on, less a day. Darkness and the sky in view shift by
+/// about half an hour a week, less than the six samples the default
+/// minimum time needs, and a week is inside the eight days a place is
+/// placed across, so each sampled night is measured as exactly as a night
+/// of the month.
+pub(super) const YEAR_EVERY_NIGHTS: u32 = 7;
+pub(super) const YEAR_NIGHTS: u32 = 53;
+
+/// Which nights a request covers.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum Span {
+    /// Nights in a row from the first: [`MOST_NIGHTS`] unless `nights`
+    /// asks for fewer.
+    Now,
+    /// [`YEAR_NIGHTS`] nights, one every [`YEAR_EVERY_NIGHTS`].
+    Year,
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -69,9 +96,14 @@ pub(super) struct Request {
     /// text so a date that is not a night is refused with a sentence.
     #[serde(default)]
     first_night: Option<String>,
-    /// How many nights from the first; 1 without it.
+    /// How many nights in a row from the first. Without it: 1, or
+    /// [`MOST_NIGHTS`] when `span` is `now`. Not taken with `span: year`.
     #[serde(default)]
     nights: Option<u32>,
+    /// `now` for the coming month, `year` for the coming year sampled
+    /// weekly. Without it, `nights` in a row.
+    #[serde(default)]
+    span: Option<Span>,
 }
 
 /// One night of the range, as Nights dates and times it.
@@ -111,6 +143,19 @@ struct Region {
     lines: Vec<Vec<[f64; 2]>>,
     /// The share of the whole sky inside the lines, 0 to 1.
     sky_fraction: f64,
+    /// The southernmost and northernmost declination inside the lines, in
+    /// degrees; `None` when no sky is.
+    declinations: Option<[f64; 2]>,
+}
+
+/// The grid the nights were counted on: nodes every `degrees`, `columns`
+/// of right ascension from 0h and `rows` of declination from the south
+/// pole to the north.
+#[derive(Serialize)]
+struct GridShape {
+    degrees: f64,
+    columns: usize,
+    rows: usize,
 }
 
 #[derive(Serialize)]
@@ -129,6 +174,15 @@ pub(super) struct View {
     step_minutes: u32,
     dark_below_degrees: f64,
     nights: Vec<NightSpan>,
+    /// How the nights were chosen, and how many nights lie from each to
+    /// the next: 1 for nights in a row, [`YEAR_EVERY_NIGHTS`] for a year.
+    span: Span,
+    every_nights: u32,
+    grid: GridShape,
+    /// For each node of the grid, on how many of `nights` it meets the
+    /// minimum time: one byte a node, row by row from the south pole, in
+    /// base64.
+    counts: String,
     /// Sky that meets the minimum time on every night.
     every_night: Region,
     /// Sky that meets it on at least one night; `None` for a single night,
@@ -303,9 +357,29 @@ fn region(
         inside += weight * count as f64;
         whole += weight * COLS as f64;
     }
+    let declinations = seen.iter().any(|seen| *seen).then(|| {
+        let lines: &Vec<Vec<[f64; 2]>> = &lines;
+        let edge = |pole_seen: bool, pole: f64, furthest: fn(f64, f64) -> f64| {
+            if pole_seen {
+                return pole;
+            }
+            // Short of the pole there is a line between, and its extreme
+            // is the limit.
+            lines
+                .iter()
+                .flatten()
+                .map(|point| point[1])
+                .fold(-pole, furthest)
+        };
+        [
+            edge(seen[0], -90.0, f64::min),
+            edge(seen[COLS * (ROWS - 1)], 90.0, f64::max),
+        ]
+    });
     Ok(Region {
         lines,
         sky_fraction: (inside / whole * 10_000.0).round() / 10_000.0,
+        declinations,
     })
 }
 
@@ -341,6 +415,7 @@ pub(super) fn compute(
     inputs: Inputs,
     dates: Vec<NightDate>,
     minimum_minutes: u32,
+    span: Span,
     stop: &Stop,
 ) -> Result<View, FeasibilityError> {
     let failed = |failure: Failure| {
@@ -374,7 +449,7 @@ pub(super) fn compute(
         "measuring the visible sky"
     );
     // The skies, the grids and the crossings all run inside the pool.
-    pool.install(|| measure(service, inputs, dates, minimum_minutes, stop))
+    pool.install(|| measure(service, inputs, dates, minimum_minutes, span, stop))
         .map_err(failed)
 }
 
@@ -384,16 +459,22 @@ fn measure(
     inputs: Inputs,
     dates: Vec<NightDate>,
     minimum_minutes: u32,
+    span: Span,
     stop: &Stop,
 ) -> Result<View, Failure> {
     let site = inputs.site;
+    // A year's skies and grids are kept apart from the month's, which
+    // Nights shares: 53 nights a rig would push a month of them out.
+    let (kept_skies, kept_grids) = match span {
+        Span::Now => (&service.skies, &service.visible_sky),
+        Span::Year => (&service.visible_sky_year.0, &service.visible_sky_year.1),
+    };
     let began = std::time::Instant::now();
     let noons: Vec<u64> = dates
         .iter()
         .map(|date| date.span(site.longitude_degrees).start_ms)
         .collect();
-    let skies: Vec<Arc<NightSky>> = service
-        .skies
+    let skies: Vec<Arc<NightSky>> = kept_skies
         .nights(site, &noons, STEP_MS, false)
         .into_iter()
         .collect::<Result<_, _>>()?;
@@ -421,10 +502,7 @@ fn measure(
         .iter()
         .map(|noon| key(&inputs, &horizon_key, *noon, needed))
         .collect();
-    let mut grids: Vec<Option<Grid>> = keys
-        .iter()
-        .map(|key| service.visible_sky.get(key))
-        .collect();
+    let mut grids: Vec<Option<Grid>> = keys.iter().map(|key| kept_grids.get(key)).collect();
     // Every row of the nights not kept, across the pool: a row's nodes
     // are placed once for all those nights. A row not yet begun when the
     // caller goes is not begun.
@@ -456,15 +534,18 @@ fn measure(
     }
     for (night, grid) in missing.into_iter().zip(fresh) {
         let grid = Arc::new(grid);
-        service
-            .visible_sky
-            .keep(keys[night].clone(), Arc::clone(&grid));
+        kept_grids.keep(keys[night].clone(), Arc::clone(&grid));
         grids[night] = Some(grid);
     }
     let grids: Vec<Grid> = grids.into_iter().flatten().collect();
     let grids_ms = began.elapsed().as_millis() - skies_ms;
     let every: Vec<bool> = (0..COLS * ROWS)
         .map(|index| grids.iter().all(|grid| grid[index]))
+        .collect();
+    // On how many of the nights each node is in view: the kept grids
+    // added up, with no new astronomy.
+    let counts: Vec<u8> = (0..COLS * ROWS)
+        .map(|index| grids.iter().filter(|grid| grid[index]).count().min(255) as u8)
         .collect();
     // Whether a place between nodes has its run on every night, or on any:
     // placed once for all of them. An error here fails the request, as it
@@ -535,6 +616,20 @@ fn measure(
                 }
             })
             .collect(),
+        span,
+        every_nights: match span {
+            Span::Now => 1,
+            Span::Year => YEAR_EVERY_NIGHTS,
+        },
+        grid: GridShape {
+            degrees: GRID_DEGREES,
+            columns: COLS,
+            rows: ROWS,
+        },
+        counts: {
+            use base64::Engine;
+            base64::engine::general_purpose::STANDARD.encode(&counts)
+        },
         every_night,
         any_night,
     })
@@ -582,12 +677,13 @@ pub(super) fn read_inputs(store: &MetaStore, rig_id: Uuid) -> Result<Inputs, Fea
     })
 }
 
-/// The nights a request covers: `nights` from `first`, or from the night
-/// under way at the site at `now_ms`. `400` with the reason when `first` is
+/// The nights a request covers: `nights` of them, one of every `every`,
+/// from `first`, or from the night under way at the site at `now_ms`. `400` with the reason when `first` is
 /// not a night, or the range runs past the last night the astronomy times.
 pub(super) fn nights_asked(
     first: Option<&str>,
     nights: u32,
+    every: u32,
     longitude_degrees: f64,
     now_ms: u64,
 ) -> Result<Vec<NightDate>, FeasibilityError> {
@@ -600,7 +696,9 @@ pub(super) fn nights_asked(
         })?,
         None => NightDate::at(now_ms, longitude_degrees).ok_or(Error::Internal)?,
     };
-    let dates: Vec<NightDate> = std::iter::successors(Some(first), |date| date.next())
+    // One night of every `every`, from the first.
+    let later = |date: &NightDate| (0..every).try_fold(*date, |date, _| date.next());
+    let dates: Vec<NightDate> = std::iter::successors(Some(first), later)
         .take(nights as usize)
         .collect();
     if dates.len() != nights as usize {
@@ -626,10 +724,20 @@ pub(super) async fn evaluate(
     Json(request): Json<Request>,
 ) -> Result<Json<ApiResponse<View>>, FeasibilityError> {
     let service = enabled(&state)?;
-    let nights = request.nights.unwrap_or(1);
-    if nights == 0 || nights > MAX_NIGHTS {
+    let span = request.span.unwrap_or(Span::Now);
+    let (nights, every) = match (request.span, request.nights) {
+        (Some(Span::Year), None) => (YEAR_NIGHTS, YEAR_EVERY_NIGHTS),
+        (Some(Span::Year), Some(_)) => {
+            return Err(FeasibilityError::Rejected(
+                "nights is not taken with span year: a year is one night a week.".into(),
+            ));
+        }
+        (Some(Span::Now), None) => (MOST_NIGHTS, 1),
+        (_, nights) => (nights.unwrap_or(1), 1),
+    };
+    if every == 1 && !(1..=MOST_NIGHTS).contains(&nights) {
         return Err(FeasibilityError::Rejected(format!(
-            "nights must be between 1 and {MAX_NIGHTS}."
+            "nights must be between 1 and {MOST_NIGHTS}."
         )));
     }
     if request
@@ -652,6 +760,7 @@ pub(super) async fn evaluate(
     let dates = nights_asked(
         request.first_night.as_deref(),
         nights,
+        every,
         inputs.site.longitude_degrees,
         now_ms,
     )?;
@@ -664,8 +773,18 @@ pub(super) async fn evaluate(
     // request is dropped.
     let stop = Stop::new();
     let gone = StopWhenDropped(stop.clone());
-    let view = blocking(move || compute(&state, &service, inputs, dates, minimum_minutes, &stop))
-        .await??;
+    let view = blocking(move || {
+        compute(
+            &state,
+            &service,
+            inputs,
+            dates,
+            minimum_minutes,
+            span,
+            &stop,
+        )
+    })
+    .await??;
     drop(gone);
     Ok(Json(ApiResponse::success(view)))
 }
@@ -875,7 +994,7 @@ mod tests {
 
     #[test]
     fn the_nights_asked_stay_inside_the_years_the_astronomy_times() {
-        let asked = |first, nights| nights_asked(Some(first), nights, -118.3, 0);
+        let asked = |first, nights| nights_asked(Some(first), nights, 1, -118.3, 0);
         let dates = asked("1970-01-02", 2).ok().unwrap();
         assert_eq!(dates[1].to_string(), "1970-01-03");
         assert_eq!(asked("2098-12-31", 1).ok().unwrap().len(), 1);
@@ -893,8 +1012,29 @@ mod tests {
             );
         }
         assert_eq!(asked("2098-12-01", 31).ok().unwrap().len(), 31);
+        // A year: one night a week, 53 of them, the last a day short of a
+        // year after the first.
+        let year = nights_asked(
+            Some("2026-11-16"),
+            YEAR_NIGHTS,
+            YEAR_EVERY_NIGHTS,
+            -118.3,
+            0,
+        )
+        .ok()
+        .unwrap();
+        assert_eq!(year.len(), 53);
+        assert_eq!(year[0].to_string(), "2026-11-16");
+        assert_eq!(year[1].to_string(), "2026-11-23");
+        assert_eq!(year[52].to_string(), "2027-11-15");
+        assert!(year.windows(2).all(|pair| pair[0].days_until(pair[1]) == 7));
+        // A year that would run past the last night is refused whole.
+        assert!(matches!(
+            nights_asked(Some("2098-01-10"), YEAR_NIGHTS, YEAR_EVERY_NIGHTS, 0.0, 0),
+            Err(FeasibilityError::Rejected(_))
+        ));
         // Without a first night: the night under way at the site.
-        let tonight = nights_asked(None, 1, -118.3, 1_790_294_400_000)
+        let tonight = nights_asked(None, 1, 1, -118.3, 1_790_294_400_000)
             .ok()
             .unwrap();
         assert_eq!(tonight[0].to_string(), "2026-09-24");
