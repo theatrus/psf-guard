@@ -946,11 +946,14 @@ export interface DirectorRigProjection {
   notes: string[];
 }
 /** What `/sky/visible-region` is asked: a rig, and optionally a minimum
- *  time, a first night (`YYYY-MM-DD`, the evening's date at the rig's site)
- *  and a number of nights. Left out: the rig's minimum time, tonight, one. */
+ *  time and which nights. `span: 'now'` is tonight and the 30 nights after;
+ *  `span: 'year'` is one night a week for a year. Without `span`: `nights`
+ *  in a row (one when left out) from `first_night` (`YYYY-MM-DD`, the
+ *  evening's date at the rig's site; tonight when left out). */
 export interface DirectorVisibleSkyRequest {
   rig: string;
   minimum_minutes?: number;
+  span?: 'now' | 'year';
   first_night?: string;
   nights?: number;
 }
@@ -960,9 +963,12 @@ export interface DirectorVisibleSkyRequest {
 export interface DirectorVisibleSkyRegion {
   lines: Array<Array<[number, number]>>;
   sky_fraction: number;
+  /** The southernmost and northernmost declination inside the lines; null
+   *  when no sky is. */
+  declinations: [number, number] | null;
 }
 /** The sky a rig has in view, in the dark, for at least a minimum time
- *  without a break, over one night or a range. */
+ *  without a break, over the nights counted. */
 export interface DirectorVisibleSky {
   rig: DirectorIdentity;
   planning_site: DirectorIdentity | null;
@@ -979,6 +985,16 @@ export interface DirectorVisibleSky {
   step_minutes: number;
   dark_below_degrees: number;
   nights: Array<{ date: string; dusk_ms: number | null; dawn_ms: number | null }>;
+  /** How the nights were chosen, and the nights from each to the next: 1
+   *  for nights in a row, 7 for a year. */
+  span: 'now' | 'year';
+  every_nights: number;
+  /** The grid the nights were counted on: nodes every `degrees`, columns
+   *  of right ascension from 0h, rows from the south pole. */
+  grid: { degrees: number; columns: number; rows: number };
+  /** For each node, on how many of `nights` it is in view: one byte a
+   *  node, row by row, in base64. */
+  counts: string;
   every_night: DirectorVisibleSkyRegion;
   /** Null for one night, when it is the same sky as `every_night`. */
   any_night: DirectorVisibleSkyRegion | null;

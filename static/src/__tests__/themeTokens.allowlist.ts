@@ -63,19 +63,21 @@ export const THEME_ALLOWLIST: { colours: ThemeFindings; states: ThemeFindings; i
     "components/header/header.css": [
       "background: rgb(0 0 0 / 18%)"
     ],
-    "components/sky/SkyPage.css": [
+    "components/sky/SkyMap.css": [
       "box-shadow: inset 0 0 80px rgba(0, 0, 0, 0.6)",
-      "fill: #f2f0d8",
       "fill: #ffb3b3",
       "fill: #ffe6a8",
       "fill: rgba(140, 190, 255, 0.75)",
-      "fill: rgba(255, 255, 255, 0.025)",
       "filter: drop-shadow(0 0 4px rgba(255, 255, 255, 0.6))",
       "stroke: #ffd166",
       "stroke: #fff",
       "stroke: rgba(160, 180, 230, 0.35)",
       "stroke: rgba(160, 200, 255, 0.4)",
       "stroke: rgba(255, 214, 120, 0.55)"
+    ],
+    "components/sky/SkyPage.css": [
+      "fill: #f2f0d8",
+      "fill: rgba(255, 255, 255, 0.025)"
     ]
   },
   "states": {
@@ -97,7 +99,7 @@ export const THEME_ALLOWLIST: { colours: ThemeFindings; states: ThemeFindings; i
     "components/projectCard.css": [
       ".library-pill-progress.is-open (.is-open)"
     ],
-    "components/sky/SkyPage.css": [
+    "components/sky/SkyMap.css": [
       ".sky-target:hover, .sky-target.is-active (.is-active)"
     ],
     "components/toolbar/toolbar.css": [

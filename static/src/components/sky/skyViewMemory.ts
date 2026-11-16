@@ -40,6 +40,9 @@ export function recallSkyView(): Partial<SkyViewMemory> {
     const raw = storage()?.getItem(KEY);
     const parsed = raw ? (JSON.parse(raw) as Partial<SkyViewMemory>) : {};
     held = typeof parsed === 'object' && parsed ? parsed : {};
+    // A build that drew the visible sky on this page kept its choices
+    // here. It is in Planning now, so what was kept is let go.
+    delete (held as Record<string, unknown>).visibleSky;
   } catch {
     held = {};
   }

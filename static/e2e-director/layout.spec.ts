@@ -178,8 +178,10 @@ test('planning tabs lay out without overlaps or clipping', async ({ page, reques
     await page.getByLabel('Askar data camera angle degrees').fill('30');
     const found: string[] = [];
     const sizes = [[1440, 1000], [1280, 800], [1100, 900], [1024, 768], [900, 900], [390, 844], [375, 812]] as const;
-    for (const tab of ['Framing', 'Exposures', 'Rigs', 'Priority and defaults']) {
+    for (const tab of ['Framing', 'Sky', 'Exposures', 'Rigs', 'Priority and defaults']) {
       await page.getByRole('tab', { name: new RegExp(`^${tab}`) }).click();
+      // The Sky tab's rigs have no site here: its controls, map and note lay out all the same.
+      if (tab === 'Sky') await expect(page.getByRole('region', { name: 'Sky in view' }).locator('.sky-map')).toBeVisible();
       for (const [width, height] of sizes) {
         await page.setViewportSize({ width, height });
         await page.waitForTimeout(300);

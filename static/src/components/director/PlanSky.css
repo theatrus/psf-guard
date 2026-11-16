@@ -1,0 +1,162 @@
+/* Planning's Sky tab: the sky a plan's rig can shoot, and a place to send
+   to Framing. */
+.plan-sky {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.plan-sky-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  font-size: 0.9em;
+  color: var(--color-text-secondary);
+}
+
+.plan-sky-controls label {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+}
+
+.plan-sky-controls select,
+.plan-sky-controls input {
+  font: inherit;
+  max-width: 100%;
+}
+
+.plan-sky-minimum input {
+  width: 5.5em;
+}
+
+.plan-sky-choice {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.plan-sky-choice button {
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border-primary);
+  background: var(--color-bg-secondary);
+  color: var(--color-text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.plan-sky-choice button:hover {
+  border-color: var(--color-primary);
+}
+
+.plan-sky-choice button[aria-checked='true'] {
+  background: var(--state-on-bg);
+  border-color: var(--state-on-border);
+  color: var(--color-text-primary);
+}
+
+.plan-sky-legend {
+  margin: 0;
+  font-size: 0.85em;
+  color: var(--color-text-secondary);
+}
+
+/* A new picture is on its way: the legend still describes the old one. */
+.plan-sky[aria-busy='true'] .plan-sky-legend {
+  opacity: 0.6;
+}
+
+.plan-sky-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(14rem, 19rem);
+  gap: 12px;
+  align-items: start;
+}
+
+.plan-sky-map {
+  min-width: 0;
+}
+
+.plan-sky-key {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  margin-top: 8px;
+  font-size: 0.8em;
+  color: var(--color-text-secondary);
+}
+
+/* The shading's scale, from none of the nights to all of them, over the
+   colour the map is drawn on. */
+.plan-sky-scale {
+  width: 120px;
+  height: 12px;
+  border: 1px solid var(--color-border-primary);
+  border-radius: 3px;
+  background: linear-gradient(to right, transparent, var(--sky-visible-shade)), var(--sky-bg);
+}
+
+.plan-sky-key-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.plan-sky-key-solid,
+.plan-sky-key-dashed {
+  display: inline-block;
+  width: 26px;
+  border-top: 2px solid var(--sky-visible-line);
+}
+
+.plan-sky-key-dashed {
+  border-top: 2px dashed var(--sky-visible-line-any);
+}
+
+.plan-sky-side {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  font-size: 0.9em;
+}
+
+.plan-sky-place {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border-primary);
+  border-radius: 8px;
+  background: var(--color-bg-secondary);
+  color: var(--color-text-secondary);
+}
+
+.plan-sky-place strong {
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
+}
+
+.plan-sky-picked {
+  border-color: var(--state-on-border);
+}
+
+.plan-sky-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+@media (max-width: 900px) {
+  .plan-sky-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

@@ -280,6 +280,12 @@
      night, and at least one night of a range. */
   --sky-visible-line: rgb(110 231 183 / 92%);
   --sky-visible-line-any: rgb(110 231 183 / 62%);
+  /* The shading under those lines at its strongest, where the sky is in
+     view every night; it fades to nothing where it never is. */
+  --sky-visible-shade: rgb(110 231 183 / 30%);
+  /* A plan's target marked on a sky map, and a spot picked there. */
+  --sky-mark: rgb(255 209 102);
+  --sky-mark-pick: rgb(255 255 255 / 92%);
 }
 
 .app {

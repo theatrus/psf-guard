@@ -402,6 +402,46 @@ describe('Framing view', () => {
     expect(screen.queryByRole('button', { name: 'Back to saved framing' })).not.toBeInTheDocument();
   });
 
+  it('takes a place offered from the Sky tab as a found target: an unsaved edit, with Undo', async () => {
+    const { saves } = fixture();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    const reported: Array<[string | null, string | null]> = [];
+    const onTarget = (target: { name: string } | null, held: string | null) => { reported.push([target?.name ?? null, held]); };
+    const tree = (offer: { pick: { name: string; center: { ra_degrees: number; dec_degrees: number }; source: string }; nonce: number } | null) =>
+      <QueryClientProvider client={client}><FramingView projectId="project" seed={seed} offer={offer} onTarget={onTarget} /></QueryClientProvider>;
+    const { rerender } = render(tree(null));
+    expect(await screen.findByLabelText('Target name')).toHaveValue('M31');
+    // The Sky tab is told the target as it stands, and that it may be moved.
+    expect(reported.at(-1)).toEqual(['M31', null]);
+    const offer = { pick: { name: '20h 59m, +44° 22′', center: { ra_degrees: 314.75, dec_degrees: 44.37 }, source: 'the map' }, nonce: 1 };
+    rerender(tree(offer));
+    expect(await screen.findByText('Moved the target to 20h 59m, +44° 22′.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Target name')).toHaveValue('20h 59m, +44° 22′');
+    expect(screen.getByLabelText('Right ascension degrees')).toHaveValue(314.75);
+    expect(reported.at(-1)).toEqual(['20h 59m, +44° 22′', null]);
+    // Nothing was saved, and one click puts the old target back.
+    expect(saves).toHaveLength(0);
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+    expect(screen.getByLabelText('Target name')).toHaveValue('M31');
+    // The same offer again, by a re-render, moves nothing; a new one does.
+    rerender(tree(offer));
+    expect(screen.getByLabelText('Target name')).toHaveValue('M31');
+    rerender(tree({ ...offer, nonce: 2 }));
+    expect(screen.getByLabelText('Target name')).toHaveValue('20h 59m, +44° 22′');
+  });
+
+  it('starts a framing that has no target from a place offered from the Sky tab', async () => {
+    fixture();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    const offer = { pick: { name: 'NGC 7000', center: { ra_degrees: 314.75, dec_degrees: 44.37 }, source: 'Seiza object catalog' }, nonce: 1 };
+    const tree = (offered: typeof offer | null) => <QueryClientProvider client={client}><FramingView projectId="project" seed={null} offer={offered} /></QueryClientProvider>;
+    const { rerender } = render(tree(null));
+    expect(await screen.findByRole('form', { name: 'Start framing' })).toBeInTheDocument();
+    rerender(tree(offer));
+    expect(await screen.findByLabelText('Target name')).toHaveValue('NGC 7000');
+    expect(screen.getByLabelText('Right ascension degrees')).toHaveValue(314.75);
+  });
+
   it('offers the local catalog names as they are typed and picks one without going online', async () => {
     const resolves: string[] = [];
     fixture();

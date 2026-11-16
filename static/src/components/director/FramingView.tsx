@@ -198,10 +198,16 @@ export interface FramingViewProps {
   onToggleRig?: (rigId: string, on: boolean) => boolean | void;
   /** Why a rig cannot join yet, such as a plan with no objectives. */
   joinBlocked?: string;
+  /** A place another tab asks to frame, as if found by name here; a new
+   *  `nonce` asks again. It becomes an unsaved edit, with Undo. */
+  offer?: { pick: TargetPick; nonce: number } | null;
+  /** Told the target as it stands, saved or not, and why it cannot be
+   *  moved from outside, when it cannot. */
+  onTarget?: (target: { name: string; center: DirectorSkyPosition } | null, held: string | null) => void;
 }
 
 /** Frame one project on the sky: target, angle, mosaic and rig footprints over a survey. */
-export default function FramingView({ projectId, seed, preferredRigIds = [], shootingRigIds, onToggleRig, joinBlocked }: FramingViewProps) {
+export default function FramingView({ projectId, seed, preferredRigIds = [], shootingRigIds, onToggleRig, joinBlocked, offer = null, onTarget }: FramingViewProps) {
   const { canWrite } = useAccess();
   const client = useQueryClient();
   const draftKey = ['directorFraming', projectId];
@@ -671,6 +677,24 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
   const followed = centerHeld && angleHeld ? 'center and camera angle' : centerHeld ? 'center' : 'camera angle';
   const heldNote = sharedHeld ? 'Locked panels prevent changes to the center and camera angle. Unlock them to move the whole mosaic.'
     : `${heldBy(holders)} prevent changes to the shared ${followed}. Unlock them, or give ${holders.length === 1 ? rigName(holders[0]) : 'those rigs'} ${holders.length === 1 ? 'its' : 'their'} own ${followed}.`;
+  // A place sent from the Sky tab: taken as a target found by name, or as
+  // the start of a framing that has none. A held center refuses it; the
+  // Sky tab is told why and does not offer.
+  const offerNonce = offer?.nonce;
+  useEffect(() => {
+    if (!offer || !canWrite) return;
+    if (!state) setStarted({ name: offer.pick.name, center: offer.pick.center, position_angle_degrees: 0 });
+    else if (!centerHeld) pickTarget(offer.pick);
+    // Only a new offer is acted on, whatever else has changed since.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [offerNonce]);
+  const targetName = state?.targetName;
+  const targetRa = state?.center.ra_degrees;
+  const targetDec = state?.center.dec_degrees;
+  const heldFromOutside = !canWrite ? 'You can view this plan but not change it.' : draft.isPending ? 'Framing is still loading.' : centerHeld ? heldNote : null;
+  useEffect(() => {
+    onTarget?.(targetName !== undefined && targetRa !== undefined && targetDec !== undefined ? { name: targetName, center: { ra_degrees: targetRa, dec_degrees: targetDec } } : null, heldFromOutside);
+  }, [onTarget, targetName, targetRa, targetDec, heldFromOutside]);
   // A new panel size moves every planned panel off the center; one locked
   // there holds the size. A shot panel stays as shot whatever the size.
   const holdsSize = useCallback((rig: string | null, layout: DirectorLayout) => layout.panels.some(panel => !panel.measured && (panel.locked || (!panel.unlocked_by_hand && framesOf(rig, panel.id) > 0)) && (Math.abs(panel.x) > 1e-9 || Math.abs(panel.y) > 1e-9)), [framesOf]);
