@@ -38,10 +38,9 @@ mod cache;
 pub(super) use cache::{Cache, REFRESH_EVERY};
 
 const DEFAULT_NIGHTS: u32 = 7;
-const STEP_MS: u64 = 300_000;
-/// Summaries count darkness as feasibility does: the Sun below −12°. Each
-/// runtime's schedule applies its own rule.
-const DARK_BELOW_DEGREES: f64 = -12.0;
+// Summaries count darkness as feasibility does: the Sun below −12°, on
+// the same step. Each runtime's schedule applies its own rule.
+use super::feasibility::{DARK_BELOW_DEGREES, STEP_MS};
 /// The overhead each exposure adds, as the program pull counts it.
 const OVERHEAD_SECONDS: f64 = 15.0;
 const MAX_RIGS: usize = 64;

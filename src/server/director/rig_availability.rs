@@ -361,8 +361,8 @@ fn forecast_windows(span: Interval, night: &ForecastNight) -> Vec<Interval> {
     merged
 }
 
-/// The Sun's altitude below which the night summaries count the sky dark.
-const DARK_BELOW_DEGREES: f64 = -12.0;
+// The Sun's altitude below which the night summaries count the sky dark.
+use super::feasibility::DARK_BELOW_DEGREES;
 /// The Sun's altitude below which any schedule may image: no Target
 /// Scheduler twilight level allows imaging above it.
 const TWILIGHT_BELOW_DEGREES: f64 = -6.0;
@@ -575,12 +575,12 @@ mod tests {
     /// that never gets dark enough has none.
     #[test]
     fn darkness_from_a_sky_is_a_summarys_dusk_and_dawn() {
+        use super::super::feasibility::STEP_MS;
         use psf_guard_director_core::{
             night::{night_summary, NightRequest},
             visibility::{AltitudeLimits, Horizon},
             windows::MeridianExclusion,
         };
-        const STEP_MS: u64 = 300_000;
         let sites = [(34.2, -118.3), (-33.9, 151.2), (64.8, -147.7), (0.0, 0.0)];
         let dates: Vec<NightDate> = ["2026-06-20", "2026-11-03"]
             .iter()

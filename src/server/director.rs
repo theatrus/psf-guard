@@ -47,6 +47,7 @@ pub(crate) async fn transfer_jobs(state: &Arc<AppState>) -> Vec<serde_json::Valu
 mod framing;
 mod image_uploads;
 mod import_drafts;
+mod least_recent;
 mod live_rigs;
 #[cfg(test)]
 pub(crate) use activation::create_director_tables as create_rig_tables_for_tests;
