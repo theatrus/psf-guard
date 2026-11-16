@@ -273,20 +273,45 @@ Settings › Workers shows both with no online check. `rc-astro license
 routinely, so it runs only when a person clicks.
 
 - **Runner and parser** (`remote_work/rc_astro.rs`): one run, a 60 second
-  limit, no retries. The NDJSON is read tolerantly: unknown events, keys and
-  tokens are passed over and each product's `message` is kept as given. A
-  refusal gives its report and its error; offline gives the error alone.
-- **This server:** `POST /api/tools/rc-astro/license-check` runs it off the
-  async runtime and answers in the request. It is one short process with a
-  limit, so it is not a tracked job. The account's address goes only to a
-  caller who may write.
-- **A worker:** `POST /api/workers/{session}/license-check` puts an
-  `rc_astro_license` task on the board that only that session may claim
-  (`TaskNeeds::LicenseCheck`), and waits for its result. A worker offers
-  `license_check`; the kind is not in `work`, so an older server reads the
-  registration, and an older worker, which lacks the field, is never sent
-  the task.
-- **At the worker:** `psf-guard-cli rc-astro license` prints the report.
+  limit, no retries, and it can be stopped. A tool's local document gives
+  the contract version first: below 5 the CLI has no such command and no
+  online check is made; from 6 the run carries `--host psf-guard-<version>`
+  as every other run does. The NDJSON is read tolerantly: unknown events,
+  keys and tokens are passed over and each product's `message` is kept as
+  given. A refusal gives its report and its error; offline gives the error
+  alone. RC-Astro's own error (`error`) and PSF Guard's failure to get an
+  answer (`failure`: could not start, no report, too slow, too old) are
+  kept apart, and a CLI is called too old only when its contract version
+  says so or it turns the command down itself. `seiza_stacking::RcAstroCli`
+  cannot run a command of the caller's choosing, so the process is built
+  here; the follow-up is a `license` method there.
+- **A tracked job** (`server/workers/license.rs`): `POST
+  /api/tools/rc-astro/license-check` starts a check, of this server or of
+  the worker whose session it is given, and returns at once. `GET
+  …/license-check/{key}` gives its state and, once it ended, its report;
+  `POST …/{key}/stop` stops it. Each check has one runner thread and a row
+  in the job line that gives the computer and no result. A second start
+  for the same computer while one runs returns the running check. This
+  server's check holds the interactive guard.
+- **Who may read it.** The report holds the RC-Astro account's address.
+  All three routes are for accounts that may write, and a worker's check
+  also needs database management, as the rest of Settings › Workers does.
+- **A worker's check is a side request, not a task.** The worker asks
+  `POST /api/workers/v1/sessions/{session}/side` on a connection of its
+  own and answers at `…/side/{id}`. So a worker with every slot busy still
+  answers, nothing it or this server runs is stopped or requeued for the
+  check, and a failure is the worker's own message, at once. The request
+  is kept for the worker's token and name: a worker that registers again
+  while a check waits still gets it. A worker that does not answer in 90
+  seconds ends the check with a message that gives the time and what to
+  try.
+- **Older peers.** A worker offers `license_check`; one from before the
+  check lacks the field, is never asked, and its row gives the command to
+  run there. A server from before side requests answers the worker's
+  request `404`, and the worker stops asking.
+- **At the worker:** `psf-guard-cli rc-astro license` prints the report,
+  and exits 0 for a report with no error, 77 when RC-Astro reported an
+  error, and 1 when rc-astro gave no answer.
 
 ## Desktop worker
 

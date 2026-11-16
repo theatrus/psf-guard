@@ -552,8 +552,17 @@ worker runs under, and the row shows the report:
   run on that computer.
 
 The check goes online. RC-Astro asks that it run only when a person asks,
-so PSF Guard never runs it by itself. When the worker is offline, the row
-shows RC-Astro's error and the tools keep the state they reported. PSF
+so PSF Guard never runs it by itself. While it runs, the job line shows
+**Checking the RC-Astro license**, and **Stop** ends it. A busy worker
+still answers, and no running work is stopped for the check. Clicking
+again while a check runs shows that check; it does not ask RC-Astro twice.
+
+The row marks RC-Astro's own words with **RC-Astro reported:**, such as a
+refusal or that it could not reach its server. A line without that mark is
+PSF Guard's: rc-astro could not be started, ended without a report (with
+its exit status and what it printed, such as a library it could not load),
+or the worker did not answer within 90 seconds. Either way the tools keep
+the state they reported. PSF
 Guard does not activate or deactivate licenses: run the command RC-Astro
 gives in a terminal on the worker, then restart the worker.
 
@@ -565,6 +574,9 @@ psf-guard-cli rc-astro license
 ```
 
 It prints the same report. Run it as the account the worker runs under.
+It exits 0 when RC-Astro gave a report with no error, 77 when RC-Astro
+reported an error, and 1 when rc-astro could not be started, took too long
+or printed no report.
 `--json` prints the report as JSON, and `--rc-astro PATH` checks another
 executable. An rc-astro from before RC-Astro's account system has no such
 check; the command says so.
