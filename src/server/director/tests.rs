@@ -22,6 +22,7 @@ mod preferences;
 mod site_profile;
 mod sky_image;
 mod star_detection;
+mod visible_sky;
 mod weather;
 mod workload;
 
