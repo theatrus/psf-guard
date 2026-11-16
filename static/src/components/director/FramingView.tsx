@@ -692,9 +692,14 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
   const targetRa = state?.center.ra_degrees;
   const targetDec = state?.center.dec_degrees;
   const heldFromOutside = !canWrite ? 'You can view this plan but not change it.' : draft.isPending ? 'Framing is still loading.' : centerHeld ? heldNote : null;
+  // Not during a drag, which moves the center at every pointer move: the
+  // page is told where the target is when the drag ends, as the save bar
+  // is told of the edit.
+  const dragging = heldReport !== null;
   useEffect(() => {
+    if (dragging) return;
     onTarget?.(targetName !== undefined && targetRa !== undefined && targetDec !== undefined ? { name: targetName, center: { ra_degrees: targetRa, dec_degrees: targetDec } } : null, heldFromOutside);
-  }, [onTarget, targetName, targetRa, targetDec, heldFromOutside]);
+  }, [onTarget, targetName, targetRa, targetDec, heldFromOutside, dragging]);
   // A new panel size moves every planned panel off the center; one locked
   // there holds the size. A shot panel stays as shot whatever the size.
   const holdsSize = useCallback((rig: string | null, layout: DirectorLayout) => layout.panels.some(panel => !panel.measured && (panel.locked || (!panel.unlocked_by_hand && framesOf(rig, panel.id) > 0)) && (Math.abs(panel.x) > 1e-9 || Math.abs(panel.y) > 1e-9)), [framesOf]);

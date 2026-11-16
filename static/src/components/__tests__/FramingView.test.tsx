@@ -430,6 +430,33 @@ describe('Framing view', () => {
     expect(screen.getByLabelText('Target name')).toHaveValue('20h 59m, +44° 22′');
   });
 
+  it('tells the page where the target is when a drag ends, not at every move of it', async () => {
+    fixture();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    const reported: number[] = [];
+    const onTarget = (target: { center: { ra_degrees: number } } | null) => { if (target) reported.push(target.center.ra_degrees); };
+    render(<QueryClientProvider client={client}><FramingView projectId="project" seed={seed} preferredRigIds={[rigA.rig.id]} onTarget={onTarget} /></QueryClientProvider>);
+    await waitFor(() => expect(screen.getByTestId('framing-panel-source')).toHaveTextContent('Size from RedCat 61'));
+    const stage = screen.getByTestId('framing-stage');
+    stage.setPointerCapture = vi.fn();
+    stage.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1024, height: 768, right: 1024, bottom: 768, x: 0, y: 0, toJSON: () => ({}) });
+    Object.defineProperty(stage, 'clientWidth', { value: 1024, configurable: true });
+    await waitFor(() => expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(1));
+    expect(new Set(reported)).toEqual(new Set([seed.center.ra_degrees]));
+    const before = reported.length;
+    // Drag the rectangle east in twenty moves.
+    fireEvent.pointerDown(stage, pointer(512, 384));
+    for (let step = 1; step <= 20; step += 1) fireEvent.pointerMove(stage, { buttons: 1, pointerId: 1, clientX: 512 - 5 * step, clientY: 384 });
+    const during = Number((screen.getByLabelText('Right ascension degrees') as HTMLInputElement).value);
+    expect(during).toBeGreaterThan(seed.center.ra_degrees);
+    // The target has moved on screen, and the page has heard nothing yet.
+    expect(reported.length).toBe(before);
+    fireEvent.pointerUp(stage, { pointerId: 1 });
+    // One report, of where it was dropped.
+    await waitFor(() => expect(reported.length).toBe(before + 1));
+    expect(reported.at(-1)).toBeCloseTo(during, 4);
+  });
+
   it('starts a framing that has no target from a place offered from the Sky tab', async () => {
     fixture();
     const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
