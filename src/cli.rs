@@ -1724,21 +1724,30 @@ pub enum CalibrationCommand {
 
 #[derive(Subcommand)]
 pub enum SkyMapsCommand {
-    /// Download and unpack a set into `<cache-dir>/director/sky-maps`.
-    /// `full` is the whole-sky DSS set (3.3 GB), `nsns-ohs` the Northern Sky
-    /// Narrowband Survey in SHO colour (1.4 GB), `nsns-ohs-starless` its
-    /// starless version (0.5 GB); any other value is taken as a zip URL.
+    /// Download a set, check it, and install it in the offline sky maps
+    /// folder, as Settings › Offline sky maps does. `full` is the whole-sky
+    /// DSS set (3.3 GB), `nsns-ohs` the Northern Sky Narrowband Survey in
+    /// SHO colour (1.4 GB), `nsns-ohs-starless` its starless version
+    /// (0.5 GB). A published set is checked against its recorded size and
+    /// SHA-256; any other value is read as a zip URL and is not checked.
     Install {
         /// `full`, `nsns-ohs`, `nsns-ohs-starless`, or a URL to a zip.
         source: String,
 
-        /// The server's cache root (the `--cache-dir` the server runs with).
-        #[arg(long, default_value = "./cache")]
-        cache_dir: String,
+        /// The offline sky maps folder. Without it: PSF_GUARD_SKY_MAPS_DIR,
+        /// else `sky-maps` in PSF Guard's data folder. Give the folder
+        /// chosen in Settings when one is set there.
+        #[arg(long, value_name = "DIR")]
+        dir: Option<String>,
     },
 
-    /// Show the sets the server would offer from this cache root.
+    /// List the installed sets: those in the offline sky maps folder, and
+    /// any left under a server's cache folder by an earlier version.
     List {
+        /// The offline sky maps folder, as for `install`.
+        #[arg(long, value_name = "DIR")]
+        dir: Option<String>,
+
         /// The server's cache root (the `--cache-dir` the server runs with).
         #[arg(long, default_value = "./cache")]
         cache_dir: String,

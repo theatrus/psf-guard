@@ -362,8 +362,10 @@ pub struct SkyImageService {
     base_url: String,
     resolver_url: String,
     cache_dir: PathBuf,
-    /// Folders of N.I.N.A. offline sky maps, one per layer.
-    sky_maps_root: PathBuf,
+    /// The one folder of offline sky maps a test reads. Otherwise the maps
+    /// are those in their own folder and any left under the cache.
+    sky_maps_root: Option<PathBuf>,
+    cache_root: PathBuf,
     maps: Mutex<Option<(Instant, MapList)>>,
     /// Offline maps whose small tiles have been warmed since start.
     warmed: Mutex<std::collections::HashSet<String>>,
@@ -400,7 +402,8 @@ impl SkyImageService {
             base_url: base_url.to_owned(),
             resolver_url: resolver_url.to_owned(),
             cache_dir: cache_root.join("director").join("sky"),
-            sky_maps_root: crate::sky_maps::root_for(cache_root),
+            sky_maps_root: None,
+            cache_root: cache_root.to_path_buf(),
             maps: Mutex::new(None),
             jobs: Mutex::new(HashMap::new()),
             warmed: Mutex::new(std::collections::HashSet::new()),
@@ -428,7 +431,7 @@ impl SkyImageService {
     /// Look for offline maps somewhere else than under the cache root.
     #[cfg(test)]
     pub fn with_sky_maps_root(mut self, root: &FilePath) -> Self {
-        self.sky_maps_root = root.to_path_buf();
+        self.sky_maps_root = Some(root.to_path_buf());
         self
     }
 
@@ -443,7 +446,7 @@ impl SkyImageService {
             return maps.clone();
         }
         let maps = Arc::new(
-            crate::sky_maps::discover(&self.sky_maps_root)
+            self.discover()
                 .into_iter()
                 .map(Arc::new)
                 .collect::<Vec<_>>(),
@@ -461,6 +464,24 @@ impl SkyImageService {
             }
         }
         maps
+    }
+
+    /// The maps on disk now: those in the one folder a test gave, or those
+    /// in the maps' own folder and then any left under the cache.
+    fn discover(&self) -> Vec<crate::sky_maps::SkyMap> {
+        match &self.sky_maps_root {
+            Some(root) => crate::sky_maps::discover(root),
+            None => crate::sky_map_install::installed(&self.cache_root)
+                .into_iter()
+                .map(|(map, _)| map)
+                .collect(),
+        }
+    }
+
+    /// Read the map folders again at the next request, as after an install,
+    /// a removal or a move.
+    pub fn forget_maps(&self) {
+        *self.maps.lock().expect("sky map list") = None;
     }
 
     /// Every layer on offer: the HiPS surveys, then the offline maps.

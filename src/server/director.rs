@@ -1187,3 +1187,9 @@ mod plan_removal;
 mod preferences;
 #[cfg(test)]
 mod tests;
+
+/// Read the offline sky map folders again at the next request, as after
+/// Settings installs, removes or moves a map.
+pub(crate) fn forget_sky_maps(state: &crate::server::state::AppState) {
+    sky_image::service(state).forget_maps();
+}

@@ -134,6 +134,8 @@ pub struct AppState {
     pub catalog_install: crate::server::catalog_install::CatalogInstallManager,
     /// The download of ONNX Runtime and the noise model a person started.
     pub noise_model_downloads: crate::server::noise_model::NoiseModelDownloads,
+    /// The offline sky map install a person started in Settings.
+    pub sky_map_installs: crate::server::sky_map_admin::SkyMapInstalls,
     /// Durable, preview-first database transfer state.
     pub sync_previews: crate::server::sync_preview::SyncPreviewManager,
     /// Serializes guarded transfer applies so one preview cannot invalidate
@@ -589,6 +591,7 @@ impl AppState {
             previews: crate::server::previews::Previews::default(),
             catalog_install: crate::server::catalog_install::CatalogInstallManager::default(),
             noise_model_downloads: crate::server::noise_model::NoiseModelDownloads::default(),
+            sky_map_installs: crate::server::sky_map_admin::SkyMapInstalls::default(),
             sync_previews: crate::server::sync_preview::SyncPreviewManager::new(&cache_dir),
             sync_apply_lock: tokio::sync::Mutex::new(()),
             remote_exports: crate::server::remote_sync::ExportStore::new(),
@@ -939,6 +942,7 @@ impl AppState {
             previews: crate::server::previews::Previews::default(),
             catalog_install: crate::server::catalog_install::CatalogInstallManager::default(),
             noise_model_downloads: crate::server::noise_model::NoiseModelDownloads::default(),
+            sky_map_installs: crate::server::sky_map_admin::SkyMapInstalls::default(),
             sync_previews: crate::server::sync_preview::SyncPreviewManager::new(
                 "/tmp/psf-guard-test",
             ),

@@ -723,6 +723,14 @@ pub struct DbRegistry {
         skip_serializing_if = "Option::is_none"
     )]
     pub noise_model: Option<crate::server::noise_model::NoiseModelSettings>,
+    /// Where offline sky maps are kept. A value this version cannot read
+    /// reads as absent.
+    #[serde(
+        default,
+        deserialize_with = "lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub sky_maps: Option<crate::server::sky_map_admin::SkyMapsSettings>,
 }
 
 /// Who may join this server as a worker, and where task files go.
@@ -1160,6 +1168,7 @@ impl Default for DbRegistry {
             scoring: None,
             remote_workers: None,
             noise_model: None,
+            sky_maps: None,
         }
     }
 }

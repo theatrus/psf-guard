@@ -38,6 +38,7 @@ pub mod renamed_lights;
 pub mod satellites;
 pub mod sequence_analysis;
 pub mod server;
+pub mod sky_map_install;
 pub mod sky_maps;
 pub mod spatial_analysis;
 pub mod star_contours;

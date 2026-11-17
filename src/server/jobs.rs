@@ -136,6 +136,7 @@ pub enum RowControl {
     Export { db_id: String },
     CatalogInstall,
     NoiseModelDownload,
+    SkyMapInstall,
     LicenseCheck { key: String },
 }
 
@@ -416,6 +417,7 @@ pub struct Snapshot {
     pub wbpp_cleanup: crate::server::wbpp_storage::Status,
     pub catalog_install: Option<CatalogInstallProgress>,
     pub noise_model_download: Option<crate::server::noise_model::DownloadProgress>,
+    pub sky_map_install: Option<crate::server::sky_map_admin::InstallProgress>,
     /// RC-Astro license checks under way: which computer, never the result.
     pub license_checks: Vec<crate::server::workers::license::RunningCheck>,
     pub previews: Vec<PreviewRun>,
@@ -448,6 +450,7 @@ impl Default for Snapshot {
             wbpp_cleanup: Default::default(),
             catalog_install: None,
             noise_model_download: None,
+            sky_map_install: None,
             license_checks: Vec::new(),
             previews: Vec::new(),
             artifact_searches: Vec::new(),
@@ -1675,6 +1678,34 @@ fn noise_model_download_row(progress: &crate::server::noise_model::DownloadProgr
     }
 }
 
+/// An offline sky map being installed from Settings › Offline sky maps.
+/// Settings is a dialog, not a view, so the row has no link.
+fn sky_map_install_row(progress: &crate::server::sky_map_admin::InstallProgress) -> JobRow {
+    let set = progress
+        .set
+        .as_deref()
+        .and_then(crate::sky_map_install::set)
+        .map(|set| set.name)
+        .unwrap_or("Offline sky map");
+    JobRow {
+        detail: progress.message.clone(),
+        percent: match progress.bytes_total {
+            Some(total) if total > 0 => Some(
+                (100.0 * progress.bytes_completed.unwrap_or(0) as f64 / total as f64).min(100.0),
+            ),
+            _ => None,
+        },
+        control: Some(RowControl::SkyMapInstall),
+        stoppable: true,
+        ..JobRow::new(
+            format!("sky-map:{}", progress.started_at.unwrap_or(0)),
+            RowKind::Catalog,
+            "Installing an offline sky map",
+            set,
+        )
+    }
+}
+
 /// A person's work first, then automatic work. Within each: work that needs
 /// a person, running work, each line's queued rows in line order, then
 /// waiting work. One line can hold rows of both tiers; a queued row's
@@ -1816,6 +1847,9 @@ pub fn rows(snapshot: &Snapshot, project_of: ProjectOf) -> Vec<JobRow> {
     if let Some(download) = snapshot.noise_model_download.as_ref().filter(|p| p.running) {
         rows.push(noise_model_download_row(download));
     }
+    if let Some(install) = snapshot.sky_map_install.as_ref().filter(|p| p.running) {
+        rows.push(sky_map_install_row(install));
+    }
     rows.extend(snapshot.license_checks.iter().map(license_check_row));
     rows.extend(snapshot.ts_sync.iter().filter_map(ts_sync_row));
     let names: HashMap<&str, &str> = snapshot
@@ -1945,6 +1979,7 @@ fn snapshot(state: &Arc<AppState>, transfers: Vec<Value>, manages: bool) -> Snap
         wbpp_cleanup: crate::server::wbpp_storage::status(state),
         catalog_install: Some(state.catalog_install.status().progress),
         noise_model_download: Some(state.noise_model_downloads.progress()),
+        sky_map_install: Some(state.sky_map_installs.progress()),
         license_checks: state.workers.license_checks.running(),
         previews: state.previews.running(),
         artifact_searches: state.stack_previews.artifact_searches_under_way(),

@@ -1,57 +1,75 @@
-//! `psf-guard sky-maps`: install and list N.I.N.A. offline sky maps under a
-//! cache root, where the Director framing view picks them up as layers.
+//! `psf-guard sky-maps`: install and list N.I.N.A. offline sky maps, which
+//! Planning's framing view offers as layers. Settings › Offline sky maps
+//! installs the same sets through the same code.
 
-use anyhow::{bail, Context, Result};
-use std::{
-    io::{Read, Write},
-    path::{Path, PathBuf},
-    time::Instant,
-};
+use anyhow::{bail, Result};
+use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use crate::cli::SkyMapsCommand;
-use crate::sky_maps::{self, root_for as sky_maps_root};
+use crate::sky_map_install::{self as install, Source, Step};
+use crate::sky_maps;
 
-const RELEASES: &str = "https://nighttime-imaging.eu/downloads/Setup/Releases/";
-const MAX_ZIP_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+/// What to install for a name or a URL given on the command line.
+fn source(given: &str) -> Result<Source> {
+    if let Some(set) = install::set(given) {
+        return Ok(Source::Set(set));
+    }
+    if given.starts_with("https://") || given.starts_with("http://") {
+        return Ok(Source::Url(given.to_owned()));
+    }
+    bail!("unknown set '{given}'; use full, nsns-ohs, nsns-ohs-starless, or a zip URL")
+}
 
-/// The sets N.I.N.A. offers on its download page, by short name.
-fn source_url(source: &str) -> Result<String> {
-    Ok(match source {
-        "full" | "dss" => format!("{RELEASES}FramingAssistantCache_Full.zip"),
-        "nsns-ohs" | "nsns" => {
-            format!("{RELEASES}FramingAssistantCache_NorthernSkyNarrowbandSurvey_OHS_withStars.zip")
-        }
-        "nsns-ohs-starless" | "nsns-starless" => {
-            format!("{RELEASES}FramingAssistantCache_NorthernSkyNarrowbandSurvey_OHS_starless.zip")
-        }
-        url if url.starts_with("https://") || url.starts_with("http://") => url.to_owned(),
-        other => {
-            bail!("unknown set '{other}'; use full, nsns-ohs, nsns-ohs-starless, or a zip URL")
-        }
-    })
+/// The maps' folder: `--dir`, else the default.
+fn root(dir: Option<String>) -> PathBuf {
+    dir.map(PathBuf::from)
+        .unwrap_or_else(sky_maps::default_root)
 }
 
 pub fn run(action: SkyMapsCommand) -> Result<()> {
     match action {
-        SkyMapsCommand::List { cache_dir } => list(&sky_maps_root(Path::new(&cache_dir))),
-        SkyMapsCommand::Install { source, cache_dir } => {
-            let root = sky_maps_root(Path::new(&cache_dir));
-            let url = source_url(&source)?;
-            std::fs::create_dir_all(&root)
-                .with_context(|| format!("creating {}", root.display()))?;
-            let zip_path = root.join(format!(".download-{}.zip", std::process::id()));
-            let result = download(&url, &zip_path).and_then(|_| unpack(&zip_path, &root));
-            let _ = std::fs::remove_file(&zip_path);
-            let folder = result?;
-            let map = sky_maps::SkyMap::open(&folder)
-                .map_err(|error| anyhow::anyhow!("{error}"))
-                .context("the unpacked set is not a framing assistant cache")?;
+        SkyMapsCommand::List { dir, cache_dir } => {
+            list(&root(dir), &sky_maps::root_for(Path::new(&cache_dir)));
+            Ok(())
+        }
+        SkyMapsCommand::Install { source: given, dir } => {
+            let root = root(dir);
+            let source = source(&given)?;
+            let started = Instant::now();
+            // One line every few seconds; these sets are gigabytes.
+            let last = std::sync::Mutex::new(Instant::now() - std::time::Duration::from_secs(60));
+            let report = move |step: Step| {
+                let mut last = last.lock().unwrap();
+                match (step.bytes_done, step.bytes_total) {
+                    (Some(done), total) => {
+                        if last.elapsed().as_secs() < 5 {
+                            return;
+                        }
+                        let megabytes = done as f64 / 1_048_576.0;
+                        match total {
+                            Some(total) => eprintln!(
+                                "  {megabytes:.0} MB of {:.0} MB",
+                                total as f64 / 1_048_576.0
+                            ),
+                            None => eprintln!("  {megabytes:.0} MB"),
+                        }
+                    }
+                    _ => eprintln!("{}", step.message),
+                }
+                *last = Instant::now();
+            };
+            eprintln!("Installing into {}", root.display());
+            let runtime = tokio::runtime::Runtime::new()?;
+            let map = runtime
+                .block_on(install::install(&root, source, &report))
+                .map_err(|error| anyhow::anyhow!("{error}"))?;
             println!(
-                "Installed {} ({} tiles) as layer {} under {}",
+                "Installed {} ({} tiles) as layer {} in {:.0} s",
                 map.name,
                 map.tile_count(),
                 map.id,
-                root.display()
+                started.elapsed().as_secs_f64()
             );
             println!("A running server offers it within half a minute; no restart needed.");
             Ok(())
@@ -59,117 +77,24 @@ pub fn run(action: SkyMapsCommand) -> Result<()> {
     }
 }
 
-fn list(root: &Path) -> Result<()> {
-    let maps = sky_maps::discover(root);
-    if maps.is_empty() {
-        println!("No offline sky maps under {}.", root.display());
-        println!("Install one with: psf-guard sky-maps install full --cache-dir <cache>");
-        return Ok(());
-    }
-    for map in maps {
-        println!(
-            "{}\t{}\t{} tiles\t{}",
-            map.id,
-            map.name,
-            map.tile_count(),
-            map.dir.display()
-        );
-    }
-    Ok(())
-}
-
-/// Stream the zip to disk with a line of progress; these sets are gigabytes.
-fn download(url: &str, to: &Path) -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
-    runtime.block_on(async {
-        let client = reqwest::Client::builder()
-            .user_agent(concat!("psf-guard/", env!("CARGO_PKG_VERSION")))
-            .build()?;
-        let response = client
-            .get(url)
-            .send()
-            .await
-            .with_context(|| format!("requesting {url}"))?;
-        if !response.status().is_success() {
-            bail!("{url} answered {}", response.status());
-        }
-        let total = response.content_length();
-        if total.is_some_and(|t| t > MAX_ZIP_BYTES) {
-            bail!(
-                "{url} is larger than {} GB",
-                MAX_ZIP_BYTES / (1024 * 1024 * 1024)
+fn list(own: &Path, older: &Path) {
+    let mut found = false;
+    for (root, note) in [(own, ""), (older, " (under the cache folder)")] {
+        for map in sky_maps::discover(root) {
+            found = true;
+            println!(
+                "{}\t{}\t{} tiles\t{}{note}",
+                map.id,
+                map.name,
+                map.tile_count(),
+                map.dir.display()
             );
         }
-        let mut file =
-            std::fs::File::create(to).with_context(|| format!("creating {}", to.display()))?;
-        let mut response = response;
-        let mut received: u64 = 0;
-        let mut last_report = Instant::now();
-        let started = Instant::now();
-        eprintln!("Downloading {url}");
-        while let Some(chunk) = response.chunk().await.context("reading the download")? {
-            file.write_all(&chunk)?;
-            received += chunk.len() as u64;
-            if received > MAX_ZIP_BYTES {
-                bail!(
-                    "download exceeded {} GB",
-                    MAX_ZIP_BYTES / (1024 * 1024 * 1024)
-                );
-            }
-            if last_report.elapsed().as_secs() >= 5 {
-                last_report = Instant::now();
-                let mb = received as f64 / 1_048_576.0;
-                match total {
-                    Some(t) => eprintln!("  {mb:.0} MB of {:.0} MB", t as f64 / 1_048_576.0),
-                    None => eprintln!("  {mb:.0} MB"),
-                }
-            }
-        }
-        seiza_fits::sync_file(&file)?;
-        eprintln!(
-            "  {:.0} MB in {:.0} s",
-            received as f64 / 1_048_576.0,
-            started.elapsed().as_secs_f64()
-        );
-        Ok(())
-    })
-}
-
-/// Unpack into `root`, refusing entries that would leave it, and return the
-/// folder that holds `CacheInfo.xml`.
-fn unpack(zip_path: &Path, root: &Path) -> Result<PathBuf> {
-    let file = std::fs::File::open(zip_path)?;
-    let mut archive = zip::ZipArchive::new(file).context("reading the zip")?;
-    let mut index_dir: Option<PathBuf> = None;
-    eprintln!("Unpacking {} entries", archive.len());
-    for i in 0..archive.len() {
-        let mut entry = archive.by_index(i)?;
-        let Some(relative) = entry.enclosed_name() else {
-            bail!("zip entry '{}' would leave the folder", entry.name()?);
-        };
-        let target = root.join(&relative);
-        if entry.is_dir() {
-            std::fs::create_dir_all(&target)?;
-            continue;
-        }
-        if let Some(parent) = target.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let mut out = std::fs::File::create(&target)
-            .with_context(|| format!("writing {}", target.display()))?;
-        let mut buffer = [0u8; 1 << 16];
-        loop {
-            let read = entry.read(&mut buffer)?;
-            if read == 0 {
-                break;
-            }
-            out.write_all(&buffer[..read])?;
-        }
-        if relative.file_name().and_then(|n| n.to_str()) == Some("CacheInfo.xml") {
-            index_dir = target.parent().map(Path::to_path_buf);
-        }
     }
-    index_dir.ok_or_else(|| anyhow::anyhow!("the zip holds no CacheInfo.xml"))
+    if !found {
+        println!("No offline sky maps in {}.", own.display());
+        println!("Install one with: psf-guard sky-maps install full");
+    }
 }
 
 #[cfg(test)]
@@ -177,51 +102,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn short_names_map_to_the_published_sets_and_urls_pass_through() {
-        assert!(source_url("full")
-            .unwrap()
-            .ends_with("FramingAssistantCache_Full.zip"));
-        assert!(source_url("nsns-ohs").unwrap().contains("OHS_withStars"));
-        assert!(source_url("nsns-ohs-starless")
-            .unwrap()
-            .contains("OHS_starless"));
+    fn short_names_are_the_published_sets_and_a_url_is_taken_as_given() {
+        for (given, file) in [
+            ("full", "FramingAssistantCache_Full.zip"),
+            ("dss", "FramingAssistantCache_Full.zip"),
+            ("nsns-ohs", "OHS_withStars.zip"),
+            ("nsns-ohs-starless", "OHS_starless.zip"),
+        ] {
+            match source(given).unwrap() {
+                Source::Set(set) => assert!(set.url().ends_with(file), "{given}"),
+                Source::Url(url) => panic!("{given} was taken as the URL {url}"),
+            }
+        }
         assert_eq!(
-            source_url("https://x.example/a.zip").unwrap(),
-            "https://x.example/a.zip"
+            source("https://x.example/a.zip").unwrap(),
+            Source::Url("https://x.example/a.zip".into())
         );
-        assert!(source_url("moon").is_err());
+        assert!(source("moon").is_err());
     }
 
     #[test]
-    fn unpacking_keeps_entries_inside_the_root_and_finds_the_index() {
-        let dir = tempfile::tempdir().unwrap();
-        let zip_path = dir.path().join("set.zip");
-        {
-            let file = std::fs::File::create(&zip_path).unwrap();
-            let mut writer = zip::ZipWriter::new(file);
-            let options = zip::write::SimpleFileOptions::default();
-            writer.add_directory("Set/", options).unwrap();
-            writer.start_file("Set/CacheInfo.xml", options).unwrap();
-            writer.write_all(b"<ImageCacheInfo/>").unwrap();
-            writer.start_file("Set/t.jpg", options).unwrap();
-            writer.write_all(b"jpg").unwrap();
-            writer.finish().unwrap();
-        }
-        let root = dir.path().join("maps");
-        let folder = unpack(&zip_path, &root).unwrap();
-        assert_eq!(folder, root.join("Set"));
-        assert!(root.join("Set").join("t.jpg").exists());
-        let evil = dir.path().join("evil.zip");
-        {
-            let file = std::fs::File::create(&evil).unwrap();
-            let mut writer = zip::ZipWriter::new(file);
-            writer
-                .start_file("../escape.txt", zip::write::SimpleFileOptions::default())
-                .unwrap();
-            writer.write_all(b"x").unwrap();
-            writer.finish().unwrap();
-        }
-        assert!(unpack(&evil, &root).is_err());
-        assert!(!dir.path().join("escape.txt").exists());
+    fn the_folder_is_the_one_given_or_the_default() {
+        assert_eq!(root(Some("/maps".into())), PathBuf::from("/maps"));
+        assert_eq!(root(None), sky_maps::default_root());
     }
 }

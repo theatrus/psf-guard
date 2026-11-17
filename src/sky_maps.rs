@@ -18,9 +18,58 @@ use std::{
 /// Survey layer id prefix; the rest is the folder name.
 pub const ID_PREFIX: &str = "nina:";
 
-/// Where the maps live for a server cache root.
+/// Where maps were installed before they had a folder of their own: under
+/// the server's cache root. Maps found there still work, and Settings
+/// offers to move them.
 pub fn root_for(cache_root: &Path) -> PathBuf {
     cache_root.join("director").join("sky-maps")
+}
+
+/// How the folder an install unpacks into begins, and the folder a
+/// replaced set is moved to. [`discover`] passes over both.
+pub const UNPACKING: &str = ".unpack-";
+pub const REPLACED: &str = ".replaced-";
+
+/// Gives the maps' own folder, in place of PSF Guard's data folder.
+pub const FOLDER_VARIABLE: &str = "PSF_GUARD_SKY_MAPS_DIR";
+
+static CHOSEN_FOLDER: std::sync::RwLock<Option<PathBuf>> = std::sync::RwLock::new(None);
+
+/// Use `folder` as the maps' own folder from now on; `None` goes back to
+/// the default. Settings calls this at startup and when the folder changes.
+pub fn configure(folder: Option<&str>) {
+    *CHOSEN_FOLDER
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = folder
+        .map(str::trim)
+        .filter(|folder| !folder.is_empty())
+        .map(PathBuf::from);
+}
+
+/// The folder Settings stores, when one is set.
+pub fn chosen_folder() -> Option<PathBuf> {
+    CHOSEN_FOLDER
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+}
+
+/// The maps' own folder when nothing chooses another: the variable, else
+/// `sky-maps` in PSF Guard's data folder. Maps are gigabytes a person
+/// downloaded, so they are kept out of the cache, which may be cleared.
+pub fn default_root() -> PathBuf {
+    if let Some(folder) = std::env::var_os(FOLDER_VARIABLE).filter(|folder| !folder.is_empty()) {
+        return PathBuf::from(folder);
+    }
+    dirs::data_local_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("psf-guard")
+        .join("sky-maps")
+}
+
+/// The maps' own folder: the one Settings stores, else [`default_root`].
+pub fn data_root() -> PathBuf {
+    chosen_folder().unwrap_or_else(default_root)
 }
 const VARIANTS: [u32; 3] = [75, 150, 500];
 /// A hemisphere composites every tile of a set; the sets hold about two thousand.
@@ -215,8 +264,15 @@ pub fn discover(root: &Path) -> Vec<SkyMap> {
     let Ok(entries) = std::fs::read_dir(root) else {
         return Vec::new();
     };
+    // An install unpacks beside the maps and moves a replaced set aside;
+    // neither folder is a map yet, or any more.
     let mut maps: Vec<SkyMap> = entries
         .flatten()
+        .filter(|entry| {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            !(name.starts_with(UNPACKING) || name.starts_with(REPLACED))
+        })
         .filter_map(|entry| SkyMap::open(&entry.path()).ok())
         .collect();
     maps.sort_by(|a, b| a.name.cmp(&b.name));

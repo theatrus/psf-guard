@@ -830,6 +830,7 @@ mod tests {
             scoring: None,
             remote_workers: None,
             noise_model: None,
+            sky_maps: None,
             peers: Vec::new(),
         }
     }
