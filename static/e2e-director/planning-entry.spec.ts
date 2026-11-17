@@ -20,8 +20,17 @@ test('Planning opens an image import and explains why a catalog copy is excluded
     } });
     expect(created.ok(), await created.text()).toBeTruthy();
     await expect.poll(async () => (await (await request.get(`/api/db/${original}/import`)).json()).data.progress.stage).toBe('complete');
-    const projects = (await (await request.get(`/api/db/${original}/projects`)).json()).data;
-    expect(projects).toHaveLength(1);
+    // Import completion can precede the first file-cache refresh. The
+    // projects route returns loading with null data until that refresh ends.
+    let projects: { id: number; guid: string }[] = [];
+    await expect.poll(async () => {
+      const response = await request.get(`/api/db/${original}/projects`);
+      expect(response.ok(), await response.text()).toBeTruthy();
+      const result = await response.json();
+      expect(result.success).toBe(true);
+      projects = result.data ?? [];
+      return projects;
+    }).toHaveLength(1);
     const projectId = projects[0].id;
     expect(projects[0].guid).toBeTruthy();
 
