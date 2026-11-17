@@ -123,19 +123,14 @@ pub async fn get_server_info(
     State(state): State<Arc<AppState>>,
     access: Option<Extension<crate::server::auth::RequestAccess>>,
 ) -> Result<Json<ApiResponse<ServerInfo>>, AppError> {
-    let access =
-        access
-            .map(|Extension(access)| access)
-            .unwrap_or(crate::server::auth::RequestAccess {
-                role: crate::server::auth::AccessRole::ReadWrite,
-                username: None,
-                api_token: false,
-            });
+    let manages = crate::server::auth::RequestAccess::manages(
+        access.as_ref().map(|Extension(access)| access),
+        &state,
+    );
     let info = ServerInfo {
         version: env!("CARGO_PKG_VERSION").to_string(),
         cache_directory: state.storage_roots.cache.display().to_string(),
-        allow_database_management: state.database_management_allowed()
-            && access.role == crate::server::auth::AccessRole::ReadWrite,
+        allow_database_management: manages,
         banner: state.site_banner(),
     };
 

@@ -234,6 +234,8 @@ export interface DirectorSurvey {
   offline?: boolean;
   /** For an offline map, the online survey it is a local copy of; the framing view prefers it. */
   stands_in_for?: string | null;
+  /** For an offline map, the version of its files. */
+  version?: string;
 }
 export interface DirectorSkyPosition { ra_degrees: number; dec_degrees: number }
 export interface DirectorPanelSize { width_degrees: number; height_degrees: number }
@@ -431,6 +433,8 @@ export interface DirectorCutoutRequest {
   width: number;
   height: number;
   rotation: number;
+  /** An offline map's version, so the browser never reuses a replaced map's pictures. */
+  v?: string;
 }
 export type DirectorCutoutResult =
   | { state: 'ready'; blob: Blob }

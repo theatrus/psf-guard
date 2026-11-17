@@ -2887,24 +2887,70 @@ the DSS plates (3.3 GB), and the Northern Sky Narrowband Survey in SHO
 colour with stars (1.4 GB) and starless (0.5 GB). Each is a folder of 5°
 tiles with a `CacheInfo.xml` index, the same format N.I.N.A. keeps under
 `%LOCALAPPDATA%\NINA\FramingAssistantCache`. PSF Guard reads such folders
-from `<cache>/director/sky-maps/` and offers each as a survey layer, called
+from its offline sky maps folder and offers each as a survey layer, called
 `nina:<folder>`, rendered on the server from the tiles that cover the view
 (the 75, 150 or 500 px versions for wide views, the full tiles when zoomed
 in) and cached like a fetched cutout. Nothing leaves the machine.
 
-Install one with the server's cache root:
+### Install a map
+
+Open **Settings › Storage & backups › Offline sky maps**. The page lists
+the three sets with their download size and licence, and shows which are
+installed.
+
+1. Click **Install** beside a set. PSF Guard downloads it from
+   nighttime-imaging.eu; nothing is downloaded before that click.
+2. The page shows the download's progress, and the job list has a row for
+   it. **Stop install** ends it and leaves nothing partly installed.
+3. PSF Guard checks the file against the size and SHA-256 recorded for that
+   set, unpacks it beside the maps, and puts it in place whole. Framing
+   offers the new layer at once.
+
+An install needs free space of about twice the download while it runs: the
+download and its unpacked files sit side by side until the download is
+removed. The page warns when the folder's volume has less. If N.I.N.A.
+replaces a file, the check fails and the page explains that a PSF Guard
+update is needed; the installed map, if any, is left as it is.
+
+**Install again** replaces an installed set only once the new copy is
+whole. **Remove** deletes a map's files from the server, after you confirm.
+Removing a map and choosing the folder need database management.
+
+The first time Framing opens with no offline map installed, it offers the
+whole-sky set under the stage: **Install**, **Not now** or **Other maps**,
+which opens the Settings page. **Not now** is remembered in that browser.
+
+### Where maps are kept
+
+Maps have a folder of their own, `sky-maps` in PSF Guard's data folder
+(`/data/share/psf-guard/sky-maps` in the Docker image), so clearing or
+moving the cache does not touch them. **Offline sky maps folder** on the
+Settings page chooses another folder; `PSF_GUARD_SKY_MAPS_DIR` sets the
+default for a server started from the command line. After a change, maps
+already installed stay in the old folder: copy their folders into the new
+one, or install them again.
+
+Earlier versions installed maps under `<cache>/director/sky-maps/`. Maps
+found there still work. The page marks each one, and **Move** puts it in
+the offline sky maps folder.
+
+### From the command line
 
 ```bash
-psf-guard sky-maps install full --cache-dir /path/to/cache
-psf-guard sky-maps install nsns-ohs --cache-dir /path/to/cache
-psf-guard sky-maps install nsns-ohs-starless --cache-dir /path/to/cache
-psf-guard sky-maps list --cache-dir /path/to/cache
+psf-guard sky-maps install full
+psf-guard sky-maps install nsns-ohs --dir /path/to/sky-maps
+psf-guard sky-maps list
 ```
 
-`install` takes a zip URL too, and a folder copied from a rig's own framing
-cache works as well: drop it under `sky-maps/`. A running server offers a new
-folder within half a minute. The maps carry their own licences (the NSNS
-sets are CC BY-NC-SA); the attribution line under the framing view shows it.
+`install` does what the Settings page does, into the default folder or
+`--dir`; give `--dir` the folder chosen in Settings when one is set there.
+It also takes a zip URL, which has no recorded size or hash to check
+against. A folder copied from a rig's own framing cache works as well: put
+it in the offline sky maps folder. A running server offers a new folder
+within half a minute. The maps carry their own licences (the NSNS sets are
+CC BY-NC-SA); the attribution line under the framing view shows it.
+
+### How Framing uses a map
 
 An offline map is preferred wherever it can stand in for an online survey:
 the DSS set for the DSS2 colour plates and the SHO set with stars for the

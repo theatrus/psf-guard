@@ -38,6 +38,7 @@ pub mod renamed_lights;
 pub mod satellites;
 pub mod sequence_analysis;
 pub mod server;
+pub mod sky_map_install;
 pub mod sky_maps;
 pub mod spatial_analysis;
 pub mod star_contours;
@@ -49,6 +50,7 @@ pub mod ts_schema;
 pub mod ts_sync;
 pub mod user_preferences;
 pub mod utils;
+pub mod verified_download;
 pub mod zero_point;
 
 // Main entry points

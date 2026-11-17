@@ -9,8 +9,6 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use sha2::{Digest, Sha256};
-
 use super::{Config, LIBRARY_FILE};
 
 /// The ONNX Runtime release PSF Guard downloads. `seiza-model` pins
@@ -248,51 +246,49 @@ async fn fetch(
     release: Release,
     report: &(dyn Fn(Step) + Send + Sync),
 ) -> Result<(), String> {
-    use tokio::io::AsyncWriteExt;
+    use crate::verified_download::{Expected, Failure};
 
-    let failed = |error: &dyn std::fmt::Display| format!("Downloading {}: {error}", release.asset);
-    let client = reqwest::Client::builder()
-        .user_agent(concat!("psf-guard/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .map_err(|error| failed(&error))?;
-    let mut response = client
-        .get(url)
-        .send()
-        .await
-        .and_then(|response| response.error_for_status())
-        .map_err(|error| failed(&error))?;
-    let total = response.content_length();
-    let mut file = tokio::fs::File::create(archive)
-        .await
-        .map_err(|error| format!("Creating {}: {error}", archive.display()))?;
-    let mut hasher = Sha256::new();
-    let mut done = 0u64;
     let message = format!("Downloading ONNX Runtime {ONNXRUNTIME_VERSION}…");
-    while let Some(chunk) = response.chunk().await.map_err(|error| failed(&error))? {
-        hasher.update(&chunk);
-        file.write_all(&chunk)
-            .await
-            .map_err(|error| format!("Writing {}: {error}", archive.display()))?;
-        done += chunk.len() as u64;
+    let progress = |done: u64, total: Option<u64>| {
         report(Step {
             message: message.clone(),
             bytes_done: Some(done),
             bytes_total: total,
-        });
-    }
-    file.flush()
-        .await
-        .map_err(|error| format!("Writing {}: {error}", archive.display()))?;
-    drop(file);
-    let found = crate::remote_work::hex(&hasher.finalize());
-    if found != release.sha256 {
-        return Err(format!(
-            "{} does not match its SHA-256: expected {}, found {found}. Nothing was installed",
+        })
+    };
+    crate::verified_download::fetch(
+        url,
+        archive,
+        Expected {
+            bytes: None,
+            sha256: Some(release.sha256),
+        },
+        MAX_ARCHIVE_BYTES,
+        &|| false,
+        &|_| Ok(()),
+        &progress,
+    )
+    .await
+    .map_err(|failure| match failure {
+        Failure::Transfer(error) => format!("Downloading {}: {error}", release.asset),
+        Failure::Write(error) => format!("Writing {error}"),
+        Failure::TooLarge { limit } => {
+            format!(
+                "{} is larger than {limit} bytes. Nothing was installed",
+                release.asset
+            )
+        }
+        Failure::NotOnRecord { sha256, .. } => format!(
+            "{} does not match its SHA-256: expected {}, found {sha256}. Nothing was installed",
             release.asset, release.sha256
-        ));
-    }
-    Ok(())
+        ),
+        Failure::Refused(error) => error,
+        Failure::Stopped => "Stopped".into(),
+    })
 }
+
+/// No ONNX Runtime archive Microsoft publishes comes near this.
+const MAX_ARCHIVE_BYTES: u64 = 1024 * 1024 * 1024;
 
 /// Unpack a verified archive into `staging`, move that to a folder of its
 /// own in `folder`, and switch [`CURRENT`] to it. Returns the library's

@@ -84,6 +84,9 @@
 .framing-stage-status [role='note'] { color: var(--color-text-lighter); pointer-events: auto; cursor: help; }
 .framing-stage-scale { position: absolute; right: 10px; bottom: 8px; background: var(--color-scrim); color: var(--color-text-on-fill); padding: 3px 8px; border-radius: 4px; font-size: 12px; pointer-events: none; }
 .framing-attribution { margin: 4px 0 0; font-size: 11px; line-height: 1.35; }
+/* The one-time offer of the whole-sky map, under the stage. */
+.framing-offline-offer { margin: 8px 0 0; padding: 8px 10px; border: 1px solid var(--color-border-secondary); border-radius: 6px; font-size: 13px; line-height: 1.5; }
+.framing-offline-offer button { margin-left: 2px; }
 .framing-controls fieldset { border: 1px solid var(--color-border-secondary); border-radius: 6px; padding: 6px 12px 10px; margin: 0 0 10px; min-width: 0; }
 .framing-controls legend { padding: 0 4px; font-weight: 600; }
 .framing-controls label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--color-text-secondary); min-width: 0; }

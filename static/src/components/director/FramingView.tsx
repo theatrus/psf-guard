@@ -7,6 +7,7 @@ import { useDraftSection } from './pageDraftsState';
 import { describeFramingChanges } from './draftChanges';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
+import OfflineMapOffer from './OfflineMapOffer';
 import type { SkyPreview } from '../../api/types';
 import type { DirectorCutoutRequest, DirectorFramingDraftView, DirectorFramingPreview, DirectorLayout, DirectorMosaicPanel, DirectorPanelSize, DirectorRigFraming, DirectorRigProfileSummary, DirectorSkyMarks, DirectorSkyPosition } from '../../api/directorTypes';
 import {
@@ -551,10 +552,14 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
     if (!moved || Math.hypot(moved[0], moved[1]) > settledView.fov * 0.01 || Math.abs(rested.fov - tile.fov) > tile.fov * 0.05) setTile(rested);
   }, [settledView?.center.ra_degrees, settledView?.center.dec_degrees, settledView?.fov]); // eslint-disable-line react-hooks/exhaustive-deps
   const tilePixels = tileSize(stageSize, stagePixels);
-  const tileRequest = (center: DirectorSkyPosition, fov: number, survey: string): DirectorCutoutRequest => ({
-    survey, ra: roundRa(center.ra_degrees, 5), dec: Number(center.dec_degrees.toFixed(5)),
-    fov: Number(fov.toFixed(5)), width: tilePixels.width, height: tilePixels.height, rotation: 0,
-  });
+  const tileRequest = (center: DirectorSkyPosition, fov: number, survey: string): DirectorCutoutRequest => {
+    const version = surveys.data?.find(entry => entry.id === survey)?.version;
+    return {
+      survey, ra: roundRa(center.ra_degrees, 5), dec: Number(center.dec_degrees.toFixed(5)),
+      fov: Number(fov.toFixed(5)), width: tilePixels.width, height: tilePixels.height, rotation: 0,
+      ...(version ? { v: version } : {}),
+    };
+  };
   // Once the settled view's tile is up, wider views of the same place are
   // fetched quietly, out to a hemisphere, so a zoom out already has a
   // picture; the server keeps them, so the next visit has them at once.
@@ -564,7 +569,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
     for (let fov = tileFor(settledView.center, settledView.fov).fov * 4; fov < TILE_MAX_FOV; fov *= 4) steps.push(fov);
     steps.push(TILE_MAX_FOV);
     return steps.map(fov => tileRequest(settledView.center, fov, state.surveyId));
-  }, [state?.surveyId, settledView?.center.ra_degrees, settledView?.center.dec_degrees, settledView?.fov, tilePixels.width, tilePixels.height]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [state?.surveyId, surveys.data, settledView?.center.ra_degrees, settledView?.center.dec_degrees, settledView?.fov, tilePixels.width, tilePixels.height]); // eslint-disable-line react-hooks/exhaustive-deps
   const cutout = useSurveyCutout(state && tile && viewNow ? tileRequest(tile.center, tile.fov, state.surveyId) : null, 150, prefetch);
   // Marks for the settled view: what the catalogs know is in the field, and
   // where the Sun, Moon, planets, comets and asteroids are at this moment.
@@ -1608,6 +1613,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
         <ul>{mosaic.data.panels.map(panel => <li key={`${panel.rig.id}-${panel.panel_id}`}>{describeStack(panel, stackChoice, stackChoiceName ? stackName(stackChoiceName) : '', mosaic.data!.activation_revision !== null)}</li>)}</ul>
       </div>}
       <p className="director-muted framing-attribution">{survey ? `${survey.name}: ${survey.bandpass}. ${survey.attribution}.` : 'Choose a survey.'}</p>
+      <OfflineMapOffer surveys={surveys.data} canWrite={canWrite} />
       <VisibilityPanel projectId={projectId} center={state.center} rigCenters={liveRigCenters} compact onRig={setVisibility} />
     </div>
     <form className="framing-controls" onSubmit={event => { event.preventDefault(); if (canWrite && !save.isPending && !stale && !refusal) { setNotice(''); setProblem(''); save.mutate(state); } }}>

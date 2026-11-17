@@ -68,6 +68,7 @@ pub mod scheduler;
 pub mod scoring_defaults;
 pub mod shutdown;
 pub mod sky_coverage;
+pub mod sky_map_admin;
 pub mod slug;
 pub mod spatial_scan;
 pub mod stack_preview;
@@ -188,6 +189,7 @@ fn apply_registry_settings(registry: &crate::db_registry::DbRegistry) {
     crate::star_detection::configure(registry.star_detection.as_ref());
     cache_budget::configure(registry.storage.as_ref());
     noise_model::configure(registry.noise_model.as_ref());
+    sky_map_admin::configure(registry.sky_maps.as_ref());
 }
 
 /// Have this server's noise model runs lease their threads from the shared
@@ -941,6 +943,18 @@ pub fn api_router(state: Arc<AppState>) -> Router {
             post(noise_model::stop_download),
         )
         .route("/settings/noise-model", put(noise_model::update_settings))
+        .route("/sky-maps", get(sky_map_admin::get_view))
+        .route("/sky-maps/install", post(sky_map_admin::start_install))
+        .route("/sky-maps/install/stop", post(sky_map_admin::stop_install))
+        .route(
+            "/sky-maps/installed/{folder}",
+            delete(sky_map_admin::remove_map),
+        )
+        .route(
+            "/sky-maps/installed/{folder}/move",
+            post(sky_map_admin::move_map),
+        )
+        .route("/settings/sky-maps", put(sky_map_admin::update_settings))
         .route(
             "/astrometry/catalogs/validate",
             post(handlers::validate_astrometry_catalogs),

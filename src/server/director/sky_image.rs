@@ -203,6 +203,12 @@ pub struct SurveyInfo {
     /// framing view can prefer it; `None` otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stands_in_for: Option<String>,
+    /// For an offline map, the version of its files, which cached views are
+    /// keyed by; empty for an online survey. The browser sends it back with
+    /// each view it asks for, so it never shows a replaced map's pictures
+    /// from its own cache.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub version: String,
 }
 
 impl From<&Survey> for SurveyInfo {
@@ -216,6 +222,7 @@ impl From<&Survey> for SurveyInfo {
             attribution: survey.attribution.to_owned(),
             offline: false,
             stands_in_for: None,
+            version: String::new(),
         }
     }
 }
@@ -234,6 +241,7 @@ impl From<&crate::sky_maps::SkyMap> for SurveyInfo {
             attribution: map.attribution.clone(),
             offline: true,
             stands_in_for: map.stands_in_for.clone(),
+            version: map.version.clone(),
         }
     }
 }
@@ -247,6 +255,8 @@ pub fn builtin_surveys() -> Vec<SurveyInfo> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Cutout {
     pub survey: String,
+    /// For an offline map, the version of its files; empty online.
+    pub version: String,
     /// The provider's identifier; `None` for an offline map.
     pub hips: Option<String>,
     pub ra_degrees: f64,
@@ -272,6 +282,10 @@ pub(super) struct CutoutQuery {
     height: u32,
     #[serde(default)]
     rotation: f64,
+    /// The map's version as the survey listing gave it. Only the browser's
+    /// cache reads it: the server keys a view by the version it has.
+    #[serde(default, rename = "v")]
+    _version: Option<String>,
 }
 fn default_size() -> u32 {
     1024
@@ -299,6 +313,7 @@ impl Cutout {
         }
         Ok(Self {
             survey: survey.id.clone(),
+            version: survey.version.clone(),
             hips: (!survey.offline).then(|| survey.hips.clone()),
             ra_degrees: query.ra,
             dec_degrees: query.dec,
@@ -313,9 +328,16 @@ impl Cutout {
     /// The key names the projection: v2 images are stereographic, which the
     /// framing stage draws in, so a v1 tangent-plane image is never reused.
     pub fn digest(&self) -> String {
+        // An offline map's view is keyed by the map's files too; an online
+        // survey's key is as it was, so its cached views stay.
+        let survey = if self.version.is_empty() {
+            self.survey.clone()
+        } else {
+            format!("{}@{}", self.survey, self.version)
+        };
         let key = format!(
             "sky-cutout-v2|STG|{}|{:.5}|{:.5}|{:.5}|{}|{}|{:.2}",
-            self.survey,
+            survey,
             self.ra_degrees,
             self.dec_degrees,
             self.fov_degrees,
@@ -362,8 +384,10 @@ pub struct SkyImageService {
     base_url: String,
     resolver_url: String,
     cache_dir: PathBuf,
-    /// Folders of N.I.N.A. offline sky maps, one per layer.
-    sky_maps_root: PathBuf,
+    /// The one folder of offline sky maps a test reads. Otherwise the maps
+    /// are those in their own folder and any left under the cache.
+    sky_maps_root: Option<PathBuf>,
+    cache_root: PathBuf,
     maps: Mutex<Option<(Instant, MapList)>>,
     /// Offline maps whose small tiles have been warmed since start.
     warmed: Mutex<std::collections::HashSet<String>>,
@@ -400,7 +424,8 @@ impl SkyImageService {
             base_url: base_url.to_owned(),
             resolver_url: resolver_url.to_owned(),
             cache_dir: cache_root.join("director").join("sky"),
-            sky_maps_root: crate::sky_maps::root_for(cache_root),
+            sky_maps_root: None,
+            cache_root: cache_root.to_path_buf(),
             maps: Mutex::new(None),
             jobs: Mutex::new(HashMap::new()),
             warmed: Mutex::new(std::collections::HashSet::new()),
@@ -428,7 +453,7 @@ impl SkyImageService {
     /// Look for offline maps somewhere else than under the cache root.
     #[cfg(test)]
     pub fn with_sky_maps_root(mut self, root: &FilePath) -> Self {
-        self.sky_maps_root = root.to_path_buf();
+        self.sky_maps_root = Some(root.to_path_buf());
         self
     }
 
@@ -443,7 +468,7 @@ impl SkyImageService {
             return maps.clone();
         }
         let maps = Arc::new(
-            crate::sky_maps::discover(&self.sky_maps_root)
+            self.discover()
                 .into_iter()
                 .map(Arc::new)
                 .collect::<Vec<_>>(),
@@ -454,13 +479,31 @@ impl SkyImageService {
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             let mut warmed = self.warmed.lock().expect("warmed sky maps");
             for map in maps.iter() {
-                if warmed.insert(map.id.clone()) {
+                if warmed.insert(format!("{}@{}", map.id, map.version)) {
                     let map = map.clone();
                     handle.spawn_blocking(move || map.warm());
                 }
             }
         }
         maps
+    }
+
+    /// The maps on disk now: those in the one folder a test gave, or those
+    /// in the maps' own folder and then any left under the cache.
+    fn discover(&self) -> Vec<crate::sky_maps::SkyMap> {
+        match &self.sky_maps_root {
+            Some(root) => crate::sky_maps::discover(root),
+            None => crate::sky_map_install::installed(&self.cache_root)
+                .into_iter()
+                .map(|(map, _)| map)
+                .collect(),
+        }
+    }
+
+    /// Read the map folders again at the next request, as after an install,
+    /// a removal or a move.
+    pub fn forget_maps(&self) {
+        *self.maps.lock().expect("sky map list") = None;
     }
 
     /// Every layer on offer: the HiPS surveys, then the offline maps.
@@ -838,6 +881,7 @@ mod tests {
             width: 800,
             height: 600,
             rotation: 12.0,
+            _version: None,
         }
     }
 
@@ -888,6 +932,32 @@ mod tests {
                 .digest()
         );
         assert_eq!(base.digest().len(), 64);
+    }
+
+    #[test]
+    fn an_offline_maps_views_are_kept_by_the_version_of_its_files() {
+        let map = |version: &str| SurveyInfo {
+            id: "nina:FramingAssistantCache".into(),
+            name: "DSS (offline)".into(),
+            hips: String::new(),
+            kind: SurveyKind::Broadband,
+            bandpass: String::new(),
+            attribution: String::new(),
+            offline: true,
+            stands_in_for: None,
+            version: version.into(),
+        };
+        let view = |version: &str| {
+            Cutout::from_query(&query("nina:FramingAssistantCache"), &[map(version)])
+                .unwrap()
+                .digest()
+        };
+        // A replaced map is not served from the old map's pictures.
+        assert_ne!(view("100-1"), view("200-2"));
+        assert_eq!(view("100-1"), view("100-1"));
+        // An online survey's key is the one it always had.
+        let online = Cutout::from_query(&query("dss2_color"), &builtin_surveys()).unwrap();
+        assert!(online.version.is_empty());
     }
 
     #[test]

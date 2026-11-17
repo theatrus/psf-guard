@@ -99,6 +99,13 @@ export const handlers = [
   }),
   http.get('/api/director/v1/templates', () => HttpResponse.json({ success: true, data: [], error: null })),
   http.get('/api/director/v1/projects/:id/plan/progress', () => HttpResponse.json({ success: true, data: { rigs: [] }, error: null })),
+  // Framing offers the whole-sky map when no offline map is installed, and
+  // reads its size here.
+  http.get('/api/sky-maps', () => HttpResponse.json({
+    success: true,
+    data: { chosen: false, sets: [], installed: [], cutouts_bytes: 0, install: { running: false, message: '' } },
+    error: null,
+  })),
   http.get('/api/director/v1/sky/search', ({ request }) => HttpResponse.json({
     success: true, data: { query: new URL(request.url).searchParams.get('q') ?? '', local: { available: false, note: 'object catalog is not configured', items: [] }, online: null, online_state: 'skipped', online_cached: false }, error: null,
   })),

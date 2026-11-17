@@ -41,6 +41,17 @@ pub struct RequestAccess {
     pub api_token: bool,
 }
 
+impl RequestAccess {
+    /// Whether the request may manage the server: see server paths, change
+    /// the registry, and read full errors. An editor, on a server that
+    /// allows database management. A request with no access record comes
+    /// from a server without accounts, where everyone is an editor.
+    pub fn manages(access: Option<&Self>, state: &crate::server::state::AppState) -> bool {
+        access.is_none_or(|access| access.role == AccessRole::ReadWrite)
+            && state.database_management_allowed()
+    }
+}
+
 #[derive(Clone)]
 pub struct ServerAuth {
     users: Arc<RwLock<Vec<AuthUser>>>,

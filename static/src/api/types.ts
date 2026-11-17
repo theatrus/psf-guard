@@ -1411,6 +1411,63 @@ export interface NoiseModelInstalled {
   folder: string;
 }
 
+/** An offline sky map install's state. */
+export interface SkyMapInstallProgress {
+  running: boolean;
+  /** The set being installed, or the last one. */
+  set?: string;
+  message: string;
+  bytes_completed?: number;
+  bytes_total?: number;
+  error?: string;
+  started_at?: number;
+  finished_at?: number;
+}
+
+/** One set N.I.N.A. publishes. */
+export interface SkyMapSet {
+  key: string;
+  name: string;
+  covers: string;
+  licence?: string;
+  /** The download's size. */
+  bytes: number;
+  /** The free space an install needs while it runs. */
+  room_needed: number;
+  installed: boolean;
+}
+
+/** One installed offline sky map. */
+export interface InstalledSkyMap {
+  /** The survey layer's id in Framing. */
+  id: string;
+  /** The map's folder name, which removes or moves it. */
+  folder: string;
+  name: string;
+  attribution: string;
+  tiles: number;
+  bytes: number;
+  /** The published set it is, when it is one. */
+  set?: string;
+  /** Still under the cache folder, where earlier versions installed maps. */
+  in_cache: boolean;
+}
+
+/** What Settings › Offline sky maps shows. */
+export interface SkyMapsView {
+  /** Server paths; absent for someone who may not manage the server. */
+  folder?: string;
+  default_folder?: string;
+  /** A folder is chosen in Settings. */
+  chosen: boolean;
+  free_bytes?: number;
+  sets: SkyMapSet[];
+  installed: InstalledSkyMap[];
+  /** Survey pictures fetched online and kept under the cache. */
+  cutouts_bytes: number;
+  install: SkyMapInstallProgress;
+}
+
 export type NoiseModelDownloadPart = 'runtime' | 'model';
 
 export interface NoiseModelDownloadProgress {
@@ -2460,6 +2517,7 @@ export type JobControl =
   | { kind: 'export'; db_id: string }
   | { kind: 'catalog-install' }
   | { kind: 'noise-model-download' }
+  | { kind: 'sky-map-install' }
   | { kind: 'license-check'; key: string };
 
 /** The automatic jobs a person can pause. Mirrors `PausableJob` in
