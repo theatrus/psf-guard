@@ -1,4 +1,4 @@
-import type { DirectorVisibleSky } from '../../api/directorTypes';
+import type { DirectorVisibleSky, DirectorVisibleSkyRegion } from '../../api/directorTypes';
 import type { LonLat } from '../../utils/skyProjection';
 import { formatNight } from './skyModel';
 import { countAt, type SkyCounts } from './skyShade';
@@ -220,7 +220,7 @@ export function insideLines(nodes: SkyCounts, raDeg: number, decDeg: number): bo
 /** One region of a picture made here: its lines, its share of the sky and
  *  the declinations it spans, as the server gives them for its own. The
  *  line runs halfway between a node inside and a node outside. */
-function region(sky: SkyCounts): DirectorVisibleSky['every_night'] {
+function region(sky: SkyCounts): DirectorVisibleSkyRegion {
   const lines = countLines(sky, 0.5);
   const degrees = 180 / (sky.rows - 1);
   let [inside, whole] = [0, 0];

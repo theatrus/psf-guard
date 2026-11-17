@@ -102,11 +102,19 @@ test('Framing covers the sky the rig cannot shoot, for the month, the year and a
     // Nothing in the group is read out as it changes.
     expect(await group.locator('[role="status"], [aria-live]').count()).toBe(0);
 
-    // Year: every night, one a week measured.
+    // Year: every night counted, one a week measured. The sky left clear
+    // is the sky in view on at least 7 nights of the year, so the cover is
+    // weighed against 7, and the target near the pole is clear, with no note.
     await group.getByRole('radio', { name: 'Year' }).click();
-    await expect(layer).toHaveAttribute('data-nights', '365', { timeout: 120_000 });
+    await expect(layer).toHaveAttribute('data-nights', '7', { timeout: 120_000 });
     await expect(words).toHaveText('The target is in view on all of the 365 nights of the year.');
+    await expect(page.getByTestId('sky-in-view-note')).toHaveCount(0);
     await expect(page.getByTestId('sky-in-view-legend')).toContainText('365 nights from tonight, ');
+    await expect(page.getByTestId('sky-in-view-shares')).toContainText(/^In view on 7 nights or more: \d+% of the sky, declination −\d+° to \+90°\./);
+    await expect(group).toContainText('Clear sky is in view on at least 7 of them, in total and not in a row.');
+    await expect(group).toContainText('No night7 nights or more');
+    // Its edge runs near the southern limit, below this view of the pole,
+    // so the shares above give where it is rather than the drawn line.
     await expect(page.getByTestId('sky-in-view-shares')).toContainText(/On at least one night: \d+% of the sky, declination −3[01]° to \+90°\./);
     // A picture chosen here is a person's request; the one drawn on
     // opening was the page's own.
@@ -161,7 +169,7 @@ test('Framing covers the sky the rig cannot shoot, for the month, the year and a
     expect(posts.length).toBe(beforeSliding);
     // Year reads the answer Season fetched: going back asks for nothing.
     await group.getByRole('radio', { name: 'Year' }).click();
-    await expect(layer).toHaveAttribute('data-nights', '365');
+    await expect(layer).toHaveAttribute('data-nights', '7');
     await group.getByRole('radio', { name: 'Season' }).click();
     await expect(slider).toHaveValue('4');
     expect(posts.length).toBe(beforeSliding);
@@ -196,6 +204,12 @@ test('Framing covers the sky the rig cannot shoot, for the month, the year and a
     await expect(words).toHaveText('The target is never in view on the 31 nights counted.', { timeout: 30_000 });
     await expect(words).not.toHaveAttribute('data-stale', 'true');
     await expect(page.getByTestId('sky-in-view-note')).toHaveText(['Target never in view']);
+    // Nor on any night of the year: Year notes it too.
+    await group.getByRole('radio', { name: 'Year' }).click();
+    await expect(words).toHaveText('The target is never in view on the 365 nights of the year.', { timeout: 60_000 });
+    await expect(page.getByTestId('sky-in-view-note')).toHaveText(['Target never in view']);
+    await group.getByRole('radio', { name: 'Now' }).click();
+    await expect(words).toHaveText('The target is never in view on the 31 nights counted.', { timeout: 30_000 });
     // No count for a place was a person's request, and typing the target
     // asked once, when it rested.
     expect(posts.filter(body => 'places' in body).every(body => !('priority' in body))).toBe(true);

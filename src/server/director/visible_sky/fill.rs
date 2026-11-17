@@ -200,18 +200,46 @@ pub(super) fn count<E>(
 }
 
 /// Whether one place is in view on every night of the year, or, with
-/// `every` false, on any, stopping as soon as the answer is known.
+/// `every` false, on any: [`at_least`] all the nights, or one. The
+/// server asks [`at_least`] itself; this form is for the tests.
+#[cfg(test)]
 pub(super) fn all_or_any<E>(
     measured: usize,
     every: bool,
     seen: impl FnMut(usize, i32) -> Result<bool, E>,
 ) -> Result<bool, E> {
+    let wanted = if every {
+        nights_counted(measured) as u32
+    } else {
+        1
+    };
+    at_least(measured, wanted, seen)
+}
+
+/// Whether one place is in view on at least `wanted` nights of the year,
+/// stopping as soon as the answer is known: once it has them, or once the
+/// nights left cannot make them up.
+pub(super) fn at_least<E>(
+    measured: usize,
+    wanted: u32,
+    seen: impl FnMut(usize, i32) -> Result<bool, E>,
+) -> Result<bool, E> {
+    if wanted == 0 {
+        return Ok(true);
+    }
+    let mut left = nights_counted(measured) as u32;
+    let mut in_view = 0;
     for night in nights(measured, seen) {
-        if night?.1 != every {
-            return Ok(!every);
+        in_view += u32::from(night?.1);
+        left -= 1;
+        if in_view >= wanted {
+            return Ok(true);
+        }
+        if in_view + left < wanted {
+            return Ok(false);
         }
     }
-    Ok(every)
+    Ok(false)
 }
 
 /// What a measured night's grid has at a node turned `step` columns along
@@ -468,6 +496,41 @@ mod tests {
             Ok::<bool, ()>(false)
         });
         assert_eq!((every, questions), (Ok(false), 1));
+    }
+
+    #[test]
+    fn at_least_some_nights_is_the_count_against_the_number_stopping_early() {
+        // In view on measured nights 2 and 3 only, where the place is: 2
+        // nights, and none between, which need the steps around.
+        let seen =
+            |night: usize, step: i32| Ok::<bool, ()>((night == 2 || night == 3) && step == 0);
+        assert_eq!(count(6, seen), Ok(2));
+        assert_eq!(at_least(6, 0, seen), Ok(true));
+        assert_eq!(at_least(6, 2, seen), Ok(true));
+        assert_eq!(at_least(6, 3, seen), Ok(false));
+        // Over every pattern, it is the count against the number.
+        for pattern in 0..64_u32 {
+            let seen = |night: usize, step: i32| {
+                Ok::<bool, ()>(
+                    (pattern >> ((night * 3 + (step + 3) as usize) % 6)) & 1 == 1 || night == 2,
+                )
+            };
+            let nights = count(6, seen).unwrap();
+            for wanted in [1, 7, 20, 36, 37] {
+                assert_eq!(
+                    at_least(6, wanted, seen).unwrap(),
+                    nights >= wanted,
+                    "{pattern} {wanted}"
+                );
+            }
+        }
+        // It stops at the night that settles it.
+        let mut questions = 0;
+        let enough = at_least(53, 2, |_: usize, _: i32| {
+            questions += 1;
+            Ok::<bool, ()>(true)
+        });
+        assert_eq!((enough, questions), (Ok(true), 2));
     }
 
     #[test]

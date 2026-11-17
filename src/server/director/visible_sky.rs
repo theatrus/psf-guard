@@ -92,6 +92,11 @@ pub(super) const MOST_NIGHTS: u32 = 31;
 /// hours change by about half an hour.
 pub(super) const YEAR_EVERY_NIGHTS: u32 = 7;
 pub(super) const YEAR_NIGHTS: u32 = 53;
+/// A year's picture leaves clear the sky in view on at least this many
+/// nights of the year, in total and not in a row: a week's worth. Sky in
+/// view every night of a year is only the sky round the pole; sky in view
+/// for a week of it is the sky a rig can shoot at all.
+pub(super) const YEAR_CLEAR_NIGHTS: u32 = 7;
 const _: () = assert!(YEAR_EVERY_NIGHTS as usize == fill::EVERY);
 
 /// Which nights a request covers.
@@ -200,6 +205,16 @@ struct Region {
     declinations: Option<[f64; 2]>,
 }
 
+/// The sky in view on at least some number of the nights counted, however
+/// they fall in the year.
+#[derive(Serialize)]
+struct AtLeast {
+    /// How many nights: [`YEAR_CLEAR_NIGHTS`].
+    nights: u32,
+    #[serde(flatten)]
+    region: Region,
+}
+
 /// A year's measured nights, and what it takes to work out the nights
 /// between them as [`fill`] does.
 #[derive(Serialize)]
@@ -263,8 +278,14 @@ pub(super) struct View {
     /// for a client to add up the nights of one time of year itself.
     #[serde(skip_serializing_if = "Option::is_none")]
     measured: Option<Measured>,
-    /// Sky that meets the minimum time on every night.
-    every_night: Region,
+    /// Sky that meets the minimum time on every night. Not for a year,
+    /// whose picture leaves clear the sky in [`View::at_least`] instead.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    every_night: Option<Region>,
+    /// For a year: sky that meets it on at least [`YEAR_CLEAR_NIGHTS`]
+    /// nights of the year. This is the sky a year's picture leaves clear.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    at_least: Option<AtLeast>,
     /// Sky that meets it on at least one night; `None` for a single night,
     /// when it is the same sky.
     any_night: Option<Region>,
@@ -559,10 +580,28 @@ fn year_count(runs: &[DarkRuns<'_>], at: IcrsPosition, needed: u32) -> Result<u3
     })
 }
 
-/// Whether a place has its run on every night of a year, or on any, as
+/// Whether a place has its run on at least `wanted` nights of a year, as
 /// [`year_count`] would count it. To place a line between nodes: where a
 /// measured night's grid settles a turned place it is not measured again,
 /// which is the trust the line itself puts in the grid.
+fn year_at_least(
+    runs: &[DarkRuns<'_>],
+    grids: &[Grid],
+    at: IcrsPosition,
+    needed: u32,
+    wanted: u32,
+) -> Result<bool, NightError> {
+    fill::at_least(runs.len(), wanted, |night, steps| {
+        let there = turned(at, steps);
+        match settled(&grids[night], there) {
+            Some(seen) => Ok(seen),
+            None => runs[night].reaches(there, needed),
+        }
+    })
+}
+
+/// Whether a place has its run on every night of a year, or on any:
+/// [`year_at_least`] all of them, or one.
 fn year_all_or_any(
     runs: &[DarkRuns<'_>],
     grids: &[Grid],
@@ -570,13 +609,12 @@ fn year_all_or_any(
     needed: u32,
     every: bool,
 ) -> Result<bool, NightError> {
-    fill::all_or_any(runs.len(), every, |night, steps| {
-        let there = turned(at, steps);
-        match settled(&grids[night], there) {
-            Some(seen) => Ok(seen),
-            None => runs[night].reaches(there, needed),
-        }
-    })
+    let wanted = if every {
+        fill::nights_counted(runs.len()) as u32
+    } else {
+        1
+    };
+    year_at_least(runs, grids, at, needed, wanted)
 }
 
 fn key(inputs: &Inputs, horizon: &Option<Arc<Vec<u64>>>, noon_ms: u64, needed: u32) -> Key {
@@ -636,6 +674,10 @@ pub(super) struct PlacesView {
     /// The first night counted, and how many were.
     first_night: NightDate,
     nights_counted: u32,
+    /// For a year: how many nights a place needs to be inside the
+    /// picture's solid line.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    at_least_nights: Option<u32>,
     places: Vec<PlaceNights>,
 }
 
@@ -645,6 +687,11 @@ struct PlaceNights {
     dec_degrees: f64,
     /// Measured for this very place, as a night's grid measures a node.
     nights_in_view: u32,
+    /// For a year: whether that is at least the picture's
+    /// [`YEAR_CLEAR_NIGHTS`], so the place is inside the picture's solid
+    /// line.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    at_least: Option<bool>,
 }
 
 /// The night planning starts from when no date is asked for: the night
@@ -886,12 +933,14 @@ fn measure(
                     ra_degrees: at.ra_degrees,
                     dec_degrees: at.dec_degrees,
                     nights_in_view,
+                    at_least: (span == Span::Year).then_some(nights_in_view >= YEAR_CLEAR_NIGHTS),
                 })
             })
             .collect::<Result<Vec<_>, NightError>>()?;
         return Ok(Answer::Places(PlacesView {
             first_night: dates[0],
             nights_counted: nights_counted(span, dates.len()),
+            at_least_nights: (span == Span::Year).then_some(YEAR_CLEAR_NIGHTS),
             places,
         }));
     }
@@ -974,10 +1023,35 @@ fn measure(
         }
         Ok(every)
     };
-    let every_night = region(&every, &|at| on_nights(at, true))?;
+    // A year's picture leaves clear the sky in view on a week's worth of
+    // nights and draws no every-night line, so it is not placed. Season,
+    // which reads a year's answer, draws its own lines.
+    let every_night = match span {
+        Span::Now => Some(region(&every, &|at| on_nights(at, true))?),
+        Span::Year => None,
+    };
     let any_night = if grids.len() > 1 {
         let any: Vec<bool> = counts.iter().map(|count| *count > 0).collect();
         Some(region(&any, &|at| on_nights(at, false))?)
+    } else {
+        None
+    };
+    // A year's clear sky: in view on a week's worth of nights.
+    let at_least = if span == Span::Year {
+        let enough: Vec<bool> = counts
+            .iter()
+            .map(|count| u32::from(*count) >= YEAR_CLEAR_NIGHTS)
+            .collect();
+        let region = region(&enough, &|at| {
+            if stop.requested() {
+                return Err(Failure::Stopped);
+            }
+            Ok(year_at_least(&runs, &grids, at, needed, YEAR_CLEAR_NIGHTS)?)
+        })?;
+        Some(AtLeast {
+            nights: YEAR_CLEAR_NIGHTS,
+            region,
+        })
     } else {
         None
     };
@@ -1055,6 +1129,7 @@ fn measure(
             base64::engine::general_purpose::STANDARD.encode(bytes)
         },
         every_night,
+        at_least,
         any_night,
     })))
 }

@@ -101,6 +101,14 @@ pub(super) struct Found {
     /// Of the nodes wrongly called in view every night, the most nights
     /// one is out of view.
     pub(super) claimed_short: usize,
+    /// The sky in view on at least [`YEAR_CLEAR_NIGHTS`] nights, which a
+    /// year's picture leaves clear: its share of the sky, true then filled;
+    /// the nodes the fill-in puts in it that are not, and leaves out that
+    /// are; and how far its filled line lies from the true one.
+    pub(super) week: (f64, f64),
+    pub(super) week_claimed: usize,
+    pub(super) week_missed: usize,
+    pub(super) week_line_apart: Option<f64>,
     /// The furthest any point of the filled every-night line lies from
     /// the true one, or the true one from it, in degrees; `None` when
     /// either has no line.
@@ -311,6 +319,33 @@ pub(super) fn compare(case: &Case, first: &str, measured: usize, needed: u32) ->
         )
     };
     let (every_claimed, every_missed) = differ(&every, &true_every);
+    // The sky in view on a week's worth of nights.
+    let wanted = YEAR_CLEAR_NIGHTS as usize;
+    let true_week: Vec<bool> = true_counts.iter().map(|count| *count >= wanted).collect();
+    let week: Vec<bool> = counts
+        .iter()
+        .map(|count| *count as usize >= wanted)
+        .collect();
+    let (week_claimed, week_missed) = differ(&week, &true_week);
+    let true_week_line = lines(region(&true_week, &|at| {
+        let mut in_view = 0;
+        for runs in &runs {
+            in_view += usize::from(runs.reaches(at, needed)?);
+            if in_view >= wanted {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }));
+    let week_line = lines(region(&week, &|at| {
+        Ok(year_at_least(
+            &sampled_runs,
+            &grids,
+            at,
+            needed,
+            YEAR_CLEAR_NIGHTS,
+        )?)
+    }));
     let (any_claimed, any_missed) = differ(&any, &true_any);
     let gaps = counts
         .iter()
@@ -362,6 +397,10 @@ pub(super) fn compare(case: &Case, first: &str, measured: usize, needed: u32) ->
         nights,
         every: (share(&true_every), share(&every)),
         any: (share(&true_any), share(&any)),
+        week: (share(&true_week), share(&week)),
+        week_claimed,
+        week_missed,
+        week_line_apart: apart(&week_line, &true_week_line),
         every_claimed,
         every_missed,
         any_claimed,
@@ -398,6 +437,13 @@ fn the_year_filled_in_against_every_night_measured() {
         let found = compare(&case, "2026-11-16", 53, 6);
         eprintln!("{}: {found:?} in {:?}", case.name, began.elapsed());
         hold(case.name, &found);
+        // Over a year the line round the sky in view on a week's worth
+        // of nights is within a degree of the true one.
+        assert!(
+            found.week_line_apart.is_some_and(|apart| apart < 1.0),
+            "{}: {found:?}",
+            case.name
+        );
         // Over a year no node is more than a fifth of the nights out.
         assert!(found.worst_count < 0.2, "{}: {found:?}", case.name);
     }
@@ -415,6 +461,18 @@ fn hold(name: &str, found: &Found) {
     // What it leaves out is a strip a node wide along some of an edge: of
     // the 16,380 nodes, a few dozen.
     assert!(found.every_missed <= 80, "{name}: {found:?}");
+    // The sky in view on a week's worth of nights, which a year's picture
+    // leaves clear: the fill-in hardly ever puts sky in it that is not
+    // (no node at the six sites, over a year), leaves
+    // out a few dozen nodes along its edge at most, and is within a
+    // third of a percent of the sky of the true share.
+    assert!(found.week_claimed <= 2, "{name}: {found:?}");
+    assert!(found.week_missed <= 60, "{name}: {found:?}");
+    assert!(
+        (found.week.1 - found.week.0).abs() < 0.003,
+        "{name}: {found:?}"
+    );
+    assert!(found.week.1 <= found.week.0, "{name}: {found:?}");
     // A month added up from the weekly nights adds at most two nights to
     // a node.
     assert!(found.months.2 <= 2, "{name}: {found:?}");

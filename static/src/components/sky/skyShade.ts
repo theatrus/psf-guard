@@ -27,6 +27,16 @@ export function unpackCounts(base64: string, nights: number, columns: number, ro
 }
 
 /**
+ * Counts against a number of nights that is enough: a node with `enough`
+ * nights or more counts as having them all. A cover made from these is
+ * clear where the sky is in view on `enough` nights, and heavier the
+ * further short of that a place falls.
+ */
+export function countsAgainst(sky: SkyCounts, enough: number): SkyCounts {
+  return { ...sky, nights: enough, counts: sky.counts.map((count) => Math.min(count, enough)) };
+}
+
+/**
  * The count at a place, drawn between the four nodes around it so the
  * shading has no steps. Right ascension wraps; declination stops at the
  * poles.

@@ -1017,7 +1017,13 @@ export interface DirectorVisibleSky {
    *  for each night since and the night after has it as far on for each
    *  night to come; a turn between two columns asks both. */
   measured?: { in_view: string; bytes_a_night: number; turn_degrees_a_night: number };
-  every_night: DirectorVisibleSkyRegion;
+  /** Left out for a year, whose picture leaves clear the sky in
+   *  `at_least` instead. */
+  every_night?: DirectorVisibleSkyRegion;
+  /** With a year: the sky in view on at least `nights` of the nights
+   *  counted, in total and not in a row. A year's picture leaves this sky
+   *  clear and draws its solid line round it. */
+  at_least?: DirectorVisibleSkyRegion & { nights: number };
   /** Null for one night, when it is the same sky as `every_night`. */
   any_night: DirectorVisibleSkyRegion | null;
 }
@@ -1031,7 +1037,11 @@ export interface DirectorVisiblePlacesRequest extends DirectorVisibleSkyRequest 
 export interface DirectorVisiblePlaces {
   first_night: string;
   nights_counted: number;
-  places: Array<{ ra_degrees: number; dec_degrees: number; nights_in_view: number }>;
+  /** With a year: how many nights a place needs to be inside the
+   *  picture's solid line, and `at_least` on each place says whether it
+   *  has them. */
+  at_least_nights?: number;
+  places: Array<{ ra_degrees: number; dec_degrees: number; nights_in_view: number; at_least?: boolean }>;
 }
 export interface DirectorFeasibility {
   center: DirectorSkyPosition;
