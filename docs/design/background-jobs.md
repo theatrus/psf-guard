@@ -46,6 +46,16 @@ the gate of the other display calculations: it may queue a check, which
 writes measurements, but never changes what the catalog records of frames
 or grades. A rig the catalog does not record is ignored.
 
+A request answered in place can carry its tier itself. Sky in view
+(`POST /sky/visible-region` and `/sky/visible-places`) has no row: its
+work is bounded and takes a second or two. Framing draws it as a plan
+opens, with no click, so a request is `Viewed` unless it says
+`priority: interactive`, which the page sends only for a picture a person
+chose in the group. A `Viewed` request waits for a person's work before
+it takes its turn, takes no guard and leases from the background share.
+The field takes those two values and no other, so a client can claim no
+more than a click gets.
+
 ## The parts
 
 | Part | Where |
