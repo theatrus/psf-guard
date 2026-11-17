@@ -63,6 +63,7 @@ import SchedulerSyncControls from './SchedulerSyncControls';
 import { discardCatalogSyncPreview as discardSavedCatalogSyncPreview } from '../utils/syncPreview';
 import RemoteSyncPreviews from './RemoteSyncPreviews';
 import SeizaCatalogControls from './SeizaCatalogControls';
+import OfflineSkyMapsSettings from './OfflineSkyMapsSettings';
 import ProcessingSetupsManager from './ProcessingSetupsManager';
 import CalibrationLibrarySummary from './CalibrationLibrarySummary';
 import AstroBinFilterSummary from './AstroBinFilterSummary';
@@ -726,6 +727,8 @@ export default function TauriSettings({
     'storage',
     ...(canEdit && managementAllowed ? ['backups'] as const : []),
     ...(canEdit ? ['catalogs'] as const : []),
+    // The maps serve Planning's framing view.
+    ...(canEdit && planningEnabled ? ['sky-maps'] as const : []),
     'exports', 'pixinsight', 'astrobin', 'review',
     ...(isTauri ? ['server'] as const : []),
     ...(!isTauri && access.status.authentication_required ? ['users'] as const : []),
@@ -1635,6 +1638,12 @@ export default function TauriSettings({
           {currentTab === 'catalogs' && (
             <div className="settings-setups">
               <SeizaCatalogControls focus={initialIntent === 'catalogs' ? initialField : null} />
+            </div>
+          )}
+
+          {currentTab === 'sky-maps' && (
+            <div className="settings-setups">
+              <OfflineSkyMapsSettings canManage={managementAllowed && canEdit} />
             </div>
           )}
 

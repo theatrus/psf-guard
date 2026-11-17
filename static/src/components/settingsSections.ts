@@ -4,7 +4,7 @@ export type SettingsSection =
   | 'setups' | 'templates'
   | 'calibration' | 'stacking'
   | 'performance' | 'gpu' | 'workers'
-  | 'storage' | 'backups' | 'catalogs'
+  | 'storage' | 'backups' | 'catalogs' | 'sky-maps'
   | 'exports' | 'pixinsight' | 'astrobin'
   | 'review' | 'server' | 'users' | 'agents';
 
@@ -42,6 +42,7 @@ const GROUPS: readonly SettingsGroup[] = [
     { id: 'storage', label: 'Folders & limits' },
     { id: 'backups', label: 'Backups' },
     { id: 'catalogs', label: 'Reference catalogs' },
+    { id: 'sky-maps', label: 'Offline sky maps' },
   ] },
   { id: 'exports', label: 'Exports & integrations', pages: [
     { id: 'exports', label: 'Export defaults' },

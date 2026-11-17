@@ -167,6 +167,8 @@ import type { GuidFillReport, GuidReport, ImportedCopiesMerge, ImportedCopiesRep
   SeizaNoiseModel,
   NoiseModelDownloadPart,
   NoiseModelDownloadProgress,
+  SkyMapInstallProgress,
+  SkyMapsView,
   StackStretchPendingProgress,
   AstrometryValidationReport,
   CatalogInstallPreset,
@@ -1810,6 +1812,59 @@ export const apiClient = {
       force ? { parts, force } : { parts }
     );
     if (!data.data) throw new Error(data.error || 'Failed to start the download');
+    return data.data;
+  },
+
+  /** The offline sky maps: published sets, installed maps and the install under way. */
+  getSkyMaps: async (): Promise<SkyMapsView> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<SkyMapsView>>('/sky-maps');
+    if (!data.data) throw new Error(data.error || 'Failed to read the offline sky maps');
+    return data.data;
+  },
+
+  /** Start installing one published set on the server. */
+  installSkyMap: async (set: string): Promise<SkyMapInstallProgress> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<SkyMapInstallProgress>>('/sky-maps/install', { set });
+    if (!data.data) throw new Error(data.error || 'Failed to start the install');
+    return data.data;
+  },
+
+  /** Stop the offline sky map install under way. */
+  stopSkyMapInstall: async (): Promise<void> => {
+    const apiInstance = await getApi();
+    await apiInstance.post('/sky-maps/install/stop');
+  },
+
+  /** Delete an installed offline sky map's files from the server. */
+  removeSkyMap: async (folder: string): Promise<SkyMapsView> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.delete<ApiResponse<SkyMapsView>>(
+      `/sky-maps/installed/${encodeURIComponent(folder)}`
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to remove the map');
+    return data.data;
+  },
+
+  /** Move a map left under the cache folder into the offline sky maps folder. */
+  moveSkyMap: async (folder: string): Promise<SkyMapsView> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<SkyMapsView>>(
+      `/sky-maps/installed/${encodeURIComponent(folder)}/move`
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to move the map');
+    return data.data;
+  },
+
+  /** Set, or with an empty path clear, the folder offline sky maps are kept in. */
+  updateSkyMapsSettings: async (folder: string): Promise<SkyMapsView> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.put<ApiResponse<SkyMapsView>>(
+      '/settings/sky-maps',
+      { folder: folder.trim() || null }
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to save the folder');
     return data.data;
   },
 

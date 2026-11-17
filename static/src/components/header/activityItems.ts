@@ -15,6 +15,7 @@ export type ActivityControl =
   | { kind: 'export'; dbId: string }
   | { kind: 'catalog-install' }
   | { kind: 'noise-model-download' }
+  | { kind: 'sky-map-install' }
   | { kind: 'license-check'; key: string };
 
 /** The job a row's Pause or Resume button calls. */
@@ -111,6 +112,8 @@ function controlOf(control: JobControl): ActivityControl {
       return { kind: 'catalog-install' };
     case 'noise-model-download':
       return { kind: 'noise-model-download' };
+    case 'sky-map-install':
+      return { kind: 'sky-map-install' };
     case 'license-check':
       return { kind: 'license-check', key: control.key };
     case 'wbpp-queued':
