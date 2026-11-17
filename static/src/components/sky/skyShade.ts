@@ -1,4 +1,4 @@
-import { unprojectPoint, wrap360, type PathScale, type SkyView } from '../../utils/skyProjection';
+import { wrap360 } from '../../utils/skyProjection';
 
 /**
  * On how many nights each part of the sky is in view: one count for each
@@ -44,35 +44,36 @@ export function countAt(sky: SkyCounts, raDeg: number, decDeg: number): number {
   return low * (1 - fy) + high * fy;
 }
 
-/** The hatch over sky never in view: stripes this many map units apart,
- *  each letting this much of the cover go at its middle. */
+/** The hatch over sky never in view: stripes this many drawing units
+ *  apart, each letting this much of the cover go at its middle. */
 const HATCH_PERIOD = 12;
 const HATCH_DEPTH = 0.3;
 /** The hatch is left out of a raster too coarse to hold it: one whose
- *  pixels are wider than this many map units. */
+ *  pixels are wider than this many drawing units. */
 const HATCH_FINEST_PIXEL = 3;
 
 /**
- * The cover as a picture of the map: for each pixel of a `width` by
- * `height` raster laid over a map `mapWidth` wide, how much of the sky
- * under it is covered, as the alpha of a white pixel (RGBA). Sky in view
- * every night is clear; sky in view on fewer nights is covered more, in
- * proportion; sky never in view is covered whole and hatched with
- * diagonal stripes, so it reads as out of reach without its colour. Each
- * pixel is looked up through the projection the other way round, so the
- * picture has no seam to break at and no limb to spill over: a pixel off
- * the sky is clear. The hatch runs in map units, so it stays put while
- * the sky turns under it.
+ * The cover as a picture of a drawing of the sky: for each pixel of a
+ * `width` by `height` raster laid over a drawing `drawnWidth` units wide,
+ * how much of the sky under it is covered, as the alpha of a white pixel
+ * (RGBA). Sky in view every night is clear; sky in view on fewer nights is
+ * covered more, in proportion; sky never in view is covered whole and
+ * hatched with diagonal stripes, so it reads as out of reach without its
+ * colour.
+ *
+ * `placeAt(x, y)` is the sky drawn at a point of the drawing, in its
+ * units, as `[ra, dec]` in degrees, or null where the drawing has no sky:
+ * the drawing's projection the other way round. Looking each pixel up
+ * through it leaves no seam and no edge to spill over. The hatch runs in
+ * the drawing's units, so it stays put while the sky moves under it.
  */
-export function shadeRaster(sky: SkyCounts, view: SkyView, at: PathScale, mapWidth: number, width: number, height: number): Uint8ClampedArray {
+export function coverRaster(sky: SkyCounts, drawnWidth: number, width: number, height: number, placeAt: (x: number, y: number) => readonly [number, number] | null): Uint8ClampedArray {
   const pixels = new Uint8ClampedArray(width * height * 4);
-  const perPixel = mapWidth / width;
+  const perPixel = drawnWidth / width;
   const hatched = perPixel <= HATCH_FINEST_PIXEL;
   for (let py = 0; py < height; py += 1) {
-    const y = -((py + 0.5) * perPixel - at.cy) / at.scale;
     for (let px = 0; px < width; px += 1) {
-      const x = ((px + 0.5) * perPixel - at.cx) / at.scale;
-      const place = unprojectPoint(x, y, view);
+      const place = placeAt((px + 0.5) * perPixel, (py + 0.5) * perPixel);
       if (!place) continue;
       const share = countAt(sky, place[0], place[1]) / sky.nights;
       if (share >= 1) continue;
@@ -92,10 +93,10 @@ export function shadeRaster(sky: SkyCounts, view: SkyView, at: PathScale, mapWid
 }
 
 /**
- * [`shadeRaster`] as an image address for the map to draw, or null where
+ * [`coverRaster`] as an image address for a drawing to show, or null where
  * there is no canvas to paint on.
  */
-export function shadeImage(sky: SkyCounts, view: SkyView, at: PathScale, mapWidth: number, width: number, height: number): string | null {
+export function coverImage(sky: SkyCounts, drawnWidth: number, width: number, height: number, placeAt: (x: number, y: number) => readonly [number, number] | null): string | null {
   if (typeof document === 'undefined') return null;
   try {
     const canvas = document.createElement('canvas');
@@ -104,7 +105,7 @@ export function shadeImage(sky: SkyCounts, view: SkyView, at: PathScale, mapWidt
     const context = canvas.getContext('2d');
     if (!context) return null;
     const image = context.createImageData(width, height);
-    image.data.set(shadeRaster(sky, view, at, mapWidth, width, height));
+    image.data.set(coverRaster(sky, drawnWidth, width, height, placeAt));
     context.putImageData(image, 0, 0);
     return canvas.toDataURL('image/png');
   } catch {

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
-import { Check, Crosshair, Globe, Grid3x3, Images, Layers, LocateFixed, Magnet, Move, Orbit, RefreshCw, RotateCw, Sparkles, SquareDashedMousePointer, Sun, Telescope, Undo2 } from 'lucide-react';
+import { Check, Crosshair, Eye, Globe, Grid3x3, Images, Layers, LocateFixed, Magnet, Move, Orbit, RefreshCw, RotateCw, Sparkles, SquareDashedMousePointer, Sun, Telescope, Undo2 } from 'lucide-react';
 import NumberInput from '../NumberInput';
 import { useDraftSection } from './pageDraftsState';
 import { describeFramingChanges } from './draftChanges';
@@ -15,6 +15,8 @@ import {
   cameraDegreesToPlane, coverageFor, framingBoxes, framingShapes, lockedOutlines, panelHandleSky, readFraming, rigLayout, turnToward, type CoverageFraming,
 } from './framingModel';
 import VisibilityPanel from './VisibilityPanel';
+import { SkyInViewLayer, SkyInViewPanel } from './SkyInView';
+import { useSkyInView } from './useSkyInView';
 import MosaicPanels, { type ExtendScope } from './MosaicPanels';
 import { asGrid, cameraStep, keepHandUnlocks, cameraToPlane, describeIssue, extendFrom, extendMosaic, fillHoles, findPanel, flaggedPanels, freshIssues, movePanel, planeToCamera, ringAround, setLocked, snapPlacement, snapTurn, turnOf, turnPanel, wrapTurn, type Direction } from './mosaicLayout';
 import { shapeCenter, shapeOverlap, sharedStrips, splitApart, type PanelShape, type Point, type ShapeReading } from './panelShape';
@@ -77,6 +79,8 @@ const MARK_KEYS = { objects: 'psf-guard.framing.marks.objects', bodies: 'psf-gua
 const SHOWN_CATALOGS_KEY = 'psf-guard.framing.marks.catalogs';
 /** Whether finished stacks are drawn on the sky, in this browser. */
 const STACKS_KEY = 'psf-guard.framing.stacks';
+/** Whether the sky the rig can shoot is marked over the stage. */
+const SKY_IN_VIEW_KEY = 'psf-guard.framing.skyInView';
 /** The stack picked for one plan, by its key; none means each panel's best. */
 const STACK_CHOICE_KEY = 'psf-guard.framing.stack.';
 /** The catalog families a mark can come from, by the letters a designation
@@ -198,16 +202,10 @@ export interface FramingViewProps {
   onToggleRig?: (rigId: string, on: boolean) => boolean | void;
   /** Why a rig cannot join yet, such as a plan with no objectives. */
   joinBlocked?: string;
-  /** A place another tab asks to frame, as if found by name here; a new
-   *  `nonce` asks again. It becomes an unsaved edit, with Undo. */
-  offer?: { pick: TargetPick; nonce: number } | null;
-  /** Told the target as it stands, saved or not, and why it cannot be
-   *  moved from outside, when it cannot. */
-  onTarget?: (target: { name: string; center: DirectorSkyPosition } | null, held: string | null) => void;
 }
 
 /** Frame one project on the sky: target, angle, mosaic and rig footprints over a survey. */
-export default function FramingView({ projectId, seed, preferredRigIds = [], shootingRigIds, onToggleRig, joinBlocked, offer = null, onTarget }: FramingViewProps) {
+export default function FramingView({ projectId, seed, preferredRigIds = [], shootingRigIds, onToggleRig, joinBlocked }: FramingViewProps) {
   const { canWrite } = useAccess();
   const client = useQueryClient();
   const draftKey = ['directorFraming', projectId];
@@ -605,6 +603,16 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
   // review of coverage and seams over the plan, never a processed image.
   // Both are remembered in this browser: the layer for every plan, the
   // stack picked for this one.
+  // Sky in view: on until it is switched off, for the rig the Visibility
+  // panel shows, or the plan's first rig while that panel has none.
+  const [showSkyInView, setShowSkyInView] = useState(() => remembered(SKY_IN_VIEW_KEY, ['on', 'off'] as const, 'on') === 'on');
+  const chooseShowSkyInView = (on: boolean) => { setShowSkyInView(on); remember(SKY_IN_VIEW_KEY, on ? 'on' : 'off'); };
+  const [visibilityRig, setVisibilityRig] = useState<string | null>(null);
+  const skyRig = useMemo(() => {
+    const entry = rigList.find(rig => rig.rig.id === visibilityRig) ?? rigList.find(rig => rig.rig.id === preferredRigIds[0]) ?? (preferredRigIds.length === 0 ? rigList[0] : undefined);
+    return entry ? { id: entry.rig.id, name: entry.catalog_name, slug: entry.catalog_slug } : null;
+  }, [rigList, visibilityRig, preferredRigIds]);
+  const skyInView = useSkyInView({ rig: skyRig, on: showSkyInView && state !== null, target: state?.center ?? null, viewCenter: settledView?.center ?? null });
   const [showStacks, setShowStacks] = useState(() => remembered(STACKS_KEY, ['on', 'off'] as const, 'on') === 'on');
   const chooseShowStacks = (on: boolean) => { setShowStacks(on); remember(STACKS_KEY, on ? 'on' : 'off'); };
   const [stackPick, setStackPick] = useState(() => { try { return window.localStorage.getItem(STACK_CHOICE_KEY + projectId) ?? ''; } catch { return ''; } });
@@ -677,29 +685,6 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
   const followed = centerHeld && angleHeld ? 'center and camera angle' : centerHeld ? 'center' : 'camera angle';
   const heldNote = sharedHeld ? 'Locked panels prevent changes to the center and camera angle. Unlock them to move the whole mosaic.'
     : `${heldBy(holders)} prevent changes to the shared ${followed}. Unlock them, or give ${holders.length === 1 ? rigName(holders[0]) : 'those rigs'} ${holders.length === 1 ? 'its' : 'their'} own ${followed}.`;
-  // A place sent from the Sky tab: taken as a target found by name, or as
-  // the start of a framing that has none. A held center refuses it; the
-  // Sky tab is told why and does not offer.
-  const offerNonce = offer?.nonce;
-  useEffect(() => {
-    if (!offer || !canWrite) return;
-    if (!state) setStarted({ name: offer.pick.name, center: offer.pick.center, position_angle_degrees: 0 });
-    else if (!centerHeld) pickTarget(offer.pick);
-    // Only a new offer is acted on, whatever else has changed since.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [offerNonce]);
-  const targetName = state?.targetName;
-  const targetRa = state?.center.ra_degrees;
-  const targetDec = state?.center.dec_degrees;
-  const heldFromOutside = !canWrite ? 'You can view this plan but not change it.' : draft.isPending ? 'Framing is still loading.' : centerHeld ? heldNote : null;
-  // Not during a drag, which moves the center at every pointer move: the
-  // page is told where the target is when the drag ends, as the save bar
-  // is told of the edit.
-  const dragging = heldReport !== null;
-  useEffect(() => {
-    if (dragging) return;
-    onTarget?.(targetName !== undefined && targetRa !== undefined && targetDec !== undefined ? { name: targetName, center: { ra_degrees: targetRa, dec_degrees: targetDec } } : null, heldFromOutside);
-  }, [onTarget, targetName, targetRa, targetDec, heldFromOutside, dragging]);
   // A new panel size moves every planned panel off the center; one locked
   // there holds the size. A shot panel stays as shot whatever the size.
   const holdsSize = useCallback((rig: string | null, layout: DirectorLayout) => layout.panels.some(panel => !panel.measured && (panel.locked || (!panel.unlocked_by_hand && framesOf(rig, panel.id) > 0)) && (Math.abs(panel.x) > 1e-9 || Math.abs(panel.y) > 1e-9)), [framesOf]);
@@ -1478,6 +1463,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
         <svg viewBox={`0 0 ${stageSize.width} ${stageSize.height}`} aria-hidden="true">
           {!webgl && cutout.image && skyMatrix && <image className="framing-sky" data-testid="framing-sky" href={cutout.image.url} x={0} y={0} width={cutout.image.request.width} height={cutout.image.request.height} preserveAspectRatio="none" transform={skyMatrix} />}
           {backdrop && !pictureUp && backdrop.milkyWay.length > 0 && <g className="framing-milky-way">{backdrop.milkyWay.map((d, i) => <path key={i} d={d} />)}</g>}
+          {skyInView.layer && <SkyInViewLayer layer={skyInView.layer} view={view} viewFov={state.viewFov} stage={stageSize} moving={skyInView.changing || viewNow !== settledView} />}
           {graticule && <g className="framing-graticule" data-testid="framing-graticule">
             {graticule.paths.map((line, i) => <path key={i} d={line.d} />)}
             {graticule.labels.map((label, i) => <text key={i} x={label.x} y={label.y}>{label.text}</text>)}
@@ -1555,6 +1541,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
             <button type="button" aria-pressed={showObjects} aria-label="Deep-sky marks" title="Deep-sky marks from the object catalog" onClick={() => chooseMarks('objects', !showObjects)}><Telescope size={15} /></button>
             <button type="button" aria-pressed={showBodies} aria-label="Comets and asteroids" title="Comets and asteroids where they are now" onClick={() => chooseMarks('bodies', !showBodies)}><Orbit size={15} /></button>
             <button type="button" aria-pressed={showSolar} aria-label="Sun, Moon and planets" title="Sun, Moon and planets where they are now" onClick={() => chooseMarks('solar', !showSolar)}><Sun size={15} /></button>
+            <button type="button" aria-pressed={showSkyInView} aria-label="Sky in view" title="Sky in view: cover the sky the rig cannot shoot" onClick={() => chooseShowSkyInView(!showSkyInView)}><Eye size={15} /></button>
             {stackChoices.length > 0 && <button type="button" aria-pressed={showStacks} aria-label="Finished stacks" title="Finished stacks, placed by their plate solves" onClick={() => chooseShowStacks(!showStacks)}><Images size={15} /></button>}
           </div>
         </div>
@@ -1565,6 +1552,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
           {marks.data && showObjects && !marks.data.objects.available && <span role="note" title={`Deep-sky marks need the Seiza object catalog on this server${marks.data.objects.note ? ` (${marks.data.objects.note})` : ''}.`}>No deep-sky catalog</span>}
           {marks.data && showBodies && !marks.data.minor_bodies.available && <span role="note" title={`Comets and asteroids need the Seiza minor-body catalog on this server${marks.data.minor_bodies.note ? ` (${marks.data.minor_bodies.note})` : ''}.`}>No comet catalog</span>}
           {marks.isError && marksWanted && <span role="alert">Marks could not be loaded: {message(marks.error)}</span>}
+          {skyInView.notes.map(note => <span key={note.text} role="note" title={note.title} data-testid="sky-in-view-note">{note.text}</span>)}
         </div>
         </div>
         <div className="framing-stage-zoom" onPointerDown={event => event.stopPropagation()}>
@@ -1600,7 +1588,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
         <ul>{mosaic.data.panels.map(panel => <li key={`${panel.rig.id}-${panel.panel_id}`}>{describeStack(panel, stackChoice, stackChoiceName ? stackName(stackChoiceName) : '', mosaic.data!.activation_revision !== null)}</li>)}</ul>
       </div>}
       <p className="director-muted framing-attribution">{survey ? `${survey.name}: ${survey.bandpass}. ${survey.attribution}.` : 'Choose a survey.'}</p>
-      <VisibilityPanel projectId={projectId} center={state.center} rigCenters={liveRigCenters} compact />
+      <VisibilityPanel projectId={projectId} center={state.center} rigCenters={liveRigCenters} compact onRig={setVisibilityRig} />
     </div>
     <form className="framing-controls" onSubmit={event => { event.preventDefault(); if (canWrite && !save.isPending && !stale && !refusal) { setNotice(''); setProblem(''); save.mutate(state); } }}>
       <fieldset>
@@ -1623,6 +1611,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
           {savedState && <button type="button" disabled={!differsFromSaved} title="Discard changes since the last save" onClick={() => { setState(savedState); setUndo(null); forgetHistory(); setNotice(`Back to saved framing revision ${draft.data?.draft?.revision ?? 0}.`); }}><Undo2 size={16} />Back to saved framing</button>}
         </div>
       </fieldset>
+      <SkyInViewPanel model={skyInView} onShow={chooseShowSkyInView} />
       <fieldset className="framing-rigs">
         <legend>Rigs</legend>
         {rigs.isError && <p className="director-error" role="alert">Rigs could not be loaded: {message(rigs.error)} <button type="button" onClick={() => void rigs.refetch()}>Retry</button></p>}

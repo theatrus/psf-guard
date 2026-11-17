@@ -103,13 +103,16 @@ export function AltitudeChart({ rig, compact = false }: { rig: DirectorRigFeasib
 /** `compact` keeps the panel to the verdict, the chart and one line of
  *  estimate, with the nights table folded away, so it fits under the
  *  framing stage and stays on screen. */
-export default function VisibilityPanel({ projectId, center, rigCenters, enabled = true, compact = false }: {
+export default function VisibilityPanel({ projectId, center, rigCenters, enabled = true, compact = false, onRig }: {
   projectId: string;
   center: DirectorSkyPosition;
   /** Centers of rigs framed on a center of their own, as the view has them. */
   rigCenters?: Record<string, DirectorSkyPosition>;
   enabled?: boolean;
   compact?: boolean;
+  /** Told which rig the panel shows, so what sits beside it can follow
+   *  the same rig; null while there is none. */
+  onRig?: (rigId: string | null) => void;
 }) {
   const round = (c: DirectorSkyPosition) => ({ ra_degrees: roundRa(c.ra_degrees, 3), dec_degrees: Number(c.dec_degrees.toFixed(3)) });
   const rigKey = JSON.stringify(Object.entries(rigCenters ?? {}).sort(([a], [b]) => a.localeCompare(b)).map(([id, c]) => [id, round(c)]));
@@ -128,6 +131,8 @@ export default function VisibilityPanel({ projectId, center, rigCenters, enabled
   const [chosen, setChosen] = useState<string | null>(null);
   const data: DirectorFeasibility | undefined = query.data;
   const rig = data?.rigs.find(r => r.rig.id === chosen) ?? data?.rigs[0];
+  const shownRig = rig?.rig.id ?? null;
+  useEffect(() => { onRig?.(shownRig); }, [onRig, shownRig]);
   // Each activated rig's own schedule, which ranks the plan against the
   // rig's other work. It does not depend on the framing being edited.
   const projection = useQuery({

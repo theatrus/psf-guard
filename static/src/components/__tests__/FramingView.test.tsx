@@ -402,73 +402,6 @@ describe('Framing view', () => {
     expect(screen.queryByRole('button', { name: 'Back to saved framing' })).not.toBeInTheDocument();
   });
 
-  it('takes a place offered from the Sky tab as a found target: an unsaved edit, with Undo', async () => {
-    const { saves } = fixture();
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
-    const reported: Array<[string | null, string | null]> = [];
-    const onTarget = (target: { name: string } | null, held: string | null) => { reported.push([target?.name ?? null, held]); };
-    const tree = (offer: { pick: { name: string; center: { ra_degrees: number; dec_degrees: number }; source: string }; nonce: number } | null) =>
-      <QueryClientProvider client={client}><FramingView projectId="project" seed={seed} offer={offer} onTarget={onTarget} /></QueryClientProvider>;
-    const { rerender } = render(tree(null));
-    expect(await screen.findByLabelText('Target name')).toHaveValue('M31');
-    // The Sky tab is told the target as it stands, and that it may be moved.
-    expect(reported.at(-1)).toEqual(['M31', null]);
-    const offer = { pick: { name: '20h 59m, +44° 22′', center: { ra_degrees: 314.75, dec_degrees: 44.37 }, source: 'the map' }, nonce: 1 };
-    rerender(tree(offer));
-    expect(await screen.findByText('Moved the target to 20h 59m, +44° 22′.')).toBeInTheDocument();
-    expect(screen.getByLabelText('Target name')).toHaveValue('20h 59m, +44° 22′');
-    expect(screen.getByLabelText('Right ascension degrees')).toHaveValue(314.75);
-    expect(reported.at(-1)).toEqual(['20h 59m, +44° 22′', null]);
-    // Nothing was saved, and one click puts the old target back.
-    expect(saves).toHaveLength(0);
-    fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
-    expect(screen.getByLabelText('Target name')).toHaveValue('M31');
-    // The same offer again, by a re-render, moves nothing; a new one does.
-    rerender(tree(offer));
-    expect(screen.getByLabelText('Target name')).toHaveValue('M31');
-    rerender(tree({ ...offer, nonce: 2 }));
-    expect(screen.getByLabelText('Target name')).toHaveValue('20h 59m, +44° 22′');
-  });
-
-  it('tells the page where the target is when a drag ends, not at every move of it', async () => {
-    fixture();
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
-    const reported: number[] = [];
-    const onTarget = (target: { center: { ra_degrees: number } } | null) => { if (target) reported.push(target.center.ra_degrees); };
-    render(<QueryClientProvider client={client}><FramingView projectId="project" seed={seed} preferredRigIds={[rigA.rig.id]} onTarget={onTarget} /></QueryClientProvider>);
-    await waitFor(() => expect(screen.getByTestId('framing-panel-source')).toHaveTextContent('Size from RedCat 61'));
-    const stage = screen.getByTestId('framing-stage');
-    stage.setPointerCapture = vi.fn();
-    stage.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1024, height: 768, right: 1024, bottom: 768, x: 0, y: 0, toJSON: () => ({}) });
-    Object.defineProperty(stage, 'clientWidth', { value: 1024, configurable: true });
-    await waitFor(() => expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(1));
-    expect(new Set(reported)).toEqual(new Set([seed.center.ra_degrees]));
-    const before = reported.length;
-    // Drag the rectangle east in twenty moves.
-    fireEvent.pointerDown(stage, pointer(512, 384));
-    for (let step = 1; step <= 20; step += 1) fireEvent.pointerMove(stage, { buttons: 1, pointerId: 1, clientX: 512 - 5 * step, clientY: 384 });
-    const during = Number((screen.getByLabelText('Right ascension degrees') as HTMLInputElement).value);
-    expect(during).toBeGreaterThan(seed.center.ra_degrees);
-    // The target has moved on screen, and the page has heard nothing yet.
-    expect(reported.length).toBe(before);
-    fireEvent.pointerUp(stage, { pointerId: 1 });
-    // One report, of where it was dropped.
-    await waitFor(() => expect(reported.length).toBe(before + 1));
-    expect(reported.at(-1)).toBeCloseTo(during, 4);
-  });
-
-  it('starts a framing that has no target from a place offered from the Sky tab', async () => {
-    fixture();
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
-    const offer = { pick: { name: 'NGC 7000', center: { ra_degrees: 314.75, dec_degrees: 44.37 }, source: 'Seiza object catalog' }, nonce: 1 };
-    const tree = (offered: typeof offer | null) => <QueryClientProvider client={client}><FramingView projectId="project" seed={null} offer={offered} /></QueryClientProvider>;
-    const { rerender } = render(tree(null));
-    expect(await screen.findByRole('form', { name: 'Start framing' })).toBeInTheDocument();
-    rerender(tree(offer));
-    expect(await screen.findByLabelText('Target name')).toHaveValue('NGC 7000');
-    expect(screen.getByLabelText('Right ascension degrees')).toHaveValue(314.75);
-  });
-
   it('offers the local catalog names as they are typed and picks one without going online', async () => {
     const resolves: string[] = [];
     fixture();
@@ -1943,5 +1876,63 @@ describe('Mosaic panels', () => {
     fireEvent.pointerUp(stage, { pointerId: 1, clientX: 300, clientY: 200 });
     expect((screen.getByLabelText('Right ascension degrees') as HTMLInputElement).value).toBe(ra);
     expect(screen.getByTestId('framing-mosaic-notice')).toHaveTextContent('Locked panels of C925 data keep the mosaic in place');
+  });
+
+  it('covers the sky the first rig cannot shoot, says where the target stands, and remembers when it is switched off', async () => {
+    fixture();
+    const asked: Array<Record<string, unknown>> = [];
+    const ring = (dec: number) => Array.from({ length: 181 }, (_, at) => [(at * 2) % 360, dec]);
+    // In view every night north of +30°, never south of it.
+    let packed = '';
+    for (let row = 0; row < 91; row += 1) packed += String.fromCharCode(-90 + row * 2 >= 30 ? 31 : 0, 0).repeat(180);
+    server.use(
+      http.post('/api/director/v1/sky/visible-region', async ({ request }) => {
+        const body = await request.json() as { rig: string };
+        asked.push(body);
+        return HttpResponse.json(ok({
+          rig: { id: body.rig, name: 'RedCat 61', revision: 1 }, planning_site: null, site: { latitude_degrees: 34.2, longitude_degrees: -118.3, elevation_meters: 400 },
+          location_from: 'rig', horizon: 'flat', horizon_from: 'none', limits: { minimum_altitude_degrees: 25, maximum_altitude_degrees: 90, horizon_offset_degrees: 0 },
+          minimum_minutes: 30, rig_minimum_minutes: 30, step_minutes: 5, dark_below_degrees: -12,
+          nights: Array.from({ length: 31 }, (_, night) => ({ date: new Date(Date.parse('2026-09-24T00:00:00Z') + night * 86_400_000).toISOString().slice(0, 10), dusk_ms: 1, dawn_ms: 2 })),
+          span: 'now', every_nights: 1, nights_counted: 31, grid: { degrees: 2, columns: 180, rows: 91 }, counts: btoa(packed),
+          every_night: { lines: [ring(30)], sky_fraction: 0.25, declinations: [30, 90] }, any_night: { lines: [ring(30)], sky_fraction: 0.25, declinations: [30, 90] },
+        }));
+      }),
+      http.post('/api/director/v1/sky/visible-places', async ({ request }) => {
+        const body = await request.json() as { places: Array<{ ra_degrees: number; dec_degrees: number }> };
+        return HttpResponse.json(ok({ first_night: '2026-09-24', nights_counted: 31, places: body.places.map(place => ({ ...place, nights_in_view: place.dec_degrees >= 30 ? 31 : 0 })) }));
+      }),
+    );
+    mount(true, true, [rigA.rig.id]);
+    expect(await screen.findByLabelText('Target name')).toHaveValue('M31');
+    // On from the start, for the plan's first rig while Visibility shows none.
+    const toggle = screen.getByRole('button', { name: 'Sky in view' });
+    expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    await waitFor(() => expect(screen.getByTestId('sky-in-view-status')).toHaveTextContent('The target is in view on all of the 31 nights counted.'));
+    expect(asked).toEqual([{ rig: rigA.rig.id, span: 'now' }]);
+    const layer = screen.getByTestId('sky-in-view-layer');
+    expect(layer).toHaveAttribute('data-nights', '31');
+    // Drawn over the survey and under the grid, the marks and the panels.
+    const stage = screen.getByTestId('framing-stage');
+    const drawn = [...stage.querySelectorAll('svg > *')];
+    expect(drawn.indexOf(layer)).toBeGreaterThanOrEqual(0);
+    expect(drawn.indexOf(layer)).toBeLessThan(drawn.indexOf(screen.getByTestId('framing-graticule')));
+    expect(drawn.indexOf(layer)).toBeLessThan(drawn.indexOf(screen.getByTestId('framing-panels')));
+    // A target moved out of reach reads so on the stage, in a few words.
+    fireEvent.change(screen.getByLabelText('Declination degrees'), { target: { value: '-40' } });
+    await waitFor(() => expect(screen.getByTestId('sky-in-view-status')).toHaveTextContent('The target is never in view on the 31 nights counted.'));
+    expect(screen.getByTestId('sky-in-view-note')).toHaveTextContent('Target never in view');
+    expect(screen.getByTestId('sky-in-view-note')).toHaveAttribute('title', 'The target is never in view on the 31 nights counted.');
+    // Switched off: the layer and its words go, and the choice is kept.
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.queryByTestId('sky-in-view-layer')).toBeNull();
+    expect(screen.queryByTestId('sky-in-view-note')).toBeNull();
+    expect(screen.getByTestId('sky-in-view-status')).toHaveTextContent('Hidden');
+    expect(window.localStorage.getItem('psf-guard.framing.skyInView')).toBe('off');
+    // The group's own switch turns it back on.
+    fireEvent.click(screen.getByLabelText('Show on the sky'));
+    expect(window.localStorage.getItem('psf-guard.framing.skyInView')).toBe('on');
+    await waitFor(() => expect(screen.getByTestId('sky-in-view-layer')).toBeInTheDocument());
   });
 });

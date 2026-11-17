@@ -10,30 +10,8 @@ import type { DirectorActivationRemotePush } from '../../api/directorTypes';
 vi.mock('../ProjectSchedulerDialog', () => ({
   ProjectPlanEditor: ({ dbId, projectId }: { dbId: string; projectId: number }) => <output>{`Source editor ${dbId}:${projectId}`}</output>,
 }));
-// The framing stub reports its target, as the view does, and shows a place
-// another tab offered it.
-vi.mock('../director/FramingView', async () => {
-  const { useEffect } = await vi.importActual<typeof import('react')>('react');
-  type Target = { name: string; center: { ra_degrees: number; dec_degrees: number } };
-  function StubFraming({ projectId, seed, offer, onTarget }: {
-    projectId: string; seed: Target | null; offer?: { pick: Target; nonce: number } | null;
-    onTarget?: (target: Target | null, held: string | null) => void;
-  }) {
-    useEffect(() => { onTarget?.(seed ? { name: seed.name, center: seed.center } : null, null); }, [onTarget, seed]);
-    return <><output>{`Framing ${projectId}:${seed ? `${seed.name}@${seed.center.ra_degrees}` : 'no seed'}`}</output>{offer && <output>{`Offered ${offer.pick.name}@${offer.pick.center.ra_degrees}`}</output>}</>;
-  }
-  return { default: StubFraming };
-});
-// The Sky tab stub shows what the workspace hands it and sends a place back.
-vi.mock('../director/PlanSky', () => ({
-  default: ({ rigs, target, frameBlocked, onFrame, onRigs, shown }: {
-    rigs: Array<{ id: string; name: string; slug?: string | null }>; target: { name: string } | null; frameBlocked: string | null;
-    onFrame: (pick: { name: string; center: { ra_degrees: number; dec_degrees: number }; source: string }) => void; onRigs: () => void; shown: boolean;
-  }) => <div>
-    <output>{`Sky for ${rigs.map(rig => `${rig.name}(${rig.slug})`).join(', ') || 'no rigs'}; target ${target?.name ?? 'none'}; ${shown ? 'shown' : 'not shown'}; ${frameBlocked ?? 'can frame'}`}</output>
-    <button type="button" onClick={() => onFrame({ name: 'NGC 7000', center: { ra_degrees: 314.75, dec_degrees: 44.37 }, source: 'the map' })}>Stub frame</button>
-    <button type="button" onClick={onRigs}>Stub rigs</button>
-  </div>,
+vi.mock('../director/FramingView', () => ({
+  default: ({ projectId, seed }: { projectId: string; seed: { name: string; center: { ra_degrees: number } } | null }) => <output>{`Framing ${projectId}:${seed ? `${seed.name}@${seed.center.ra_degrees}` : 'no seed'}`}</output>,
 }));
 // The editor keeps which rigs shoot the plan; the stub does the same, lets
 // the Rigs tab add and drop them through `controls`, and holds one draft
@@ -131,6 +109,12 @@ describe('project workspace', () => {
     expect(screen.queryByText('Source editor catalog:7')).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Library' })).toHaveAttribute('href', '/?db=catalog');
   });
+  it('opens Framing for an address that names a tab the plan no longer has', async () => {
+    // Sky in view was a tab of its own before it moved into Framing.
+    mount(links, '/plan?plan=project&planTab=sky');
+    expect(await screen.findByRole('tab', { name: 'Framing' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getAllByRole('tab').map(tab => tab.textContent)).toEqual(['Framing', 'Exposures', 'Rigs', 'Priority and defaults']);
+  });
   it('keeps the tab in the address and opens the one a link names', async () => {
     mount(links, '/plan?plan=project&planTab=priority');
     expect(await screen.findByRole('tab', { name: 'Priority and defaults' })).toHaveAttribute('aria-selected', 'true');
@@ -143,35 +127,6 @@ describe('project workspace', () => {
     // Arrow keys move along the tabs.
     fireEvent.keyDown(screen.getByRole('tab', { name: 'Exposures' }), { key: 'ArrowRight' });
     expect(screen.getByRole('tab', { name: 'Rigs' })).toHaveAttribute('aria-selected', 'true');
-  });
-  it('has a Sky tab after Framing that marks the framing\'s target and sends a place back to Framing', async () => {
-    mount(links);
-    await screen.findByText('Framing project:M31@7.5');
-    const tabs = within(screen.getByRole('tablist', { name: 'Plan sections' })).getAllByRole('tab').map(tab => tab.textContent);
-    expect(tabs).toEqual(['Framing', 'Sky', 'Exposures', 'Rigs', 'Priority and defaults']);
-    // Nothing is asked for until the tab is opened; it has the plan's rigs,
-    // each with its database, and the target Framing reports.
-    expect(screen.getByText(/^Sky for/)).toHaveTextContent('Sky for C925 data(catalog), Redcat data(redcat); target M31; not shown; can frame');
-    fireEvent.click(screen.getByRole('tab', { name: 'Sky' }));
-    expect(screen.getByTestId('where')).toHaveTextContent('planTab=sky');
-    expect(screen.getByText(/^Sky for/)).toHaveTextContent('target M31; shown; can frame');
-    expect(screen.getByText(/^Sky for/).closest('[role="tabpanel"]')).not.toHaveAttribute('hidden');
-    // The tab holds no draft of its own.
-    expect(screen.getByRole('tab', { name: 'Sky' })).toBeInTheDocument();
-    expect(screen.queryByText(/^Offered/)).not.toBeInTheDocument();
-    // Frame this: the place goes to Framing, and Framing is shown.
-    fireEvent.click(screen.getByRole('button', { name: 'Stub frame' }));
-    expect(screen.getByRole('tab', { name: 'Framing' })).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByText('Offered NGC 7000@314.75')).toBeInTheDocument();
-    expect(screen.getByTestId('where')).toHaveTextContent('planTab=framing');
-    // From a plan with no rig the tab leads to Rigs.
-    fireEvent.click(screen.getByRole('tab', { name: 'Sky' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Stub rigs' }));
-    expect(screen.getByRole('tab', { name: 'Rigs' })).toHaveAttribute('aria-selected', 'true');
-    // Arrow keys pass through it in order.
-    fireEvent.click(screen.getByRole('tab', { name: 'Framing' }));
-    fireEvent.keyDown(screen.getByRole('tab', { name: 'Framing' }), { key: 'ArrowRight' });
-    expect(screen.getByRole('tab', { name: 'Sky' })).toHaveAttribute('aria-selected', 'true');
   });
   it('opens the tab an older link names under its new name', async () => {
     mount(links, '/plan?plan=project&planTab=databases');

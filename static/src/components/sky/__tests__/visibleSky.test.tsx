@@ -1,24 +1,19 @@
-import { fireEvent, render } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { DirectorVisibleSky } from '../../../api/directorTypes';
-import { defaultView, projectedPoint, type LonLat, type PathScale, type SkyView } from '../../../utils/skyProjection';
+import type { LonLat } from '../../../utils/skyProjection';
 import { formatNightDate } from '../../nights/nightsModel';
 import { formatNight } from '../skyModel';
-import SkyMap from '../SkyMap';
 import {
   darknessNote,
   formatMinutes,
   nightCount,
   standing,
-  visibleSideMarks,
   visibleSkyError,
   visibleSkyLegend,
   visibleSkyShares,
   visibleSkySummary,
 } from '../visibleSky';
 
-const AT: PathScale = { cx: 500, cy: 270, scale: 236 };
-const flat: SkyView = { frame: 'equatorial', mode: 'aitoff', centerLon: 0, centerLat: 0 };
 
 /** A ring at one declination, run with the north on its left: right
  *  ascension rising. */
@@ -98,136 +93,5 @@ describe('the legend', () => {
     const noonUtc = Date.parse('2026-09-24T12:00:00Z');
     expect(nightCount(noonUtc + 1, 0)).toBe(nightCount(noonUtc - 1, 0) + 1);
     expect(nightCount(noonUtc + 1, -118.3)).toBe(nightCount(noonUtc - 1, -118.3));
-  });
-});
-
-describe('marks on the visible side', () => {
-  const ends = (path: string) => [...path.matchAll(/M([\d.-]+),([\d.-]+)L([\d.-]+),([\d.-]+)/g)].map((m) => m.slice(1).map(Number));
-
-  it('point north of a line that runs with rising right ascension, in both map shapes', () => {
-    for (const sky of [flat, { ...flat, mode: 'globe' as const, centerLat: 25 }]) {
-      const marks = ends(visibleSideMarks(ring(-30), sky, AT, 6, 7));
-      expect(marks.length).toBeGreaterThan(10);
-      for (const [x1, y1, x2, y2] of marks) {
-        expect(Math.hypot(x2 - x1, y2 - y1)).toBeCloseTo(7, 0);
-        // North is up on the screen: the mark ends above where it starts.
-        expect(y2).toBeLessThan(y1);
-      }
-    }
-  });
-
-  it('keep their direction and length at the deepest zoom', () => {
-    const length = 7 / 60;
-    const slanted: LonLat[] = Array.from({ length: 41 }, (_, i) => [i * 0.5, -10 + i * 0.3]);
-    const marks = ends(visibleSideMarks(slanted, flat, AT, 1, length));
-    expect(marks.length).toBeGreaterThan(5);
-    const angles = marks.map(([x1, y1, x2, y2]) => (Math.atan2(y2 - y1, x2 - x1) * 180) / Math.PI);
-    for (const [x1, y1, x2, y2] of marks) expect(Math.hypot(x2 - x1, y2 - y1)).toBeCloseTo(length, 3);
-    for (let i = 1; i < angles.length; i += 1) expect(Math.abs(angles[i] - angles[i - 1])).toBeLessThan(1);
-    for (const angle of angles) expect(Math.abs(angle / 45 - Math.round(angle / 45))).toBeGreaterThan(0.05);
-  });
-
-  it('point south when the line runs the other way, and start on the line', () => {
-    const reversed = [...ring(40)].reverse();
-    const marks = ends(visibleSideMarks(reversed, flat, AT, 6, 7));
-    expect(marks.length).toBeGreaterThan(10);
-    for (const [, y1, , y2] of marks) expect(y2).toBeGreaterThan(y1);
-    const onLine = reversed.map(([ra, dec]) => projectedPoint(ra, dec, flat, AT));
-    for (const [x1, y1] of marks) expect(onLine.some((p) => Math.abs(p.x - x1) < 0.1 && Math.abs(p.y - y1) < 0.1)).toBe(true);
-    expect(visibleSideMarks([[0, 0], [1, 0]], flat, AT, 6, 7)).toBe('');
-  });
-});
-
-describe('the map', () => {
-  // No canvas under the tests: the map draws without the shading's picture.
-  beforeEach(() => { vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null); });
-  afterEach(() => vi.restoreAllMocks());
-  const map = (props: Partial<Parameters<typeof SkyMap>[0]> = {}) => render(<SkyMap frame="equatorial" mode="aitoff" showBackdrop={false} showStacks={false} {...props} />).container;
-
-  it('draws with no targets at all, under the name it is given', () => {
-    const drawn = map({ label: 'Map of the sky C925' });
-    expect(drawn.querySelector('.sky-map')?.getAttribute('aria-label')).toBe('Map of the sky C925');
-    expect(drawn.querySelectorAll('.sky-target')).toHaveLength(0);
-    expect(drawn.querySelector('.sky-visible')).toBeNull();
-    expect(drawn.querySelector('.sky-marks')).toBeNull();
-    // Without a name it is the coverage map.
-    expect(map().querySelector('.sky-map')?.getAttribute('aria-label')).toBe('Sky coverage map in equatorial coordinates with 0 targets');
-  });
-
-  it('draws a solid line for every night and a dashed one for any, with marks', () => {
-    const drawn = map({ visible: { every: [ring(-20)], any: [ring(-35)] }, mode: 'globe' });
-    expect(drawn.querySelector('.sky-visible')?.getAttribute('data-nights')).toBe('range');
-    const every = drawn.querySelector('.sky-visible-line.sky-visible-every')?.getAttribute('d') ?? '';
-    const any = drawn.querySelector('.sky-visible-line.sky-visible-any')?.getAttribute('d') ?? '';
-    expect(every).toMatch(/^M/);
-    expect(any).toMatch(/^M/);
-    expect(any).not.toBe(every);
-    expect(drawn.querySelector('.sky-visible-marks.sky-visible-every')?.getAttribute('d')).toMatch(/^M/);
-    expect(drawn.querySelector('.sky-visible')?.getAttribute('pointer-events')).toBe('none');
-  });
-
-  it('holds a place for the shading under the lines', () => {
-    const shade = { counts: new Uint16Array(180 * 91).fill(3), nights: 31, columns: 180, rows: 91 };
-    const drawn = map({ shade });
-    const group = drawn.querySelector('.sky-visible-shade');
-    expect(group?.getAttribute('data-nights')).toBe('31');
-    expect(group?.getAttribute('pointer-events')).toBe('none');
-    expect(map().querySelector('.sky-visible-shade')).toBeNull();
-  });
-
-  it('marks and labels a target and a picked place where they are', () => {
-    const drawn = map({
-      marks: [
-        { id: 'target', ra: 10.68, dec: 41.27, label: 'M31', kind: 'target' },
-        { id: 'pick', ra: 83.8, dec: -5.4, label: '5h 35m, −5° 24′', kind: 'pick' },
-      ],
-    });
-    const target = drawn.querySelector('.sky-mark-target');
-    expect(target?.getAttribute('data-mark')).toBe('M31');
-    expect(target?.querySelector('text')?.textContent).toBe('M31');
-    expect(drawn.querySelector('.sky-mark-pick text')?.textContent).toBe('5h 35m, −5° 24′');
-    // The target's diamond sits on its place.
-    const at = projectedPoint(10.68, 41.27, defaultView('equatorial', 'aitoff'), AT);
-    expect(target?.querySelector('path')?.getAttribute('d')).toContain(`M${at.x} ${at.y - 7}`);
-    // Marks never take a click from the map under them.
-    expect(drawn.querySelector('.sky-marks')?.getAttribute('pointer-events')).toBe('none');
-  });
-
-  it('gives the place under a click on open sky, and nothing for a click off it', () => {
-    const onPick = vi.fn();
-    const drawn = map({ onPick });
-    const svg = drawn.querySelector('.sky-map') as SVGSVGElement;
-    expect(svg.getAttribute('data-picks')).toBe('on');
-    vi.spyOn(svg, 'getBoundingClientRect').mockReturnValue({ left: 100, top: 50, width: 1000, height: 540, right: 1100, bottom: 590, x: 100, y: 50, toJSON: () => ({}) });
-    // The middle of the map is the place it opens turned to.
-    const opened = defaultView('equatorial', 'aitoff');
-    fireEvent.click(svg, { clientX: 600, clientY: 320 });
-    expect(onPick).toHaveBeenCalledTimes(1);
-    expect(onPick.mock.calls[0][0]).toBeCloseTo(opened.centerLon, 6);
-    expect(onPick.mock.calls[0][1]).toBeCloseTo(0, 6);
-    // Where M31 is drawn, M31's place comes back.
-    const at = projectedPoint(10.68, 41.27, opened, AT);
-    fireEvent.click(svg, { clientX: 100 + at.x, clientY: 50 + at.y });
-    expect(onPick.mock.calls[1][0]).toBeCloseTo(10.68, 4);
-    expect(onPick.mock.calls[1][1]).toBeCloseTo(41.27, 4);
-    // A corner of the picture is not sky.
-    fireEvent.click(svg, { clientX: 105, clientY: 55 });
-    expect(onPick).toHaveBeenCalledTimes(2);
-    // A map that takes no picks does not look as if it did.
-    expect(map().querySelector('.sky-map')?.getAttribute('data-picks')).toBeNull();
-  });
-});
-
-describe('what the Sky view remembers', () => {
-  it('lets go of a visible sky choice kept by a build that drew it there', async () => {
-    window.sessionStorage.setItem('psf-guard:sky-view:v1', JSON.stringify({ mode: 'globe', zoom: 3, visibleSky: { on: true, rigId: 'rig-1', minimumMinutes: 45 } }));
-    // A page opened afresh reads the stored record.
-    vi.resetModules();
-    const memory = await import('../skyViewMemory');
-    expect(memory.recallSkyView()).toEqual({ mode: 'globe', zoom: 3 });
-    // The next thing remembered writes the record without it.
-    memory.rememberSkyView({ zoom: 4 });
-    expect(JSON.parse(window.sessionStorage.getItem('psf-guard:sky-view:v1') ?? '{}')).toEqual({ mode: 'globe', zoom: 4 });
-    memory.forgetSkyView();
   });
 });

@@ -1,5 +1,5 @@
-/* The sky map's own look: the Sky view and Planning's Sky tab both draw
-   one, so the rules live with the component. */
+/* The sky map's own look: the rules live with the component that draws
+   it. */
 .sky-map-wrapper {
   position: relative;
   background: var(--sky-bg);
@@ -278,64 +278,4 @@
 
 .sky-rig.is-stale text {
   fill: #ffb3b3;
-}
-
-/* The lines around the sky a rig has in view for long enough: solid for
-   every night, dashed for at least one, with marks on the visible side. */
-.sky-visible-line,
-.sky-visible-marks {
-  fill: none;
-  stroke: var(--sky-visible-line);
-  stroke-linejoin: round;
-}
-
-.sky-visible-line {
-  stroke-width: 1.8;
-}
-
-.sky-visible-marks {
-  stroke-width: 1.2;
-}
-
-.sky-visible-line.sky-visible-any {
-  stroke: var(--sky-visible-line-any);
-  stroke-width: 1.4;
-  stroke-dasharray: 6 5;
-}
-
-.sky-visible-marks.sky-visible-any {
-  stroke: var(--sky-visible-line-any);
-}
-
-/* Sky a rig cannot shoot is covered: a picture whose solidness is the
-   share of nights out of view, given the cover's colour here. */
-.sky-visible-shade rect {
-  fill: var(--sky-out-of-view-cover);
-}
-
-/* A plan's target, and a spot picked on the map. */
-.sky-mark path {
-  fill: none;
-  stroke: var(--sky-mark);
-  stroke-width: 2;
-}
-
-.sky-mark-pick path {
-  stroke: var(--sky-mark-pick);
-}
-
-.sky-mark text {
-  fill: var(--sky-mark);
-  paint-order: stroke;
-  stroke: var(--color-halo);
-  stroke-width: 3px;
-}
-
-.sky-mark-pick text {
-  fill: var(--sky-mark-pick);
-}
-
-/* A map that takes picks shows it under the pointer. */
-.sky-map[data-picks='on'] {
-  cursor: crosshair;
 }

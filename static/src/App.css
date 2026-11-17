@@ -285,9 +285,6 @@
      every night. Grey enough to read as closed off, clear enough to
      leave the stars and names under it faintly readable. */
   --sky-out-of-view-cover: rgb(62 68 84 / 80%);
-  /* A plan's target marked on a sky map, and a spot picked there. */
-  --sky-mark: rgb(255 209 102);
-  --sky-mark-pick: rgb(255 255 255 / 92%);
 }
 
 .app {

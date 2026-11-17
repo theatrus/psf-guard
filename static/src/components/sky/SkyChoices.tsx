@@ -17,8 +17,8 @@ export function SkyChoice<T extends string>({ label, options, value, onChange }:
 const FRAMES: ReadonlyArray<readonly [SkyFrame, string]> = [['equatorial', 'Equatorial'], ['galactic', 'Galactic']];
 const SHAPES: ReadonlyArray<readonly [SkyMode, string]> = [['aitoff', 'Flat'], ['globe', 'Globe']];
 
-/** The coordinate frame and the map's shape: the two choices every sky map
- *  offers, on the Sky view and on a plan's Sky tab. */
+/** The coordinate frame and the map's shape: the two choices the Sky view
+ *  offers for its map. */
 export function SkyShapeChoices({ frame, mode, onFrame, onMode, shapeFirst = false }: { frame: SkyFrame; mode: SkyMode; onFrame: (next: SkyFrame) => void; onMode: (next: SkyMode) => void; shapeFirst?: boolean }) {
   const frames = <SkyChoice label="Coordinate frame" options={FRAMES} value={frame} onChange={onFrame} />;
   const shapes = <SkyChoice label="Map shape" options={SHAPES} value={mode} onChange={onMode} />;

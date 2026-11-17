@@ -954,6 +954,8 @@ export interface DirectorVisibleSkyRequest {
   rig: string;
   minimum_minutes?: number;
   span?: 'now' | 'year';
+  /** With `span: 'year'`: send each measured night's grid too. */
+  measured?: boolean;
   first_night?: string;
   nights?: number;
 }
@@ -1000,7 +1002,7 @@ export interface DirectorVisibleSky {
   /** For each node, on how many of the nights counted it is in view: two
    *  bytes a node, low byte first, row by row, in base64. */
   counts: string;
-  /** With a year: each measured night's grid, to add up the nights of one
+  /** With a year asked for with `measured`: each measured night's grid, to add up the nights of one
    *  time of year from. `in_view` is base64 of a bit a node, the lowest
    *  bit of each byte first, `bytes_a_night` bytes for each of `nights`.
    *  A night between two measured nights has a node in view only where

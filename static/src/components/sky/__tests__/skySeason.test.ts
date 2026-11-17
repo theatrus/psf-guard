@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { DirectorVisibleSky } from '../../../api/directorTypes';
-import { countLines, nightGrid, seasonNights, seasonSky, seasonStarts, unpackMeasured, windowCounts } from '../skySeason';
+import { countLines, insideLines, nightGrid, seasonDarknessNote, seasonDates, seasonFrom, seasonNights, seasonSky, seasonStarts, unpackMeasured, windowCounts } from '../skySeason';
+import { formatNight } from '../skyModel';
 import type { SkyCounts } from '../skyShade';
 
 /** The small sky the server's tests hold too (`fill.rs`): six measured
@@ -134,6 +135,58 @@ describe('lines drawn from the counts', () => {
   });
 });
 
+describe('a place against the lines', () => {
+  // A grid of 10° cells whose nodes are 1 where listed.
+  const nodes = (inside: Array<[number, number]>): SkyCounts => {
+    const counts = new Uint16Array(36 * 19);
+    for (const [col, row] of inside) counts[row * 36 + col] = 1;
+    return { counts, nights: 1, columns: 36, rows: 19 };
+  };
+  // A place a share of the way across and up the cell whose south-west
+  // node is column 5, row 5.
+  const at = (x: number, y: number): [number, number] => [(5 + x) * 10, -90 + (5 + y) * 10];
+  const corners: Record<string, [number, number]> = { sw: [5, 5], se: [6, 5], ne: [6, 6], nw: [5, 6] };
+  const near: Record<string, (x: number, y: number) => [number, number]> = { sw: (x, y) => [x, y], se: (x, y) => [1 - x, y], ne: (x, y) => [1 - x, 1 - y], nw: (x, y) => [x, 1 - y] };
+
+  it('is on the side the drawn line puts it on, in a cell with one corner out', () => {
+    for (const out of Object.keys(corners)) {
+      const sky = nodes(Object.entries(corners).filter(([name]) => name !== out).map(([, node]) => node));
+      // The line cuts the corner off half way along each side. A place
+      // 0.28 from the corner each way is past it, inside; taking the
+      // count to change evenly across the cell would put it outside.
+      const [x, y] = near[out](0.28, 0.28);
+      expect(insideLines(sky, ...at(x, y)), `${out} out, 0.28`).toBe(true);
+      const [cx, cy] = near[out](0.2, 0.2);
+      expect(insideLines(sky, ...at(cx, cy)), `${out} out, 0.2`).toBe(false);
+      // The line itself, drawn from the same nodes, runs between the two.
+      const line = countLines(sky, 0.5)[0];
+      const [ra, dec] = at(...near[out](0.25, 0.25));
+      expect(line.some(([lineRa, lineDec], i) => i + 1 < line.length && Math.abs((lineRa + line[i + 1][0]) / 2 - ra) < 1e-9 && Math.abs((lineDec + line[i + 1][1]) / 2 - dec) < 1e-9), `${out} out, on the line`).toBe(true);
+    }
+  });
+
+  it('is on the side the drawn line puts it on, in a cell with one corner in', () => {
+    for (const name of Object.keys(corners)) {
+      const sky = nodes([corners[name]]);
+      expect(insideLines(sky, ...at(...near[name](0.2, 0.2))), `${name} in, 0.2`).toBe(true);
+      expect(insideLines(sky, ...at(...near[name](0.28, 0.28))), `${name} in, 0.28`).toBe(false);
+    }
+  });
+
+  it('follows a straight edge, and joins two corners across from each other through the middle', () => {
+    const south = nodes([corners.sw, corners.se, [4, 5], [7, 5]]);
+    expect(insideLines(south, ...at(0.3, 0.45))).toBe(true);
+    expect(insideLines(south, ...at(0.3, 0.55))).toBe(false);
+    const across = nodes([corners.sw, corners.ne]);
+    expect(insideLines(across, ...at(0.5, 0.5))).toBe(true);
+    expect(insideLines(across, ...at(0.8, 0.1))).toBe(false);
+    expect(insideLines(across, ...at(0.1, 0.8))).toBe(false);
+    // All in, and all out.
+    expect(insideLines(nodes(Object.values(corners)), ...at(0.5, 0.5))).toBe(true);
+    expect(insideLines(nodes([]), ...at(0.5, 0.5))).toBe(false);
+  });
+});
+
 describe('one time of year', () => {
   it('counts 31 nights, outlines them and keeps the measured nights among them', () => {
     // 53 measured nights on the real grid: in view north of the equator
@@ -145,10 +198,15 @@ describe('one time of year', () => {
     const view = year({ nights: nights(53, 7, (night) => night !== 2), nights_counted: 365, grid: { degrees: 2, columns: 180, rows: 91 }, measured: { in_view: packed(53, 180 * 91, seen), bytes_a_night: 2048, turn_degrees_a_night: 1 } });
     const sky = unpackMeasured(view)!;
     const first = seasonSky(view, sky, 0);
-    expect(first.view.span).toBe('season');
-    expect(first.view.nights).toHaveLength(31);
-    expect(first.view.nights[0].date).toBe('2026-09-24');
-    expect(first.view.nights[30].date).toBe('2026-10-24');
+    // A season has its dates and what the year was drawn under, and no
+    // night-by-night dusk to mistake for a measured one.
+    expect(first.view.first_night).toBe('2026-09-24');
+    expect(first.view.last_night).toBe('2026-10-24');
+    expect(first.view.minimum_minutes).toBe(30);
+    expect('nights' in first.view).toBe(false);
+    expect(seasonFrom(first.view)).toBe(`31 nights from ${formatNight('2026-09-24')}`);
+    expect(seasonDates(first.view)).toBe(`${formatNight('2026-09-24')} to ${formatNight('2026-10-24')}`);
+    expect(seasonDarknessNote(first.view)).toBe('It does not get dark on 1 of the 5 nights measured.');
     expect(first.view.nights_counted).toBe(31);
     // Nights 0, 7, 14, 21 and 28 are measured, and the third never gets dark.
     expect(first.view.measured_nights.map((night) => night.date)).toEqual(['2026-09-24', '2026-10-01', '2026-10-08', '2026-10-15', '2026-10-22']);
@@ -163,7 +221,8 @@ describe('one time of year', () => {
     // From night 49 the southern band is in view on the first nights only:
     // the solid line is at the equator and the dashed one further south.
     const later = seasonSky(view, sky, 49);
-    expect(later.view.nights[0].date).toBe('2026-11-12');
+    expect(later.view.first_night).toBe('2026-11-12');
+    expect(seasonDarknessNote(later.view)).toBeNull();
     expect(later.view.every_night.declinations).toEqual([-1, 90]);
     expect(later.view.any_night?.declinations).toEqual([-31, 90]);
     // A place is counted on its side of each line: every night north of
@@ -181,7 +240,7 @@ describe('one time of year', () => {
     expect(later.counts.counts[30 * 180]).toBe(15);
     // Late in the year the band is gone.
     const last = seasonSky(view, sky, 334);
-    expect(last.view.nights[30].date).toBe('2027-09-23');
+    expect(last.view.last_night).toBe('2027-09-23');
     expect(last.view.any_night?.declinations).toEqual([-1, 90]);
   });
 });

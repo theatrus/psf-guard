@@ -15,7 +15,6 @@ import {
   projectedPath,
   projectedPoint,
   tanPixelToSky,
-  unprojectPoint,
   toFrame,
   wrap360,
   type LonLat,
@@ -25,8 +24,6 @@ import { blendFilterColors, filterColor } from '../../utils/filterColors';
 import { BRIGHT_STARS, CONSTELLATION_LINES, CONSTELLATION_NAMES } from '../../data/skyBackdrop';
 import { formatHours, formatNight, type ShownTarget } from './skyModel';
 import type { PlacedRig } from './liveRigs';
-import { visiblePaths, type VisibleSkyLines } from './visibleSky';
-import { shadeImage, type SkyCounts } from './skyShade';
 import './SkyMap.css';
 
 export const MAP_WIDTH = 1000;
@@ -36,25 +33,8 @@ const MAX_ZOOM = 60;
 /** Stack previews are drawn once a field is big enough to show one. */
 const STACKS_FROM_ZOOM = 3;
 
-/** A place marked on the map: a plan's target, or a spot someone picked. */
-export interface SkyMark {
-  id: string;
-  /** ICRS degrees. */
-  ra: number;
-  dec: number;
-  label: string;
-  kind: 'target' | 'pick';
-}
-
-/** The cover's raster: a fraction of the map's size each way, drawn
- *  smooth. While the sky is being turned it is made smaller still, once
- *  an animation frame at most, and at full size when the turn ends. */
-const SHADE_SIZE = [400, 216] as const;
-const SHADE_SIZE_TURNING = [160, 86] as const;
-
 interface Props {
-  /** What was imaged, drawn as fields; none on a map that only plans. */
-  targets?: ShownTarget[];
+  targets: ShownTarget[];
   frame: SkyFrame;
   mode: SkyMode;
   showBackdrop: boolean;
@@ -64,26 +44,11 @@ interface Props {
   initialCenter?: { lon: number; lat: number };
   /** Called whenever the zoom or turn changes, so the page can remember it. */
   onViewChange?: (zoom: number, center: { lon: number; lat: number }) => void;
-  onOpen?: (target: ShownTarget) => void;
+  onOpen: (target: ShownTarget) => void;
   /** Rigs drawn where they point now; those without a place are skipped. */
   rigs?: PlacedRig[];
   /** Turn the sky to put this place in the middle; a new `nonce` asks again. */
   focus?: { ra: number; dec: number; nonce: number } | null;
-  /** Lines around the sky a rig has in view for long enough, if asked for. */
-  visible?: VisibleSkyLines | null;
-  /** How many nights each part of the sky is in view: sky in view on
-   *  fewer nights is covered more, under the lines. */
-  shade?: SkyCounts | null;
-  /** The cover is changing many times a second, as under a slider: draw
-   *  it small until this is false again, as while the sky is turned. */
-  shadeChanging?: boolean;
-  /** Places to mark and label. */
-  marks?: SkyMark[];
-  /** Called with the ICRS place under a click on open sky. A drag, or a
-   *  click on an imaged field, is not a pick. */
-  onPick?: (ra: number, dec: number) => void;
-  /** What the map is, for readers who cannot see it. */
-  label?: string;
 }
 
 interface View {
@@ -144,11 +109,8 @@ function imageMatrix(corners: LonLat[], width: number, height: number, view: Sky
   return `matrix(${a} ${b} ${c} ${d} ${p0.x} ${p0.y})`;
 }
 
-const NO_TARGETS: ShownTarget[] = [];
-const NO_MARKS: SkyMark[] = [];
-
 export default function SkyMap({
-  targets = NO_TARGETS,
+  targets,
   frame,
   mode,
   showBackdrop,
@@ -159,12 +121,6 @@ export default function SkyMap({
   onOpen,
   rigs = [],
   focus = null,
-  visible = null,
-  shade = null,
-  shadeChanging = false,
-  marks = NO_MARKS,
-  onPick,
-  label,
 }: Props) {
   const [hovered, setHovered] = useState<ShownTarget | null>(null);
   const [pointer, setPointer] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -178,9 +134,6 @@ export default function SkyMap({
   });
   // The frame and shape this map was made for; a change to either starts
   // the view over, but the first render keeps what was remembered.
-  // Whether the sky is being turned by a drag: the shading is drawn small
-  // until it stops.
-  const [turning, setTurning] = useState(false);
   const made = useRef({ frame, mode });
   const wrapper = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -256,7 +209,6 @@ export default function SkyMap({
       event.currentTarget.setPointerCapture(event.pointerId);
     }
     start.moved = true;
-    setTurning(true);
     // A drag turns the sky, in both directions and at every zoom. The globe
     // is seen from outside and the flat map from inside, so the sky under
     // the pointer follows the pointer in both.
@@ -271,7 +223,6 @@ export default function SkyMap({
     if (drag.current && event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
-    setTurning(false);
     // Leave `moved` for the click that follows, then forget the drag.
     window.setTimeout(() => {
       drag.current = null;
@@ -279,20 +230,7 @@ export default function SkyMap({
   };
   const open = (item: ShownTarget) => {
     if (drag.current?.moved) return;
-    onOpen?.(item);
-  };
-  // A click on open sky picks the place under it.
-  const pick = (event: MouseEvent<SVGSVGElement>) => {
-    if (!onPick || drag.current?.moved) return;
-    if ((event.target as Element).closest?.('.sky-target')) return;
-    const box = event.currentTarget.getBoundingClientRect();
-    if (!(box.width > 0 && box.height > 0)) return;
-    // The picture keeps its shape inside the box, centred.
-    const fit = Math.min(box.width / (MAP_WIDTH / view.k), box.height / (MAP_HEIGHT / view.k));
-    const x = view.x + MAP_WIDTH / view.k / 2 + (event.clientX - box.left - box.width / 2) / fit;
-    const y = view.y + MAP_HEIGHT / view.k / 2 + (event.clientY - box.top - box.height / 2) / fit;
-    const place = unprojectPoint((x - AT.cx) / AT.scale, -(y - AT.cy) / AT.scale, sky);
-    if (place) onPick(place[0], place[1]);
+    onOpen(item);
   };
 
   const scenery = useMemo(() => {
@@ -372,46 +310,6 @@ export default function SkyMap({
     [rigs, sky]
   );
 
-  // The lines around the visible sky, with marks on the visible side: a
-  // mark every few degrees, closer together as the view zooms in.
-  const visibleDrawn = useMemo(() => {
-    if (!visible) return null;
-    const every = Math.max(1, 6 / Math.sqrt(view.k));
-    const length = 7 / view.k;
-    return {
-      every: visiblePaths(visible.every, sky, AT, every, length),
-      any: visible.any ? visiblePaths(visible.any, sky, AT, every, length) : null,
-    };
-  }, [visible, sky, view.k]);
-
-  // The cover: a small picture of the whole map. Its pixels are white;
-  // how solid each is carries how much of the sky under it is covered. It is made on an animation frame,
-  // so however many times the pointer moves in a frame it is made once,
-  // and a frame not yet drawn when the sky turns again is dropped. The
-  // picture is handed straight to its element: drawing the map again to
-  // show it would cost more than making it.
-  const shadeImageRef = useRef<SVGImageElement>(null);
-  useEffect(() => {
-    if (!shade) return;
-    const [width, height] = turning || shadeChanging ? SHADE_SIZE_TURNING : SHADE_SIZE;
-    const paint = () => {
-      const url = shadeImage(shade, sky, AT, MAP_WIDTH, width, height);
-      if (url) shadeImageRef.current?.setAttribute('href', url);
-      else shadeImageRef.current?.removeAttribute('href');
-    };
-    if (typeof requestAnimationFrame !== 'function') {
-      paint();
-      return;
-    }
-    const frame = requestAnimationFrame(paint);
-    return () => cancelAnimationFrame(frame);
-  }, [shade, sky, turning, shadeChanging]);
-
-  const placedMarks = useMemo(
-    () => marks.map((mark) => ({ mark, at: projectedPoint(mark.ra, mark.dec, sky, AT) })).filter((entry) => entry.at.visible),
-    [marks, sky]
-  );
-
   // Which fields are inside the current view, for lazy stack previews.
   const visibleWidth = MAP_WIDTH / view.k;
   const visibleHeight = MAP_HEIGHT / view.k;
@@ -438,9 +336,7 @@ export default function SkyMap({
         className={`sky-map${k > 1 ? ' is-zoomed' : ''}`}
         viewBox={`${view.x} ${view.y} ${visibleWidth} ${visibleHeight}`}
         role="img"
-        aria-label={label ?? `Sky coverage map in ${frame} coordinates with ${drawn.length} targets`}
-        data-picks={onPick ? 'on' : undefined}
-        onClick={pick}
+        aria-label={`Sky coverage map in ${frame} coordinates with ${drawn.length} targets`}
         data-zoom={k.toFixed(2)}
         data-center={`${center.lon.toFixed(1)},${center.lat.toFixed(1)}`}
         onPointerDown={onPointerDown}
@@ -543,7 +439,7 @@ export default function SkyMap({
               onFocus: () => setHovered(item),
               onBlur: () => setHovered(null),
               onKeyDown: (event: { key: string }) => {
-                if (event.key === 'Enter') onOpen?.(item);
+                if (event.key === 'Enter') onOpen(item);
               },
             };
             if (kind === 'field') {
@@ -582,48 +478,6 @@ export default function SkyMap({
                   />
                 </g>
               ))}
-          </g>
-        )}
-        {shade && (
-          <g className="sky-visible-shade" pointerEvents="none" data-nights={shade.nights}>
-            <mask id="sky-visible-shade-mask" maskUnits="userSpaceOnUse" x={0} y={0} width={MAP_WIDTH} height={MAP_HEIGHT}>
-              <image ref={shadeImageRef} x={0} y={0} width={MAP_WIDTH} height={MAP_HEIGHT} preserveAspectRatio="none" />
-            </mask>
-            <rect x={0} y={0} width={MAP_WIDTH} height={MAP_HEIGHT} mask="url(#sky-visible-shade-mask)" />
-          </g>
-        )}
-        {visibleDrawn && (
-          <g className="sky-visible" pointerEvents="none" data-nights={visibleDrawn.any ? 'range' : 'one'}>
-            {visibleDrawn.any && (
-              <>
-                <path className="sky-visible-line sky-visible-any" d={visibleDrawn.any.line} vectorEffect="non-scaling-stroke" />
-                <path className="sky-visible-marks sky-visible-any" d={visibleDrawn.any.marks} vectorEffect="non-scaling-stroke" />
-              </>
-            )}
-            <path className="sky-visible-line sky-visible-every" d={visibleDrawn.every.line} vectorEffect="non-scaling-stroke" />
-            <path className="sky-visible-marks sky-visible-every" d={visibleDrawn.every.marks} vectorEffect="non-scaling-stroke" />
-          </g>
-        )}
-        {placedMarks.length > 0 && (
-          <g className="sky-marks" pointerEvents="none">
-            {placedMarks.map(({ mark, at }) => {
-              const r = 7 * textScale;
-              return (
-                <g key={mark.id} className={`sky-mark sky-mark-${mark.kind}`} data-mark={mark.label}>
-                  {mark.kind === 'target' ? (
-                    <path d={`M${at.x} ${at.y - r}L${at.x + r} ${at.y}L${at.x} ${at.y + r}L${at.x - r} ${at.y}Z`} vectorEffect="non-scaling-stroke" />
-                  ) : (
-                    <path
-                      d={`M${at.x - 1.6 * r} ${at.y}H${at.x - 0.5 * r}M${at.x + 0.5 * r} ${at.y}H${at.x + 1.6 * r}M${at.x} ${at.y - 1.6 * r}V${at.y - 0.5 * r}M${at.x} ${at.y + 0.5 * r}V${at.y + 1.6 * r}`}
-                      vectorEffect="non-scaling-stroke"
-                    />
-                  )}
-                  <text x={at.x + 1.8 * r} y={at.y - 1.1 * r} style={{ fontSize: 12 * textScale }}>
-                    {mark.label}
-                  </text>
-                </g>
-              );
-            })}
           </g>
         )}
         {placedRigs.length > 0 && (

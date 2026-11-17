@@ -1,6 +1,8 @@
 import type { DirectorVisibleSky } from '../../api/directorTypes';
 import type { LonLat } from '../../utils/skyProjection';
+import { formatNight } from './skyModel';
 import { countAt, type SkyCounts } from './skyShade';
+import type { SkyRegions, SkyTerms } from './visibleSky';
 
 /** How many nights one time of year shows: as many as Now counts. */
 export const SEASON_NIGHTS = 31;
@@ -183,6 +185,38 @@ function nodesAt(sky: SkyCounts, level: number): SkyCounts {
   return { ...sky, nights: 1, counts: sky.counts.map((count) => (count >= level ? 1 : 0)) };
 }
 
+/**
+ * Whether a place is on the inside of the lines [`countLines`] draws round
+ * the nodes that are 1, at half way: decided against the stretch of line
+ * in the place's own cell of the grid, so it is the side the drawn line
+ * puts the place on. A stretch cuts a corner off a cell half way along
+ * each side, or runs straight across its middle.
+ */
+export function insideLines(nodes: SkyCounts, raDeg: number, decDeg: number): boolean {
+  const { columns, rows, counts } = nodes;
+  const across = ((((raDeg % 360) + 360) % 360) / 360) * columns;
+  const up = Math.min(rows - 1, Math.max(0, ((decDeg + 90) / 180) * (rows - 1)));
+  const col = Math.floor(across) % columns;
+  const row = Math.min(rows - 2, Math.floor(up));
+  const [x, y] = [across - Math.floor(across), up - row];
+  const at = (c: number, r: number) => counts[r * columns + (c % columns)] >= 0.5;
+  const [sw, se, ne, nw] = [at(col, row), at(col + 1, row), at(col + 1, row + 1), at(col, row + 1)];
+  const inside = [sw, se, ne, nw].filter(Boolean).length;
+  if (inside === 4) return true;
+  if (inside === 0) return false;
+  // How far the place is from each corner, along the sides.
+  const from = [x + y, 1 - x + y, 2 - x - y, x + 1 - y];
+  const corners = [sw, se, ne, nw];
+  if (inside === 1) return from[corners.indexOf(true)] <= 0.5;
+  if (inside === 3) return from[corners.indexOf(false)] >= 0.5;
+  // Two corners across from each other: the line joins the sky in view
+  // through the middle and cuts off the two corners outside.
+  if (sw === ne) return corners.every((corner, index) => corner || from[index] >= 0.5);
+  // Two corners on one side: the line runs straight across the middle.
+  if (sw === se) return sw ? y <= 0.5 : y >= 0.5;
+  return sw ? x <= 0.5 : x >= 0.5;
+}
+
 /** One region of a picture made here: its lines, its share of the sky and
  *  the declinations it spans, as the server gives them for its own. The
  *  line runs halfway between a node inside and a node outside. */
@@ -205,18 +239,20 @@ function region(sky: SkyCounts): DirectorVisibleSky['every_night'] {
 }
 
 /**
- * A picture of one time of year, made from a year's answer: the nights
- * from night `first`, counted and outlined here. `span` is `season`, which
- * the server never sends.
+ * One time of year, made from a year's answer: the nights from one night
+ * of the year, counted and outlined here. It has what the year was drawn
+ * under and its own two regions, and no more of a server's picture than
+ * it knows: the dates of its nights, and dusk and dawn for the measured
+ * nights among them only.
  */
-export interface SeasonSky extends Omit<DirectorVisibleSky, 'span' | 'measured'> {
-  span: 'season';
+export interface SeasonSky extends SkyTerms, SkyRegions {
+  /** The first and last night counted, as `YYYY-MM-DD`. */
+  first_night: string;
+  last_night: string;
+  nights_counted: number;
   /** The measured nights among those counted. */
   measured_nights: DirectorVisibleSky['nights'];
 }
-
-const DAY_MS = 86_400_000;
-const dateAfter = (date: string, days: number) => new Date(Date.parse(`${date}T00:00:00Z`) + days * DAY_MS).toISOString().slice(0, 10);
 
 /** One time of year: its picture, its counts, and the nodes in view on
  *  every night and on any, which its lines are drawn round. */
@@ -229,38 +265,56 @@ export interface Season {
 
 /**
  * On how many of a season's nights a place is in view, read between the
- * nodes of the grid. Which side of each line the place is on comes first,
- * and the count is kept on that side: every night inside the solid line,
- * none outside the dashed one, and at least one but not all between them.
+ * nodes of the grid. Which side of each drawn line the place is on comes
+ * first, and the count is kept on that side: every night inside the solid
+ * line, none outside the dashed one, and at least one but not all between
+ * them.
  */
 export function seasonNights(season: Season, raDeg: number, decDeg: number): number {
   const nights = season.counts.nights;
-  if (countAt(season.every, raDeg, decDeg) >= 0.5) return nights;
-  if (countAt(season.any, raDeg, decDeg) < 0.5) return 0;
+  if (insideLines(season.every, raDeg, decDeg)) return nights;
+  if (!insideLines(season.any, raDeg, decDeg)) return 0;
   return Math.min(nights - 1, Math.max(1, Math.round(countAt(season.counts, raDeg, decDeg))));
 }
+
+const DAY_MS = 86_400_000;
+const dateAfter = (date: string, days: number) => new Date(Date.parse(`${date}T00:00:00Z`) + days * DAY_MS).toISOString().slice(0, 10);
 
 export function seasonSky(year: DirectorVisibleSky, sky: MeasuredSky, first: number, nights = SEASON_NIGHTS): Season {
   const counts = windowCounts(sky, first, nights);
   const [every, any] = [nodesAt(counts, nights), nodesAt(counts, 1)];
   const start = year.nights[0]?.date ?? '1970-01-02';
-  const { measured: _measured, ...rest } = year;
-  void _measured;
   return {
     counts,
     every,
     any,
     view: {
-      ...rest,
-      span: 'season',
-      // Each night's date. Whether it gets dark is known for the measured
-      // nights only, which `measured_nights` lists.
-      nights: Array.from({ length: nights }, (_, night) => ({ date: dateAfter(start, first + night), dusk_ms: 0, dawn_ms: 0 })),
-      measured_nights: year.nights.filter((_, week) => week * sky.every >= first && week * sky.every < first + nights),
+      minimum_minutes: year.minimum_minutes,
+      horizon: year.horizon,
+      horizon_from: year.horizon_from,
+      limits: year.limits,
+      first_night: dateAfter(start, first),
+      last_night: dateAfter(start, first + nights - 1),
       nights_counted: nights,
-      counts: '',
+      measured_nights: year.nights.filter((_, week) => week * sky.every >= first && week * sky.every < first + nights),
       every_night: region(every),
       any_night: region(any),
     },
   };
+}
+
+/** A season's nights in a few words: for the slider's value. */
+export function seasonFrom(season: SeasonSky): string {
+  return `${season.nights_counted} nights from ${formatNight(season.first_night)}`;
+}
+
+/** A season's first and last night. */
+export function seasonDates(season: SeasonSky): string {
+  return `${formatNight(season.first_night)} to ${formatNight(season.last_night)}`;
+}
+
+/** A note when some of a season's measured nights never get dark. */
+export function seasonDarknessNote(season: SeasonSky): string | null {
+  const light = season.measured_nights.filter((night) => night.dusk_ms === null).length;
+  return light === 0 ? null : `It does not get dark on ${light} of the ${season.measured_nights.length} nights measured.`;
 }

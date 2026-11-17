@@ -4,9 +4,6 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import FramingView from './FramingView';
-import PlanSky from './PlanSky';
-import type { TargetPick } from './TargetSearch';
-import type { DirectorSkyPosition } from '../../api/directorTypes';
 import PlanEditor, { type PlanRigControls, type PlanRigState } from './PlanEditor';
 import PlanRigs from './PlanRigs';
 import PlanScheduling from './PlanScheduling';
@@ -22,13 +19,11 @@ import { withoutPlanningParams } from '../../hooks/useUrlState';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Director request failed';
 
-/** The workspace's tabs, one job each. Sky holds no draft of its own: a
- *  place sent from it becomes an edit in Framing. Every panel stays mounted, hidden
+/** The workspace's tabs, one job each. Every panel stays mounted, hidden
  *  when not shown, so an unsaved edit survives a switch; `draft` names the
  *  save-bar section a tab holds. */
 const TABS = [
   { id: 'framing', label: 'Framing', drafts: ['framing'] },
-  { id: 'sky', label: 'Sky', drafts: [] },
   { id: 'exposures', label: 'Exposures', drafts: ['plan'] },
   { id: 'rigs', label: 'Rigs', drafts: ['scheduling'] },
   { id: 'priority', label: 'Priority and defaults', drafts: ['priority'] },
@@ -81,11 +76,6 @@ export default function ProjectWorkspace({ instanceId, projectId }: { instanceId
   // Why a rig switched on in the framing did not join, until the next switch.
   const [framingNote, setFramingNote] = useState('');
   const [activating, setActivating] = useState(false);
-  // The Sky tab marks the target Framing has, saved or not, and sends a
-  // picked place back to Framing as its target.
-  const [framingTarget, setFramingTarget] = useState<{ target: { name: string; center: DirectorSkyPosition } | null; held: string | null }>({ target: null, held: null });
-  const reportTarget = useCallback((target: { name: string; center: DirectorSkyPosition } | null, held: string | null) => setFramingTarget({ target, held }), []);
-  const [offer, setOffer] = useState<{ pick: TargetPick; nonce: number } | null>(null);
   const section = useRef<HTMLElement>(null);
   const activationDue = useActivationDue(projectId, canWrite, drafts.unsaved.length);
   // The tab lives in the address, so a reload or a shared link opens it.
@@ -156,12 +146,7 @@ export default function ProjectWorkspace({ instanceId, projectId }: { instanceId
     </div>
     <div {...panel('framing')}>
       {!framingShown ? <p role="status">Loading targets...</p> : <FramingView projectId={projectId} seed={seed} preferredRigIds={summaryRigs.map(rig => rig.id)}
-        shootingRigIds={planRigs.rigIds} onToggleRig={toggleFromFraming} joinBlocked={joinBlocked} offer={offer} onTarget={reportTarget} />}
-    </div>
-    <div {...panel('sky')}>
-      <PlanSky rigs={summaryRigs.map(rig => ({ id: rig.id, name: rig.name, slug: profiles.data?.find(entry => entry.rig.id === rig.id)?.catalog_slug ?? row.links.find(link => link.rig.id === rig.id)?.catalog_slug }))}
-        target={framingTarget.target} frameBlocked={!framingShown ? 'Framing is still loading.' : framingTarget.held}
-        onFrame={pick => { setOffer({ pick, nonce: Date.now() }); chooseTab('framing'); }} onRigs={() => chooseTab('rigs')} shown={visited.has('sky')} />
+        shootingRigIds={planRigs.rigIds} onToggleRig={toggleFromFraming} joinBlocked={joinBlocked} />}
     </div>
     <div {...panel('exposures')}>
       <PlanEditor projectId={projectId} linkedRigIds={row.links.map(link => link.rig.id)} controls={planControls} onRigsChange={reportRigs} />

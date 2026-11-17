@@ -277,53 +277,6 @@ export function projectPoint(raDeg: number, decDeg: number, view: SkyView): Proj
 }
 
 /**
- * The ICRS position drawn at unit map coordinates (`x`, `y`) under `view`:
- * [`projectPoint`] the other way round. Null off the sky: outside the
- * ellipse of the flat map or the disc of the globe.
- */
-export function unprojectPoint(x: number, y: number, view: SkyView): LonLat | null {
-  const phi0 = view.centerLat * DEG;
-  let lon: number;
-  let lat: number;
-  if (view.mode === 'globe') {
-    const out = x * x + y * y;
-    if (out > 1) return null;
-    // Towards the viewer.
-    const z = Math.sqrt(1 - out);
-    lat = Math.asin(Math.min(1, Math.max(-1, y * Math.cos(phi0) + z * Math.sin(phi0)))) * RAD;
-    lon = view.centerLon + Math.atan2(-x, z * Math.cos(phi0) - y * Math.sin(phi0)) * RAD;
-  } else {
-    // Aitoff is the azimuthal equidistant map of half the longitude,
-    // stretched to twice the width; undo the stretch and read it back.
-    const across = (-x * Math.PI) / 4;
-    const up = (y * Math.PI) / 2;
-    const rho = Math.hypot(across, up);
-    if (rho > Math.PI / 2) return null;
-    const sinc = rho === 0 ? 1 : Math.sin(rho) / rho;
-    const turnedLat = Math.asin(Math.min(1, Math.max(-1, up * sinc)));
-    const turnedLon = 2 * Math.atan2(across * sinc, Math.cos(rho));
-    if (view.centerLat === 0) {
-      lat = turnedLat * RAD;
-      lon = view.centerLon + turnedLon * RAD;
-    } else {
-      // Undo `turnToCenter`: tilt the pole back.
-      const x2 = Math.cos(turnedLat) * Math.cos(turnedLon);
-      const east = Math.cos(turnedLat) * Math.sin(turnedLon);
-      const z2 = Math.sin(turnedLat);
-      const towards = x2 * Math.cos(phi0) - z2 * Math.sin(phi0);
-      const pole = x2 * Math.sin(phi0) + z2 * Math.cos(phi0);
-      lat = Math.asin(Math.min(1, Math.max(-1, pole))) * RAD;
-      lon = view.centerLon + Math.atan2(east, towards) * RAD;
-    }
-  }
-  if (view.frame === 'galactic') {
-    const [ra, dec] = galacticToEquatorial(wrap360(lon), lat);
-    return [wrap360(ra), dec];
-  }
-  return [wrap360(lon), lat];
-}
-
-/**
  * The coordinates of a point after the sphere is turned so that
  * (`centerLon`, `centerLat`) lies at longitude 0, latitude 0: a rotation
  * about the pole by −centerLon, then about the new east–west axis by
