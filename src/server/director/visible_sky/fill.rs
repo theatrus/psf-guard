@@ -14,7 +14,7 @@
 //! number of degrees asks both steps around it. So the estimate errs one
 //! way: it may leave out a night a place was in view, and does not add
 //! one. Sky it calls in view every night is in view on every measured
-//! night with seven degrees of right ascension to spare each way.
+//! night with six degrees of right ascension to spare each way.
 //!
 //! Held against a year with every night measured, at six sites from the
 //! equator to Tromsø (`year_check`): the line round the sky in view every
@@ -61,22 +61,16 @@ pub(super) fn between(before: [bool; REACH + 1], after: [bool; REACH + 1]) -> [b
     ]
 }
 
-/// Whether one node is in view on one night of the year, from the
-/// measured nights' grids: night 0 is the first measured night. The rule
-/// [`counts`] counts by, one night at a time.
+/// Every night of the year for one node, in order, from the measured
+/// nights' grids: night 0 is the first measured night.
 #[cfg(test)]
-pub(super) fn night_seen(grids: &[&[bool]], cols: usize, night: usize, index: usize) -> bool {
-    let (week, since) = (night / EVERY, night % EVERY);
-    if since == 0 {
-        return grids[week][index];
+pub(super) fn node_nights(grids: &[&[bool]], cols: usize, index: usize) -> Vec<bool> {
+    let mut seen = vec![false; nights_counted(grids.len())];
+    for night in nights(grids.len(), at_node(grids, cols, index)) {
+        let Ok((night, in_view)) = night;
+        seen[night] = in_view;
     }
-    let (row, col) = (index / cols, index % cols);
-    let at = |grid: &[bool], step: i32| {
-        grid[row * cols + (col as i32 + step).rem_euclid(cols as i32) as usize]
-    };
-    let before: [bool; REACH + 1] = std::array::from_fn(|i| at(grids[week], -(i as i32)));
-    let after: [bool; REACH + 1] = std::array::from_fn(|i| at(grids[week + 1], i as i32));
-    between(before, after)[since - 1]
+    seen
 }
 
 /// For every node, on how many of `nights` nights from night `first` of
@@ -92,8 +86,9 @@ pub(super) fn window_counts(
     let nodes = grids.first().map_or(0, |grid| grid.len());
     (0..nodes)
         .map(|index| {
-            (first..first + nights)
-                .filter(|night| night_seen(grids, cols, *night, index))
+            node_nights(grids, cols, index)[first..first + nights]
+                .iter()
+                .filter(|seen| **seen)
                 .count() as u16
         })
         .collect()
@@ -125,75 +120,123 @@ pub(super) fn nights_counted(measured: usize) -> usize {
     }
 }
 
-/// On how many nights of the year one place is in view. `seen(night, i)`
-/// is whether, on measured night `night`, the place `2 i` degrees of right
-/// ascension from it is in view: behind it for a negative `i`. It is asked
-/// at most once for each night and step.
-pub(super) fn count<E>(
+/// Every night of the year for one place: its number, counted from the
+/// first measured night, and whether the place is in view on it. This is
+/// the one place the rule is applied; counting, and asking whether every
+/// night or any has the place, read it.
+///
+/// `seen(night, i)` is whether, on measured night `night`, the place `2 i`
+/// degrees of right ascension from it is in view: behind it for a negative
+/// `i`. It is asked at most once for each night and step, and only as the
+/// nights are drawn: each measured night comes first, on one question, and
+/// then the six nights before it, on six more. So the nights do not come
+/// in order. After an error there are no more.
+pub(super) fn nights<E>(
     measured: usize,
     mut seen: impl FnMut(usize, i32) -> Result<bool, E>,
+) -> impl Iterator<Item = Result<(usize, bool), E>> {
+    // The measured night to draw next, the answer of the one before it,
+    // and the nights worked out and not yet drawn.
+    let mut week = 0;
+    let mut last: Option<bool> = None;
+    let mut between_due: Option<(bool, bool)> = None;
+    let mut ready: Vec<(usize, bool)> = Vec::with_capacity(EVERY - 1);
+    let mut failed = false;
+    std::iter::from_fn(move || {
+        if failed {
+            return None;
+        }
+        if let Some(night) = ready.pop() {
+            return Some(Ok(night));
+        }
+        let mut next = || -> Result<Option<(usize, bool)>, E> {
+            if let Some((before, here)) = between_due.take() {
+                // The six nights between the measured night before and the
+                // one just drawn: `week` already counts past it.
+                let (earlier, later) = (week - 2, week - 1);
+                let before = [
+                    before,
+                    seen(earlier, -1)?,
+                    seen(earlier, -2)?,
+                    seen(earlier, -3)?,
+                ];
+                let after = [here, seen(later, 1)?, seen(later, 2)?, seen(later, 3)?];
+                for (since, in_view) in between(before, after).into_iter().enumerate().rev() {
+                    ready.push((earlier * EVERY + since + 1, in_view));
+                }
+                return Ok(ready.pop());
+            }
+            if week == measured {
+                return Ok(None);
+            }
+            let here = seen(week, 0)?;
+            if let Some(before) = last {
+                between_due = Some((before, here));
+            }
+            last = Some(here);
+            week += 1;
+            Ok(Some(((week - 1) * EVERY, here)))
+        };
+        match next() {
+            Ok(night) => night.map(Ok),
+            Err(error) => {
+                failed = true;
+                Some(Err(error))
+            }
+        }
+    })
+}
+
+/// On how many nights of the year one place is in view.
+pub(super) fn count<E>(
+    measured: usize,
+    seen: impl FnMut(usize, i32) -> Result<bool, E>,
 ) -> Result<u32, E> {
-    let mut nights = 0;
-    // The night before's places behind, kept from the last turn.
-    let mut before: Option<[bool; REACH + 1]> = None;
-    for night in 0..measured {
-        let here = seen(night, 0)?;
-        nights += u32::from(here);
-        if let Some(before) = before {
-            let after = [here, seen(night, 1)?, seen(night, 2)?, seen(night, 3)?];
-            nights += between(before, after).iter().filter(|seen| **seen).count() as u32;
-        }
-        if night + 1 < measured {
-            before = Some([here, seen(night, -1)?, seen(night, -2)?, seen(night, -3)?]);
-        }
+    let mut in_view = 0;
+    for night in nights(measured, seen) {
+        in_view += u32::from(night?.1);
     }
-    Ok(nights)
+    Ok(in_view)
 }
 
 /// Whether one place is in view on every night of the year, or, with
-/// `every` false, on any: [`count`] at its two ends, stopping as soon as
-/// the answer is known.
+/// `every` false, on any, stopping as soon as the answer is known.
 pub(super) fn all_or_any<E>(
     measured: usize,
     every: bool,
-    mut seen: impl FnMut(usize, i32) -> Result<bool, E>,
+    seen: impl FnMut(usize, i32) -> Result<bool, E>,
 ) -> Result<bool, E> {
-    let mut before: Option<[bool; REACH + 1]> = None;
-    for night in 0..measured {
-        let here = seen(night, 0)?;
-        if here != every {
+    for night in nights(measured, seen) {
+        if night?.1 != every {
             return Ok(!every);
-        }
-        if let Some(before) = before {
-            let after = [here, seen(night, 1)?, seen(night, 2)?, seen(night, 3)?];
-            if between(before, after).contains(&!every) {
-                return Ok(!every);
-            }
-        }
-        if night + 1 < measured {
-            before = Some([here, seen(night, -1)?, seen(night, -2)?, seen(night, -3)?]);
         }
     }
     Ok(every)
 }
 
+/// What a measured night's grid has at a node turned `step` columns along
+/// its row. A grid's columns are two degrees of right ascension apart and
+/// wrap, so a turned node is another node of its row.
+fn at_node<'a>(
+    grids: &'a [&'a [bool]],
+    cols: usize,
+    index: usize,
+) -> impl FnMut(usize, i32) -> Result<bool, std::convert::Infallible> + 'a {
+    let (row, col) = (index / cols, index % cols);
+    move |night, step| {
+        let turned = (col as i32 + step).rem_euclid(cols as i32) as usize;
+        Ok(grids[night][row * cols + turned])
+    }
+}
+
 /// For every node of a grid `cols` wide, on how many nights of the year
-/// it is in view, from the measured nights' grids. A grid's columns are
-/// two degrees of right ascension apart and wrap, so a turned node is
-/// another node of its row.
+/// it is in view, from the measured nights' grids.
 pub(super) fn counts(grids: &[&[bool]], cols: usize) -> Vec<u16> {
     let nodes = grids.first().map_or(0, |grid| grid.len());
     (0..nodes)
         .map(|index| {
-            let (row, col) = (index / cols, index % cols);
-            let seen = |night: usize, step: i32| -> Result<bool, std::convert::Infallible> {
-                let turned = (col as i32 + step).rem_euclid(cols as i32) as usize;
-                Ok(grids[night][row * cols + turned])
-            };
-            match count(grids.len(), seen) {
-                Ok(nights) => nights as u16,
-                Err(never) => match never {},
-            }
+            let Ok(in_view) = count(grids.len(), at_node(grids, cols, index));
+            in_view as u16
         })
         .collect()
 }
@@ -377,6 +420,54 @@ mod tests {
                 assert_eq!(packed[night * 5 + index / 8] >> (index % 8) & 1 == 1, *seen);
             }
         }
+    }
+
+    #[test]
+    fn the_nights_are_numbered_and_asked_for_only_as_they_are_drawn() {
+        // In view on measured night 2 only, and only where the place is.
+        let mut asked = Vec::new();
+        let mut drawn = nights(4, |night: usize, step: i32| {
+            asked.push((night, step));
+            Ok::<bool, ()>(night == 2 && step == 0)
+        });
+        // The first measured night costs one question.
+        assert_eq!(drawn.next(), Some(Ok((0, false))));
+        // The next comes before the six nights that lead up to it.
+        assert_eq!(drawn.next(), Some(Ok((7, false))));
+        assert_eq!(drawn.next(), Some(Ok((1, false))));
+        let rest: Vec<(usize, bool)> = drawn.map(|night| night.unwrap()).collect();
+        assert_eq!(asked[..2], [(0, 0), (1, 0)]);
+        assert_eq!(asked.len(), 4 + 3 * 6);
+        // Every night of the 22 once, and night 14 alone in view.
+        let mut numbers: Vec<usize> = [0, 7, 1]
+            .into_iter()
+            .chain(rest.iter().map(|night| night.0))
+            .collect();
+        numbers.sort_unstable();
+        assert_eq!(numbers, (0..22).collect::<Vec<_>>());
+        assert_eq!(
+            rest.iter()
+                .filter(|night| night.1)
+                .map(|night| night.0)
+                .collect::<Vec<_>>(),
+            [14]
+        );
+        // An error ends them.
+        let mut failing = nights(
+            3,
+            |night: usize, _: i32| if night == 1 { Err("lost") } else { Ok(true) },
+        );
+        assert_eq!(failing.next(), Some(Ok((0, true))));
+        assert_eq!(failing.next(), Some(Err("lost")));
+        assert_eq!(failing.next(), None);
+        // Asking whether every night has a place stops at the first that
+        // does not, on one question.
+        let mut questions = 0;
+        let every = all_or_any(53, true, |_: usize, _: i32| {
+            questions += 1;
+            Ok::<bool, ()>(false)
+        });
+        assert_eq!((every, questions), (Ok(false), 1));
     }
 
     #[test]

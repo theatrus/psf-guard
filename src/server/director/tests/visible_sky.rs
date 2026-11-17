@@ -168,7 +168,7 @@ async fn requests_for_the_same_nights_measure_them_once_and_a_dropped_one_measur
         Nights::Dates(dates.clone()),
         30,
         Span::Now,
-        Wanted::Picture,
+        Wanted::Picture { measured: false },
         &gone
     )
     .is_err());
@@ -201,7 +201,7 @@ async fn requests_for_the_same_nights_measure_them_once_and_a_dropped_one_measur
         Nights::Dates(dates),
         30,
         Span::Now,
-        Wanted::Picture,
+        Wanted::Picture { measured: false },
         &Stop::new()
     )
     .is_ok());
@@ -555,10 +555,29 @@ async fn the_month_and_the_year_count_the_nights_each_part_of_the_sky_is_in_view
         year_share(1),
         view["any_night"]["sky_fraction"].as_f64().unwrap()
     );
-    // The measured nights' grids come with a year, for a client to show
-    // one time of year from: a bit a node, 2048 bytes a night.
+    // The measured nights' grids come with a year when asked for, for a
+    // client to show one time of year from: a bit a node, 2048 bytes a
+    // night. They are read from what the year kept: nothing is measured
+    // again, and the rest of the answer is the same.
     assert!(month["measured"].is_null());
-    let measured = &view["measured"];
+    assert!(view["measured"].is_null());
+    let with_nights =
+        json!({"rig": rig, "first_night": "2026-09-24", "span": "year", "measured": true});
+    let (status, body) = call(&app, "POST", PATH, with_nights, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(service.visible_sky.computed(), (31, 48));
+    let mut without = body["data"].clone();
+    let measured = &body["data"]["measured"].clone();
+    without.as_object_mut().unwrap().remove("measured");
+    assert_eq!(without, view);
+    // A month has no measured nights to send.
+    let asked = json!({"rig": rig, "span": "now", "measured": true});
+    let (status, body) = call(&app, "POST", PATH, asked, None).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(
+        body["error"],
+        "Send measured only with span year: only a year has measured nights to send."
+    );
     assert_eq!(measured["bytes_a_night"], 2048);
     assert_eq!(measured["turn_degrees_a_night"], 1.0);
     let bits = {

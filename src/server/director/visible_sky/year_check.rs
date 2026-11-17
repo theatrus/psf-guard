@@ -317,12 +317,11 @@ pub(super) fn compare(case: &Case, first: &str, measured: usize, needed: u32) ->
         .zip(&true_counts)
         .map(|(filled, truth)| i32::from(*filled) - *truth as i32);
     // A month at a time from each week of the year.
+    let by_node: Vec<Vec<bool>> = (0..COLS * ROWS)
+        .map(|index| fill::node_nights(&slices, COLS, index))
+        .collect();
     let filled_nights: Vec<Vec<bool>> = (0..nights)
-        .map(|night| {
-            (0..COLS * ROWS)
-                .map(|index| fill::night_seen(&slices, COLS, night, index))
-                .collect()
-        })
+        .map(|night| by_node.iter().map(|node| node[night]).collect())
         .collect();
     let month = |first: usize| {
         let count = |from: &[Vec<bool>], index: usize| {
@@ -407,10 +406,10 @@ fn the_year_filled_in_against_every_night_measured() {
 /// What the fill-in is held to, at any site and over any stretch.
 fn hold(name: &str, found: &Found) {
     // It may leave a night out and hardly ever adds one: a node's count
-    // is at most two nights over, and a handful of nodes at most are
-    // called in view every night when they miss a night or two.
+    // is at most two nights over, and three nodes at most are called in
+    // view every night when they miss a night or two.
     assert!(found.worst_overcount <= 2, "{name}: {found:?}");
-    assert!(found.every_claimed <= 4, "{name}: {found:?}");
+    assert!(found.every_claimed <= 3, "{name}: {found:?}");
     assert!(found.claimed_short <= 3, "{name}: {found:?}");
     assert_eq!(found.any_claimed, 0, "{name}: {found:?}");
     // What it leaves out is a strip a node wide along some of an edge: of

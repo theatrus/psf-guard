@@ -120,6 +120,10 @@ pub(super) struct Request {
     /// weekly. Without it, `nights` in a row.
     #[serde(default)]
     span: Option<Span>,
+    /// With `span: year`: send each measured night's grid too, for a
+    /// client that shows the year a month at a time.
+    #[serde(default)]
+    measured: bool,
 }
 
 /// One night of the range, as Nights dates and times it.
@@ -164,9 +168,6 @@ struct Region {
     declinations: Option<[f64; 2]>,
 }
 
-/// The grid the nights were counted on: nodes every `degrees`, `columns`
-/// of right ascension from 0h and `rows` of declination from the south
-/// pole to the north.
 /// A year's measured nights, and what it takes to work out the nights
 /// between them as [`fill`] does.
 #[derive(Serialize)]
@@ -186,6 +187,9 @@ struct Measured {
     turn_degrees_a_night: f64,
 }
 
+/// The grid the nights were counted on: nodes every `degrees`, `columns`
+/// of right ascension from 0h and `rows` of declination from the south
+/// pole to the north.
 #[derive(Serialize)]
 struct GridShape {
     degrees: f64,
@@ -223,8 +227,8 @@ pub(super) struct View {
     /// meets the minimum time: two bytes a node, low byte first, row by
     /// row from the south pole, in base64.
     counts: String,
-    /// For a year, each measured night's grid, for a client to add up the
-    /// nights of one time of year itself.
+    /// For a year asked for with `measured`: each measured night's grid,
+    /// for a client to add up the nights of one time of year itself.
     #[serde(skip_serializing_if = "Option::is_none")]
     measured: Option<Measured>,
     /// Sky that meets the minimum time on every night.
@@ -573,8 +577,9 @@ pub(super) enum Nights {
 
 /// What to answer with.
 pub(super) enum Wanted {
-    /// The whole sky: counts and lines.
-    Picture,
+    /// The whole sky: counts and lines, and for a year, when `measured`,
+    /// each measured night's grid.
+    Picture { measured: bool },
     /// How many of the nights each of these places is in view.
     Places(Vec<IcrsPosition>),
 }
@@ -777,6 +782,7 @@ fn measure(
     let needed = (u64::from(minimum_minutes) * 60_000)
         .div_ceil(STEP_MS)
         .max(1) as u32;
+    let send_measured = matches!(wanted, Wanted::Picture { measured: true });
     if let Wanted::Places(places) = wanted {
         // Each place measured as a grid node is, on every night counted:
         // a few observations a place, with the skies kept.
@@ -953,7 +959,7 @@ fn measure(
             rows: ROWS,
         },
         nights_counted: counted,
-        measured: (span == Span::Year).then(|| {
+        measured: (span == Span::Year && send_measured).then(|| {
             use base64::Engine;
             let measured: Vec<&[bool]> = grids.iter().map(|grid| grid.as_slice()).collect();
             Measured {
@@ -1145,7 +1151,15 @@ pub(super) async fn evaluate(
         nights: request.nights,
         span: request.span,
     };
-    match answer(state, asked, Wanted::Picture).await? {
+    if request.measured && request.span != Some(Span::Year) {
+        return Err(FeasibilityError::Rejected(
+            "Send measured only with span year: only a year has measured nights to send.".into(),
+        ));
+    }
+    let wanted = Wanted::Picture {
+        measured: request.measured,
+    };
+    match answer(state, asked, wanted).await? {
         Answer::Picture(view) => Ok(Json(ApiResponse::success(*view))),
         Answer::Places(_) => Err(Error::Internal.into()),
     }
