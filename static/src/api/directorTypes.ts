@@ -1000,6 +1000,14 @@ export interface DirectorVisibleSky {
   /** For each node, on how many of the nights counted it is in view: two
    *  bytes a node, low byte first, row by row, in base64. */
   counts: string;
+  /** With a year: each measured night's grid, to add up the nights of one
+   *  time of year from. `in_view` is base64 of a bit a node, the lowest
+   *  bit of each byte first, `bytes_a_night` bytes for each of `nights`.
+   *  A night between two measured nights has a node in view only where
+   *  the night before has it `turn_degrees_a_night` back along its row
+   *  for each night since and the night after has it as far on for each
+   *  night to come; a turn between two columns asks both. */
+  measured?: { in_view: string; bytes_a_night: number; turn_degrees_a_night: number };
   every_night: DirectorVisibleSkyRegion;
   /** Null for one night, when it is the same sky as `every_night`. */
   any_night: DirectorVisibleSkyRegion | null;

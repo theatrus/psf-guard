@@ -74,6 +74,9 @@ interface Props {
   /** How many nights each part of the sky is in view: sky in view on
    *  fewer nights is covered more, under the lines. */
   shade?: SkyCounts | null;
+  /** The cover is changing many times a second, as under a slider: draw
+   *  it small until this is false again, as while the sky is turned. */
+  shadeChanging?: boolean;
   /** Places to mark and label. */
   marks?: SkyMark[];
   /** Called with the ICRS place under a click on open sky. A drag, or a
@@ -158,6 +161,7 @@ export default function SkyMap({
   focus = null,
   visible = null,
   shade = null,
+  shadeChanging = false,
   marks = NO_MARKS,
   onPick,
   label,
@@ -389,7 +393,7 @@ export default function SkyMap({
   const shadeImageRef = useRef<SVGImageElement>(null);
   useEffect(() => {
     if (!shade) return;
-    const [width, height] = turning ? SHADE_SIZE_TURNING : SHADE_SIZE;
+    const [width, height] = turning || shadeChanging ? SHADE_SIZE_TURNING : SHADE_SIZE;
     const paint = () => {
       const url = shadeImage(shade, sky, AT, MAP_WIDTH, width, height);
       if (url) shadeImageRef.current?.setAttribute('href', url);
@@ -401,7 +405,7 @@ export default function SkyMap({
     }
     const frame = requestAnimationFrame(paint);
     return () => cancelAnimationFrame(frame);
-  }, [shade, sky, turning]);
+  }, [shade, sky, turning, shadeChanging]);
 
   const placedMarks = useMemo(
     () => marks.map((mark) => ({ mark, at: projectedPoint(mark.ra, mark.dec, sky, AT) })).filter((entry) => entry.at.visible),

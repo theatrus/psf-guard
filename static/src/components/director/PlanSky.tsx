@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { keepPreviousData, useMutationState, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../../api/client';
 import type { DirectorSkyPosition, DirectorVisiblePlacesRequest, DirectorVisibleSky, DirectorVisibleSkyRequest } from '../../api/directorTypes';
@@ -7,6 +7,8 @@ import { openSettings } from '../../utils/settingsIntent';
 import { formatDecShort, formatRaShort, type SkyFrame, type SkyMode } from '../../utils/skyProjection';
 import SkyMap, { type SkyMark } from '../sky/SkyMap';
 import { SkyChoice, SkyShapeChoices } from '../sky/SkyChoices';
+import { formatNight } from '../sky/skyModel';
+import { SEASON_NIGHTS, seasonNights, seasonSky, seasonStarts, unpackMeasured } from '../sky/skySeason';
 import { unpackCounts } from '../sky/skyShade';
 import {
   darknessNote,
@@ -17,6 +19,7 @@ import {
   visibleSkyLines,
   visibleSkyShares,
   visibleSkySummary,
+  type SkyPicture,
 } from '../sky/visibleSky';
 import { retryWhenBusy } from './retry';
 import { SKY_INPUTS_MUTATION } from './skyInputs';
@@ -45,16 +48,43 @@ interface Props {
   shown: boolean;
 }
 
-type Span = 'now' | 'year';
+/** Now and Year are the server's two time frames. Season shows the
+ *  server's year a month at a time, made here. */
+type Span = 'now' | 'year' | 'season';
+/** How long after the last slider step the cover is drawn at full size. */
+export const SEASON_SETTLE_MS = 180;
+/** Page Up and Page Down move the slider this many weeks: about a month. */
+const SEASON_PAGE = 4;
+const DAY_MS = 86_400_000;
 const MAX_MINUTES = 24 * 60;
 /** How long the minimum field waits after the last keystroke or spinner
  *  step before it asks for a new picture. */
 export const MINIMUM_SETTLE_MS = 500;
-const SPANS: ReadonlyArray<readonly [Span, string]> = [['now', 'Now'], ['year', 'Year']];
-const SPAN_LABEL: Record<Span, string> = { now: 'Now', year: 'Year' };
+const SPANS: ReadonlyArray<readonly [Span, string]> = [['now', 'Now'], ['year', 'Year'], ['season', 'Season']];
+const SPAN_LABEL: Record<Span, string> = { now: 'Now', year: 'Year', season: 'Season' };
 /** A place to a millionth of a degree: enough to tell two places apart,
  *  and steady from one render to the next. */
 const rounded = (center: DirectorSkyPosition): DirectorSkyPosition => ({ ra_degrees: Math.round(center.ra_degrees * 1e6) / 1e6 % 360, dec_degrees: Math.round(center.dec_degrees * 1e6) / 1e6 });
+
+/** A slider position in words: the nights it shows. */
+const seasonWords = (view: SkyPicture) => `${view.nights.length} nights from ${formatNight(view.nights[0]?.date ?? null)}`;
+
+/** Where each month begins along the slider, as a share of its length:
+ *  the slider runs from the year's first night to `lastStart` nights on. */
+function monthMarks(first: string | undefined, lastStart: number): Array<{ label: string; share: number }> {
+  if (!first || lastStart <= 0) return [];
+  const start = Date.parse(`${first}T00:00:00Z`);
+  const marks: Array<{ label: string; share: number }> = [];
+  const month = new Date(start);
+  month.setUTCDate(1);
+  for (let i = 0; i < 14; i += 1) {
+    month.setUTCMonth(month.getUTCMonth() + 1);
+    const nights = Math.round((month.getTime() - start) / DAY_MS);
+    if (nights > lastStart) break;
+    marks.push({ label: month.toLocaleDateString(undefined, { month: 'short', timeZone: 'UTC' }), share: nights / lastStart });
+  }
+  return marks;
+}
 
 const placeName = (center: DirectorSkyPosition) => `${formatRaShort(center.ra_degrees)}, ${formatDecShort(center.dec_degrees)}`;
 
@@ -63,7 +93,9 @@ const placeName = (center: DirectorSkyPosition) => `${formatRaShort(center.ra_de
  * heavily the fewer nights it is in view for the minimum time, with a solid line round the sky in view
  * every night and a dashed one round the sky in view on any. Now counts
  * tonight and the 30 nights after; Year counts every night of a year,
- * of which the server measures one a week and works out the rest.
+ * of which the server measures one a week and works out the rest; Season
+ * shows 31 nights of that year at a time, chosen with a slider and added
+ * up here from the year's answer, so moving the slider asks for nothing.
  * A place found by name or clicked on the map can be sent to Framing.
  */
 export default function PlanSky({ rigs, target, frameBlocked, onFrame, onRigs, shown }: Props) {
@@ -77,9 +109,11 @@ export default function PlanSky({ rigs, target, frameBlocked, onFrame, onRigs, s
   const [minimum, setMinimum] = useState<number | null>(null);
   const [picked, setPicked] = useState<TargetPick | null>(null);
 
+  // Season is made from the year's answer: the two ask for the same thing.
+  const asked = span === 'season' ? 'year' : span;
   const request: DirectorVisibleSkyRequest | null = useMemo(
-    () => (rig ? { rig: rig.id, span, ...(minimum !== null ? { minimum_minutes: minimum } : {}) } : null),
-    [rig, span, minimum]
+    () => (rig ? { rig: rig.id, span: asked, ...(minimum !== null ? { minimum_minutes: minimum } : {}) } : null),
+    [rig, asked, minimum]
   );
   // The picture for fixed inputs does not change, so it is not fetched on
   // the app's timer or on focus. A superseded request is cancelled, and
@@ -98,7 +132,7 @@ export default function PlanSky({ rigs, target, frameBlocked, onFrame, onRigs, s
   // The picture on screen: the one asked for, or, while that loads, the
   // last one for this rig, dimmed. Another rig's picture is never shown.
   const view: DirectorVisibleSky | undefined = request && !query.isError && query.data?.rig.id === request.rig ? query.data : undefined;
-  const awaited = view !== undefined && view.span !== span;
+  const awaited = view !== undefined && view.span !== asked;
   // The nights start again at the next local noon at the rig's site. A
   // tab behind another asks for nothing; it catches up when it is shown.
   const longitude = query.data?.site.longitude_degrees;
@@ -154,8 +188,38 @@ export default function PlanSky({ rigs, target, frameBlocked, onFrame, onRigs, s
     settle.current = window.setTimeout(() => sendMinutes(text), MINIMUM_SETTLE_MS);
   };
 
-  const counts = useMemo(() => (view ? unpackCounts(view.counts, view.nights_counted, view.grid.columns, view.grid.rows) : null), [view]);
-  const lines = useMemo(() => (view ? visibleSkyLines(view) : null), [view]);
+  // Season: the year's measured nights, and which 31 nights of the year
+  // are shown. The slider's place is kept while the year is the same one,
+  // and starts again with another rig or minimum time.
+  const measured = useMemo(() => (view?.span === 'year' ? unpackMeasured(view) : null), [view]);
+  const starts = useMemo(() => (measured ? seasonStarts(measured) : [0]), [measured]);
+  const [place, setPlace] = useState(0);
+  const yearOf = `${rig?.id ?? ''} ${minimum ?? ''}`;
+  const placedFor = useRef(yearOf);
+  if (placedFor.current !== yearOf) {
+    placedFor.current = yearOf;
+    if (place !== 0) setPlace(0);
+  }
+  const position = Math.min(place, starts.length - 1);
+  const season = useMemo(() => (span === 'season' && view && measured ? seasonSky(view, measured, starts[position], SEASON_NIGHTS) : null), [span, view, measured, starts, position]);
+  // While the slider moves the cover is drawn small, and at full size
+  // once it rests.
+  const [sliding, setSliding] = useState(false);
+  const slideRest = useRef<number | null>(null);
+  useEffect(() => () => { if (slideRest.current !== null) window.clearTimeout(slideRest.current); }, []);
+  const slideTo = (next: number) => {
+    setPlace(Math.max(0, Math.min(starts.length - 1, next)));
+    setSliding(true);
+    if (slideRest.current !== null) window.clearTimeout(slideRest.current);
+    slideRest.current = window.setTimeout(() => setSliding(false), SEASON_SETTLE_MS);
+  };
+  const seasonId = useId();
+  // The picture drawn: the server's, or the time of year made from it.
+  const picture: SkyPicture | undefined = season ? season.view : span === 'season' && view?.span === 'year' ? undefined : view;
+  const fromTonight = !season || position === 0;
+
+  const counts = useMemo(() => (season ? season.counts : picture ? unpackCounts(picture.counts, picture.nights_counted, picture.grid.columns, picture.grid.rows) : null), [season, picture]);
+  const lines = useMemo(() => (picture ? visibleSkyLines(picture) : null), [picture]);
   const marks: SkyMark[] = useMemo(() => {
     const list: SkyMark[] = [];
     if (target) list.push({ id: 'target', ra: target.center.ra_degrees, dec: target.center.dec_degrees, label: target.name || 'Target', kind: 'target' });
@@ -168,9 +232,10 @@ export default function PlanSky({ rigs, target, frameBlocked, onFrame, onRigs, s
   const placesRequest: DirectorVisiblePlacesRequest | null = useMemo(() => {
     const places = [target?.center, picked?.center].filter((place): place is DirectorSkyPosition => !!place).map(rounded);
     const first = view?.nights[0]?.date;
-    if (!view || !first || places.length === 0) return null;
+    // A time of year is counted here, from the grid the map is drawn from.
+    if (!view || !first || places.length === 0 || span === 'season') return null;
     return { rig: view.rig.id, span: view.span, minimum_minutes: view.minimum_minutes, first_night: first, places };
-  }, [view, target, picked]);
+  }, [view, target, picked, span]);
   const placesQuery = useQuery({
     queryKey: ['directorVisibleSky', 'places', placesRequest],
     queryFn: ({ signal }) => apiClient.getDirectorVisiblePlaces(placesRequest!, signal),
@@ -183,18 +248,22 @@ export default function PlanSky({ rigs, target, frameBlocked, onFrame, onRigs, s
   });
   /** On how many nights a place is in view: null until the server says. */
   const inView = (center: DirectorSkyPosition): number | null => {
+    // In Season the count is read off the grid between its nodes, as the
+    // lines are drawn between them: the card and the map are one thing.
+    if (season) return seasonNights(season, center.ra_degrees, center.dec_degrees);
+    if (span === 'season') return null;
     const at = rounded(center);
     const found = placesQuery.data?.places.find((place) => place.ra_degrees === at.ra_degrees && place.dec_degrees === at.dec_degrees);
     return found && placesQuery.data?.nights_counted === view?.nights_counted ? found.nights_in_view : null;
   };
-  const counted = view?.nights_counted ?? 0;
-  const nightsWords = (nights: number) => (view?.span === 'year' ? `In view on ${nights} of the ${counted} nights of the year` : `In view on ${nights} of the ${counted} nights counted`);
+  const counted = picture?.nights_counted ?? 0;
+  const nightsWords = (nights: number) => (picture?.span === 'year' ? `In view on ${nights} of the ${counted} nights of the year` : `In view on ${nights} of the ${counted} nights counted`);
   const standingWords = (nights: number) => {
     const where = standing(nights, counted);
     return where === 'every' ? 'Inside the every-night line.' : where === 'some' ? 'Between the lines: in view on some nights.' : 'Outside both lines: never in view for long enough.';
   };
   const placeWords = (center: DirectorSkyPosition) => {
-    if (!view) return null;
+    if (!picture) return null;
     const nights = inView(center);
     if (nights === null) return placesQuery.isError ? 'Its nights in view could not be counted.' : 'Counting its nights in view…';
     return `${nightsWords(nights)}. ${standingWords(nights)}`;
@@ -268,11 +337,11 @@ export default function PlanSky({ rigs, target, frameBlocked, onFrame, onRigs, s
               </button>
             )}
           </>
-        ) : view && rig ? (
+        ) : picture && rig ? (
           <>
-            {awaited ? `${SPAN_LABEL[view.span]} is shown while ${SPAN_LABEL[span]} loads. ` : ''}
-            {visibleSkyLegend(view, rig.name)}. {visibleSkyShares(view)}
-            {darknessNote(view) ? ` ${darknessNote(view)}` : ''}
+            {awaited ? `${SPAN_LABEL[picture.span]} is shown while ${SPAN_LABEL[span]} loads. ` : ''}
+            {visibleSkyLegend(picture, rig.name, fromTonight)}. {visibleSkyShares(picture)}
+            {darknessNote(picture) ? ` ${darknessNote(picture)}` : ''}
           </>
         ) : (
           'Working out the sky in view…'
@@ -288,10 +357,44 @@ export default function PlanSky({ rigs, target, frameBlocked, onFrame, onRigs, s
             showStacks={false}
             visible={lines}
             shade={counts}
+            shadeChanging={sliding}
             marks={marks}
             onPick={(ra, dec) => setPicked({ name: placeName({ ra_degrees: ra, dec_degrees: dec }), center: { ra_degrees: ra, dec_degrees: dec }, source: 'the map' })}
-            label={view && rig ? visibleSkySummary(view, rig.name) : 'Map of the sky'}
+            label={picture && rig ? visibleSkySummary(picture, rig.name, fromTonight) : 'Map of the sky'}
           />
+          {span === 'season' && (
+            <div className="plan-sky-season">
+              <label htmlFor={seasonId}>Time of year</label>
+              <span className="plan-sky-season-nights">{season ? seasonWords(season.view) : 'Working out the year…'}</span>
+              <input
+                id={seasonId}
+                type="range"
+                min={0}
+                max={starts.length - 1}
+                step={1}
+                value={position}
+                disabled={!season}
+                aria-valuetext={season ? seasonWords(season.view) : undefined}
+                onChange={(event) => slideTo(Number(event.target.value))}
+                onKeyDown={(event) => {
+                  // Arrow keys step a week, and Home and End go to the
+                  // ends, as a slider does; a page is about a month.
+                  if (event.key !== 'PageUp' && event.key !== 'PageDown') return;
+                  event.preventDefault();
+                  slideTo(position + (event.key === 'PageUp' ? SEASON_PAGE : -SEASON_PAGE));
+                }}
+              />
+              {view && measured && (
+                <div className="plan-sky-season-months" aria-hidden="true">
+                  {monthMarks(view.nights[0]?.date, starts[starts.length - 1]).map((mark) => (
+                    <span key={mark.label + mark.share} style={{ left: `${mark.share * 100}%` }}>
+                      {mark.label}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
           <div className="plan-sky-key" aria-label="How to read the map">
             <span className="plan-sky-scale-end">No night</span>
             <span className="plan-sky-scale" aria-hidden="true" />
@@ -306,7 +409,10 @@ export default function PlanSky({ rigs, target, frameBlocked, onFrame, onRigs, s
             </span>
             <span className="plan-sky-key-line">Marks point into the sky in view.</span>
             <span className="plan-sky-key-line">Covered sky is out of view on some nights. Hatched sky is never in view.</span>
-            {view?.span === 'year' && (
+            {span === 'season' && (
+              <span className="plan-sky-key-line">Season shows 31 nights of the year at a time. Its lines follow the 2° grid the year is measured on, so they are rougher than the lines in Now and Year.</span>
+            )}
+            {picture?.span === 'year' && (
               <span className="plan-sky-key-line">Year counts every night. One night a week is measured and the nights between are worked out from the measured nights. The solid line is within about 2° of a line measured on every night.</span>
             )}
           </div>

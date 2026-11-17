@@ -3,6 +3,11 @@ import { projectedPath, projectedPoint, type LonLat, type PathScale, type SkyVie
 import type { DirectorVisibleSky } from '../../api/directorTypes';
 import { formatNightDate } from '../nights/nightsModel';
 import { formatNight } from './skyModel';
+import type { SeasonSky } from './skySeason';
+
+/** A picture of the sky in view: the server's, or one time of year made
+ *  here from the server's year. */
+export type SkyPicture = DirectorVisibleSky | SeasonSky;
 
 const DAY_MS = 86_400_000;
 
@@ -23,7 +28,7 @@ export function formatMinutes(minutes: number): string {
 }
 
 /** Which horizon the lines were drawn against, and where it was set. */
-export function horizonText(view: DirectorVisibleSky): string {
+export function horizonText(view: SkyPicture): string {
   const minimum = `${Number(view.limits.minimum_altitude_degrees.toFixed(1))}°`;
   if (view.horizon === 'flat') return `flat horizon at ${minimum}`;
   const from = view.horizon_from === 'site' ? "the site's" : "the rig's";
@@ -37,18 +42,19 @@ export function horizonText(view: DirectorVisibleSky): string {
  * way at the rig's site, or from the next once its dark has ended, which
  * either way is the night a person there calls tonight.
  */
-export function nightsText(view: DirectorVisibleSky, fromTonight: boolean): string {
+export function nightsText(view: SkyPicture, fromTonight: boolean): string {
   const first = view.nights[0]?.date;
   const last = view.nights[view.nights.length - 1]?.date;
   if (!first || !last) return '';
   const from = fromTonight ? 'from tonight, ' : '';
+  if (view.span === 'season') return `${view.nights.length} nights from ${fromTonight ? 'tonight, ' : ''}${formatNight(first)}${fromTonight ? ',' : ''} to ${formatNight(last)}, one a week measured`;
   if (view.span === 'year') return `${view.nights_counted} nights ${from}${formatNight(first)}${fromTonight ? ',' : ''} to ${formatNight(last)}, one a week measured`;
   if (view.nights.length === 1) return fromTonight ? `tonight, ${formatNightDate(first)}` : formatNightDate(first);
   return `${view.nights.length} nights ${from}${formatNightDate(first)}${fromTonight ? ',' : ''} to ${formatNightDate(last)}`;
 }
 
 /** The legend: the rig, the minimum time, the nights and the horizon. */
-export function visibleSkyLegend(view: DirectorVisibleSky, rigName: string, fromTonight = true): string {
+export function visibleSkyLegend(view: SkyPicture, rigName: string, fromTonight = true): string {
   return [`${rigName}: in view ${formatMinutes(view.minimum_minutes)} or more`, nightsText(view, fromTonight), horizonText(view)].filter(Boolean).join(' · ');
 }
 
@@ -64,14 +70,14 @@ function regionText(region: DirectorVisibleSky['every_night']): string {
 
 /** What the lines enclose, for the legend and for readers who cannot see
  *  the map. */
-export function visibleSkyShares(view: DirectorVisibleSky): string {
+export function visibleSkyShares(view: SkyPicture): string {
   if (!view.any_night) return `In view: ${regionText(view.every_night)}.`;
   return `In view every night: ${regionText(view.every_night)}. On at least one night: ${regionText(view.any_night)}.`;
 }
 
 /** The map in words: what it shows, for whom, and the numbers. */
-export function visibleSkySummary(view: DirectorVisibleSky, rigName: string): string {
-  return `Map of the sky ${visibleSkyLegend(view, rigName)}. ${visibleSkyShares(view)} Sky out of view is covered.`;
+export function visibleSkySummary(view: SkyPicture, rigName: string, fromTonight = true): string {
+  return `Map of the sky ${visibleSkyLegend(view, rigName, fromTonight)}. ${visibleSkyShares(view)} Sky out of view is covered.`;
 }
 
 /** Where a place stands, from the nights it is in view out of those counted. */
@@ -80,9 +86,12 @@ export function standing(nights: number, counted: number): 'every' | 'some' | 'n
 }
 
 /** A note when some of the nights never get dark. */
-export function darknessNote(view: DirectorVisibleSky): string | null {
-  const light = view.nights.filter((night) => night.dusk_ms === null).length;
+export function darknessNote(view: SkyPicture): string | null {
+  // One time of year knows it only for its measured nights.
+  const known = view.span === 'season' ? view.measured_nights : view.nights;
+  const light = known.filter((night) => night.dusk_ms === null).length;
   if (light === 0) return null;
+  if (view.span === 'season') return `It does not get dark on ${light} of the ${known.length} nights measured.`;
   if (view.nights.length === 1) return 'It does not get dark on this night.';
   if (view.span === 'year') return `It does not get dark on ${light} of the ${view.nights.length} nights measured.`;
   return light === view.nights.length ? 'It does not get dark on these nights.' : `It does not get dark on ${light} of these nights.`;
@@ -159,7 +168,7 @@ export interface VisibleSkyLines {
   any: LonLat[][] | null;
 }
 
-export function visibleSkyLines(view: DirectorVisibleSky): VisibleSkyLines {
+export function visibleSkyLines(view: SkyPicture): VisibleSkyLines {
   return { every: view.every_night.lines, any: view.any_night ? view.any_night.lines : null };
 }
 

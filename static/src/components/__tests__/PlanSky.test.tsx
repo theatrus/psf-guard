@@ -4,7 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DirectorVisiblePlacesRequest, DirectorVisibleSky, DirectorVisibleSkyRequest } from '../../api/directorTypes';
 import { SKY_INPUTS_MUTATION } from '../director/skyInputs';
 import { formatNightDate } from '../nights/nightsModel';
-import PlanSky, { MINIMUM_SETTLE_MS } from '../director/PlanSky';
+import { formatNight } from '../sky/skyModel';
+import PlanSky, { MINIMUM_SETTLE_MS, SEASON_SETTLE_MS } from '../director/PlanSky';
 
 // The map is a heavy thing to draw; a busy machine needs more than a second.
 configure({ asyncUtilTimeout: 5000 });
@@ -39,6 +40,20 @@ const counts = (nights: number) => {
   }
   return btoa(text);
 };
+/** A year's measured nights as the server packs them: north of +40° in
+ *  view on all 53, down to −30° on the first ten only, never south of that. */
+const measuredYear = () => {
+  const bytes = new Uint8Array(53 * 2048);
+  for (let night = 0; night < 53; night += 1) {
+    for (let index = 0; index < 180 * 91; index += 1) {
+      const dec = -90 + Math.floor(index / 180) * 2;
+      if (dec >= 40 || (dec >= -30 && night < 10)) bytes[night * 2048 + (index >> 3)] |= 1 << (index & 7);
+    }
+  }
+  let text = '';
+  for (let i = 0; i < bytes.length; i += 4096) text += String.fromCharCode(...bytes.subarray(i, i + 4096));
+  return { in_view: btoa(text), bytes_a_night: 2048, turn_degrees_a_night: 1 };
+};
 const ring = (dec: number) => Array.from({ length: 181 }, (_, i) => [(i * 2) % 360, dec] as [number, number]);
 const nightList = (count: number, every: number) =>
   Array.from({ length: count }, (_, i) => ({ date: new Date(Date.parse('2026-09-24T00:00:00Z') + i * every * 86_400_000).toISOString().slice(0, 10), dusk_ms: Date.now() + 1, dawn_ms: Date.now() + 2 }));
@@ -56,6 +71,7 @@ const view = (request: DirectorVisibleSkyRequest, over: Partial<DirectorVisibleS
     grid: { degrees: 2, columns: 180, rows: 91 }, counts: counts(year ? 365 : 31),
     every_night: { lines: [ring(40)], sky_fraction: 0.18, declinations: [39.6, 90] },
     any_night: { lines: [ring(-30)], sky_fraction: 0.75, declinations: [-30.4, 90] },
+    ...(year ? { measured: measuredYear() } : {}),
     ...over,
   };
 };
@@ -309,5 +325,95 @@ describe("the plan's Sky tab", () => {
     fireEvent.change(screen.getByLabelText('Rig'), { target: { value: 'rig-2' } });
     await waitFor(() => expect(legend()).toBe('The sky in view could not be worked out. '));
     expect(screen.queryByRole('button', { name: 'Open Rig setup' })).toBeNull();
+  });
+
+  it('shows a month of the year at a time under a slider, from the year already fetched', async () => {
+    // A target on the equator: in view while the southern band is.
+    const { container } = show({ target: { name: 'Equator', center: { ra_degrees: 38.2, dec_degrees: 0 } } });
+    await waitFor(() => expect(legend()).toContain('31 nights'));
+    fireEvent.click(screen.getByRole('radio', { name: 'Season' }));
+    const slider = (await screen.findByRole('slider', { name: 'Time of year' })) as HTMLInputElement;
+    // Season asks for the year, once.
+    await waitFor(() => expect(slider.disabled).toBe(false));
+    expect(asked.calls).toEqual([{ rig: 'rig-1', span: 'now' }, { rig: 'rig-1', span: 'year' }]);
+    // 49 places a week apart: arrow keys step one, Home and End reach the ends.
+    expect([slider.min, slider.max, slider.step, slider.value]).toEqual(['0', '48', '1', '0']);
+    expect(slider.getAttribute('aria-valuetext')).toBe(`31 nights from ${formatNight('2026-09-24')}`);
+    expect(container.querySelector('.plan-sky-season-nights')?.textContent).toBe(`31 nights from ${formatNight('2026-09-24')}`);
+    // The first place is the month Now shows, from the weekly nights.
+    expect(legend()).toContain(`C925: in view 30 min or more · 31 nights from tonight, ${formatNight('2026-09-24')}, to ${formatNight('2026-10-24')}, one a week measured ·`);
+    expect(legend()).toContain('In view every night: 76% of the sky, declination −31° to +90°. On at least one night: 76% of the sky, declination −31° to +90°.');
+    expect(container.querySelector('.sky-visible-shade')?.getAttribute('data-nights')).toBe('31');
+    expect(container.querySelector('.sky-visible-line.sky-visible-every')?.getAttribute('d')).toMatch(/^M/);
+    expect(screen.getByTestId('plan-sky-target').textContent).toContain('In view on 31 of the 31 nights counted. Inside the every-night line.');
+    expect(screen.getByLabelText('How to read the map').textContent).toContain('Season shows 31 nights of the year at a time.');
+    // The months run along the slider.
+    expect(container.querySelectorAll('.plan-sky-season-months span').length).toBeGreaterThanOrEqual(10);
+
+    // Seven weeks on, the southern band is in view on the first 15 nights only.
+    const map = screen.getByRole('img', { name: /^Map of the sky/ });
+    const before = container.querySelector('.sky-visible-line.sky-visible-every')?.getAttribute('d');
+    fireEvent.change(slider, { target: { value: '7' } });
+    expect(slider.getAttribute('aria-valuetext')).toBe(`31 nights from ${formatNight('2026-11-12')}`);
+    expect(legend()).toContain(`31 nights from ${formatNight('2026-11-12')} to ${formatNight('2026-12-12')}, one a week measured`);
+    expect(legend()).not.toContain('from tonight');
+    expect(legend()).toContain('In view every night: 19% of the sky, declination +39° to +90°. On at least one night: 76% of the sky, declination −31° to +90°.');
+    expect(map.getAttribute('aria-label')).toContain(`31 nights from ${formatNight('2026-11-12')}`);
+    expect(container.querySelector('.sky-visible-line.sky-visible-every')?.getAttribute('d')).not.toBe(before);
+    expect(screen.getByTestId('plan-sky-target').textContent).toContain('In view on 15 of the 31 nights counted. Between the lines: in view on some nights.');
+    // Page Up and Page Down move about a month.
+    fireEvent.keyDown(slider, { key: 'PageUp' });
+    expect(slider.value).toBe('11');
+    expect(screen.getByTestId('plan-sky-target').textContent).toContain('In view on 0 of the 31 nights counted. Outside both lines: never in view for long enough.');
+    fireEvent.keyDown(slider, { key: 'PageDown' });
+    fireEvent.keyDown(slider, { key: 'PageDown' });
+    expect(slider.value).toBe('3');
+    fireEvent.keyDown(slider, { key: 'PageDown' });
+    expect(slider.value).toBe('0');
+    // The last place ends with the year.
+    fireEvent.change(slider, { target: { value: '48' } });
+    expect(legend()).toContain(`31 nights from ${formatNight('2027-08-24')} to ${formatNight('2027-09-23')}, one a week measured`);
+
+    // None of it asked the server for anything, about the picture or a place.
+    expect(asked.calls).toHaveLength(2);
+    expect(asked.places.every((request) => request.span === 'now')).toBe(true);
+    // Year and Season are one answer: going between them asks for nothing.
+    fireEvent.click(screen.getByRole('radio', { name: 'Year' }));
+    await waitFor(() => expect(legend()).toContain('365 nights'));
+    expect(screen.queryByRole('slider')).toBeNull();
+    fireEvent.click(screen.getByRole('radio', { name: 'Season' }));
+    expect((screen.getByRole('slider', { name: 'Time of year' }) as HTMLInputElement).value).toBe('48');
+    expect(asked.calls).toHaveLength(2);
+    // Another rig is another year: the slider starts again.
+    fireEvent.change(screen.getByLabelText('Rig'), { target: { value: 'rig-2' } });
+    await waitFor(() => expect(legend()).toContain('RC51: in view'));
+    expect((screen.getByRole('slider', { name: 'Time of year' }) as HTMLInputElement).value).toBe('0');
+    expect(asked.calls.at(-1)).toEqual({ rig: 'rig-2', span: 'year' });
+  });
+
+  it('draws the cover small while the slider moves and whole once it rests', async () => {
+    const { container } = show();
+    await waitFor(() => expect(legend()).toContain('31 nights'));
+    fireEvent.click(screen.getByRole('radio', { name: 'Season' }));
+    const slider = (await screen.findByRole('slider', { name: 'Time of year' })) as HTMLInputElement;
+    await waitFor(() => expect(slider.disabled).toBe(false));
+    // A canvas that records the size of each picture painted.
+    const sizes: number[] = [];
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(function (this: HTMLCanvasElement) {
+      sizes.push(this.width);
+      return null;
+    });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'requestAnimationFrame', 'cancelAnimationFrame'] });
+    try {
+      fireEvent.change(slider, { target: { value: '5' } });
+      act(() => { vi.advanceTimersByTime(20); });
+      expect(sizes.at(-1)).toBe(160);
+      act(() => { vi.advanceTimersByTime(SEASON_SETTLE_MS + 5); });
+      act(() => { vi.advanceTimersByTime(40); });
+      expect(sizes.at(-1)).toBe(400);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(container.querySelector('.sky-visible-shade')?.getAttribute('data-nights')).toBe('31');
   });
 });

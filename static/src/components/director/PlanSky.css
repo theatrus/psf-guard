@@ -57,6 +57,53 @@
   min-width: 0;
 }
 
+/* Season's slider: its nights in words, the slider, and the months along
+   it. */
+.plan-sky-season {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 12px;
+  align-items: baseline;
+  margin-top: 8px;
+  font-size: 0.85em;
+  color: var(--color-text-secondary);
+}
+
+.plan-sky-season-nights {
+  color: var(--color-text-primary);
+}
+
+.plan-sky-season input {
+  grid-column: 1 / -1;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  /* Tall enough for a finger. */
+  height: 28px;
+}
+
+.plan-sky-season-months {
+  grid-column: 1 / -1;
+  position: relative;
+  height: 1.3em;
+  /* The months sit under the slider's thumb at its ends. */
+  margin: 0 8px;
+  font-size: 0.9em;
+}
+
+.plan-sky-season-months span {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+
+@media (max-width: 520px) {
+  .plan-sky-season-months span:nth-child(even) {
+    display: none;
+  }
+}
+
 .plan-sky-key {
   display: flex;
   flex-wrap: wrap;

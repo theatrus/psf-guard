@@ -44,7 +44,7 @@ async function sidewaysScroll(page: Page): Promise<string[]> {
   });
 }
 
-test("a plan's Sky tab shades the sky its rig can shoot, for the month and the year, and sends a picked place to Framing", async ({ page, request }, testInfo) => {
+test("a plan's Sky tab covers the sky its rig cannot shoot, for the month, the year and a season, and sends a picked place to Framing", async ({ page, request }, testInfo) => {
   test.setTimeout(240_000);
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
@@ -118,8 +118,60 @@ test("a plan's Sky tab shades the sky its rig can shoot, for the month and the y
     await expect(every).toHaveAttribute('d', /^M[\d.,-]+L/);
     await expect(shade.locator('image')).toHaveAttribute('href', /^data:image\/png;base64,/);
     await tab.getByRole('radio', { name: 'Flat' }).click();
+
+    // Season: a month of the year at a time under a slider, made from the
+    // year already fetched.
+    await tab.getByRole('radio', { name: 'Season' }).click();
+    const slider = tab.getByRole('slider', { name: 'Time of year' });
+    await expect(slider).toHaveValue('0');
+    await expect(slider).toHaveAttribute('aria-valuetext', /^31 nights from \S/);
+    await expect(legend).toContainText('31 nights from tonight, ');
+    await expect(legend).toContainText(', one a week measured');
+    await expect(shade).toHaveAttribute('data-nights', '31');
+    await expect(tab.getByTestId('plan-sky-target')).toContainText('In view on 31 of the 31 nights counted. Inside the every-night line.');
+    await expect(tab.getByLabel('How to read the map')).toContainText('Season shows 31 nights of the year at a time.');
+    const firstLegend = (await legend.textContent()) ?? '';
+    const firstValue = (await slider.getAttribute('aria-valuetext')) ?? '';
+    const firstCover = await shade.locator('image').getAttribute('href');
+    const firstLine = await every.getAttribute('d');
+    const beforeSliding = posts.length;
+    // Half a year on, a week a key press: other sky is covered.
+    await slider.focus();
+    for (let week = 0; week < 26; week += 1) await slider.press('ArrowRight');
+    await expect(slider).toHaveValue('26');
+    await expect(slider).not.toHaveAttribute('aria-valuetext', firstValue);
+    await expect(legend).not.toHaveText(firstLegend);
+    await expect(legend).not.toContainText('from tonight');
+    await expect(legend).toContainText(/31 nights from \S.* to .*, one a week measured/);
+    await expect.poll(async () => shade.locator('image').getAttribute('href')).not.toBe(firstCover);
+    await expect(every).not.toHaveAttribute('d', firstLine ?? '');
+    // The target near the pole is in view at every time of year.
+    await expect(tab.getByTestId('plan-sky-target')).toContainText('In view on 31 of the 31 nights counted. Inside the every-night line.');
+    await page.screenshot({ path: testInfo.outputPath('plan-sky-season.png') });
+    // Home and End reach the ends, and a page is four weeks.
+    await slider.press('End');
+    await expect(slider).toHaveValue('48');
+    await slider.press('Home');
+    await expect(slider).toHaveValue('0');
+    await expect(legend).toHaveText(firstLegend);
+    await slider.press('PageUp');
+    await expect(slider).toHaveValue('4');
+    // The slider fits a phone, and none of this asked the server for anything.
+    for (const [width, height] of [[390, 844], [320, 700]] as const) {
+      await page.setViewportSize({ width, height });
+      await page.waitForTimeout(300);
+      expect(await sidewaysScroll(page), `Season at ${width}px`).toEqual([]);
+      await expect(slider).toBeVisible();
+    }
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    expect(posts.length).toBe(beforeSliding);
+    await tab.getByRole('radio', { name: 'Year' }).click();
+    await expect(legend).toContainText('365 nights from tonight, ');
+    expect(pictures()).toHaveLength(2);
+
     await tab.getByRole('radio', { name: 'Now' }).click();
     await expect(legend).toContainText('31 nights');
+    await expect(legend).not.toContainText('one a week measured');
     expect(pictures()).toHaveLength(2);
 
     // A longer minimum, typed a key at a time, is asked for once.
