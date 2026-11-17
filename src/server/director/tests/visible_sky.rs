@@ -169,6 +169,7 @@ async fn requests_for_the_same_nights_measure_them_once_and_a_dropped_one_measur
         30,
         Span::Now,
         Wanted::Picture { measured: false },
+        crate::concurrency::Priority::Viewed,
         &gone
     )
     .is_err());
@@ -202,6 +203,7 @@ async fn requests_for_the_same_nights_measure_them_once_and_a_dropped_one_measur
         30,
         Span::Now,
         Wanted::Picture { measured: false },
+        crate::concurrency::Priority::Interactive,
         &Stop::new()
     )
     .is_ok());
@@ -211,6 +213,56 @@ async fn requests_for_the_same_nights_measure_them_once_and_a_dropped_one_measur
         state.leased_workers(crate::concurrency::Priority::Interactive),
         0
     );
+    assert_eq!(
+        state.leased_workers(crate::concurrency::Priority::Viewed),
+        0
+    );
+    // A request with no priority is a page's own: the three requests the
+    // route took held no interactive guard. The one a person asked for,
+    // just now, did.
+    assert_eq!(service.visible_sky.guards(), 1);
+    let by_hand = json!({"rig": rig, "first_night": "2026-09-24", "nights": 2, "minimum_minutes": 45, "priority": "interactive"});
+    let (status, body) = call(&app, "POST", PATH, by_hand, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(service.visible_sky.guards(), 2);
+    // Nor does a count for a place, unless a person asked for it.
+    let place = json!({"rig": rig, "first_night": "2026-09-24", "nights": 2, "places": [{"ra_degrees": 10.0, "dec_degrees": 80.0}]});
+    let (status, body) = call(&app, "POST", "/sky/visible-places", place, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(service.visible_sky.guards(), 2);
+    assert_eq!(state.interactive_job_name(), None);
+    // Only the two priorities are taken.
+    let other = json!({"rig": rig, "priority": "background"});
+    let (status, _) = call(&app, "POST", PATH, other, None).await;
+    assert!(status.is_client_error(), "{status}");
+}
+
+/// A page's own request waits while a person's work runs, and takes its
+/// turn once that ends.
+#[tokio::test]
+async fn a_request_a_page_made_waits_for_a_persons_work() {
+    let (_dir, state, app, _instance, _catalog, rig) = fixture().await;
+    rig_profile(&state, rig, true).await;
+    let service = state.director.clone().unwrap();
+    let busy = state.begin_named_interactive_job("a stack someone started");
+    let body = json!({"rig": rig, "first_night": "2026-09-24"});
+    let waiting = tokio::spawn({
+        let (app, body) = (app.clone(), body.clone());
+        async move { call(&app, "POST", PATH, body, None).await }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    // Nothing is measured while the person's work runs.
+    assert!(!waiting.is_finished());
+    assert_eq!(service.visible_sky.computed().0, 0);
+    // A person's own request for the sky does not wait behind it.
+    let by_hand = json!({"rig": rig, "first_night": "2026-09-25", "priority": "interactive"});
+    let (status, _) = call(&app, "POST", PATH, by_hand, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!waiting.is_finished());
+    drop(busy);
+    let (status, answer) = waiting.await.unwrap();
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(service.visible_sky.guards(), 1);
 }
 
 #[tokio::test]

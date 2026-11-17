@@ -28,10 +28,17 @@
 //! nights, not 31; filling in the nights between adds a few hundredths
 //! of a second. Nothing in it grows with the catalog or the plans.
 //!
-//! It still follows the rules for heavy work. It measures in a pool of
-//! workers leased from the interactive budget, so it shares the cores with
-//! a stack someone started, and it holds the interactive guard, so
-//! background work steps aside. Requests for one span measure one at a
+//! It still follows the rules for heavy work, and takes the priority of
+//! who began it ([`Asked::priority`]). Framing draws the picture as soon
+//! as a plan opens, with no click: that request, and every count for a
+//! place, is `Viewed`. It first waits for a person's work to end, takes
+//! no interactive guard, so nothing waits for it, and leases its workers
+//! from the background share. A picture a person asks for in the group,
+//! by another minimum time or by Year or Season, says so and is
+//! `Interactive`: it leases from the interactive budget, sharing the cores
+//! with a stack someone started, and holds the interactive guard, so
+//! background work steps aside. A client can ask for no more than that,
+//! which is what any click gets. Requests for one span measure one at a
 //! time ([`Kept::turn`]): a second request for the same nights waits and
 //! then finds the grids kept, and the requests left behind by someone
 //! still typing cannot pile up on the cores. The month and the year each
@@ -124,6 +131,31 @@ pub(super) struct Request {
     /// client that shows the year a month at a time.
     #[serde(default)]
     measured: bool,
+    /// Who began the request. Without it, a page did.
+    #[serde(default)]
+    priority: AskedBy,
+}
+
+/// Who began a request: a page drawing what it shows, or a person asking
+/// for it. These are the two priorities a request may run at; a client
+/// that claims a person asked gets what a person's click gets and no more.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum AskedBy {
+    /// Automatic work a page shows: [`Priority::Viewed`].
+    #[default]
+    Viewed,
+    /// A person asked: [`Priority::Interactive`].
+    Interactive,
+}
+
+impl AskedBy {
+    fn priority(self) -> Priority {
+        match self {
+            Self::Viewed => Priority::Viewed,
+            Self::Interactive => Priority::Interactive,
+        }
+    }
 }
 
 /// One night of the range, as Nights dates and times it.
@@ -270,6 +302,9 @@ pub(super) struct Kept {
     /// Held while a request for the month measures, and for the year.
     month_turn: Mutex<()>,
     year_turn: Mutex<()>,
+    /// How many requests took the interactive guard.
+    #[cfg(test)]
+    guards: std::sync::atomic::AtomicUsize,
 }
 
 /// The year's nights, kept apart so that 53 of them for a rig never push
@@ -287,6 +322,12 @@ impl Kept {
             Span::Now => &self.month_turn,
             Span::Year => &self.year_turn,
         }
+    }
+
+    /// How many requests took the interactive guard.
+    #[cfg(test)]
+    pub(super) fn guards(&self) -> usize {
+        self.guards.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// How many grids were computed for the month, and for the year.
@@ -661,8 +702,15 @@ fn skies_for(
     Ok(found.into_iter().flatten().collect())
 }
 
+/// How long a request a page made on its own sleeps between looks at
+/// whether a person's work has ended.
+const VIEWED_NAP: std::time::Duration = std::time::Duration::from_millis(100);
+
 /// The answer for `inputs` over `nights`, measured in this request's turn
 /// in a pool of leased workers. `stop` is asked once the caller has gone.
+/// `priority` is `Viewed` for a request a page made on its own, which
+/// waits for a person's work and takes no guard, and `Interactive` for one
+/// a person asked for.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn compute(
     state: &AppState,
@@ -672,6 +720,7 @@ pub(super) fn compute(
     minimum_minutes: u32,
     span: Span,
     wanted: Wanted,
+    priority: Priority,
     stop: &Stop,
 ) -> Result<Answer, FeasibilityError> {
     let failed = |failure: Failure| match failure {
@@ -685,6 +734,23 @@ pub(super) fn compute(
         }
         Failure::Refused(why) => FeasibilityError::Rejected(why),
     };
+    // Automatic work waits for a person's work before it takes its turn,
+    // so that it never holds the turn against a person's own request for
+    // the sky while it waits.
+    if priority != Priority::Interactive {
+        let running = state.wait_for_interactive_work_unless(
+            VIEWED_NAP,
+            || stop.requested(),
+            |waiting_for| {
+                if let Some(work) = waiting_for {
+                    tracing::debug!(work, "the visible sky waits for a person's work");
+                }
+            },
+        );
+        if !running {
+            return Err(failed(Failure::Stopped));
+        }
+    }
     let _turn = service
         .visible_sky
         .turn(span)
@@ -694,14 +760,26 @@ pub(super) fn compute(
     if stop.requested() {
         return Err(failed(Failure::Stopped));
     }
-    let _interactive = state.begin_named_interactive_job("the visible sky");
-    let budget = plan_workers(None, &state.worker_policy(), Priority::Interactive, None);
-    let lease = state.lease_workers(Priority::Interactive, budget.workers);
+    let _interactive = (priority == Priority::Interactive).then(|| {
+        #[cfg(test)]
+        service
+            .visible_sky
+            .guards
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        state.begin_named_interactive_job("the visible sky")
+    });
+    let budget = plan_workers(None, &state.worker_policy(), priority, None);
+    let lease = state.lease_workers(priority, budget.workers);
     let pool = ComputePool::take("visible-sky", lease.workers).map_err(|error| {
         tracing::error!(%error, "no pool for the visible sky");
         FeasibilityError::Api(Error::Internal)
     })?;
-    tracing::debug!(workers = lease.workers, ?span, "measuring the visible sky");
+    tracing::debug!(
+        workers = lease.workers,
+        ?span,
+        ?priority,
+        "measuring the visible sky"
+    );
     // The skies, the grids and the crossings all run inside the pool.
     pool.install(|| measure(service, inputs, nights, minimum_minutes, span, wanted, stop))
         .map_err(failed)
@@ -1062,6 +1140,7 @@ struct Asked {
     first_night: Option<String>,
     nights: Option<u32>,
     span: Option<Span>,
+    priority: Priority,
 }
 
 /// Read the rig, settle the nights and the minimum, and measure off the
@@ -1123,6 +1202,7 @@ async fn answer(
     // request is dropped.
     let stop = Stop::new();
     let gone = StopWhenDropped(stop.clone());
+    let priority = asked.priority;
     let answer = blocking(move || {
         compute(
             &state,
@@ -1132,6 +1212,7 @@ async fn answer(
             minimum_minutes,
             span,
             wanted,
+            priority,
             &stop,
         )
     })
@@ -1150,6 +1231,7 @@ pub(super) async fn evaluate(
         first_night: request.first_night,
         nights: request.nights,
         span: request.span,
+        priority: request.priority.priority(),
     };
     if request.measured && request.span != Some(Span::Year) {
         return Err(FeasibilityError::Rejected(
@@ -1182,6 +1264,9 @@ pub(super) struct PlacesRequest {
     nights: Option<u32>,
     #[serde(default)]
     span: Option<Span>,
+    /// Who began the request. Without it, a page did.
+    #[serde(default)]
+    priority: AskedBy,
     /// ICRS degrees.
     places: Vec<IcrsPosition>,
 }
@@ -1210,6 +1295,7 @@ pub(super) async fn places(
         first_night: request.first_night,
         nights: request.nights,
         span: request.span,
+        priority: request.priority.priority(),
     };
     match answer(state, asked, Wanted::Places(request.places)).await? {
         Answer::Places(view) => Ok(Json(ApiResponse::success(view))),
