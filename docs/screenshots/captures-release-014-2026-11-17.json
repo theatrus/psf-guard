@@ -1,0 +1,128 @@
+{
+  "source": "https://psf-guard.atpn.co/",
+  "server_version": "0.13.0",
+  "deployed_commit": "unknown",
+  "browser": "Chrome (installed macOS browser; version not exposed)",
+  "viewport_css": {
+    "width": 1931,
+    "height": 1375
+  },
+  "zoom": 0.9,
+  "theme": "dark",
+  "capture_method": "Chrome tab.screenshot JPEG clips; clip coordinates account for 90% browser zoom; no image edits",
+  "notes": "Captures show deployed development UI, not a verified 0.14 binary. Copy changes in this preparation are not deployed. No settings, plans, grades or credentials were saved; no processing jobs, downloads or acquisitions were started. Four background jobs appeared during the session. Site coordinates and credentials are outside all crops. Framing returned to Now with its footprint fitted.",
+  "captures": [
+    {
+      "file": "rigs-live-014.jpg",
+      "url": "https://psf-guard.atpn.co/#/rigs",
+      "captured_at": "2026-11-17T18:09:35.295Z",
+      "state": "Five rigs; all offline or never seen. Sync contacts and one stale stopped sequence; forecast unknown or stale.",
+      "reshoot": "Open Rigs > Live and wait for all five rows. Crop the table and provider attribution.",
+      "sha256": "db658c770053dee038855581cfa16db0d16f0e3b8c6e1ddba5df098b18238374",
+      "width": 1439,
+      "height": 389,
+      "clip_api": {
+        "x": 225,
+        "y": 172,
+        "width": 1295,
+        "height": 350
+      }
+    },
+    {
+      "file": "offline-sky-maps-014.jpg",
+      "url": "https://psf-guard.atpn.co/#/rigs",
+      "captured_at": "2026-11-17T18:09:50.749Z",
+      "state": "DSS and both NSNS sets installed in the old cache folder; Move offered. No download, move, removal or save performed.",
+      "reshoot": "Open Settings > Storage & backups > Offline sky maps. Capture the three sets and folder controls.",
+      "sha256": "522e364a6051e58913fd41dfe520f466f82748fecaa32c7c44a1c585a6db61c9",
+      "width": 1056,
+      "height": 789,
+      "clip_api": {
+        "x": 350,
+        "y": 65,
+        "width": 950,
+        "height": 710
+      }
+    },
+    {
+      "file": "processing-tools-014.jpg",
+      "url": "https://psf-guard.atpn.co/#/rigs",
+      "captured_at": "2026-11-17T18:11:08.934Z",
+      "state": "RC-Astro 2.6.10 ready on Mac desktop; Seiza model and ONNX Runtime not installed. No downloads or online license checks requested.",
+      "reshoot": "Settings > Processing > Stacking; scroll to Processing tools at the bottom.",
+      "sha256": "fb4699abb20a088a184d5624e10e35c87a6fd9615e0df1175e1d7753654db326",
+      "width": 1056,
+      "height": 783,
+      "clip_api": {
+        "x": 350,
+        "y": 520,
+        "width": 950,
+        "height": 705
+      }
+    },
+    {
+      "file": "rig-plugins-sync-014.jpg",
+      "url": "https://psf-guard.atpn.co/#/rigs",
+      "captured_at": "2026-11-17T18:10:35.303Z",
+      "state": "starfront-redcat61: Sync on, paired 0.4.0.22; image uploads off; Director unpaired. No credentials generated or settings changed.",
+      "reshoot": "Settings > starfront-redcat61 > Rig setup > Plugins; capture the overview, Sync and Image uploads cards.",
+      "sha256": "f7e8ebd1dbfb277dbb13c7a359c67c2a319c2d560eac56b6b9db0a1a13e5e1a4",
+      "width": 989,
+      "height": 933,
+      "clip_api": {
+        "x": 380,
+        "y": 340,
+        "width": 890,
+        "height": 840
+      }
+    },
+    {
+      "file": "rig-director-beta-014.jpg",
+      "url": "https://psf-guard.atpn.co/#/rigs",
+      "captured_at": "2026-11-17T18:10:41.602Z",
+      "state": "Director early beta: unpaired, equipment not reported, work not allowed, no open work.",
+      "reshoot": "On the same Plugins tab, scroll to the PSF Guard Director card. Do not generate a code or allow work.",
+      "sha256": "e253607b9b8c1a867bc25d69539f10e2f3da90e4cd1c70fe5a457604b6b91004",
+      "width": 778,
+      "height": 511,
+      "clip_api": {
+        "x": 565,
+        "y": 688,
+        "width": 700,
+        "height": 460
+      }
+    },
+    {
+      "file": "server-pairing-014.jpg",
+      "url": "https://psf-guard.atpn.co/#/rigs",
+      "captured_at": "2026-11-17T18:11:02.134Z",
+      "state": "No peer paired and no remote API key; server sync switch on. No pairing code or credential generated.",
+      "reshoot": "Settings > starfront-redcat61 > Sync; scroll to Other PSF Guard servers.",
+      "sha256": "b077a77eeaa23d10c09e82b99d3983b087cbcf752150be6e6d1a7ee1ccbf3d40",
+      "width": 1056,
+      "height": 483,
+      "clip_api": {
+        "x": 350,
+        "y": 790,
+        "width": 950,
+        "height": 435
+      }
+    },
+    {
+      "file": "framing-season-014.jpg",
+      "url": "https://psf-guard.atpn.co/#/plan?db=db-a01c581c&project=21&plan=051751d1-6b05-444e-9485-afbc6177dd5b",
+      "captured_at": "2026-11-17T18:03:31.064Z",
+      "state": "Heart Mosaic, askar107phq; NSNS SHO offline; Season, 30 minutes, Nov 17\u2013Dec 17 2026; target visible all 31 nights. Stage 132.82 degrees across; four locked panels; no framing saved.",
+      "reshoot": "Open Heart Mosaic > Framing. Expand Sky in view, select Season, keep 30 minutes, zoom out twice from 110-degree input, and scroll the right panel to the sky controls.",
+      "sha256": "1eeef5752e98add06c084b9b292b92ce669c1b1a82132ffc68c16721c4bc1d24",
+      "width": 1956,
+      "height": 1067,
+      "clip_api": {
+        "x": 85,
+        "y": 210,
+        "width": 1760,
+        "height": 960
+      }
+    }
+  ]
+}

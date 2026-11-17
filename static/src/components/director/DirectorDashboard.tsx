@@ -8,7 +8,6 @@ import type { RigNights } from '../../api/nightPlanTypes';
 import { describeNow, errorsOf, formatAge } from './dashboardModel';
 import { describeRecent, describeSequence, describeSyncAction } from './syncLiveModel';
 import { retryWhenBusy } from './retry';
-import EarlyBeta from './EarlyBeta';
 import { RigWeatherSummary } from './RigWeather';
 import { PROVIDER_URL } from './forecastLabels';
 import { useDirectorClock } from '../../hooks/useDirectorClock';
@@ -57,7 +56,7 @@ export default function DirectorDashboard() {
   ]).entries()];
   return <section className="director-records director-dashboard" aria-label="Live rigs">
     <div className="director-toolbar">
-      <div className="early-beta-heading"><h2>Live</h2><EarlyBeta /></div>
+      <h2>Live</h2>
       <button type="button" title="Refresh live status" aria-label="Refresh live status" disabled={statuses.isFetching} onClick={() => void statuses.refetch()}><RefreshCw size={16} /></button>
     </div>
     {statuses.isPending && <p role="status">Loading live status...</p>}

@@ -1,5 +1,66 @@
 [
   {
+    "version": "0.14.0",
+    "deprecations": [
+      {
+        "title": "Direct Target Scheduler access remains deprecated",
+        "body": "Existing direct connections still work. For a new connection, use Settings › Databases & rigs › New / import to import a local TS file or connect PSF Guard Sync. Automatic migration is not part of 0.14."
+      }
+    ],
+    "upgradeNotes": [
+      {
+        "title": "Back up planning data before updating",
+        "body": "The upgraded planning store cannot be opened by older PSF Guard versions. Keep a pre-upgrade backup if you may need to return to 0.13."
+      },
+      {
+        "title": "Update workers and allow rebuilds",
+        "body": "Install 0.14 on stack workers as well as the server. Stacks and calibration masters rebuild when next needed because the stacking output version changed. Saved processing choices remain unchanged."
+      },
+      {
+        "title": "Update N.I.N.A. plugins for new features",
+        "body": "Detailed Sync activity and new-project profile assignment need the matching Sync plugin. Director uploads, flats and recovery need the matching Director plugin. Director remains early beta; Live with Sync does not require Director."
+      },
+      {
+        "title": "Keep database companion files together",
+        "body": "Local-disk catalogs now use a write-ahead log. Keep the -wal and -shm files beside a running catalog. Network-share catalogs keep their previous mode."
+      }
+    ],
+    "highlights": [
+      {
+        "title": "Follow Target Scheduler rigs on Live",
+        "body": "Rigs › Live shows Sync-reported exposures, autofocus, slews and waits, with weather, plugin history and links to active projects. Sync exposures also appear in the header and on Sky. Director controls remain marked early beta."
+      },
+      {
+        "title": "Set up both plugins together",
+        "body": "Rig setup › Plugins separates PSF Guard Sync, Image uploads and PSF Guard Director. See which are on, pair each plugin and choose what the rig accepts. Your existing connections keep working."
+      },
+      {
+        "title": "Find plans that need activation",
+        "body": "Choose Show › Needs activating in the Library and review an activation without leaving it. Plans on a rig with no frames appear under that rig, and Library filters survive navigation."
+      },
+      {
+        "title": "Check seasonal sky visibility",
+        "body": "Planning › Framing › Sky in view shows what the rig can reach for a minimum uninterrupted time. Compare Now, Year and Season using the rig’s horizon and altitude limits."
+      },
+      {
+        "title": "Install offline sky maps",
+        "body": "Choose a whole-sky image set in Settings › Storage & backups › Offline sky maps. Downloads are checked before installation. Maps live outside the cache; older maps can be moved there."
+      },
+      {
+        "title": "Choose a noise-reduction provider",
+        "body": "Use the Seiza noise model or RC-Astro under the shared processing categories. Download the model and ONNX Runtime only when needed. Processing tools and Workers explain RC-Astro license status."
+      },
+      {
+        "title": "Pair servers and merge repeated frames",
+        "body": "Pair PSF Guard servers with a one-time code. Merge imported or renamed copies while retaining Target Scheduler’s records and plan counts. Conflicting grades require review."
+      },
+      {
+        "title": "Load night plans faster and use matching flats",
+        "body": "Nights and Tonight reuse sky calculations. When every external flat master is too old, a night’s own raw flats can supply its master. Flat coverage also supports replacement Director flats with the matching beta plugin."
+      }
+    ]
+  },
+  {
     "version": "0.13.0",
     "deprecations": [
       {

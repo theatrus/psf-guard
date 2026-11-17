@@ -1,5 +1,16 @@
 # README screenshot sources
 
+## 0.14 captures — November 17, 2026
+
+`rigs-live-014.jpg` and `framing-season-014.jpg` are exact copies of the
+documentation-site captures. The [manifest](captures-release-014-2026-11-17.json)
+records their sources, UI state, dimensions, crops and hashes, together with
+the five site-only images. The server reported 0.13.0; the deployed commit is
+unknown. The captures show the development UI, not a verified 0.14 binary.
+No catalog settings, grades, plans or credentials were saved. The Live crop
+excludes the old page-wide beta badge; Director remains early beta.
+
+
 ## 0.13 screenshot handoff
 
 The [documentation-site screenshot plan](https://github.com/theatrus/psf-guard-docs/blob/main/SCREENSHOT-PLAN.md#013-capture-priorities)

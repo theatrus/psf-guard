@@ -8,7 +8,7 @@
 %global rustflags_debuginfo 0
 
 Name:           psf-guard
-Version:        0.13.0
+Version:        0.14.0
 Release:        1%{?dist}
 Summary:        Astronomical image analysis and quality assessment tool for N.I.N.A.
 
@@ -105,6 +105,11 @@ install -Dpm0600 packaging/rpm/systemd/psf-guard-worker.conf \
 %config(noreplace) %attr(0600,root,root) %{_sysconfdir}/%{name}/worker.conf
 
 %changelog
+* Tue Nov 17 2026 Yann Ramin <github@theatr.us> - 0.14.0-1
+- Add Sync live status, rig plugin setup and activation review in the Library
+- Add seasonal sky visibility, offline maps and Seiza noise reduction
+- Improve catalog merging, calibration matching and worker setup
+
 * Sun Nov 01 2026 Yann Ramin <github@theatr.us> - 0.13.0-1
 - Add GPU stacking, integrated mosaics, live previews and remote workers
 - Add color-processing steps, stack inspection tools and grouped Settings

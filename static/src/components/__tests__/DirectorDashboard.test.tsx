@@ -71,10 +71,10 @@ describe('Director live dashboard', () => {
     expect(screen.getAllByRole('link', { name: 'Active projects' })).toHaveLength(2);
   });
 
-  it('marks live status as the Director plugin early beta, and names Target Scheduler as the main way to run a rig', async () => {
+  it('does not label shared Live monitoring as a Director beta', async () => {
     mount([online]);
     expect(await screen.findByRole('heading', { name: 'Live' })).toBeInTheDocument();
-    expect(screen.getByText('Early beta')).toHaveAttribute('title', expect.stringContaining('Target Scheduler with PSF Guard Sync is the main way to run a rig'));
+    expect(screen.queryByText('Early beta')).not.toBeInTheDocument();
   });
 
   it('credits the forecast provider once, at the foot of the page', async () => {

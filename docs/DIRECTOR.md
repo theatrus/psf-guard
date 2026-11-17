@@ -11,9 +11,9 @@ Target Scheduler with PSF Guard Sync is the main way to run a rig today.
 Activation writes ordinary Target Scheduler projects, and Sync carries them to
 N.I.N.A. Pairing a rig with the N.I.N.A. Director plugin is an early beta: a
 paired plugin pulls its program, checks in captures and reports live status.
-The app marks what the plugin drives **Early beta**: the **Live** table, the
-rig's plugin status and its camera modes. Pairing does not allocate work or
-enable acquisition.
+Live monitoring with PSF Guard Sync does not require Director and is not
+labeled beta. The app marks Director plugin controls and camera modes
+**Early beta**. Pairing does not allocate work or enable acquisition.
 
 ## Run a rig with the Director plugin
 
@@ -1626,6 +1626,12 @@ the process that can read that folder.
 
 ### Sky in view
 
+![Seasonal sky visibility over the NSNS survey](screenshots/framing-season-014.jpg)
+
+Heart Mosaic from askar107phq, November 17–December 17, 2026. The target is
+in view on all 31 nights with a 30-minute minimum. The capture predates the
+shorter overlay labels in 0.14; it shows the same visibility controls.
+
 Framing covers the sky its rig cannot shoot, so you can see at once
 whether a target, or the sky around it, is within reach. The overlay is
 on until you switch it off.
@@ -1676,7 +1682,7 @@ another rig there. When that panel can time no rig, because none has a
 location, the overlay uses the plan's first rig and explains what the rig
 lacks.
 
-To change what is counted, open **Nights counted and how to read it** in
+To change what is counted, open **Time range and overlay key** in
 the group:
 
 1. Choose the time frame:
@@ -1704,7 +1710,7 @@ the group:
 
 Under the controls, the group shows the rig, the minimum time, the nights
 counted and the horizon used; the share of the sky and the declinations
-inside each line; and a scale from **No night**, the covered end, to
+inside each line; and a scale from **Never**, the shaded end, to
 **Every night** (in **Year**, to **7 nights or more**).
 
 A place is in view when the Sun is more than 12° below the horizon and the
@@ -2290,7 +2296,8 @@ program that does not bind is a `422` with the reason, never a partial pull.
 
 ## Check-in and live status
 
-Early beta. The **Live** table on the Rigs page reads these reports.
+Director check-in and acquisition reporting remain early beta. The **Live**
+table also reads Sync reports for regular Target Scheduler monitoring.
 
 | Method | Route | Body or query |
 | --- | --- | --- |
