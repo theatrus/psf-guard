@@ -111,7 +111,7 @@ test('Framing covers the sky the rig cannot shoot, for the month, the year and a
     await expect(page.getByTestId('sky-in-view-note')).toHaveCount(0);
     await expect(page.getByTestId('sky-in-view-legend')).toContainText('365 nights from tonight, ');
     await expect(page.getByTestId('sky-in-view-shares')).toContainText(/^In view on 7 nights or more: \d+% of the sky, declination −\d+° to \+90°\./);
-    await expect(group).toContainText('Clear sky is in view on at least 7 of them, in total and not in a row.');
+    await expect(group).toContainText('Unshaded sky is in view on at least 7 nights; they need not be consecutive.');
     await expect(group).toContainText('Never7 nights or more');
     // Its edge runs near the southern limit, below this view of the pole,
     // so the shares above give where it is rather than the drawn line.
