@@ -280,6 +280,11 @@
      night, and at least one night of a range. */
   --sky-visible-line: rgb(110 231 183 / 92%);
   --sky-visible-line-any: rgb(110 231 183 / 62%);
+  /* The cover over sky a rig cannot shoot, at its heaviest: where the
+     sky is never in view. It thins to nothing where the sky is in view
+     every night. Grey enough to read as closed off, clear enough to
+     leave the stars and names under it faintly readable. */
+  --sky-out-of-view-cover: rgb(62 68 84 / 80%);
 }
 
 .app {

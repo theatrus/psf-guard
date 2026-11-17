@@ -1877,4 +1877,71 @@ describe('Mosaic panels', () => {
     expect((screen.getByLabelText('Right ascension degrees') as HTMLInputElement).value).toBe(ra);
     expect(screen.getByTestId('framing-mosaic-notice')).toHaveTextContent('Locked panels of C925 data keep the mosaic in place');
   });
+
+  it('covers the sky the first rig cannot shoot, says where the target stands, and remembers when it is switched off', async () => {
+    fixture();
+    const asked: Array<Record<string, unknown>> = [];
+    const places: Array<{ ra_degrees: number; dec_degrees: number }> = [];
+    const ring = (dec: number) => Array.from({ length: 181 }, (_, at) => [(at * 2) % 360, dec]);
+    // In view every night north of +30°, never south of it.
+    let packed = '';
+    for (let row = 0; row < 91; row += 1) packed += String.fromCharCode(-90 + row * 2 >= 30 ? 31 : 0, 0).repeat(180);
+    server.use(
+      http.post('/api/director/v1/sky/visible-region', async ({ request }) => {
+        const body = await request.json() as { rig: string };
+        asked.push(body);
+        return HttpResponse.json(ok({
+          rig: { id: body.rig, name: 'RedCat 61', revision: 1 }, planning_site: null, site: { latitude_degrees: 34.2, longitude_degrees: -118.3, elevation_meters: 400 },
+          location_from: 'rig', horizon: 'flat', horizon_from: 'none', limits: { minimum_altitude_degrees: 25, maximum_altitude_degrees: 90, horizon_offset_degrees: 0 },
+          minimum_minutes: 30, rig_minimum_minutes: 30, step_minutes: 5, dark_below_degrees: -12,
+          nights: Array.from({ length: 31 }, (_, night) => ({ date: new Date(Date.parse('2026-09-24T00:00:00Z') + night * 86_400_000).toISOString().slice(0, 10), dusk_ms: 1, dawn_ms: 2 })),
+          span: 'now', every_nights: 1, nights_counted: 31, grid: { degrees: 2, columns: 180, rows: 91 }, counts: btoa(packed),
+          every_night: { lines: [ring(30)], sky_fraction: 0.25, declinations: [30, 90] }, any_night: { lines: [ring(30)], sky_fraction: 0.25, declinations: [30, 90] },
+        }));
+      }),
+      http.post('/api/director/v1/sky/visible-places', async ({ request }) => {
+        const body = await request.json() as { places: Array<{ ra_degrees: number; dec_degrees: number }> };
+        places.push(...body.places);
+        return HttpResponse.json(ok({ first_night: '2026-09-24', nights_counted: 31, places: body.places.map(place => ({ ...place, nights_in_view: place.dec_degrees >= 30 ? 31 : 0 })) }));
+      }),
+    );
+    mount(true, true, [rigA.rig.id]);
+    expect(await screen.findByLabelText('Target name')).toHaveValue('M31');
+    // On from the start, for the plan's first rig while Visibility shows none.
+    const toggle = screen.getByRole('button', { name: 'Sky in view' });
+    expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    await waitFor(() => expect(screen.getByTestId('sky-in-view-status')).toHaveTextContent('The target is in view on all of the 31 nights counted.'));
+    expect(asked).toEqual([{ rig: rigA.rig.id, span: 'now' }]);
+    const layer = screen.getByTestId('sky-in-view-layer');
+    expect(layer).toHaveAttribute('data-nights', '31');
+    // Drawn over the survey and under the grid, the marks and the panels.
+    const stage = screen.getByTestId('framing-stage');
+    const drawn = [...stage.querySelectorAll('svg > *')];
+    expect(drawn.indexOf(layer)).toBeGreaterThanOrEqual(0);
+    expect(drawn.indexOf(layer)).toBeLessThan(drawn.indexOf(screen.getByTestId('framing-graticule')));
+    expect(drawn.indexOf(layer)).toBeLessThan(drawn.indexOf(screen.getByTestId('framing-panels')));
+    // A target typed a key at a time, as one dragged, is counted once it
+    // rests: the words stay, dimmed, and one request follows.
+    const counted = places.length;
+    for (const typed of ['-1', '-10', '-20', '-30']) fireEvent.change(screen.getByLabelText('Declination degrees'), { target: { value: typed } });
+    expect(screen.getByTestId('sky-in-view-status')).toHaveTextContent('The target is in view on all of the 31 nights counted.');
+    expect(screen.getByTestId('sky-in-view-status')).toHaveAttribute('data-stale', 'true');
+    fireEvent.change(screen.getByLabelText('Declination degrees'), { target: { value: '-40' } });
+    await waitFor(() => expect(screen.getByTestId('sky-in-view-status')).toHaveTextContent('The target is never in view on the 31 nights counted.'));
+    expect(screen.getByTestId('sky-in-view-note')).toHaveTextContent('Target never in view');
+    expect(screen.getByTestId('sky-in-view-note')).toHaveAttribute('title', 'The target is never in view on the 31 nights counted.');
+    expect(places.slice(counted)).toEqual([{ ra_degrees: seed.center.ra_degrees, dec_degrees: -40 }]);
+    expect(screen.getByTestId('sky-in-view-status')).not.toHaveAttribute('data-stale');
+    // Switched off: the layer and its words go, and the choice is kept.
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.queryByTestId('sky-in-view-layer')).toBeNull();
+    expect(screen.queryByTestId('sky-in-view-note')).toBeNull();
+    expect(screen.getByTestId('sky-in-view-status')).toHaveTextContent('Hidden');
+    expect(window.localStorage.getItem('psf-guard.framing.skyInView')).toBe('off');
+    // The group's own switch turns it back on.
+    fireEvent.click(screen.getByLabelText('Show on the sky'));
+    expect(window.localStorage.getItem('psf-guard.framing.skyInView')).toBe('on');
+    await waitFor(() => expect(screen.getByTestId('sky-in-view-layer')).toBeInTheDocument());
+  });
 });

@@ -6,6 +6,7 @@ import { RUNTIME_LABEL, STATE_LABEL, formatClock, formatNightDate, markOrigin } 
 import { formatHours } from './visibilityFormat';
 import { roundRa } from './framingModel';
 import { retryWhenBusy } from './retry';
+import { visibilityRig, type ShownRig } from './visibilityRig';
 import './VisibilityPanel.css';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Feasibility request failed';
@@ -103,13 +104,16 @@ export function AltitudeChart({ rig, compact = false }: { rig: DirectorRigFeasib
 /** `compact` keeps the panel to the verdict, the chart and one line of
  *  estimate, with the nights table folded away, so it fits under the
  *  framing stage and stays on screen. */
-export default function VisibilityPanel({ projectId, center, rigCenters, enabled = true, compact = false }: {
+export default function VisibilityPanel({ projectId, center, rigCenters, enabled = true, compact = false, onRig }: {
   projectId: string;
   center: DirectorSkyPosition;
   /** Centers of rigs framed on a center of their own, as the view has them. */
   rigCenters?: Record<string, DirectorSkyPosition>;
   enabled?: boolean;
   compact?: boolean;
+  /** Told which rig the panel shows, and while it is still finding out,
+   *  so what sits beside it can follow the same rig. */
+  onRig?: (shown: ShownRig) => void;
 }) {
   const round = (c: DirectorSkyPosition) => ({ ra_degrees: roundRa(c.ra_degrees, 3), dec_degrees: Number(c.dec_degrees.toFixed(3)) });
   const rigKey = JSON.stringify(Object.entries(rigCenters ?? {}).sort(([a], [b]) => a.localeCompare(b)).map(([id, c]) => [id, round(c)]));
@@ -127,7 +131,10 @@ export default function VisibilityPanel({ projectId, center, rigCenters, enabled
   });
   const [chosen, setChosen] = useState<string | null>(null);
   const data: DirectorFeasibility | undefined = query.data;
-  const rig = data?.rigs.find(r => r.rig.id === chosen) ?? data?.rigs[0];
+  const rig = visibilityRig(data?.rigs, chosen);
+  const shownRig = rig?.rig.id ?? null;
+  const shownState = data ? 'ready' : query.isError ? 'failed' : 'loading';
+  useEffect(() => { onRig?.(shownState === 'ready' ? { state: 'ready', rigId: shownRig } : { state: shownState }); }, [onRig, shownState, shownRig]);
   // Each activated rig's own schedule, which ranks the plan against the
   // rig's other work. It does not depend on the framing being edited.
   const projection = useQuery({

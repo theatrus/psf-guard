@@ -1,5 +1,4 @@
 import type { SkyFrame, SkyMode } from '../../utils/skyProjection';
-import type { VisibleSkyChoice } from './visibleSky';
 
 /**
  * Where the Sky view was left: frame, shape, turn, zoom, and the cuts. Kept
@@ -20,9 +19,6 @@ export interface SkyViewMemory {
   hiddenFilters: string[];
   fromNight: string | null;
   asOfNight: string | null;
-  /** The Visible sky overlay: on or off, the rig, the minutes typed (null
-   *  is the rig's own), and tonight or a range of dates. */
-  visibleSky: VisibleSkyChoice;
 }
 
 const KEY = 'psf-guard:sky-view:v1';
@@ -44,6 +40,9 @@ export function recallSkyView(): Partial<SkyViewMemory> {
     const raw = storage()?.getItem(KEY);
     const parsed = raw ? (JSON.parse(raw) as Partial<SkyViewMemory>) : {};
     held = typeof parsed === 'object' && parsed ? parsed : {};
+    // A build that drew the visible sky on this page kept its choices
+    // here. It is in Planning now, so what was kept is let go.
+    delete (held as Record<string, unknown>).visibleSky;
   } catch {
     held = {};
   }

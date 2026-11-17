@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { SKY_INPUTS_MUTATION } from './skyInputs';
 import { type QueryClient, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError, type AxiosError } from 'axios';
 import { Camera, Check, CloudSun, Download, Link2, MapPin, Plug, SlidersHorizontal } from 'lucide-react';
@@ -142,6 +143,7 @@ export default function RigProfileCard({ slug, syncPlugin, initialTab }: {
     siteId ? { overrides: siteSettings.data?.scheduling, from: 'from the site' } : null,
   ]);
   const save = useMutation({
+    mutationKey: SKY_INPUTS_MUTATION,
     retry: false,
     mutationFn: async (view: DirectorRigProfileView) => {
       if (!form) throw new Error('Nothing to save');

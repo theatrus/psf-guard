@@ -109,6 +109,12 @@ describe('project workspace', () => {
     expect(screen.queryByText('Source editor catalog:7')).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Library' })).toHaveAttribute('href', '/?db=catalog');
   });
+  it('opens Framing for an address that names a tab the plan no longer has', async () => {
+    // Sky in view was a tab of its own before it moved into Framing.
+    mount(links, '/plan?plan=project&planTab=sky');
+    expect(await screen.findByRole('tab', { name: 'Framing' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getAllByRole('tab').map(tab => tab.textContent)).toEqual(['Framing', 'Exposures', 'Rigs', 'Priority and defaults']);
+  });
   it('keeps the tab in the address and opens the one a link names', async () => {
     mount(links, '/plan?plan=project&planTab=priority');
     expect(await screen.findByRole('tab', { name: 'Priority and defaults' })).toHaveAttribute('aria-selected', 'true');

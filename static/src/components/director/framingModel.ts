@@ -320,6 +320,14 @@ export function compassDirections(rotation: number): { north: [number, number]; 
   return { north: [Math.sin(rad), -Math.cos(rad)], east: [-Math.cos(rad), -Math.sin(rad)] };
 }
 
+/** The angle between two sky positions, in degrees. */
+export function separationDegrees(a: DirectorSkyPosition, b: DirectorSkyPosition): number {
+  const rad = Math.PI / 180;
+  const cos = Math.sin(a.dec_degrees * rad) * Math.sin(b.dec_degrees * rad)
+    + Math.cos(a.dec_degrees * rad) * Math.cos(b.dec_degrees * rad) * Math.cos((a.ra_degrees - b.ra_degrees) * rad);
+  return Math.acos(Math.min(1, Math.max(-1, cos))) / rad;
+}
+
 /** How much sky the stage really spans across: less than the stage degrees
  *  once the view is wide, since the projection stretches toward the rim. */
 export function trueWidth(viewFov: number): number {

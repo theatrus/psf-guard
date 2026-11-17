@@ -946,11 +946,19 @@ export interface DirectorRigProjection {
   notes: string[];
 }
 /** What `/sky/visible-region` is asked: a rig, and optionally a minimum
- *  time, a first night (`YYYY-MM-DD`, the evening's date at the rig's site)
- *  and a number of nights. Left out: the rig's minimum time, tonight, one. */
+ *  time and which nights. `span: 'now'` is tonight and the 30 nights after;
+ *  `span: 'year'` is every night of a year, one a week measured. Without `span`: `nights`
+ *  in a row (one when left out) from `first_night` (`YYYY-MM-DD`, the
+ *  evening's date at the rig's site; tonight when left out). */
 export interface DirectorVisibleSkyRequest {
   rig: string;
   minimum_minutes?: number;
+  span?: 'now' | 'year';
+  /** With `span: 'year'`: send each measured night's grid too. */
+  measured?: boolean;
+  /** Who began the request: `interactive` when a person asked for this
+   *  picture by a click, left out for what a page draws on its own. */
+  priority?: 'viewed' | 'interactive';
   first_night?: string;
   nights?: number;
 }
@@ -960,9 +968,12 @@ export interface DirectorVisibleSkyRequest {
 export interface DirectorVisibleSkyRegion {
   lines: Array<Array<[number, number]>>;
   sky_fraction: number;
+  /** The southernmost and northernmost declination inside the lines; null
+   *  when no sky is. */
+  declinations: [number, number] | null;
 }
 /** The sky a rig has in view, in the dark, for at least a minimum time
- *  without a break, over one night or a range. */
+ *  without a break, over the nights counted. */
 export interface DirectorVisibleSky {
   rig: DirectorIdentity;
   planning_site: DirectorIdentity | null;
@@ -979,9 +990,44 @@ export interface DirectorVisibleSky {
   step_minutes: number;
   dark_below_degrees: number;
   nights: Array<{ date: string; dusk_ms: number | null; dawn_ms: number | null }>;
+  /** How the nights were chosen, and the nights from each to the next: 1
+   *  for nights in a row, 7 for a year. */
+  span: 'now' | 'year';
+  every_nights: number;
+  /** The grid the nights were counted on: nodes every `degrees`, columns
+   *  of right ascension from 0h, rows from the south pole. */
+  grid: { degrees: number; columns: number; rows: number };
+  /** How many nights are counted. For nights in a row, the length of
+   *  `nights`. For a year, every night from the first of `nights` to the
+   *  last: `nights` are the ones measured, one a week, and the server
+   *  works out the six between each two from them. */
+  nights_counted: number;
+  /** For each node, on how many of the nights counted it is in view: two
+   *  bytes a node, low byte first, row by row, in base64. */
+  counts: string;
+  /** With a year asked for with `measured`: each measured night's grid, to add up the nights of one
+   *  time of year from. `in_view` is base64 of a bit a node, the lowest
+   *  bit of each byte first, `bytes_a_night` bytes for each of `nights`.
+   *  A night between two measured nights has a node in view only where
+   *  the night before has it `turn_degrees_a_night` back along its row
+   *  for each night since and the night after has it as far on for each
+   *  night to come; a turn between two columns asks both. */
+  measured?: { in_view: string; bytes_a_night: number; turn_degrees_a_night: number };
   every_night: DirectorVisibleSkyRegion;
   /** Null for one night, when it is the same sky as `every_night`. */
   any_night: DirectorVisibleSkyRegion | null;
+}
+/** What `/sky/visible-places` is asked: the rig, minimum and nights as for
+ *  the picture, and up to 16 places in ICRS degrees. */
+export interface DirectorVisiblePlacesRequest extends DirectorVisibleSkyRequest {
+  places: DirectorSkyPosition[];
+}
+/** On how many of the nights counted each place is in view, measured for
+ *  the place itself. */
+export interface DirectorVisiblePlaces {
+  first_night: string;
+  nights_counted: number;
+  places: Array<{ ra_degrees: number; dec_degrees: number; nights_in_view: number }>;
 }
 export interface DirectorFeasibility {
   center: DirectorSkyPosition;

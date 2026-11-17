@@ -1,0 +1,210 @@
+/* Sky in view, over Framing's stage: sky the rig cannot shoot is covered,
+   with a line round the sky in view every night and another round the sky
+   in view on any. */
+
+/* The cover: a picture whose solidness is the share of nights out of view,
+   given the cover's colour here. The survey picture shows through, dimmed. */
+.sky-in-view-cover {
+  fill: var(--sky-out-of-view-cover);
+}
+
+.sky-in-view-line,
+.sky-in-view-marks {
+  fill: none;
+  stroke: var(--sky-visible-line);
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.sky-in-view-line {
+  stroke-width: 2;
+}
+
+.sky-in-view-marks {
+  stroke-width: 1.4;
+}
+
+.sky-in-view-line.sky-in-view-any {
+  stroke: var(--sky-visible-line-any);
+  stroke-width: 1.6;
+  stroke-dasharray: 7 6;
+}
+
+.sky-in-view-marks.sky-in-view-any {
+  stroke: var(--sky-visible-line-any);
+}
+
+/* The words and controls: a group among Framing's own. */
+.sky-in-view {
+  font-size: 13px;
+}
+
+/* Two lines kept for the words whatever they say, so nothing under them
+   moves as they change. */
+.sky-in-view-status {
+  margin: 0 0 4px;
+  min-height: 2.7em;
+  line-height: 1.35;
+  color: var(--color-text-primary);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+/* The last words known, while the target moves or is counted again. */
+.sky-in-view-status[data-stale='true'] {
+  opacity: 0.55;
+}
+
+.framing-controls .sky-in-view-show {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-text-primary);
+}
+
+.sky-in-view-more {
+  margin-top: 6px;
+  font-size: 12px;
+}
+
+.sky-in-view-more summary {
+  cursor: pointer;
+  color: var(--color-text-secondary);
+}
+
+.sky-in-view-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+  min-width: 0;
+}
+
+.sky-in-view-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  color: var(--color-text-secondary);
+}
+
+.sky-in-view-minimum {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.framing-controls .sky-in-view .sky-in-view-minimum input {
+  flex: none;
+  width: 5em;
+  min-height: 26px;
+  padding: 2px 6px;
+  font: inherit;
+}
+
+/* Season's slider: its nights in words, the slider, and the months along
+   it. The words stay on one line whatever the date, so the slider does not
+   move as it is dragged. */
+.sky-in-view-season {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2px;
+  color: var(--color-text-secondary);
+}
+
+.framing-controls .sky-in-view-season label,
+.sky-in-view-season-nights {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sky-in-view-season-nights {
+  color: var(--color-text-primary);
+}
+
+.framing-controls .sky-in-view .sky-in-view-season input {
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  /* Tall enough for a finger. */
+  height: 28px;
+}
+
+/* A name that runs past the track is cut off, not left to widen the page. */
+.sky-in-view-months {
+  /* The months sit under the slider's thumb at its ends. */
+  padding: 0 8px;
+  overflow: hidden;
+}
+
+.sky-in-view-months div {
+  position: relative;
+  height: 1.3em;
+}
+
+.sky-in-view-months span {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+
+.sky-in-view-months span:nth-child(even) {
+  display: none;
+}
+
+.sky-in-view-text {
+  margin: 0;
+  color: var(--color-text-secondary);
+  line-height: 1.35;
+}
+
+.sky-in-view-key {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin: 0;
+  color: var(--color-text-secondary);
+}
+
+.sky-in-view-key > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* From covered, where the sky is never in view, to clear. */
+.sky-in-view-scale {
+  width: 90px;
+  height: 10px;
+  border: 1px solid var(--color-border-primary);
+  border-radius: 3px;
+  background: linear-gradient(to right, var(--sky-out-of-view-cover), transparent), var(--sky-bg);
+}
+
+.sky-in-view-key-solid,
+.sky-in-view-key-dashed {
+  display: inline-block;
+  width: 24px;
+  border-top: 2px solid var(--sky-visible-line);
+}
+
+.sky-in-view-key-dashed {
+  border-top: 2px dashed var(--sky-visible-line-any);
+}
+
+/* The way to Rig setup, clear of the switch under it. */
+.sky-in-view > .link-button {
+  display: block;
+  margin: 0 0 10px;
+}

@@ -125,6 +125,9 @@ test('the map zooms, shows constellations, and stays whole-sky by default', asyn
 
   await page.getByLabel('Constellations').uncheck();
   await expect(page.locator('.sky-constellations')).toHaveCount(0);
+  // The sky a rig can shoot is drawn in Planning, not here.
+  await expect(page.getByRole('button', { name: 'Visible sky' })).toHaveCount(0);
+  await expect(page.locator('.sky-visible, .sky-visible-shade')).toHaveCount(0);
 });
 
 test('the sky remembers its turn and zoom while you are away in another view', async ({ page }) => {

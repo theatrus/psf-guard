@@ -1303,6 +1303,9 @@ it uses, `location` and `horizon`, and `location_from` and `horizon_from`
 (`rig`, `site` or `none`). Typed model:
 [site profile](../crates/director-meta/src/site_profile.rs).
 
+To see what a site's horizon and a rig's altitude limits leave in view,
+open a plan's **Framing** tab; see [Sky in view](#sky-in-view).
+
 ## Framing view
 
 Open a plan from its Planning button in the Library, or pick its project in the
@@ -1620,6 +1623,160 @@ the rig's Windows machine in `%LOCALAPPDATA%\NINA\FramingAssistantCache`
 (`CacheInfo.xml` with `RA`, `Dec`, `FoVW`, `FoVH`, `Rotation`, `Source` and a
 JPEG per entry); reusing it is planned through the Director plugin, which is
 the process that can read that folder.
+
+### Sky in view
+
+Framing covers the sky its rig cannot shoot, so you can see at once
+whether a target, or the sky around it, is within reach. The overlay is
+on until you switch it off.
+
+- Sky in view on every night counted shows as it is. Sky in view on fewer
+  nights is covered with grey, more heavily the fewer the nights. Sky
+  never in view is covered whole and hatched with diagonal stripes. The
+  survey picture, the stars and the names stay visible under the cover,
+  dimmed.
+- A solid line marks the edge of the sky in view every night, and a
+  dashed line the edge of the sky in view on at least one night. Short
+  marks on each line point into the sky in view, so the lines can be read
+  without the cover or its colour.
+- The **Sky in view** group, under **Target** beside the stage, shows the
+  rig it is drawn for and states
+  where the target stands: "The target is in view on all of the 31 nights
+  counted.", "The target is in view on 12 of the 31 nights counted." or
+  "The target is never in view on the 31 nights counted." PSF Guard counts
+  those nights for the target's own position, so the words agree with the
+  lines. It counts them once the target rests: while you drag the target
+  or type its position, the last words stay, dimmed.
+- When the rig frames the target on a center of its own (**Frame
+  separately**), the words are about that framing: "RedCat 61's own
+  framing is in view on all of the 31 nights counted."
+- When the target is not in view every night, a note on the stage says so
+  in a few words: **Target never in view** or **Target not in view every
+  night**. Zoomed in on a target the whole stage is usually covered or
+  clear, and the note and the group tell you which without zooming out.
+- When the middle of the stage is more than a degree from the target, the
+  group also states where that sky stands, and the stage shows **This sky
+  is never in view** or **This sky is not in view every night**.
+
+To switch the overlay off or on, click **Sky in view** (the eye) among the
+stage's layer buttons, or check **Show on the sky** in the group. PSF
+Guard remembers the choice in this browser.
+
+The overlay is drawn for the rig the **Visibility** panel shows; choose
+another rig there. When that panel can time no rig, because none has a
+location, the overlay uses the plan's first rig and explains what the rig
+lacks.
+
+To change what is counted, open **Nights counted and how to read it** in
+the group:
+
+1. Choose the time frame:
+   - **Now** counts tonight and the 30 nights after it.
+   - **Year** counts every night of the coming year, 365 nights. It shows
+     everything the site can reach in any season. The server measures one
+     night a week and works out the nights between from the measured
+     nights.
+   - **Season** shows 31 nights of that year at a time. Drag the **Time
+     of year** slider, or focus it and press the arrow keys to move a
+     week, Page Up or Page Down to move four weeks, and Home or End to go
+     to either end. The text over the slider shows the first of the 31
+     nights. The first position shows the same 31 nights as **Now**; the
+     last ends with the year.
+
+   All three start from tonight at the rig's site: the night under way,
+   or, once its dark has ended, the night to come. In the morning that is
+   the coming night, not the one that just ended.
+2. Set how long a place must stay in view under **In view for**. The field
+   starts at the rig's Target Scheduler minimum time (30 minutes unless
+   you changed it). The overlay follows a new value when you stop typing,
+   press Enter or leave the field. **Use rig's 30 min** restores the rig's
+   value.
+
+Under the controls, the group shows the rig, the minimum time, the nights
+counted and the horizon used; the share of the sky and the declinations
+inside each line; and a scale from **No night**, the covered end, to
+**Every night**.
+
+A place is in view when the Sun is more than 12° below the horizon and the
+place is above the rig's horizon and minimum altitude and below its maximum
+altitude: the tests [Visibility](#visibility) and [Nights](#nights) use, on
+the same five-minute samples. A place counts on a night when it stays in
+view for the minimum time without a break. A tree that hides a place in
+the middle of the night splits its time in two; the place counts only if
+one part is long enough. The overlay always follows a custom horizon when
+the rig or its Planning site has one, whether or not **Custom horizon** is
+on in a plan's Scheduling limits. The rig's location, horizon and altitude
+limits come from Rig setup; see [Sites and horizons](#sites-and-horizons).
+
+In **Now**, sky near the Sun is in view on no night, so the dashed line
+leaves out a band of right ascension. In **Year**, every right ascension
+has its season: the dashed line runs along the southern limit (the
+northern one, from a southern site).
+
+**Year** measures 53 nights, one a week, and works out the six nights
+between each two. From one night to the next the sky in view moves on by
+about a degree of right ascension, while dusk, dawn and the length of the
+dark change slowly. So PSF Guard counts a place as in view on a night
+between two measured nights only when both measured nights have it in
+view, each with the sky turned to that night. The result is an estimate,
+and it errs toward too few nights:
+
+- The solid line is within about 2° of the line that measuring every
+  night would draw, and nearly always inside it. At a few points it runs
+  up to one grid step (2°) outside, around sky that is out of view on one
+  or two nights of the year.
+- The cover and the words count at most two nights too many. They can
+  count too few: about one night in the year on average, and up to 60 at
+  a place right on the edge of the sky in view.
+- At high latitudes, where the dark hours come and go within a few weeks,
+  the count is lower still: about five nights too few on average at 70°
+  north. The nights between a measured night with no dark and the next
+  measured night with some are all counted as out of view.
+
+**Now** measures every one of its nights and has no estimate.
+
+**Season** uses the year's measured nights, so it has the same estimate.
+Your browser adds up each position from one answer, so moving the slider
+is immediate. In **Season**:
+
+- The lines are drawn from the 2° grid the year is measured on, halfway
+  between a grid point in view and one out of view. They are accurate to
+  about 1° on top of the estimate, and rougher than the lines in **Now**
+  and **Year**.
+- The words read a place's nights from the same grid, on the side of each
+  line the place is drawn on, so the words and the lines always agree.
+- A month added up from weekly nights differs from the same month
+  measured night by night. At most grid points the count is the same;
+  along the edges of the sky in view it can be several nights lower. At
+  high latitudes, in the weeks when the dark hours return, it can be
+  lower over most of the sky: use **Now** for the coming month.
+- If the year's nights cannot be read, the group says so. Reload the
+  page, or choose **Year**.
+
+When the rig has no location, the group shows "Choose a Planning site in
+Rig setup." and **Open Rig setup** opens the rig's settings. On nights
+when it never gets dark at the site nothing is in view; the group shows
+how many of the nights are like that (in **Year** and **Season**, how many
+of the measured nights).
+
+Framing's widest view shows about 133° of sky, not all of it. Turn the
+view to see the rest: drag with **Sky** chosen, or Shift-drag.
+
+The picture Framing draws when a plan opens is automatic work: it waits
+while a stack or another job you started runs. A picture you ask for in
+the group, with another minimum time or with **Year** or **Season**, runs
+as your own work.
+
+The first time the server draws a time frame for a rig it measures the
+whole sky for each night; it keeps the result, so the next look, or
+another minimum time, is quicker. **Now** takes up to about a second and
+**Year** up to about two seconds on a server with two cores. The overlay
+is drawn again when the next night begins at the rig's site, and after
+you save the rig's site, horizon, altitude limits or minimum time. The
+requests are `POST /sky/visible-region` for the picture and
+`POST /sky/visible-places` for the target and the middle of the stage.
+**Season** asks once, for the year with its measured nights, and sends
+nothing as the slider moves.
 
 ## Acquisition plan
 
@@ -2780,7 +2937,8 @@ layers are marked as such and never stand in for one another.
 | GET | `/sky/search` | `q` (2 to 64 characters typed so far), optional `limit` (8 by default, at most 25) and `online` (false by default). Answers `local`: the Seiza object catalog's names starting with `q`, one row per object with `name`, `common_name`, `kind`, ICRS degrees, the `matched` designation or alias and `source`, an exact match first, plus whether the catalog is `available`. With `online=true` it also asks CDS Sesame through the cache: `online` (the resolved name or null), `online_state` (`hit`, `miss`, `failed`, or `skipped` when not asked), `online_note` and `online_cached`. |
 | GET | `/sky/resolve` | `name`: an object name. The local Seiza catalog answers a name it knows in full (source `Seiza object catalog`); otherwise CDS Sesame (Simbad, NED, VizieR), whose answers are cached under `director/sesame` in the cache root, hits for ninety days and misses for a day. Returns the resolved `name`, ICRS `ra_degrees` and `dec_degrees` and the `source`; `404` when no catalog knows the name. A catalog position, not a pointing solution. |
 | GET | `/sky/objects` | `ra` and `dec` in ICRS degrees, `fov` (stage width in degrees), optional `aspect` (width over height, 4:3 by default), `at` (Unix milliseconds, now by default), `limit` (300 by default, at most 1000), `limit_mag` (16 by default), `catalogs` (comma-separated catalog prefixes to keep in `objects`, matched against the letters a designation starts with; every catalog when absent) and `hide` (prefixes to leave out; `PGC,HD` when neither is given, nothing when `catalogs` is, empty to hide nothing). Answers the marks within the stage's reach: `catalogs` and `hidden` (the prefixes applied), `objects` from the Seiza object catalog by prominence after the catalog filter, `minor_bodies` (comets and asteroids from its minor-body catalog at `at`, brightest first, with motion and a tail or motion direction), and `solar_system` (Sun, Moon and planets from the built-in ephemeris). Each catalog layer says whether it is `available` on the server and, if not, why. |
-| POST | `/sky/visible-region` | The sky a rig has in view, in the dark, for at least a minimum time without a break, as lines the Sky view draws. Body: `rig` (the rig's id), optional `minimum_minutes` (0 to 1440; the rig's Target Scheduler minimum time when absent), `first_night` (`YYYY-MM-DD` from 1970-01-02 to 2098-12-31, the evening's date at the rig's site; the night under way there now when absent) and `nights` (1 to 31, default 1). In view means the Sun below −12° and the place above the horizon resolved for the rig (its own, else its site's custom horizon, with the horizon offset; whether or not a plan turns Custom horizon on) and inside the rig's altitude limits, on the five-minute samples feasibility and night plans use. A run shorter than one sample never counts. Answers `every_night`: `lines`, closed lines of `[ra_degrees, dec_degrees]` in ICRS around the sky that meets the minimum on every night, each running with that sky on its left seen with north up and right ascension rising to the right, and `sky_fraction`, its share of the whole sky; `any_night`, the same for sky that meets it on at least one night, or `null` for a single night; `nights` (each `date` with `dusk_ms` and `dawn_ms`, `null` when it never gets dark); `site`, `planning_site`, `location_from` and `horizon_from` (`rig`, `site` or `none`); `horizon` (`custom` or `flat`); the applied `limits`; `minimum_minutes` and `rig_minimum_minutes`. Lines are placed to about an eighth of a degree on a 2° grid. `404` for an unknown rig; `400` with the reason for `nights` or `minimum_minutes` out of range, a `first_night` that is not such a date, or a range that ends after 2098-12-31; `422` when the rig has no location (choose a Planning site in Rig setup) or its altitude limits leave nothing to image. Each night's grid is kept in memory by site, horizon, limits, night and minimum time (in whole samples), so an overlapping range does not measure it again. The request answers when the lines are ready and has no row in the job line. It measures in a pool of workers leased from the interactive budget and holds the interactive guard; requests measure one at a time, so a second request for the same nights waits and reads the kept grids. A request whose caller hangs up or cancels starts no more work. A night not yet kept takes under 0.05 s. A month of them takes about 0.2 s with 8 workers (a 16-thread machine), 0.5 s with 2 workers and 0.9 s to 1 s with 1, whatever the minimum; most of that is the nights' skies, which Nights shares, and with those kept a month takes 0.15 s to 0.35 s on one worker. |
+| POST | `/sky/visible-region` | The sky a rig has in view, in the dark, for at least a minimum time without a break, counted over a set of nights: what Framing's **Sky in view** overlay draws. Body: `rig` (the rig's id); optional `minimum_minutes` (0 to 1440; the rig's Target Scheduler minimum time when absent); optional `span`, `now` for 31 nights in a row or `year` for every night of a year, of which 53 are measured, one every 7, and the rest worked out from them; optional `priority`, `interactive` for a picture a person asked for by a click (it runs as a person's work does: on the interactive share of the cores, and background work waits for it) or `viewed`, the default, for one a page draws on its own (it waits for a person's work to end, then runs on the background share, and nothing waits for it); optional `measured`, `true` with `span: year` to have each measured night's grid sent too (`400` with another span); optional `first_night` (`YYYY-MM-DD` from 1970-01-02 to 2098-12-31, the evening's date at the rig's site). Without `first_night` the nights start from the night under way at the rig's site, or from the next one once its dark has ended (a night that never gets dark ends at 06:00 local mean time), so a request in the morning counts the nights to come; and, without `span` or with `now`, optional `nights` (1 to 31 in a row; 1 without `span`). In view means the Sun below −12° and the place above the horizon resolved for the rig (its own, else its site's custom horizon, with the horizon offset; whether or not a plan turns Custom horizon on) and inside the rig's altitude limits, on the five-minute samples feasibility and night plans use. A run shorter than one sample never counts. Answers `nights`, the nights measured (each `date` with `dusk_ms` and `dawn_ms`, `null` when it never gets dark), `span`, `every_nights` (1, or 7 for a year) and `nights_counted` (the length of `nights`, or 365 for a year: every night from the first measured to the last); `grid` (`degrees` 2, `columns` 180 of right ascension from 0h, `rows` 91 of declination from the south pole) and `counts`, base64 of two bytes for each grid node, low byte first, row by row: on how many of the nights counted the node meets the minimum; for a year asked for with `measured`, `measured`: `in_view`, base64 of each measured night's grid in turn as a bit a node (the lowest bit of each byte first, `bytes_a_night` bytes a night, 2048), and `turn_degrees_a_night` (1), the turn in right ascension the nights between are worked out with, so a client can add up any run of the year's nights itself (the grids are read from what the year kept, so asking for them measures nothing again; a year's answer is about 54 kB without them and 199 kB with them); `every_night`: `lines`, closed lines of `[ra_degrees, dec_degrees]` in ICRS around the sky that meets the minimum on every night, each running with that sky on its left seen with north up and right ascension rising to the right, `sky_fraction`, its share of the whole sky, and `declinations`, the southernmost and northernmost declination inside the lines or `null` when no sky is; `any_night`, the same for sky that meets it on at least one night, or `null` for a single night; `site`, `planning_site`, `location_from` and `horizon_from` (`rig`, `site` or `none`); `horizon` (`custom` or `flat`); the applied `limits`; `minimum_minutes` and `rig_minimum_minutes`. Lines are placed to about an eighth of a degree on the 2° grid. For a year, a night between two measured nights counts a place only when both measured nights have it in view, each turned in right ascension to that night in steps of 2°; the every-night line is then within about 2° of the line from measuring all 365 nights, and the counts err low. `404` for an unknown rig; `400` with the reason for `nights` or `minimum_minutes` out of range, `nights` sent with `span: year`, a `first_night` that is not such a date, or nights that end after 2098-12-31; `422` when the rig has no location (choose a Planning site in Rig setup) or its altitude limits leave nothing to image. Each night's grid is kept in memory by site, horizon, limits, night and minimum time (in whole samples). A year's grids and night skies are kept apart from the month's, which Nights shares, so a look at the year lets go of none of them; each reads a night the other already holds, so the five nights a year shares with the month are measured once. The request answers when the picture is ready and has no row in the job line. It measures in a pool of workers leased from the interactive budget and holds the interactive guard; requests for one span measure one at a time, so a second request for the same nights waits and reads the kept grids; `now` and `year` wait in separate turns, so a year being measured does not hold up the month, and each runs on its own lease. A request whose caller hangs up or cancels starts no more work. Not yet kept, `now` takes about 0.2 s with 8 workers (a 16-thread machine), 0.5 s with 2 and 0.9 s with 1; `year` takes 0.4 s, 1.0 s and 1.9 s. Kept, both take under 0.1 s. |
+| POST | `/sky/visible-places` | On how many of the nights some places are in view, each place measured itself by the rule `/sky/visible-region` measures a grid node with: what Framing's **Sky in view** group states for the target and the middle of the stage. Body: `rig`, `minimum_minutes`, `span`, `first_night`, `nights` and `priority` as for `/sky/visible-region`, and `places`, 1 to 16 positions with `ra_degrees` (0 up to 360) and `dec_degrees` (−90 to 90) in ICRS. Send the picture's first night as `first_night` to count the same nights. Answers `first_night`, `nights_counted` (365 for a year) and `places`, each with its position and `nights_in_view`. For a year the place is measured on the 53 measured nights, where it is and at up to three steps of 2° of right ascension either way, and the nights between are worked out as the picture works them out, so a place on a grid node gets that node's count. A place in view on every night is inside the every-night line, one in view on some between the lines, one in view on none outside both. Errors as for `/sky/visible-region`, and `400` for `places` out of range. With the nights' skies kept it measures no grid and takes about 0.01 s; it waits its turn and leases workers as the picture does. |
 | GET | `/sky/cutout` | `survey` (an `id` from the list), `ra` and `dec` in ICRS degrees, `fov` (image width in degrees, 0.02 to 180), optional `width` and `height` in pixels (64 to 2048, default 1024) and `rotation` in degrees east of north. A cached image answers `200 image/jpeg`. A miss starts one fetch and answers `202` with `Retry-After: 1`; poll the same URL. A failed fetch answers `502` with the reason for about a minute. |
 
 Cutouts are tangent-plane JPEGs cached under `<cache>/director/sky/` by

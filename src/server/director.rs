@@ -200,9 +200,9 @@ pub struct Service {
     night_plans: night_plans::Cache,
     /// The skies of each night at each site, kept across requests.
     skies: night_sky::Skies,
-    /// Each night's grid of how long the sky stays in view, kept across
-    /// requests.
-    visible_sky: visible_sky::Grids,
+    /// What the visible sky keeps across requests: night grids, and the
+    /// skies of the nights a year is sampled on.
+    visible_sky: visible_sky::Kept,
     /// The writer's [`MetaStore::planning_rows_written`] after its last
     /// write: night plans kept from an older count may be out of date.
     planning_rows: std::sync::atomic::AtomicU64,
@@ -280,7 +280,7 @@ impl Service {
             forecast_turn: tokio::sync::Mutex::new(()),
             night_plans: night_plans::Cache::default(),
             skies: night_sky::Skies::default(),
-            visible_sky: visible_sky::Grids::default(),
+            visible_sky: visible_sky::Kept::default(),
             live_rigs: live_rigs::LiveRigs::default(),
             liveness,
             live_table: checkin::LiveTable::default(),
@@ -921,6 +921,10 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
         .route(
             "/sky/visible-region",
             axum::routing::post(visible_sky::evaluate),
+        )
+        .route(
+            "/sky/visible-places",
+            axum::routing::post(visible_sky::places),
         )
         .route("/projects/{id}", get(project).patch(rename_project))
         .route(
