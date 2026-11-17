@@ -638,7 +638,7 @@ impl CacheSizes {
     }
 }
 
-fn tree_bytes(path: &Path) -> u64 {
+pub(crate) fn tree_bytes(path: &Path) -> u64 {
     let Ok(metadata) = std::fs::symlink_metadata(path) else {
         return 0;
     };

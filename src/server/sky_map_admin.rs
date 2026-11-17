@@ -4,18 +4,21 @@
 //!
 //! PSF Guard never downloads a map by itself. A map is gigabytes, so an
 //! install runs as one job server-wide with a row in the job line and
-//! Stop. It is a download, not computation: it takes no workers and holds
-//! no interactive guard, so grading and builds carry on beside it.
+//! Stop. A person starts it, so it holds the interactive guard while it
+//! runs, as the star catalog and noise model downloads do. Stop is seen
+//! between chunks and unpacked files; an install past its last check
+//! finishes, and the install removes its own files either way.
 
 use std::path::{Path as FilePath, PathBuf};
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::extract::{Path, State};
-use axum::Json;
+use axum::{Extension, Json};
 use serde::{Deserialize, Serialize};
 
 use crate::server::api::ApiResponse;
+use crate::server::auth::{AccessRole, RequestAccess};
 use crate::server::handlers::{require_database_management_allowed, update_registry, AppError};
 use crate::server::state::AppState;
 use crate::sky_map_install::{self as install, Set, Source};
@@ -137,12 +140,29 @@ impl SkyMapInstalls {
                     progress.bytes_total = step.bytes_total;
                 })
             };
-            // Dropping the install's future, as Stop and a stopping server
-            // do here, removes its archive and its unpack folder.
-            let ended = tokio::select! {
-                ended = install::install(&root, source, &report) => ended.map(|_| ()),
-                () = stop.stopped() => Err("Stopped".to_string()),
-                () = server_stop => Err("The server stopped".to_string()),
+            // Stop and a stopping server ask the install to end, and the
+            // install is awaited to its end either way: it removes its own
+            // files, and an install past its last check finishes, so the
+            // message below says what happened.
+            let server_stopping = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let (asked, watched) = (stop.clone(), Arc::clone(&server_stopping));
+            let stopped: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(move || {
+                asked.requested() || watched.load(std::sync::atomic::Ordering::Relaxed)
+            });
+            let watch = Arc::clone(&server_stopping);
+            let watcher = tokio::spawn(async move {
+                server_stop.await;
+                watch.store(true, std::sync::atomic::Ordering::Relaxed);
+            });
+            let ended = install::install(&root, source, stopped, &report)
+                .await
+                .map(|_| ());
+            watcher.abort();
+            let ended = match ended {
+                Err(error) if error == "Stopped" && !stop.requested() => {
+                    Err("The server stopped".to_string())
+                }
+                other => other,
             };
             installs.set(|progress| {
                 progress.running = false;
@@ -296,25 +316,34 @@ fn view(state: &AppState) -> SkyMapsView {
 
 /// The view, read off the request path: it sizes folders of thousands of
 /// files.
-async fn read_view(state: &Arc<AppState>) -> Result<SkyMapsView, AppError> {
+async fn read_view(state: &Arc<AppState>, manages: bool) -> Result<SkyMapsView, AppError> {
     let reading = Arc::clone(state);
     let view = tokio::task::spawn_blocking(move || view(&reading))
         .await
         .map_err(|error| {
             AppError::InternalError(format!("Reading the sky maps failed: {error}"))
         })?;
-    Ok(if state.database_management_allowed() {
-        view
-    } else {
-        view.for_viewer()
-    })
+    Ok(if manages { view } else { view.for_viewer() })
+}
+
+/// Whether the caller may see server paths and full errors: an editor, on a
+/// server that allows database management, as the job list decides.
+fn manages(state: &AppState, access: &Option<Extension<RequestAccess>>) -> bool {
+    let editor = access
+        .as_ref()
+        .is_none_or(|Extension(access)| access.role == AccessRole::ReadWrite);
+    editor && state.database_management_allowed()
 }
 
 /// GET /api/sky-maps
 pub async fn get_view(
     State(state): State<Arc<AppState>>,
+    access: Option<Extension<RequestAccess>>,
 ) -> Result<Json<ApiResponse<SkyMapsView>>, AppError> {
-    Ok(Json(ApiResponse::success(read_view(&state).await?)))
+    let manages = manages(&state, &access);
+    Ok(Json(ApiResponse::success(
+        read_view(&state, manages).await?,
+    )))
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -335,7 +364,10 @@ pub async fn start_install(
     let set = install::set(&request.set).ok_or_else(|| {
         AppError::BadRequest(format!("{} is not an offline sky map", request.set))
     })?;
-    let hold = state.shutdown.hold("an offline sky map install");
+    // A person started it, so background work waits for it, as for the
+    // star catalog and noise model downloads.
+    let guard = state.begin_named_interactive_job("an offline sky map install");
+    let hold = (guard, state.shutdown.hold("an offline sky map install"));
     let shutdown = Arc::clone(&state.shutdown);
     let refreshing = Arc::downgrade(&state);
     let progress = state.sky_map_installs.start(
@@ -401,7 +433,7 @@ pub async fn remove_map(
     .await
     .map_err(|error| AppError::InternalError(format!("Removing the map failed: {error}")))??;
     crate::server::director::forget_sky_maps(&state);
-    Ok(Json(ApiResponse::success(read_view(&state).await?)))
+    Ok(Json(ApiResponse::success(read_view(&state, true).await?)))
 }
 
 /// POST /api/sky-maps/installed/{folder}/move
@@ -429,7 +461,7 @@ pub async fn move_map(
     .await
     .map_err(|error| AppError::InternalError(format!("Moving the map failed: {error}")))??;
     crate::server::director::forget_sky_maps(&state);
-    Ok(Json(ApiResponse::success(read_view(&state).await?)))
+    Ok(Json(ApiResponse::success(read_view(&state, true).await?)))
 }
 
 /// PUT /api/settings/sky-maps
@@ -468,7 +500,7 @@ pub async fn update_settings(
     .await?;
     configure(Some(&settings));
     crate::server::director::forget_sky_maps(&state);
-    Ok(Json(ApiResponse::success(read_view(&state).await?)))
+    Ok(Json(ApiResponse::success(read_view(&state, true).await?)))
 }
 
 fn unix_now() -> u64 {
@@ -518,6 +550,7 @@ mod tests {
                 entries
                     .flatten()
                     .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                    .filter(|name| name != ".install.lock")
                     .collect()
             })
             .unwrap_or_default()
@@ -635,6 +668,34 @@ mod tests {
         let sent = serde_json::to_string(&view).unwrap();
         assert!(!sent.contains("/data"), "{sent}");
         assert!(!sent.contains("/root"), "{sent}");
+    }
+
+    #[test]
+    fn only_an_editor_on_a_managed_server_is_given_paths() {
+        let state = AppState::from_databases(
+            Vec::new(),
+            tempfile::tempdir()
+                .unwrap()
+                .path()
+                .to_string_lossy()
+                .into_owned(),
+            crate::cli::PregenerationConfig::default(),
+        )
+        .unwrap();
+        let access = |role| {
+            Some(Extension(RequestAccess {
+                role,
+                username: None,
+                api_token: false,
+            }))
+        };
+        let (reader, editor) = (access(AccessRole::ReadOnly), access(AccessRole::ReadWrite));
+        state.set_allow_database_management(true);
+        assert!(!manages(&state, &reader));
+        assert!(manages(&state, &editor));
+        assert!(manages(&state, &None), "a server without accounts");
+        state.set_allow_database_management(false);
+        assert!(!manages(&state, &editor));
     }
 
     #[test]

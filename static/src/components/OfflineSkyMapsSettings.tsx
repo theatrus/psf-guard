@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import type { InstalledSkyMap, SkyMapSet, SkyMapsView } from '../api/types';
@@ -52,6 +52,12 @@ export default function OfflineSkyMapsSettings({ canManage }: {
 
   const progress = data?.install;
   const running = !!progress?.running;
+  // Framing keeps its list of layers until told: tell it when an install
+  // that ended here put a map in place.
+  const installedAt = !running && !progress?.error ? progress?.finished_at : undefined;
+  useEffect(() => {
+    if (installedAt !== undefined) void queryClient.invalidateQueries({ queryKey: surveysKey });
+  }, [installedAt, queryClient]);
   const busy = running || install.isPending || remove.isPending || move.isPending;
   const savedFolder = data?.chosen ? data.folder ?? '' : '';
   const shownFolder = folder ?? savedFolder;

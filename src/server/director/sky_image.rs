@@ -203,6 +203,10 @@ pub struct SurveyInfo {
     /// framing view can prefer it; `None` otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stands_in_for: Option<String>,
+    /// For an offline map, the version of its files, which cached views are
+    /// keyed by; empty for an online survey.
+    #[serde(skip)]
+    pub version: String,
 }
 
 impl From<&Survey> for SurveyInfo {
@@ -216,6 +220,7 @@ impl From<&Survey> for SurveyInfo {
             attribution: survey.attribution.to_owned(),
             offline: false,
             stands_in_for: None,
+            version: String::new(),
         }
     }
 }
@@ -234,6 +239,7 @@ impl From<&crate::sky_maps::SkyMap> for SurveyInfo {
             attribution: map.attribution.clone(),
             offline: true,
             stands_in_for: map.stands_in_for.clone(),
+            version: map.version.clone(),
         }
     }
 }
@@ -247,6 +253,8 @@ pub fn builtin_surveys() -> Vec<SurveyInfo> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Cutout {
     pub survey: String,
+    /// For an offline map, the version of its files; empty online.
+    pub version: String,
     /// The provider's identifier; `None` for an offline map.
     pub hips: Option<String>,
     pub ra_degrees: f64,
@@ -299,6 +307,7 @@ impl Cutout {
         }
         Ok(Self {
             survey: survey.id.clone(),
+            version: survey.version.clone(),
             hips: (!survey.offline).then(|| survey.hips.clone()),
             ra_degrees: query.ra,
             dec_degrees: query.dec,
@@ -313,9 +322,16 @@ impl Cutout {
     /// The key names the projection: v2 images are stereographic, which the
     /// framing stage draws in, so a v1 tangent-plane image is never reused.
     pub fn digest(&self) -> String {
+        // An offline map's view is keyed by the map's files too; an online
+        // survey's key is as it was, so its cached views stay.
+        let survey = if self.version.is_empty() {
+            self.survey.clone()
+        } else {
+            format!("{}@{}", self.survey, self.version)
+        };
         let key = format!(
             "sky-cutout-v2|STG|{}|{:.5}|{:.5}|{:.5}|{}|{}|{:.2}",
-            self.survey,
+            survey,
             self.ra_degrees,
             self.dec_degrees,
             self.fov_degrees,
@@ -457,7 +473,7 @@ impl SkyImageService {
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             let mut warmed = self.warmed.lock().expect("warmed sky maps");
             for map in maps.iter() {
-                if warmed.insert(map.id.clone()) {
+                if warmed.insert(format!("{}@{}", map.id, map.version)) {
                     let map = map.clone();
                     handle.spawn_blocking(move || map.warm());
                 }
@@ -909,6 +925,32 @@ mod tests {
                 .digest()
         );
         assert_eq!(base.digest().len(), 64);
+    }
+
+    #[test]
+    fn an_offline_maps_views_are_kept_by_the_version_of_its_files() {
+        let map = |version: &str| SurveyInfo {
+            id: "nina:FramingAssistantCache".into(),
+            name: "DSS (offline)".into(),
+            hips: String::new(),
+            kind: SurveyKind::Broadband,
+            bandpass: String::new(),
+            attribution: String::new(),
+            offline: true,
+            stands_in_for: None,
+            version: version.into(),
+        };
+        let view = |version: &str| {
+            Cutout::from_query(&query("nina:FramingAssistantCache"), &[map(version)])
+                .unwrap()
+                .digest()
+        };
+        // A replaced map is not served from the old map's pictures.
+        assert_ne!(view("100-1"), view("200-2"));
+        assert_eq!(view("100-1"), view("100-1"));
+        // An online survey's key is the one it always had.
+        let online = Cutout::from_query(&query("dss2_color"), &builtin_surveys()).unwrap();
+        assert!(online.version.is_empty());
     }
 
     #[test]

@@ -9,8 +9,7 @@
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-
-use sha2::{Digest, Sha256};
+use std::sync::Arc;
 
 use crate::sky_maps::{self, SkyMap};
 
@@ -136,23 +135,6 @@ impl Step {
     }
 }
 
-/// Removes an install's archive and its unpack folder when the install
-/// ends, however it ends, and tells an unpack still running to stop.
-struct Cleanup {
-    archive: PathBuf,
-    staging: PathBuf,
-    cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
-}
-
-impl Drop for Cleanup {
-    fn drop(&mut self) {
-        self.cancelled
-            .store(true, std::sync::atomic::Ordering::Relaxed);
-        let _ = std::fs::remove_file(&self.archive);
-        let _ = std::fs::remove_dir_all(&self.staging);
-    }
-}
-
 /// A name no other install uses: the process and the time.
 fn tag() -> String {
     let nanos = std::time::SystemTime::now()
@@ -162,9 +144,39 @@ fn tag() -> String {
     format!("{}-{nanos:x}", std::process::id())
 }
 
-/// Leftovers of installs that did not finish: archives and unpack folders.
-/// [`sky_maps::discover`] passes over the folders; the archive is a file.
-pub fn sweep(root: &Path) {
+/// The file an install or a move locks for as long as it changes a maps
+/// folder. Settings and the command line may both install into the same
+/// folder; the lock keeps one from removing the other's files, and the
+/// system releases it if the process ends.
+const LOCK_FILE: &str = ".install.lock";
+
+/// The lock on `root`, held while the returned file is open.
+fn lock(root: &Path) -> Result<std::fs::File, String> {
+    std::fs::create_dir_all(root)
+        .map_err(|error| format!("Creating {}: {error}", root.display()))?;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(root.join(LOCK_FILE))
+        .map_err(|error| format!("Opening {}: {error}", root.join(LOCK_FILE).display()))?;
+    match file.try_lock() {
+        Ok(()) => Ok(file),
+        Err(std::fs::TryLockError::WouldBlock) => Err(format!(
+            "Another install or move is changing {}. Wait for it to end, then try again.",
+            root.display()
+        )),
+        Err(std::fs::TryLockError::Error(error)) => {
+            Err(format!("Locking {}: {error}", root.display()))
+        }
+    }
+}
+
+/// Leftovers of installs and moves that did not finish: archives and
+/// unpack folders. Only called with [`lock`] held, so nothing it removes
+/// belongs to work still under way. [`sky_maps::discover`] passes over the
+/// folders meanwhile.
+fn sweep(root: &Path) {
     let Ok(entries) = std::fs::read_dir(root) else {
         return;
     };
@@ -206,47 +218,51 @@ fn check_room(root: &Path, archive_bytes: u64) -> Result<(), String> {
 }
 
 /// Download `source` into `root` and return the installed map. `report` is
-/// told how far it has got; dropping the returned future stops the install
-/// and leaves nothing behind. A set installed already is replaced only when
-/// the new one is whole.
+/// told how far it has got. `stopped` is read between chunks and unpacked
+/// files and once more just before the map is put in place; an install
+/// that has passed that point finishes. A set installed already is
+/// replaced only when the new one is whole. However it ends, the install's
+/// archive and unpack folder are removed before this returns.
 pub async fn install(
     root: &Path,
     source: Source,
+    stopped: Arc<dyn Fn() -> bool + Send + Sync>,
     report: &(dyn Fn(Step) + Send + Sync),
 ) -> Result<SkyMap, String> {
-    std::fs::create_dir_all(root)
-        .map_err(|error| format!("Creating {}: {error}", root.display()))?;
+    let lock = lock(root)?;
     sweep(root);
-    if let Some((bytes, _)) = source.record() {
+    let record = source.record();
+    if let Some((bytes, _)) = record {
         check_room(root, bytes)?;
     }
     let tag = tag();
-    let cleanup = Cleanup {
-        archive: root.join(format!(".download-{tag}.zip")),
-        staging: root.join(format!("{}{tag}", sky_maps::UNPACKING)),
-        cancelled: Default::default(),
+    let archive = root.join(format!(".download-{tag}.zip"));
+    let staging = root.join(format!("{}{tag}", sky_maps::UNPACKING));
+    let url = source.url();
+    // The download only writes the archive, so it may be dropped where it
+    // stands; a stop is seen while it waits on the network too.
+    let watch = Arc::clone(&stopped);
+    let fetched = tokio::select! {
+        fetched = fetch(&url, record, &archive, root, stopped.as_ref(), report) => fetched,
+        () = async move {
+            while !watch() {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+        } => Err("Stopped".to_string()),
     };
-    fetch(
-        &source.url(),
-        source.record(),
-        &cleanup.archive,
-        root,
-        report,
-    )
-    .await?;
-    report(Step::say("Unpacking…"));
-    let (archive, staging, target_root) = (
-        cleanup.archive.clone(),
-        cleanup.staging.clone(),
-        root.to_path_buf(),
-    );
-    let cancelled = cleanup.cancelled.clone();
-    let installed =
-        tokio::task::spawn_blocking(move || place(&archive, &staging, &target_root, &cancelled))
-            .await
-            .map_err(|error| format!("Unpacking failed: {error}"))??;
-    drop(cleanup);
-    Ok(installed)
+    let target_root = root.to_path_buf();
+    // The unpack, the switch and the clean-up all run on one blocking
+    // thread, which this waits for: nothing removes the unpack folder while
+    // the unpack still writes to it.
+    tokio::task::spawn_blocking(move || {
+        let placed = fetched.and_then(|()| place(&archive, &staging, &target_root, &|| stopped()));
+        let _ = std::fs::remove_file(&archive);
+        let _ = std::fs::remove_dir_all(&staging);
+        drop(lock);
+        placed
+    })
+    .await
+    .map_err(|error| format!("Unpacking failed: {error}"))?
 }
 
 /// Stream `url` to `archive`. With a `record`, the size and SHA-256 a
@@ -256,80 +272,55 @@ async fn fetch(
     record: Option<(u64, &str)>,
     archive: &Path,
     root: &Path,
+    stopped: &(dyn Fn() -> bool + Send + Sync),
     report: &(dyn Fn(Step) + Send + Sync),
 ) -> Result<(), String> {
-    let client = reqwest::Client::builder()
-        .user_agent(concat!("psf-guard/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .map_err(|error| error.to_string())?;
-    let mut response = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|error| format!("{url} could not be reached: {error}"))?;
-    if !response.status().is_success() {
-        return Err(format!("{url} answered {}", response.status()));
-    }
-    let expected = record.map(|(bytes, _)| bytes);
-    let total = expected.or(response.content_length());
-    if let (Some(expected), Some(offered)) = (expected, response.content_length())
-        && expected != offered
-    {
-        return Err(changed(url));
-    }
-    if total.is_some_and(|total| total > MAX_ZIP_BYTES) {
-        return Err(format!("{url} is larger than {}", gigabytes(MAX_ZIP_BYTES)));
-    }
-    if expected.is_none()
-        && let Some(total) = total
-    {
-        check_room(root, total)?;
-    }
-    let mut file = std::fs::File::create(archive)
-        .map_err(|error| format!("Writing {}: {error}", archive.display()))?;
-    let mut hasher = Sha256::new();
-    let mut received: u64 = 0;
-    let mut reported = std::time::Instant::now();
-    report(Step {
-        message: "Downloading…".into(),
-        bytes_done: Some(0),
-        bytes_total: total,
-    });
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|error| format!("The download broke off: {error}"))?
-    {
-        file.write_all(&chunk)
-            .map_err(|error| format!("Writing {}: {error}", archive.display()))?;
-        hasher.update(&chunk);
-        received += chunk.len() as u64;
-        if received > total.unwrap_or(MAX_ZIP_BYTES).min(MAX_ZIP_BYTES) {
-            return Err(match expected {
-                Some(_) => changed(url),
-                None => format!("{url} is larger than {}", gigabytes(MAX_ZIP_BYTES)),
-            });
-        }
-        if reported.elapsed().as_millis() >= 500 {
-            reported = std::time::Instant::now();
-            report(Step {
-                message: "Downloading…".into(),
-                bytes_done: Some(received),
-                bytes_total: total,
-            });
+    use crate::verified_download::{Expected, Failure};
+
+    if record.is_none() {
+        // A zip given by URL: check the room once its size is known.
+        if let Ok(response) = reqwest::Client::new().head(url).send().await
+            && let Some(bytes) = response.content_length()
+        {
+            check_room(root, bytes)?;
         }
     }
-    seiza_fits::sync_file(&file).map_err(|error| error.to_string())?;
-    if let Some((bytes, sha256)) = record {
-        let digest = hasher
-            .finalize()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
-        if received != bytes || digest != sha256 {
-            return Err(changed(url));
+    let reported =
+        std::sync::Mutex::new(std::time::Instant::now() - std::time::Duration::from_secs(1));
+    let progress = |done: u64, total: Option<u64>| {
+        let mut last = reported
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if last.elapsed().as_millis() < 500 && Some(done) != total {
+            return;
         }
-    }
+        *last = std::time::Instant::now();
+        report(Step {
+            message: "Downloading…".into(),
+            bytes_done: Some(done),
+            bytes_total: total,
+        });
+    };
+    crate::verified_download::fetch(
+        url,
+        archive,
+        Expected {
+            bytes: record.map(|(bytes, _)| bytes),
+            sha256: record.map(|(_, sha256)| sha256),
+        },
+        MAX_ZIP_BYTES,
+        stopped,
+        &progress,
+    )
+    .await
+    .map_err(|failure| match failure {
+        Failure::Transfer(error) => format!("{url} could not be downloaded: {error}"),
+        Failure::Write(error) => format!("Writing {error}"),
+        Failure::TooLarge { limit } => format!("{url} is larger than {}", gigabytes(limit)),
+        Failure::NotOnRecord { .. } => changed(url),
+        Failure::Stopped => "Stopped".into(),
+    })?;
+    report(Step::say("Unpacking…"));
     Ok(())
 }
 
@@ -349,9 +340,9 @@ fn place(
     archive: &Path,
     staging: &Path,
     root: &Path,
-    cancelled: &std::sync::atomic::AtomicBool,
+    stopped: &dyn Fn() -> bool,
 ) -> Result<SkyMap, String> {
-    let unpacked = unpack(archive, staging, cancelled)?;
+    let unpacked = unpack(archive, staging, stopped)?;
     SkyMap::open(&unpacked)
         .map_err(|error| format!("The archive is not a framing assistant cache: {error}"))?;
     let folder = unpacked
@@ -362,7 +353,8 @@ fn place(
         return Err("The archive's map folder begins with a dot".into());
     }
     let target = root.join(&folder);
-    if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+    // The last moment a stop counts: past it, the install finishes.
+    if stopped() {
         return Err("Stopped".into());
     }
     // A set of this name is moved aside first, so the folder is never half
@@ -386,18 +378,14 @@ fn place(
 
 /// Unpack into `staging`, refusing entries that would leave it, and return
 /// the folder that holds `CacheInfo.xml`.
-fn unpack(
-    archive: &Path,
-    staging: &Path,
-    cancelled: &std::sync::atomic::AtomicBool,
-) -> Result<PathBuf, String> {
+fn unpack(archive: &Path, staging: &Path, stopped: &dyn Fn() -> bool) -> Result<PathBuf, String> {
     let file = std::fs::File::open(archive).map_err(|error| error.to_string())?;
     let mut zip =
         zip::ZipArchive::new(file).map_err(|error| format!("Reading the archive: {error}"))?;
     let mut index_dir: Option<PathBuf> = None;
     let mut buffer = vec![0u8; 1 << 16];
     for i in 0..zip.len() {
-        if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+        if stopped() {
             return Err("Stopped".into());
         }
         let mut entry = zip.by_index(i).map_err(|error| error.to_string())?;
@@ -440,6 +428,7 @@ fn unpack(
 pub fn remove(root: &Path, folder: &str) -> Result<(), String> {
     let dir = map_dir(root, folder)?;
     SkyMap::open(&dir).map_err(|_| format!("{folder} is not an offline sky map"))?;
+    let _lock = lock(root)?;
     std::fs::remove_dir_all(&dir).map_err(|error| format!("Removing {}: {error}", dir.display()))
 }
 
@@ -449,7 +438,8 @@ pub fn remove(root: &Path, folder: &str) -> Result<(), String> {
 pub fn relocate(from: &Path, folder: &str, to: &Path) -> Result<SkyMap, String> {
     let source = map_dir(from, folder)?;
     SkyMap::open(&source).map_err(|_| format!("{folder} is not an offline sky map"))?;
-    std::fs::create_dir_all(to).map_err(|error| format!("Creating {}: {error}", to.display()))?;
+    // Held for the move, so no install sweeps its copy away.
+    let _lock = lock(to)?;
     let target = to.join(folder);
     if target.exists() {
         return Err(format!(
@@ -460,6 +450,7 @@ pub fn relocate(from: &Path, folder: &str, to: &Path) -> Result<SkyMap, String> 
     if std::fs::rename(&source, &target).is_err() {
         let size = folder_bytes(&source);
         check_room(to, size / 2)?;
+        sweep(to);
         let staging = to.join(format!("{}{}", sky_maps::UNPACKING, tag()));
         let copied = copy_tree(&source, &staging.join(folder)).and_then(|()| {
             std::fs::rename(staging.join(folder), &target).map_err(|error| error.to_string())
@@ -500,17 +491,7 @@ fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
 
 /// The bytes the files under `dir` take.
 pub fn folder_bytes(dir: &Path) -> u64 {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return 0;
-    };
-    entries
-        .flatten()
-        .map(|entry| match entry.metadata() {
-            Ok(meta) if meta.is_dir() => folder_bytes(&entry.path()),
-            Ok(meta) => meta.len(),
-            Err(_) => 0,
-        })
-        .sum()
+    crate::server::cache_budget::tree_bytes(dir)
 }
 
 /// The published set an installed map's folder belongs to.
@@ -541,6 +522,12 @@ pub fn installed(cache_root: &Path) -> Vec<(SkyMap, PathBuf)> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use sha2::{Digest, Sha256};
+
+    /// An install nothing stops.
+    fn go() -> std::sync::Arc<dyn Fn() -> bool + Send + Sync> {
+        std::sync::Arc::new(|| false)
+    }
 
     /// A zip holding a one-tile map in `folder`.
     pub(crate) fn map_zip(folder: &str) -> Vec<u8> {
@@ -610,18 +597,19 @@ pub(crate) mod tests {
     async fn an_archive_is_unpacked_aside_and_appears_whole() {
         let root = tempfile::tempdir().unwrap();
         let url = serve(map_zip("FramingAssistantCache")).await;
-        let map = install(root.path(), Source::Url(url), &quiet())
+        let map = install(root.path(), Source::Url(url), go(), &quiet())
             .await
             .unwrap();
         assert_eq!(map.dir, root.path().join("FramingAssistantCache"));
         assert_eq!(sky_maps::discover(root.path()).len(), 1);
-        // Nothing of the install is left beside the map.
-        let names: Vec<String> = std::fs::read_dir(root.path())
+        // Nothing of the install is left beside the map but the lock file.
+        let mut names: Vec<String> = std::fs::read_dir(root.path())
             .unwrap()
             .flatten()
             .map(|entry| entry.file_name().to_string_lossy().into_owned())
             .collect();
-        assert_eq!(names, ["FramingAssistantCache"]);
+        names.sort();
+        assert_eq!(names, [LOCK_FILE, "FramingAssistantCache"]);
     }
 
     #[tokio::test]
@@ -633,7 +621,17 @@ pub(crate) mod tests {
         let archive = root.path().join(".download-test.zip");
         let check = |record: (u64, String)| {
             let (url, archive, root) = (url.clone(), archive.clone(), root.path().to_path_buf());
-            async move { fetch(&url, Some((record.0, &record.1)), &archive, &root, &quiet()).await }
+            async move {
+                fetch(
+                    &url,
+                    Some((record.0, &record.1)),
+                    &archive,
+                    &root,
+                    &|| false,
+                    &quiet(),
+                )
+                .await
+            }
         };
         // The file on record passes.
         check((bytes, hash.clone())).await.unwrap();
@@ -652,18 +650,18 @@ pub(crate) mod tests {
     async fn a_new_install_replaces_a_set_of_the_same_name_only_when_it_is_whole() {
         let root = tempfile::tempdir().unwrap();
         let url = serve(map_zip("FramingAssistantCache")).await;
-        install(root.path(), Source::Url(url.clone()), &quiet())
+        install(root.path(), Source::Url(url.clone()), go(), &quiet())
             .await
             .unwrap();
         std::fs::write(root.path().join("FramingAssistantCache/mine.txt"), b"old").unwrap();
         // A broken archive leaves the installed set as it was.
         let broken = serve(b"not a zip".to_vec()).await;
-        assert!(install(root.path(), Source::Url(broken), &quiet())
+        assert!(install(root.path(), Source::Url(broken), go(), &quiet())
             .await
             .is_err());
         assert!(root.path().join("FramingAssistantCache/mine.txt").exists());
         // A whole one takes its place.
-        install(root.path(), Source::Url(url), &quiet())
+        install(root.path(), Source::Url(url), go(), &quiet())
             .await
             .unwrap();
         assert!(!root.path().join("FramingAssistantCache/mine.txt").exists());
@@ -674,7 +672,7 @@ pub(crate) mod tests {
     async fn a_map_still_being_unpacked_or_moved_aside_is_not_listed() {
         let root = tempfile::tempdir().unwrap();
         let url = serve(map_zip("FramingAssistantCache")).await;
-        install(root.path(), Source::Url(url), &quiet())
+        install(root.path(), Source::Url(url), go(), &quiet())
             .await
             .unwrap();
         for aside in [".unpack-1-a", ".replaced-1-b"] {
@@ -687,6 +685,56 @@ pub(crate) mod tests {
         let listed = sky_maps::discover(root.path());
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].dir, root.path().join("FramingAssistantCache"));
+    }
+
+    #[tokio::test]
+    async fn a_second_install_into_the_same_folder_waits_its_turn() {
+        let root = tempfile::tempdir().unwrap();
+        let held = lock(root.path()).unwrap();
+        let url = serve(map_zip("FramingAssistantCache")).await;
+        let refused = install(root.path(), Source::Url(url.clone()), go(), &quiet())
+            .await
+            .unwrap_err();
+        assert!(refused.contains("Another install or move"), "{refused}");
+        // Its files were not touched by the refused install's sweep.
+        std::fs::write(root.path().join(".download-other.zip"), b"theirs").unwrap();
+        assert!(
+            install(root.path(), Source::Url(url.clone()), go(), &quiet())
+                .await
+                .is_err()
+        );
+        assert!(root.path().join(".download-other.zip").exists());
+        drop(held);
+        install(root.path(), Source::Url(url), go(), &quiet())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_stop_during_the_unpack_leaves_the_installed_set_and_nothing_else() {
+        let root = tempfile::tempdir().unwrap();
+        let url = serve(map_zip("FramingAssistantCache")).await;
+        install(root.path(), Source::Url(url.clone()), go(), &quiet())
+            .await
+            .unwrap();
+        std::fs::write(root.path().join("FramingAssistantCache/mine.txt"), b"old").unwrap();
+        // Stopped once the download is done: the unpack sees it.
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = calls.clone();
+        let stop_after_download: std::sync::Arc<dyn Fn() -> bool + Send + Sync> =
+            std::sync::Arc::new(move || {
+                counted.fetch_add(1, std::sync::atomic::Ordering::Relaxed) >= 1
+            });
+        let ended = install(root.path(), Source::Url(url), stop_after_download, &quiet()).await;
+        assert_eq!(ended.unwrap_err(), "Stopped");
+        assert!(root.path().join("FramingAssistantCache/mine.txt").exists());
+        let names: Vec<String> = std::fs::read_dir(root.path())
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name != LOCK_FILE)
+            .collect();
+        assert_eq!(names, ["FramingAssistantCache"]);
     }
 
     #[test]
@@ -708,7 +756,7 @@ pub(crate) mod tests {
     #[test]
     fn an_archive_that_would_leave_its_folder_or_has_no_map_is_refused() {
         let root = tempfile::tempdir().unwrap();
-        let never = std::sync::atomic::AtomicBool::new(false);
+        let never = || false;
         // No index at all.
         let mut bytes = Vec::new();
         {
@@ -725,7 +773,7 @@ pub(crate) mod tests {
             .contains("no CacheInfo.xml"));
         // A stopped unpack writes nothing more.
         std::fs::write(&archive, map_zip("FramingAssistantCache")).unwrap();
-        let stopped = std::sync::atomic::AtomicBool::new(true);
+        let stopped = || true;
         assert_eq!(
             unpack(&archive, &root.path().join(".unpack-b"), &stopped).unwrap_err(),
             "Stopped"
@@ -751,7 +799,7 @@ pub(crate) mod tests {
         let cache = tempfile::tempdir().unwrap();
         let own = tempfile::tempdir().unwrap();
         let url = serve(map_zip("FramingAssistantCache")).await;
-        install(cache.path(), Source::Url(url), &quiet())
+        install(cache.path(), Source::Url(url), go(), &quiet())
             .await
             .unwrap();
         let moved = relocate(cache.path(), "FramingAssistantCache", own.path()).unwrap();
@@ -759,7 +807,7 @@ pub(crate) mod tests {
         assert!(sky_maps::discover(cache.path()).is_empty());
         // A second map of that name is not written over.
         let url = serve(map_zip("FramingAssistantCache")).await;
-        install(cache.path(), Source::Url(url), &quiet())
+        install(cache.path(), Source::Url(url), go(), &quiet())
             .await
             .unwrap();
         assert!(relocate(cache.path(), "FramingAssistantCache", own.path()).is_err());

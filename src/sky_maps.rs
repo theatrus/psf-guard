@@ -112,6 +112,11 @@ pub struct SkyMap {
     /// Narrowband Survey SHO set. The framing view then prefers this map.
     pub stands_in_for: Option<String>,
     pub dir: PathBuf,
+    /// Changes when the map's files are replaced, as an install of a newer
+    /// copy does: the index's size and time. Rendered views and warmed
+    /// tiles are kept under it, so a replaced map is never served from the
+    /// old one's pictures.
+    pub version: String,
     pub tiles: Vec<Tile>,
     /// Unit vectors per tile: center, east, north.
     frames: Vec<[[f64; 3]; 3]>,
@@ -284,6 +289,17 @@ impl SkyMap {
         let index = dir.join("CacheInfo.xml");
         let xml = std::fs::read_to_string(&index)
             .map_err(|_| format!("{}: no CacheInfo.xml", dir.display()))?;
+        let version = std::fs::metadata(&index)
+            .map(|meta| {
+                let at = meta
+                    .modified()
+                    .ok()
+                    .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|since| since.as_nanos())
+                    .unwrap_or(0);
+                format!("{}-{at:x}", meta.len())
+            })
+            .unwrap_or_default();
         let tiles = parse_index(&xml).map_err(|error| format!("{}: {error}", dir.display()))?;
         let folder = dir
             .file_name()
@@ -314,6 +330,7 @@ impl SkyMap {
             attribution,
             stands_in_for,
             dir: dir.to_path_buf(),
+            version,
             tiles,
             frames,
             cache: Mutex::new(TileCache::default()),

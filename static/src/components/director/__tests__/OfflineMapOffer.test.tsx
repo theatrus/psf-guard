@@ -50,7 +50,10 @@ describe('Offline map offer', () => {
     await waitFor(() => expect(installs).toEqual(['full']));
     await waitFor(() => expect(screen.getByTestId('offline-map-offer'))
       .toHaveTextContent('Installing the whole-sky map. 1.0 GB of 3.3 GB. You can keep working.'));
-    expect(window.localStorage.getItem('psf-guard.framing.offlineMapOffer')).toBe('installed');
+    // Remembered only once the map is in place.
+    expect(window.localStorage.getItem('psf-guard.framing.offlineMapOffer')).toBeNull();
+    install = { running: false, set: 'full', message: 'Installed', finished_at: 2 };
+    await waitFor(() => expect(window.localStorage.getItem('psf-guard.framing.offlineMapOffer')).toBe('installed'), { timeout: 4000 });
   });
 
   it('is not shown again after Not now', async () => {
@@ -88,5 +91,25 @@ describe('Offline map offer', () => {
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent('The install failed: no room');
     expect(screen.getByRole('button', { name: 'Open Offline sky maps' })).toBeInTheDocument();
+    // A failure is not remembered: the offer comes back.
+    expect(window.localStorage.getItem('psf-guard.framing.offlineMapOffer')).toBeNull();
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByRole('button', { name: 'Install' })).toBeInTheDocument();
+  });
+
+  it('does not take another set being installed for the whole-sky map', async () => {
+    const installs: string[] = [];
+    const nsns = { running: true, set: 'nsns-ohs', message: 'Downloading…' };
+    server.use(
+      http.get('/api/sky-maps', () => ok({ ...maps(nsns), sets: [
+        ...maps().sets, { key: 'nsns-ohs', name: 'Northern sky narrowband, with stars', covers: '', bytes: 1, room_needed: 0, installed: false },
+      ] })),
+      http.post('/api/sky-maps/install', () => { installs.push('full'); return ok(nsns); }),
+    );
+    render(<OfflineMapOffer surveys={[online]} canWrite />, { wrapper: wrapper() });
+    expect(await screen.findByText(/Northern sky narrowband, with stars is being installed now/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Install' })).toBeNull();
+    expect(installs).toEqual([]);
+    expect(window.localStorage.getItem('psf-guard.framing.offlineMapOffer')).toBeNull();
   });
 });

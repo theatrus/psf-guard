@@ -62,7 +62,12 @@ pub fn run(action: SkyMapsCommand) -> Result<()> {
             eprintln!("Installing into {}", root.display());
             let runtime = tokio::runtime::Runtime::new()?;
             let map = runtime
-                .block_on(install::install(&root, source, &report))
+                .block_on(install::install(
+                    &root,
+                    source,
+                    std::sync::Arc::new(|| false),
+                    &report,
+                ))
                 .map_err(|error| anyhow::anyhow!("{error}"))?;
             println!(
                 "Installed {} ({} tiles) as layer {} in {:.0} s",

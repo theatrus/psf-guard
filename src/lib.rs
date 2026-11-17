@@ -50,6 +50,7 @@ pub mod ts_schema;
 pub mod ts_sync;
 pub mod user_preferences;
 pub mod utils;
+pub mod verified_download;
 pub mod zero_point;
 
 // Main entry points

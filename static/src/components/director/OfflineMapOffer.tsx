@@ -38,50 +38,62 @@ export default function OfflineMapOffer({ surveys, canWrite }: {
     queryFn: apiClient.getSkyMaps,
     enabled: offering || started,
     refetchOnWindowFocus: false,
-    refetchInterval: (query) => started && query.state.data?.install.running ? 2000 : false,
+    refetchInterval: (query) => (started || offering) && query.state.data?.install.running ? 2000 : false,
   });
   const install = useMutation({
     mutationFn: () => apiClient.installSkyMap(OFFERED_SET),
-    onSuccess: () => {
-      remember('installed');
-      setStarted(true);
+    onSuccess: (progress) => {
+      // The server answers with the install under way: when another set is
+      // installing, this click started nothing.
+      if (progress.set === OFFERED_SET) setStarted(true);
       return queryClient.invalidateQueries({ queryKey: skyMapsKey });
     },
   });
 
-  // Installed: Framing reads its layers again and takes the map.
-  const finished = started && !!maps.data && !maps.data.install.running && !maps.data.install.error;
+  const progress = maps.data?.install;
+  const ours = progress?.set === OFFERED_SET;
+  // The offer is answered only once the whole-sky map is in place.
+  const finished = started && ours && !!progress && !progress.running && !progress.error;
   useEffect(() => {
-    if (finished) void queryClient.invalidateQueries({ queryKey: ['directorSurveys'] });
+    if (!finished) return;
+    remember('installed');
+    void queryClient.invalidateQueries({ queryKey: ['directorSurveys'] });
   }, [finished, queryClient]);
 
-  if (started) {
-    const progress = maps.data?.install;
-    if (!progress || progress.running) {
-      const part = progress?.bytes_total && progress.bytes_completed !== undefined
+  if (!canWrite || !none) return null;
+  if (started && ours && progress) {
+    if (progress.running) {
+      const part = progress.bytes_total && progress.bytes_completed !== undefined
         ? ` ${gigabytes(progress.bytes_completed)} of ${gigabytes(progress.bytes_total)}.` : '';
       return <p className="framing-offline-offer" data-testid="offline-map-offer">
         Installing the whole-sky map.{part} You can keep working.
       </p>;
     }
     if (progress.error) {
+      // Not remembered: the offer comes back, so the person can try again.
       return <p className="framing-offline-offer" role="alert" data-testid="offline-map-offer">
         {progress.message}{' '}
+        <button type="button" onClick={() => { setStarted(false); install.reset(); }}>Try again</button>{' '}
         <button type="button" onClick={() => openSettings('sky-maps')}>Open Offline sky maps</button>
       </p>;
     }
     return null;
   }
-  if (!offering) return null;
+  if (answered) return null;
   const set = maps.data?.sets.find(entry => entry.key === OFFERED_SET);
+  const other = progress?.running && !ours
+    ? maps.data?.sets.find(entry => entry.key === progress.set)?.name ?? 'Another map'
+    : undefined;
   const later = () => { remember('later'); setAnswered(true); };
   // A plain paragraph: the stage's notes are the page's `note`s.
   return <p className="framing-offline-offer" data-testid="offline-map-offer">
     No offline sky map is installed, so the sky is fetched from the survey service as you move.{' '}
-    Install the whole-sky map{set ? ` (${gigabytes(set.bytes)})` : ''}?{' '}
-    <button type="button" disabled={install.isPending} onClick={() => install.mutate()}>
-      {install.isPending ? 'Starting…' : 'Install'}
-    </button>{' '}
+    {other
+      ? <>{other} is being installed now; install the whole-sky map when it is done.{' '}</>
+      : <>Install the whole-sky map{set ? ` (${gigabytes(set.bytes)})` : ''}?{' '}
+        <button type="button" disabled={install.isPending} onClick={() => install.mutate()}>
+          {install.isPending ? 'Starting…' : 'Install'}
+        </button>{' '}</>}
     <button type="button" onClick={later}>Not now</button>{' '}
     <button type="button" onClick={() => openSettings('sky-maps')}>Other maps</button>
     {install.error && <span role="alert"> {install.error.message}</span>}
