@@ -555,6 +555,71 @@ async fn the_month_and_the_year_count_the_nights_each_part_of_the_sky_is_in_view
         year_share(1),
         view["any_night"]["sky_fraction"].as_f64().unwrap()
     );
+    // The measured nights' grids come with a year, for a client to show
+    // one time of year from: a bit a node, 2048 bytes a night.
+    assert!(month["measured"].is_null());
+    let measured = &view["measured"];
+    assert_eq!(measured["bytes_a_night"], 2048);
+    assert_eq!(measured["turn_degrees_a_night"], 1.0);
+    let bits = {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD
+            .decode(measured["in_view"].as_str().unwrap())
+            .unwrap()
+    };
+    assert_eq!(bits.len(), 53 * 2048);
+    let seen = |night: usize, index: usize| bits[night * 2048 + index / 8] >> (index % 8) & 1 == 1;
+    // They are the grids the counts were made from. A measured night
+    // asked for alone has the same grid.
+    for (night, date) in [(0, "2026-09-24"), (1, "2026-10-01"), (30, "2027-04-22")] {
+        let one = json!({"rig": rig, "first_night": date});
+        let (status, body) = call(&app, "POST", PATH, one, None).await;
+        assert_eq!(status, StatusCode::OK);
+        let single = unpacked(&body["data"]);
+        assert!(
+            single
+                .iter()
+                .enumerate()
+                .all(|(index, count)| (*count == 1) == seen(night, index)),
+            "{date}"
+        );
+    }
+    // Added up by the rule for the nights between, they give the year's
+    // counts, and a month of them gives the reference's month.
+    let grids: Vec<Vec<bool>> = (0..53)
+        .map(|night| (0..180 * 91).map(|index| seen(night, index)).collect())
+        .collect();
+    let slices: Vec<&[bool]> = grids.iter().map(|grid| grid.as_slice()).collect();
+    assert_eq!(
+        super::super::visible_sky::year_window(&slices, 0, 365),
+        year_counts
+    );
+    for first in [0, 98, 189, 334] {
+        let window = super::super::visible_sky::year_window(&slices, first, 31);
+        assert!(window.iter().all(|count| *count <= 31));
+        assert!(window
+            .iter()
+            .zip(&year_counts)
+            .all(|(month, year)| month <= year));
+        // The pole every night, the far south none.
+        assert_eq!(window[90 * 180], 31);
+        assert_eq!(window[0], 0);
+    }
+    // The first month from the weekly nights against the month measured
+    // night by night: never more nights at a node than were measured.
+    let first = super::super::visible_sky::year_window(&slices, 0, 31);
+    assert!(first
+        .iter()
+        .zip(&counts)
+        .all(|(filled, exact)| *filled <= *exact + 2));
+    // Most nodes agree, and those that differ lie along the edges.
+    let differ = first
+        .iter()
+        .zip(&counts)
+        .filter(|(filled, exact)| filled != exact)
+        .count();
+    assert!(differ < 180 * 91 / 10, "{differ}");
+
     // A place asked about for itself is counted as its node is in the
     // picture: a card and the map beside it agree.
     let nodes: Vec<(f64, f64)> = vec![(190.0, 0.0), (20.0, -20.0), (300.0, 40.0), (96.0, -28.0)];

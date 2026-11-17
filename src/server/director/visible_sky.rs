@@ -167,6 +167,25 @@ struct Region {
 /// The grid the nights were counted on: nodes every `degrees`, `columns`
 /// of right ascension from 0h and `rows` of declination from the south
 /// pole to the north.
+/// A year's measured nights, and what it takes to work out the nights
+/// between them as [`fill`] does.
+#[derive(Serialize)]
+struct Measured {
+    /// For each of `nights` in turn, whether each node of the grid meets
+    /// the minimum time: a bit a node, row by row from the south pole, the
+    /// lowest bit of each byte first, each night padded to whole bytes;
+    /// in base64.
+    in_view: String,
+    bytes_a_night: usize,
+    /// How far the sky in view is taken to turn from one night to the
+    /// next, in degrees of right ascension. A night between two measured
+    /// nights counts a node only when the measured night before has it in
+    /// view this far back for each night since, and the one after this far
+    /// on for each night to come; a turn that falls between two columns
+    /// asks both.
+    turn_degrees_a_night: f64,
+}
+
 #[derive(Serialize)]
 struct GridShape {
     degrees: f64,
@@ -204,6 +223,10 @@ pub(super) struct View {
     /// meets the minimum time: two bytes a node, low byte first, row by
     /// row from the south pole, in base64.
     counts: String,
+    /// For a year, each measured night's grid, for a client to add up the
+    /// nights of one time of year itself.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    measured: Option<Measured>,
     /// Sky that meets the minimum time on every night.
     every_night: Region,
     /// Sky that meets it on at least one night; `None` for a single night,
@@ -449,6 +472,13 @@ fn nights_counted(span: Span, measured: usize) -> u32 {
         Span::Now => measured as u32,
         Span::Year => fill::nights_counted(measured) as u32,
     }
+}
+
+/// A window of a year's nights added up from its measured grids, for
+/// tests to hold an answer's grids against.
+#[cfg(test)]
+pub(super) fn year_window(grids: &[&[bool]], first: usize, nights: usize) -> Vec<u16> {
+    fill::window_counts(grids, COLS, first, nights)
 }
 
 /// A place `steps` grid steps of right ascension on from another, at the
@@ -923,6 +953,15 @@ fn measure(
             rows: ROWS,
         },
         nights_counted: counted,
+        measured: (span == Span::Year).then(|| {
+            use base64::Engine;
+            let measured: Vec<&[bool]> = grids.iter().map(|grid| grid.as_slice()).collect();
+            Measured {
+                in_view: base64::engine::general_purpose::STANDARD.encode(fill::pack(&measured)),
+                bytes_a_night: (COLS * ROWS).div_ceil(8),
+                turn_degrees_a_night: fill::TURN_DEGREES_A_NIGHT,
+            }
+        }),
         counts: {
             use base64::Engine;
             let bytes: Vec<u8> = counts

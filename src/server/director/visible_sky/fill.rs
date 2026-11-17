@@ -36,6 +36,9 @@
 
 /// The measured nights lie this many nights apart.
 pub(super) const EVERY: usize = 7;
+/// How far the sky in view is taken to turn from one night to the next,
+/// in degrees of right ascension. The true figure is 0.986.
+pub(super) const TURN_DEGREES_A_NIGHT: f64 = 1.0;
 /// How far, in steps of two degrees, a measured night is turned either
 /// way to stand for the nights around it: six degrees for six nights.
 pub(super) const REACH: usize = 3;
@@ -56,6 +59,60 @@ pub(super) fn between(before: [bool; REACH + 1], after: [bool; REACH + 1]) -> [b
         a[2] && a[3] && b[1],
         a[3] && b[0] && b[1],
     ]
+}
+
+/// Whether one node is in view on one night of the year, from the
+/// measured nights' grids: night 0 is the first measured night. The rule
+/// [`counts`] counts by, one night at a time.
+#[cfg(test)]
+pub(super) fn night_seen(grids: &[&[bool]], cols: usize, night: usize, index: usize) -> bool {
+    let (week, since) = (night / EVERY, night % EVERY);
+    if since == 0 {
+        return grids[week][index];
+    }
+    let (row, col) = (index / cols, index % cols);
+    let at = |grid: &[bool], step: i32| {
+        grid[row * cols + (col as i32 + step).rem_euclid(cols as i32) as usize]
+    };
+    let before: [bool; REACH + 1] = std::array::from_fn(|i| at(grids[week], -(i as i32)));
+    let after: [bool; REACH + 1] = std::array::from_fn(|i| at(grids[week + 1], i as i32));
+    between(before, after)[since - 1]
+}
+
+/// For every node, on how many of `nights` nights from night `first` of
+/// the year it is in view: what a client adds up from the measured
+/// nights' grids to show one time of year.
+#[cfg(test)]
+pub(super) fn window_counts(
+    grids: &[&[bool]],
+    cols: usize,
+    first: usize,
+    nights: usize,
+) -> Vec<u16> {
+    let nodes = grids.first().map_or(0, |grid| grid.len());
+    (0..nodes)
+        .map(|index| {
+            (first..first + nights)
+                .filter(|night| night_seen(grids, cols, *night, index))
+                .count() as u16
+        })
+        .collect()
+}
+
+/// The measured nights' grids packed for a client: a bit a node, the
+/// lowest bit of each byte first, each night padded to whole bytes.
+pub(super) fn pack(grids: &[&[bool]]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for grid in grids {
+        for nodes in grid.chunks(8) {
+            let mut byte = 0_u8;
+            for (bit, seen) in nodes.iter().enumerate() {
+                byte |= u8::from(*seen) << bit;
+            }
+            bytes.push(byte);
+        }
+    }
+    bytes
 }
 
 /// How many nights the measured nights stand for: themselves and the six
@@ -227,6 +284,98 @@ mod tests {
                 "{pattern}"
             );
             assert_eq!(all_or_any(6, false, seen).unwrap(), nights > 0, "{pattern}");
+        }
+    }
+
+    /// The rule as a client works it out from the constants an answer
+    /// carries: a night `since` nights after a measured night turns back
+    /// `since` degrees from it and on `EVERY - since` degrees from the next,
+    /// and a turn between two steps of the grid asks both.
+    #[test]
+    fn the_table_is_the_turn_in_steps_of_the_grid() {
+        let step_degrees = 2.0;
+        for pattern in 0..256_u32 {
+            let before: [bool; 4] = std::array::from_fn(|i| pattern >> i & 1 == 1);
+            let after: [bool; 4] = std::array::from_fn(|i| pattern >> (i + 4) & 1 == 1);
+            for since in 1..EVERY {
+                let back = since as f64 * TURN_DEGREES_A_NIGHT / step_degrees;
+                let on = (EVERY - since) as f64 * TURN_DEGREES_A_NIGHT / step_degrees;
+                let wanted = before[back.floor() as usize]
+                    && before[back.ceil() as usize]
+                    && after[on.floor() as usize]
+                    && after[on.ceil() as usize];
+                assert_eq!(
+                    between(before, after)[since - 1],
+                    wanted,
+                    "{pattern} {since}"
+                );
+            }
+        }
+        assert_eq!(
+            REACH,
+            ((EVERY - 1) as f64 * TURN_DEGREES_A_NIGHT / step_degrees).ceil() as usize
+        );
+    }
+
+    /// A small sky the client's tests hold too (`skySeason.test.ts`): six
+    /// measured nights of three rows by twelve columns.
+    fn small() -> Vec<Vec<bool>> {
+        (0..6_usize)
+            .map(|night| {
+                (0..36_usize)
+                    .map(|index| {
+                        let (row, col) = (index / 12, index % 12);
+                        match row {
+                            0 => false,
+                            1 => (col + 12 - (3 * night) % 12) % 12 < 7,
+                            _ => night != 3 || col > 4,
+                        }
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_window_adds_up_the_nights_the_whole_count_is_made_of() {
+        let small = small();
+        let grids: Vec<&[bool]> = small.iter().map(|grid| grid.as_slice()).collect();
+        let whole = counts(&grids, 12);
+        assert_eq!(window_counts(&grids, 12, 0, 36), whole);
+        let (early, late) = (
+            window_counts(&grids, 12, 0, 10),
+            window_counts(&grids, 12, 10, 26),
+        );
+        assert!(whole
+            .iter()
+            .zip(early.iter().zip(&late))
+            .all(|(all, (a, b))| all == &(a + b)));
+        // The numbers the client's test expects of its own adding up.
+        assert_eq!(
+            window_counts(&grids, 12, 0, 10),
+            [
+                vec![0; 12],
+                vec![1, 3, 5, 8, 10, 10, 10, 7, 5, 3, 0, 0],
+                vec![10; 12]
+            ]
+            .concat()
+        );
+        assert_eq!(
+            window_counts(&grids, 12, 14, 10),
+            [
+                vec![0; 12],
+                vec![10, 7, 5, 3, 0, 0, 1, 3, 5, 8, 10, 10],
+                vec![2, 1, 2, 4, 6, 8, 10, 10, 10, 8, 6, 4]
+            ]
+            .concat()
+        );
+        // Packed a bit a node, lowest bit first, a night to whole bytes.
+        let packed = pack(&grids);
+        assert_eq!(packed.len(), 6 * 5);
+        for (night, grid) in grids.iter().enumerate() {
+            for (index, seen) in grid.iter().enumerate() {
+                assert_eq!(packed[night * 5 + index / 8] >> (index % 8) & 1 == 1, *seen);
+            }
         }
     }
 

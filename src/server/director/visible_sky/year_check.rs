@@ -107,6 +107,14 @@ pub(super) struct Found {
     pub(super) line_apart: Option<f64>,
     /// The same for the line through the measured nights alone.
     pub(super) measured_line_apart: Option<f64>,
+    /// A month at a time, as a client adds one up for each week of the
+    /// year: over every such month, the largest difference in a node's
+    /// count of 31 nights, the mean difference in nights, the largest
+    /// count beyond the true one, and the most nodes wrongly counted in
+    /// view on every night of a month. The same four for the first month
+    /// alone, which is the month Now measures night by night.
+    pub(super) months: (i32, f64, i32, usize),
+    pub(super) first_month: (i32, f64, i32, usize),
     /// The largest zigzag of each every-night line's declination within
     /// 7° of right ascension, in degrees: true, filled, measured alone.
     pub(super) wiggle: (f64, f64, f64),
@@ -308,7 +316,50 @@ pub(super) fn compare(case: &Case, first: &str, measured: usize, needed: u32) ->
         .iter()
         .zip(&true_counts)
         .map(|(filled, truth)| i32::from(*filled) - *truth as i32);
+    // A month at a time from each week of the year.
+    let filled_nights: Vec<Vec<bool>> = (0..nights)
+        .map(|night| {
+            (0..COLS * ROWS)
+                .map(|index| fill::night_seen(&slices, COLS, night, index))
+                .collect()
+        })
+        .collect();
+    let month = |first: usize| {
+        let count = |from: &[Vec<bool>], index: usize| {
+            from[first..first + 31]
+                .iter()
+                .filter(|night| night[index])
+                .count() as i32
+        };
+        let (mut worst, mut sum, mut over, mut claimed) = (0, 0, 0, 0);
+        for index in 0..COLS * ROWS {
+            let (filled, truth) = (count(&filled_nights, index), count(&truth, index));
+            worst = worst.max((filled - truth).abs());
+            sum += (filled - truth).abs();
+            over = over.max(filled - truth);
+            claimed += usize::from(filled == 31 && truth < 31);
+        }
+        (worst, f64::from(sum) / (COLS * ROWS) as f64, over, claimed)
+    };
+    let first_month = if nights >= 31 {
+        month(0)
+    } else {
+        (0, 0.0, 0, 0)
+    };
+    let months = (0..nights.saturating_sub(30))
+        .step_by(fill::EVERY)
+        .map(month)
+        .fold((0, 0.0_f64, 0, 0), |all, one| {
+            (
+                all.0.max(one.0),
+                all.1.max(one.1),
+                all.2.max(one.2),
+                all.3.max(one.3),
+            )
+        });
     Found {
+        months,
+        first_month,
         nights,
         every: (share(&true_every), share(&every)),
         any: (share(&true_any), share(&any)),
@@ -365,6 +416,10 @@ fn hold(name: &str, found: &Found) {
     // What it leaves out is a strip a node wide along some of an edge: of
     // the 16,380 nodes, a few dozen.
     assert!(found.every_missed <= 80, "{name}: {found:?}");
+    // A month added up from the weekly nights adds at most two nights to
+    // a node.
+    assert!(found.months.2 <= 2, "{name}: {found:?}");
+    assert!(found.first_month.2 <= 2, "{name}: {found:?}");
     assert!(found.any_missed <= 80, "{name}: {found:?}");
     // Its shares of the sky are within half a percent of the true ones,
     // and never over for the sky in view every night by more than a
