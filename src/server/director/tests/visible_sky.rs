@@ -607,6 +607,61 @@ async fn the_month_and_the_year_count_the_nights_each_part_of_the_sky_is_in_view
         year_share(1),
         view["any_night"]["sky_fraction"].as_f64().unwrap()
     );
+    // A year's clear sky is the sky in view on at least seven nights of
+    // it, and the answer carries the number. A month has no such region.
+    assert!(month["at_least"].is_null());
+    let clear = &view["at_least"];
+    assert_eq!(clear["nights"], 7);
+    assert_eq!(year_share(7), clear["sky_fraction"].as_f64().unwrap());
+    assert!(year_share(365) < year_share(7) && year_share(7) <= year_share(1));
+    assert_eq!(clear["declinations"][1], 90.0);
+    // Its lines run between the nodes with seven nights or more and
+    // those with fewer: every point of a line lies on the grid between
+    // one of each, so every node with seven is inside and none with fewer.
+    let enough = |ra: f64, dec: f64| count_at(&view, ra.rem_euclid(360.0), dec) >= 7;
+    let clear_lines = lines(clear);
+    assert!(!clear_lines.is_empty());
+    let mut upright = None;
+    for (ra, dec) in clear_lines.iter().flatten() {
+        let on_column = (ra / 2.0 - (ra / 2.0).round()).abs() < 1e-9;
+        let on_row = (dec / 2.0 - (dec / 2.0).round()).abs() < 1e-9;
+        assert!(on_column || on_row, "{ra} {dec}");
+        if on_column && !on_row {
+            let (south, north) = ((dec / 2.0).floor() * 2.0, (dec / 2.0).ceil() * 2.0);
+            assert_ne!(enough(*ra, south), enough(*ra, north), "{ra} {dec}");
+            // A place well clear of both nodes and of the line.
+            if upright.is_none() && dec - south > 0.5 && north - dec > 0.5 {
+                upright = Some((*ra, *dec, enough(*ra, north)));
+            }
+        } else if on_row && !on_column {
+            let (west, east) = ((ra / 2.0).floor() * 2.0, (ra / 2.0).ceil() * 2.0);
+            assert_ne!(enough(west, *dec), enough(east, *dec), "{ra} {dec}");
+        }
+    }
+    // A place either side of the line is counted for itself, and the
+    // one-place answer says which side it is on by the same count.
+    let (ra, dec, north_is_in) = upright.expect("a crossing between two rows");
+    let either = json!({"rig": rig, "first_night": "2026-09-24", "span": "year", "places": [
+        {"ra_degrees": ra, "dec_degrees": dec + 0.3}, {"ra_degrees": ra, "dec_degrees": dec - 0.3}]});
+    let (status, body) = call(&app, "POST", "/sky/visible-places", either, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["data"]["at_least_nights"], 7);
+    let sides = body["data"]["places"].as_array().unwrap();
+    assert_eq!(sides[0]["at_least"], north_is_in, "{body}");
+    assert_eq!(sides[1]["at_least"], !north_is_in, "{body}");
+    for side in sides {
+        assert_eq!(
+            side["at_least"].as_bool().unwrap(),
+            side["nights_in_view"].as_u64().unwrap() >= 7,
+            "{body}"
+        );
+    }
+    // A month's place has no such answer.
+    let in_month = json!({"rig": rig, "first_night": "2026-09-24", "span": "now", "places": [{"ra_degrees": ra, "dec_degrees": dec}]});
+    let (status, body) = call(&app, "POST", "/sky/visible-places", in_month, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body["data"]["at_least_nights"].is_null());
+    assert!(body["data"]["places"][0]["at_least"].is_null());
     // The measured nights' grids come with a year when asked for, for a
     // client to show one time of year from: a bit a node, 2048 bytes a
     // night. They are read from what the year kept: nothing is measured
