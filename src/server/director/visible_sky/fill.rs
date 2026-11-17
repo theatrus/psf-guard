@@ -31,8 +31,8 @@
 //!
 //! The same rule serves a node of the grid, where the turned places are
 //! other nodes and cost nothing, and any place between nodes, where each
-//! turned place is measured: a card about a place and the picture beside
-//! it are one estimate.
+//! turned place is measured: words about a place and the picture beside
+//! them are one estimate.
 
 /// The measured nights lie this many nights apart.
 pub(super) const EVERY: usize = 7;

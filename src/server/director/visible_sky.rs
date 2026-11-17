@@ -1,7 +1,7 @@
 //! The sky a rig can shoot for long enough: over a set of nights, on how
 //! many of them each part of the sky stays in view, in the dark, for at
 //! least a minimum time without a break, and the lines around the sky in
-//! view on every night and on any. A plan's Sky tab draws them. The nights
+//! view on every night and on any. Framing draws them over its stage. The nights
 //! are tonight and the 30 after ([`Span::Now`]), or every night of a year
 //! ([`Span::Year`]): one night a week measured, and the nights between
 //! worked out from the measured ones ([`fill`]).
@@ -1187,8 +1187,8 @@ pub(super) struct PlacesRequest {
 }
 
 /// On how many of the nights some places are in view: each place measured
-/// itself, not read off the grid, so a card about a place agrees with the
-/// lines drawn beside it.
+/// itself, not read off the grid, so words about a place agree with the
+/// lines drawn beside them.
 pub(super) async fn places(
     State(state): State<Arc<AppState>>,
     Json(request): Json<PlacesRequest>,
