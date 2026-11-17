@@ -7,13 +7,13 @@ import { formatNightDate } from '../nights/nightsModel';
 import { formatNight } from '../sky/skyModel';
 import { DEFAULT_STAGE, deprojectOn, fromStage, projectOn, skyAtStage, toStage, viewAt } from '../director/framingModel';
 import { SkyInViewLayer, SkyInViewPanel } from '../director/SkyInView';
-import { monthMarks, useSkyInView, type SkyInViewRig } from '../director/useSkyInView';
+import { monthMarks, shortOfYear, useSkyInView, type SkyInViewRig } from '../director/useSkyInView';
 import { COVER_REST_MS, coverSize, stageLines, stagePlace, stageReach } from '../director/skyInViewStage';
 import { coverRaster, type SkyCounts } from '../sky/skyShade';
 
 configure({ asyncUtilTimeout: 5000 });
 
-const asked = vi.hoisted(() => ({ calls: [] as DirectorVisibleSkyRequest[], places: [] as DirectorVisiblePlacesRequest[], answer: (request: DirectorVisibleSkyRequest): Promise<unknown> => Promise.resolve(request) }));
+const asked = vi.hoisted(() => ({ calls: [] as DirectorVisibleSkyRequest[], places: [] as DirectorVisiblePlacesRequest[], placesGate: null as Promise<void> | null, answer: (request: DirectorVisibleSkyRequest): Promise<unknown> => Promise.resolve(request) }));
 vi.mock('../../api/client', () => ({
   apiClient: {
     getDirectorVisibleSky: (request: DirectorVisibleSkyRequest) => { asked.calls.push(request); return asked.answer(request); },
@@ -21,8 +21,11 @@ vi.mock('../../api/client', () => ({
     // night north of +40°, 12 nights down to −30°, none south of that.
     getDirectorVisiblePlaces: async (request: DirectorVisiblePlacesRequest) => {
       asked.places.push(request);
+      if (asked.placesGate) await asked.placesGate;
       const counted = request.span === 'year' ? 365 : 31;
-      if (request.span === 'year') return { first_night: request.first_night ?? '2026-09-24', nights_counted: 365, at_least_nights: 7, places: request.places.map((place) => ({ ...place, nights_in_view: yearNights(place.dec_degrees), at_least: yearNights(place.dec_degrees) >= 7 })) };
+      // At +15° the server's own decision is that the place falls short,
+      // whatever its count: the words must follow the server.
+      if (request.span === 'year') return { first_night: request.first_night ?? '2026-09-24', nights_counted: 365, at_least_nights: 7, places: request.places.map((place) => ({ ...place, nights_in_view: yearNights(place.dec_degrees), at_least: place.dec_degrees === 15 ? false : yearNights(place.dec_degrees) >= 7 })) };
       return { first_night: request.first_night ?? '2026-09-24', nights_counted: counted, places: request.places.map((place) => ({ ...place, nights_in_view: place.dec_degrees >= 40 ? counted : place.dec_degrees >= -30 ? 12 : 0 })) };
     },
   },
@@ -78,7 +81,8 @@ const view = (request: DirectorVisibleSkyRequest, over: Partial<DirectorVisibleS
     nights: nightList(year ? 53 : 31, year ? 7 : 1), span: year ? 'year' : 'now', every_nights: year ? 7 : 1,
     nights_counted: year ? 365 : 31,
     grid: { degrees: 2, columns: 180, rows: 91 }, counts: year ? yearCounts() : counts(31),
-    every_night: { lines: [ring(40)], sky_fraction: 0.18, declinations: [39.6, 90] },
+    // A year has no every-night region: its clear sky is `at_least`.
+    ...(year ? {} : { every_night: { lines: [ring(40)], sky_fraction: 0.18, declinations: [39.6, 90] as [number, number] } }),
     any_night: { lines: [ring(-30)], sky_fraction: 0.75, declinations: [-30.4, 90] },
     ...(year ? { at_least: { nights: 7, lines: [ring(10)], sky_fraction: 0.41, declinations: [9.8, 90] as [number, number] } } : {}),
     ...(request.measured ? { measured: measuredYear() } : {}),
@@ -118,7 +122,7 @@ const notes = () => screen.queryAllByTestId('note').map((note) => [note.textCont
 
 describe('sky in view over the framing stage', () => {
   beforeEach(() => {
-    asked.calls.length = 0; asked.places.length = 0; asked.answer = async (request) => view(request); openSettings.mockClear();
+    asked.calls.length = 0; asked.places.length = 0; asked.placesGate = null; asked.answer = async (request) => view(request); openSettings.mockClear();
     // No canvas under the tests: the layer draws without the cover's picture.
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
   });
@@ -177,7 +181,7 @@ describe('sky in view over the framing stage', () => {
     expect(layer?.getAttribute('data-nights')).toBe('7');
     expect(layer?.querySelector('.sky-in-view-line.sky-in-view-every')?.getAttribute('d')).toMatch(/^M/);
     const body = container.querySelector('.sky-in-view-body')?.textContent ?? '';
-    expect(body).toContain('Year counts every night of the year. Clear sky is in view on at least 7 of them, in total and not in a row. One night a week is measured and the nights between are worked out from the measured nights. The solid line is within about 1° of a line measured on every night.');
+    expect(body).toContain('Year counts every night of the year. One night a week is measured and the nights between are worked out from the measured nights. Clear sky is in view on at least 7 of them, in total and not in a row. The solid line is within about 1° of a line measured on every night.');
     expect(body).toContain('Covered sky is in view on fewer than 7 nights. Hatched sky is never in view.');
     // The scale and the solid line's name follow.
     expect(body).toContain('No night7 nights or moreEdge of the sky in view on 7 nights or moreEdge of the sky in view on any night');
@@ -192,6 +196,87 @@ describe('sky in view over the framing stage', () => {
     expect(asked.calls.some((call) => call.minimum_minutes === 9)).toBe(false);
     fireEvent.click(await screen.findByRole('button', { name: "Use rig's 30 min" }));
     await waitFor(() => expect(field.value).toBe('30'));
+  });
+
+  it('never holds a count from one time frame to the rule of another while the new count is on its way', async () => {
+    // At +20° the target is in view on 12 of the month's 31 nights, short
+    // of every night, and on 7 of the year's, which leaves it clear.
+    show({ target: { ra_degrees: 38.2, dec_degrees: 20 } });
+    await waitFor(() => expect(status()).toBe('The target is in view on 12 of the 31 nights counted.'));
+    expect(notes()).toEqual([['Target not in view every night', 'The target is in view on 12 of the 31 nights counted.']]);
+    let open = () => {};
+    asked.placesGate = new Promise((resolve) => { open = resolve; });
+    fireEvent.click(screen.getByRole('radio', { name: 'Year' }));
+    await waitFor(() => expect(asked.places.at(-1)?.span).toBe('year'));
+    // The year's picture is here and its count is not: the month's words
+    // and note stay, dimmed, judged as the month's.
+    await waitFor(() => expect(screen.getByTestId('stale').textContent).toBe('true'));
+    expect(status()).toBe('The target is in view on 12 of the 31 nights counted.');
+    expect(notes()).toEqual([['Target not in view every night', 'The target is in view on 12 of the 31 nights counted.']]);
+    await act(async () => { open(); });
+    await waitFor(() => expect(status()).toBe('The target is in view on 7 of the 365 nights of the year.'));
+    expect(notes()).toEqual([]);
+  });
+
+  it("keeps a year's note to the year while the month's count is on its way", async () => {
+    // At 0° the target is in view on 3 nights of the year, short of a
+    // week, and on 12 of the month's 31. It is first framed elsewhere, so
+    // its month is not already counted when Now is chosen again.
+    const { again } = show({ target: { ra_degrees: 38.2, dec_degrees: 61.45 } });
+    await waitFor(() => expect(status()).toContain('31 nights'));
+    fireEvent.click(screen.getByRole('radio', { name: 'Year' }));
+    await waitFor(() => expect(status()).toContain('365 nights'));
+    again({ target: { ra_degrees: 38.2, dec_degrees: 0 } });
+    await waitFor(() => expect(status()).toBe('The target is in view on 3 of the 365 nights of the year.'));
+    expect(notes()).toEqual([['Target in view under a week a year', 'The target is in view on 3 of the 365 nights of the year.']]);
+    let open = () => {};
+    asked.placesGate = new Promise((resolve) => { open = resolve; });
+    const seen = asked.places.length;
+    fireEvent.click(screen.getByRole('radio', { name: 'Now' }));
+    await waitFor(() => expect(asked.places.length).toBeGreaterThan(seen));
+    // The year's words and its own note stay, dimmed, until the month's
+    // count is here; the month's rule is not applied to them.
+    expect(screen.getByTestId('stale').textContent).toBe('true');
+    expect(notes()).toEqual([['Target in view under a week a year', 'The target is in view on 3 of the 365 nights of the year.']]);
+    await act(async () => { open(); });
+    await waitFor(() => expect(status()).toBe('The target is in view on 12 of the 31 nights counted.'));
+    expect(notes()).toEqual([['Target not in view every night', 'The target is in view on 12 of the 31 nights counted.']]);
+  });
+
+  it("follows the server's decision on whether a place has the year's nights", async () => {
+    const { again } = show({ target: { ra_degrees: 38.2, dec_degrees: 20 } });
+    await waitFor(() => expect(status()).toContain('31 nights'));
+    fireEvent.click(screen.getByRole('radio', { name: 'Year' }));
+    await waitFor(() => expect(status()).toBe('The target is in view on 7 of the 365 nights of the year.'));
+    expect(notes()).toEqual([]);
+    // Here the server says the place falls short, though its count is 7.
+    again({ target: { ra_degrees: 38.2, dec_degrees: 15 } });
+    await waitFor(() => expect(notes()).toEqual([['Target in view under a week a year', 'The target is in view on 7 of the 365 nights of the year.']]));
+  });
+
+  it("explains how a year is counted even when the answer has no clear sky to describe", async () => {
+    // A year answered as before there was a clear sky: every night only.
+    asked.answer = async (request) => {
+      const year = view(request);
+      if (request.span !== 'year') return year;
+      const { at_least: _clear, ...rest } = year;
+      void _clear;
+      return { ...rest, every_night: { lines: [ring(40)], sky_fraction: 0.18, declinations: [39.6, 90] } };
+    };
+    const { container } = show({ target: { ra_degrees: 38.2, dec_degrees: 61.45 } });
+    await waitFor(() => expect(status()).toContain('31 nights'));
+    fireEvent.click(screen.getByRole('radio', { name: 'Year' }));
+    await waitFor(() => expect(container.querySelector('.sky-in-view-layer')?.getAttribute('data-nights')).toBe('365'));
+    const body = container.querySelector('.sky-in-view-body')?.textContent ?? '';
+    expect(body).toContain('Year counts every night of the year. One night a week is measured and the nights between are worked out from the measured nights.');
+    expect(body).not.toContain('Clear sky is in view');
+    expect(body).toContain('No nightEvery night');
+  });
+
+  it("says a year's shortfall in weeks when the nights needed are whole weeks", () => {
+    expect(shortOfYear(7)).toBe('in view under a week a year');
+    expect(shortOfYear(14)).toBe('in view under 2 weeks a year');
+    expect(shortOfYear(10)).toBe('in view on fewer than 10 nights a year');
   });
 
   it('in Year notes a target only when it falls short of a week of nights, and keeps the exact count in words', async () => {

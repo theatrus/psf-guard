@@ -64,6 +64,41 @@ export function monthMarks(first: string | undefined, lastStart: number): Array<
   return marks;
 }
 
+/** Nights in a week, for saying a year's threshold in weeks. */
+const NIGHTS_A_WEEK = 7;
+
+/** How far short of a year's clear sky a place in view on some nights
+ *  is, in a few words: in weeks when the nights needed are whole weeks. */
+export function shortOfYear(enough: number): string {
+  if (enough % NIGHTS_A_WEEK === 0) {
+    const weeks = enough / NIGHTS_A_WEEK;
+    return weeks === 1 ? 'in view under a week a year' : `in view under ${weeks} weeks a year`;
+  }
+  return `in view on fewer than ${enough} nights a year`;
+}
+
+/**
+ * Where a place stands on the nights counted, from one answer: its count,
+ * and whether that leaves it clear. For a year, clear is the server's own
+ * decision against its number of nights; otherwise every night.
+ */
+interface Standing {
+  nights: number;
+  counted: number;
+  year: boolean;
+  /** For a year: the nights that leave a place clear. */
+  enough: number | null;
+  clear: boolean;
+}
+
+/** The note for the stage about a place, or null when it is clear. `lead`
+ *  starts it: "Target" or "This sky is". */
+function standingNote(standing: Standing, lead: string): string | null {
+  if (standing.nights === 0) return `${lead} never in view`;
+  if (standing.clear) return null;
+  return `${lead} ${standing.enough !== null ? shortOfYear(standing.enough) : 'not in view every night'}`;
+}
+
 /** A place's nights in words. */
 function placeWords(what: string, nights: number, counted: number, year: boolean): string {
   const of = year ? `the ${counted} nights of the year` : counted === 1 ? 'the night counted' : `the ${counted} nights counted`;
@@ -274,7 +309,13 @@ export function useSkyInView({ rig, waiting = null, on, target, targetMoving = f
     const all = picture ? unpackCounts(picture.counts, picture.nights_counted, picture.grid.columns, picture.grid.rows) : null;
     return all && clearNights !== null ? countsAgainst(all, clearNights) : all;
   }, [season, picture, clearNights]);
-  const lines = useMemo(() => (season ? visibleSkyLines(season.view) : picture && clear ? { every: clear.lines, any: picture.any_night ? picture.any_night.lines : null } : picture ? visibleSkyLines(picture) : null), [season, picture, clear]);
+  // The picture's own regions: a year's clear sky, or every night.
+  const regions = useMemo(() => {
+    if (!picture) return null;
+    const solid = clear ?? picture.every_night;
+    return solid ? { every_night: solid, any_night: picture.any_night } : null;
+  }, [picture, clear]);
+  const lines = useMemo(() => (season ? visibleSkyLines(season.view) : regions ? visibleSkyLines(regions) : null), [season, regions]);
   const layer = useMemo(() => (counts && lines ? { counts, lines } : null), [counts, lines]);
 
   // The target, and the middle of the view when it is somewhere else: the
@@ -302,24 +343,32 @@ export function useSkyInView({ rig, waiting = null, on, target, targetMoving = f
   });
   const targetQuery = useQuery(placeQuery(targetAsk));
   const viewQuery = useQuery(placeQuery(viewAsk));
-  const counted = season?.view.nights_counted ?? picture?.nights_counted ?? 0;
-  /** On how many nights a place is in view: null until it is known. */
-  const inView = (at: DirectorSkyPosition | null, answer: typeof targetQuery.data): number | null => {
+  /** Where a place stands, from the answer for its own nights: null until
+   *  that is known. */
+  const inView = (at: DirectorSkyPosition | null, answer: typeof targetQuery.data): Standing | null => {
     if (!at) return null;
-    if (season) return seasonNights(season, at.ra_degrees, at.dec_degrees);
+    if (season) {
+      const nights = seasonNights(season, at.ra_degrees, at.dec_degrees);
+      return { nights, counted: season.counts.nights, year: false, enough: null, clear: nights >= season.counts.nights };
+    }
     if (wantsSeason || !picture) return null;
     const found = answer?.places.find((entry) => entry.ra_degrees === at.ra_degrees && entry.dec_degrees === at.dec_degrees);
-    return found && answer?.nights_counted === picture.nights_counted ? found.nights_in_view : null;
+    if (!found || !answer || answer.nights_counted !== picture.nights_counted) return null;
+    const year = picture.span === 'year';
+    const enough = year ? answer.at_least_nights ?? null : null;
+    return { nights: found.nights_in_view, counted: answer.nights_counted, year, enough, clear: found.at_least ?? found.nights_in_view >= answer.nights_counted };
   };
   const year = !season && picture?.span === 'year';
-  const targetNights = inView(targetAt, targetQuery.data);
-  const viewNights = viewApart ? inView(viewAt, viewQuery.data) : null;
+  const targetStanding = inView(targetAt, targetQuery.data);
+  const viewStanding = viewApart ? inView(viewAt, viewQuery.data) : null;
   // What the rig shoots: the plan's target, or its own framing of it.
   const subject = ownFraming && rig ? `${rig.name}'s own framing` : 'The target';
   const short = ownFraming && rig ? `${rig.name}'s framing` : 'Target';
-  // The words for the target as it stands, once known. While it moves, or
-  // while its nights are being counted, the last words stay.
-  const fresh = targetNights === null || targetMoving ? null : { words: placeWords(subject, targetNights, counted, year), nights: targetNights, counted };
+  // The words and note for the target as it stands, once known. While it
+  // moves, or while its nights are counted again, the last ones stay, each
+  // judged by the nights they were counted on: a month's count is never
+  // held to a year's rule.
+  const fresh = targetStanding === null || targetMoving ? null : { words: placeWords(subject, targetStanding.nights, targetStanding.counted, targetStanding.year), note: standingNote(targetStanding, short) };
   const keptFor = `${rigId ?? ''} ${on}`;
   const kept = useRef<{ key: string; target: NonNullable<typeof fresh> } | null>(null);
   if (fresh) kept.current = { key: keptFor, target: fresh };
@@ -327,14 +376,11 @@ export function useSkyInView({ rig, waiting = null, on, target, targetMoving = f
   const shownTarget = fresh ?? kept.current?.target ?? null;
   const stale = fresh === null && shownTarget !== null;
   const targetWords = shownTarget?.words ?? null;
-  const viewWords = viewNights === null ? null : placeWords('The middle of the view', viewNights, counted, year);
+  const viewWords = viewStanding === null ? null : placeWords('The middle of the view', viewStanding.nights, viewStanding.counted, viewStanding.year);
+  const viewNote = viewStanding === null ? null : standingNote(viewStanding, 'This sky is');
   const notes: Array<{ text: string; title: string }> = [];
-  // A note on the stage when a place is covered: short of every night, or
-  // in a year short of the nights that leave it clear.
-  const enough = (of: number) => clearNights ?? of;
-  const shortfall = clearNights === null ? 'not in view every night' : clearNights === 7 ? 'in view under a week a year' : `in view on fewer than ${clearNights} nights a year`;
-  if (shownTarget && shownTarget.nights < enough(shownTarget.counted)) notes.push({ text: shownTarget.nights === 0 ? `${short} never in view` : `${short} ${shortfall}`, title: shownTarget.words });
-  if (viewNights !== null && viewWords && viewNights < enough(counted)) notes.push({ text: viewNights === 0 ? 'This sky is never in view' : `This sky is ${shortfall}`, title: viewWords });
+  if (shownTarget?.note) notes.push({ text: shownTarget.note, title: shownTarget.words });
+  if (viewNote && viewWords) notes.push({ text: viewNote, title: viewWords });
 
   const failure = on && query.isError ? visibleSkyError(query.error) : null;
   const broken = "The year's nights could not be read, so Season has nothing to show. Reload the page, or choose Year.";
@@ -351,7 +397,7 @@ export function useSkyInView({ rig, waiting = null, on, target, targetMoving = f
   const note = season ? seasonDarknessNote(season.view) : picture ? darknessNote(picture) : null;
   const shares = season ? `${seasonDates(season.view)}. ${visibleSkyShares(season.view)}${note ? ` ${note}` : ''}`
     : picture && clear ? `${clearSkyShares({ at_least: clear, any_night: picture.any_night })}${note ? ` ${note}` : ''}`
-    : picture ? `${visibleSkyShares(picture)}${note ? ` ${note}` : ''}`
+    : regions ? `${visibleSkyShares(regions)}${note ? ` ${note}` : ''}`
     : null;
   const months = useMemo(() => (view && measured ? monthMarks(view.nights[0]?.date, starts[starts.length - 1]) : []), [view, measured, starts]);
 

@@ -93,8 +93,7 @@ test('Framing covers the sky the rig cannot shoot, for the month, the year and a
     // Zoomed out, the lines show where the limits are.
     for (let step = 0; step < 16; step += 1) await page.getByRole('button', { name: 'Zoom out' }).click();
     await expect(layer.locator('.sky-in-view-line.sky-in-view-any')).toHaveAttribute('d', /^M[\d. -]+L/);
-    // Its edge runs near the southern limit, below this view of the pole,
-    // so the shares above give where it is rather than the drawn line.
+    await expect(layer.locator('.sky-in-view-line.sky-in-view-every')).toHaveAttribute('d', /^M[\d. -]+L/);
 
     // The controls are folded behind one line.
     await group.locator('summary').click();

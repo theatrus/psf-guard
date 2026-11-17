@@ -171,7 +171,8 @@ export function SkyInViewPanel({ model, onShow }: { model: SkyInViewModel; onSho
             <p className="sky-in-view-text">
               {panel.clearNights !== null ? `Covered sky is in view on fewer than ${panel.clearNights} nights.` : 'Covered sky is out of view on some nights.'} Hatched sky is never in view. Marks on the lines point into the sky in view.
               {panel.span === 'season' && ' Season shows 31 nights of the year at a time. Its lines follow the 2° grid the year is measured on, so they are rougher than the lines in Now and Year.'}
-              {panel.year && panel.clearNights !== null && ` Year counts every night of the year. Clear sky is in view on at least ${panel.clearNights} of them, in total and not in a row. One night a week is measured and the nights between are worked out from the measured nights. The solid line is within about 1° of a line measured on every night.`}
+              {panel.year && ' Year counts every night of the year. One night a week is measured and the nights between are worked out from the measured nights.'}
+              {panel.year && panel.clearNights !== null && ` Clear sky is in view on at least ${panel.clearNights} of them, in total and not in a row. The solid line is within about 1° of a line measured on every night.`}
             </p>
           </div>
         </details>

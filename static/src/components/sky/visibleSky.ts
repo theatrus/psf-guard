@@ -1,6 +1,6 @@
 import { isAxiosError } from 'axios';
 import type { LonLat } from '../../utils/skyProjection';
-import type { DirectorVisibleSky } from '../../api/directorTypes';
+import type { DirectorVisibleSky, DirectorVisibleSkyRegion } from '../../api/directorTypes';
 import { formatNightDate } from '../nights/nightsModel';
 import { formatNight } from './skyModel';
 
@@ -8,7 +8,7 @@ import { formatNight } from './skyModel';
  *  the horizon and the altitude limits. */
 export type SkyTerms = Pick<DirectorVisibleSky, 'minimum_minutes' | 'horizon' | 'horizon_from' | 'limits'>;
 /** The two regions of a picture: sky in view every night, and on any. */
-export type SkyRegions = Pick<DirectorVisibleSky, 'every_night' | 'any_night'>;
+export type SkyRegions = { every_night: DirectorVisibleSkyRegion; any_night: DirectorVisibleSky['any_night'] };
 
 const DAY_MS = 86_400_000;
 
@@ -73,7 +73,7 @@ const percent = (fraction: number) => `${Math.round(fraction * 100)}%`;
 const degrees = (value: number) => `${value < 0 ? '−' : '+'}${Math.round(Math.abs(value))}°`;
 
 /** One region in words: its share of the sky and the declinations it spans. */
-function regionText(region: DirectorVisibleSky['every_night']): string {
+function regionText(region: DirectorVisibleSkyRegion): string {
   if (!region.declinations) return 'none of the sky';
   const [south, north] = region.declinations;
   return `${percent(region.sky_fraction)} of the sky, declination ${degrees(south)} to ${degrees(north)}`;
@@ -88,7 +88,7 @@ export function visibleSkyShares(view: SkyRegions): string {
 
 /** What a year's lines enclose, in words: the sky in view on enough
  *  nights to be left clear, and the sky in view on any. */
-export function clearSkyShares(view: { at_least: DirectorVisibleSky['every_night'] & { nights: number }; any_night: DirectorVisibleSky['any_night'] }): string {
+export function clearSkyShares(view: { at_least: DirectorVisibleSkyRegion & { nights: number }; any_night: DirectorVisibleSky['any_night'] }): string {
   const clear = `In view on ${view.at_least.nights} nights or more: ${regionText(view.at_least)}.`;
   return view.any_night ? `${clear} On at least one night: ${regionText(view.any_night)}.` : clear;
 }

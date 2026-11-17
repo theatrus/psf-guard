@@ -13,6 +13,7 @@ import {
   visibleSkyError,
   visibleSkyLegend,
   visibleSkyShares,
+  type SkyRegions,
 } from '../visibleSky';
 
 
@@ -24,7 +25,7 @@ const counts = () => btoa('\0'.repeat(180 * 91 * 2));
 const nights = (first: string, count: number, every: number) =>
   Array.from({ length: count }, (_, i) => ({ date: new Date(Date.parse(`${first}T00:00:00Z`) + i * every * 86_400_000).toISOString().slice(0, 10), dusk_ms: 1, dawn_ms: 2 }));
 
-const view = (over: Partial<DirectorVisibleSky> = {}): DirectorVisibleSky => ({
+const view = (over: Partial<DirectorVisibleSky> = {}): DirectorVisibleSky & SkyRegions => ({
   rig: { id: 'rig-1', name: 'Rig', revision: 1 },
   planning_site: { id: 'site-1', name: 'Patio', revision: 1 },
   site: { latitude_degrees: 34.2, longitude_degrees: -118.3, elevation_meters: 400 },
@@ -45,7 +46,7 @@ const view = (over: Partial<DirectorVisibleSky> = {}): DirectorVisibleSky => ({
   every_night: { lines: [ring(-12) as Array<[number, number]>], sky_fraction: 0.41, declinations: [-12.4, 90] },
   any_night: { lines: [ring(-30) as Array<[number, number]>], sky_fraction: 0.62, declinations: [-30.6, 90] },
   ...over,
-});
+}) as DirectorVisibleSky & SkyRegions;
 
 describe('the legend', () => {
   it('gives the rig, the minimum time, the nights and the horizon used', () => {
