@@ -66,7 +66,7 @@ test('Framing covers the sky the rig cannot shoot, for the month, the year and a
 
     await page.setViewportSize({ width: 1280, height: 900 });
     // Every request for the picture or for a place's nights.
-    const posts: Array<{ span?: string; minimum_minutes?: number; measured?: boolean; places?: unknown[] }> = [];
+    const posts: Array<{ span?: string; minimum_minutes?: number; measured?: boolean; priority?: string; places?: unknown[] }> = [];
     page.on('request', sent => { if (/\/sky\/visible-(region|places)$/.test(sent.url())) posts.push(JSON.parse(sent.postData() ?? '{}')); });
     const pictures = () => posts.filter(body => !('places' in body));
     // An address from when the plan had a Sky tab opens Framing.
@@ -108,7 +108,9 @@ test('Framing covers the sky the rig cannot shoot, for the month, the year and a
     await expect(words).toHaveText('The target is in view on all of the 365 nights of the year.');
     await expect(page.getByTestId('sky-in-view-legend')).toContainText('365 nights from tonight, ');
     await expect(page.getByTestId('sky-in-view-shares')).toContainText(/On at least one night: \d+% of the sky, declination −3[01]° to \+90°\./);
-    expect(pictures().at(-1)).toEqual({ rig: expect.any(String), span: 'year' });
+    // A picture chosen here is a person's request; the one drawn on
+    // opening was the page's own.
+    expect(pictures().at(-1)).toEqual({ rig: expect.any(String), span: 'year', priority: 'interactive' });
 
     // Season: a month of the year at a time under a slider. It asks once,
     // for the year with its measured nights.
@@ -119,7 +121,7 @@ test('Framing covers the sky the rig cannot shoot, for the month, the year and a
     await expect(slider).toHaveAttribute('aria-valuetext', /^31 nights from \S/);
     await expect(layer).toHaveAttribute('data-nights', '31');
     await expect(words).toHaveText('The target is in view on all of the 31 nights counted.');
-    expect(pictures().at(-1)).toEqual({ rig: expect.any(String), span: 'year', measured: true });
+    expect(pictures().at(-1)).toEqual({ rig: expect.any(String), span: 'year', measured: true, priority: 'interactive' });
     expect(pictures()).toHaveLength(3);
     const firstValue = (await slider.getAttribute('aria-valuetext')) ?? '';
     const firstShares = (await page.getByTestId('sky-in-view-shares').textContent()) ?? '';
@@ -192,7 +194,11 @@ test('Framing covers the sky the rig cannot shoot, for the month, the year and a
     await page.getByRole('button', { name: 'Center view on target' }).click();
     for (let step = 0; step < 16; step += 1) await page.getByRole('button', { name: 'Zoom in' }).click();
     await expect(words).toHaveText('The target is never in view on the 31 nights counted.', { timeout: 30_000 });
+    await expect(words).not.toHaveAttribute('data-stale', 'true');
     await expect(page.getByTestId('sky-in-view-note')).toHaveText(['Target never in view']);
+    // No count for a place was a person's request, and typing the target
+    // asked once, when it rested.
+    expect(posts.filter(body => 'places' in body).every(body => !('priority' in body))).toBe(true);
     await page.screenshot({ path: testInfo.outputPath('framing-sky-never.png') });
 
     // Switched off, the layer goes and nothing more is asked; the choice

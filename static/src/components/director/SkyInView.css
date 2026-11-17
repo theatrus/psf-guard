@@ -53,6 +53,11 @@
   line-clamp: 2;
 }
 
+/* The last words known, while the target moves or is counted again. */
+.sky-in-view-status[data-stale='true'] {
+  opacity: 0.55;
+}
+
 .framing-controls .sky-in-view-show {
   flex-direction: row;
   align-items: center;

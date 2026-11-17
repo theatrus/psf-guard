@@ -1,5 +1,5 @@
 import type { DirectorContribution, DirectorGoal, DirectorLayout, DirectorMosaic, DirectorPlanDraft } from '../../api/directorTypes';
-import { formatDegrees, type FramingState } from './framingModel';
+import { formatDegrees, separationDegrees, type FramingState } from './framingModel';
 import { KNOWN_BANDPASSES, PURPOSES } from './planModel';
 import { asGrid, findPanel, turnOf } from './mosaicLayout';
 
@@ -8,14 +8,6 @@ import { asGrid, findPanel, turnOf } from './mosaicLayout';
 
 const angle = (value: number) => `${Math.round(value * 10) / 10}°`;
 const same = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right);
-
-/** Angular distance between two sky positions, in arcminutes. */
-function separationArcmin(a: { ra_degrees: number; dec_degrees: number }, b: { ra_degrees: number; dec_degrees: number }): number {
-  const rad = Math.PI / 180;
-  const cos = Math.sin(a.dec_degrees * rad) * Math.sin(b.dec_degrees * rad)
-    + Math.cos(a.dec_degrees * rad) * Math.cos(b.dec_degrees * rad) * Math.cos((a.ra_degrees - b.ra_degrees) * rad);
-  return Math.acos(Math.min(1, Math.max(-1, cos))) / rad * 60;
-}
 
 /** What changed in a framing's panels: a grid resized reads as a grid, and
  *  panels placed one by one by name. */
@@ -48,7 +40,7 @@ export function describeFramingChanges(before: FramingState | null, after: Frami
   const changes: string[] = [];
   if (before.targetName !== after.targetName) changes.push(`target name “${before.targetName}” → “${after.targetName}”`);
   if (!same(before.center, after.center)) {
-    const moved = separationArcmin(before.center, after.center);
+    const moved = separationDegrees(before.center, after.center) * 60;
     changes.push(moved < 1 ? `target moved ${Math.round(moved * 60)}″` : `target moved ${Math.round(moved * 10) / 10}′`);
   }
   if (before.positionAngle !== after.positionAngle) changes.push(`camera angle ${angle(before.positionAngle)} → ${angle(after.positionAngle)}`);

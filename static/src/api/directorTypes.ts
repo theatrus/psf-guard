@@ -956,6 +956,9 @@ export interface DirectorVisibleSkyRequest {
   span?: 'now' | 'year';
   /** With `span: 'year'`: send each measured night's grid too. */
   measured?: boolean;
+  /** Who began the request: `interactive` when a person asked for this
+   *  picture by a click, left out for what a page draws on its own. */
+  priority?: 'viewed' | 'interactive';
   first_night?: string;
   nights?: number;
 }

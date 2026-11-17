@@ -17,6 +17,7 @@ import {
 import VisibilityPanel from './VisibilityPanel';
 import { SkyInViewLayer, SkyInViewPanel } from './SkyInView';
 import { useSkyInView } from './useSkyInView';
+import type { ShownRig } from './visibilityRig';
 import MosaicPanels, { type ExtendScope } from './MosaicPanels';
 import { asGrid, cameraStep, keepHandUnlocks, cameraToPlane, describeIssue, extendFrom, extendMosaic, fillHoles, findPanel, flaggedPanels, freshIssues, movePanel, planeToCamera, ringAround, setLocked, snapPlacement, snapTurn, turnOf, turnPanel, wrapTurn, type Direction } from './mosaicLayout';
 import { shapeCenter, shapeOverlap, sharedStrips, splitApart, type PanelShape, type Point, type ShapeReading } from './panelShape';
@@ -81,6 +82,8 @@ const SHOWN_CATALOGS_KEY = 'psf-guard.framing.marks.catalogs';
 const STACKS_KEY = 'psf-guard.framing.stacks';
 /** Whether the sky the rig can shoot is marked over the stage. */
 const SKY_IN_VIEW_KEY = 'psf-guard.framing.skyInView';
+/** How long the target must rest before its nights in view are counted. */
+const SKY_TARGET_REST_MS = 500;
 /** The stack picked for one plan, by its key; none means each panel's best. */
 const STACK_CHOICE_KEY = 'psf-guard.framing.stack.';
 /** The catalog families a mark can come from, by the letters a designation
@@ -607,12 +610,29 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
   // panel shows, or the plan's first rig while that panel has none.
   const [showSkyInView, setShowSkyInView] = useState(() => remembered(SKY_IN_VIEW_KEY, ['on', 'off'] as const, 'on') === 'on');
   const chooseShowSkyInView = (on: boolean) => { setShowSkyInView(on); remember(SKY_IN_VIEW_KEY, on ? 'on' : 'off'); };
-  const [visibilityRig, setVisibilityRig] = useState<string | null>(null);
+  const [visibility, setVisibility] = useState<ShownRig>({ state: 'loading' });
+  // The rig Visibility shows, by Visibility's own rule and once it knows,
+  // so the sky is measured for one rig and not for a guess first. When no
+  // rig could be timed, the plan's first rig, which says what it lacks.
+  const skyRigId = visibility.state === 'loading' ? null : visibility.state === 'ready' && visibility.rigId ? visibility.rigId : preferredRigIds[0] ?? null;
   const skyRig = useMemo(() => {
-    const entry = rigList.find(rig => rig.rig.id === visibilityRig) ?? rigList.find(rig => rig.rig.id === preferredRigIds[0]) ?? (preferredRigIds.length === 0 ? rigList[0] : undefined);
+    const entry = rigList.find(rig => rig.rig.id === skyRigId);
     return entry ? { id: entry.rig.id, name: entry.catalog_name, slug: entry.catalog_slug } : null;
-  }, [rigList, visibilityRig, preferredRigIds]);
-  const skyInView = useSkyInView({ rig: skyRig, on: showSkyInView && state !== null, target: state?.center ?? null, viewCenter: settledView?.center ?? null });
+  }, [rigList, skyRigId]);
+  const skyWaiting = rigs.isPending ? 'Loading the rigs…'
+    : rigs.isError ? `The rigs could not be loaded: ${message(rigs.error)}`
+    : visibility.state === 'loading' ? 'Working out the sky in view…'
+    : null;
+  // What that rig shoots: its own framing's center when it has one, else
+  // the shared target. It is counted once it rests: after a drag has
+  // ended or typing has stopped, not at every move.
+  const skyOwn = skyRig ? liveRigCenters[skyRig.id] : undefined;
+  const skyTargetNow = skyOwn ?? state?.center ?? null;
+  const skyTargetRa = skyTargetNow?.ra_degrees;
+  const skyTargetDec = skyTargetNow?.dec_degrees;
+  const skyTargetLive = useMemo(() => (skyTargetRa === undefined || skyTargetDec === undefined ? null : { ra_degrees: skyTargetRa, dec_degrees: skyTargetDec }), [skyTargetRa, skyTargetDec]);
+  const skyTarget = useDebounced(skyTargetLive, SKY_TARGET_REST_MS);
+  const skyInView = useSkyInView({ rig: skyRig, waiting: skyWaiting, on: showSkyInView && state !== null, target: skyTarget, targetMoving: skyTarget !== skyTargetLive, ownFraming: skyOwn !== undefined, viewCenter: settledView?.center ?? null });
   const [showStacks, setShowStacks] = useState(() => remembered(STACKS_KEY, ['on', 'off'] as const, 'on') === 'on');
   const chooseShowStacks = (on: boolean) => { setShowStacks(on); remember(STACKS_KEY, on ? 'on' : 'off'); };
   const [stackPick, setStackPick] = useState(() => { try { return window.localStorage.getItem(STACK_CHOICE_KEY + projectId) ?? ''; } catch { return ''; } });
@@ -1463,7 +1483,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
         <svg viewBox={`0 0 ${stageSize.width} ${stageSize.height}`} aria-hidden="true">
           {!webgl && cutout.image && skyMatrix && <image className="framing-sky" data-testid="framing-sky" href={cutout.image.url} x={0} y={0} width={cutout.image.request.width} height={cutout.image.request.height} preserveAspectRatio="none" transform={skyMatrix} />}
           {backdrop && !pictureUp && backdrop.milkyWay.length > 0 && <g className="framing-milky-way">{backdrop.milkyWay.map((d, i) => <path key={i} d={d} />)}</g>}
-          {skyInView.layer && <SkyInViewLayer layer={skyInView.layer} view={view} viewFov={state.viewFov} stage={stageSize} moving={skyInView.changing || viewNow !== settledView} />}
+          {skyInView.layer && <SkyInViewLayer layer={skyInView.layer} view={view} viewFov={state.viewFov} stage={stageSize} />}
           {graticule && <g className="framing-graticule" data-testid="framing-graticule">
             {graticule.paths.map((line, i) => <path key={i} d={line.d} />)}
             {graticule.labels.map((label, i) => <text key={i} x={label.x} y={label.y}>{label.text}</text>)}
@@ -1588,7 +1608,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
         <ul>{mosaic.data.panels.map(panel => <li key={`${panel.rig.id}-${panel.panel_id}`}>{describeStack(panel, stackChoice, stackChoiceName ? stackName(stackChoiceName) : '', mosaic.data!.activation_revision !== null)}</li>)}</ul>
       </div>}
       <p className="director-muted framing-attribution">{survey ? `${survey.name}: ${survey.bandpass}. ${survey.attribution}.` : 'Choose a survey.'}</p>
-      <VisibilityPanel projectId={projectId} center={state.center} rigCenters={liveRigCenters} compact onRig={setVisibilityRig} />
+      <VisibilityPanel projectId={projectId} center={state.center} rigCenters={liveRigCenters} compact onRig={setVisibility} />
     </div>
     <form className="framing-controls" onSubmit={event => { event.preventDefault(); if (canWrite && !save.isPending && !stale && !refusal) { setNotice(''); setProblem(''); save.mutate(state); } }}>
       <fieldset>

@@ -43,7 +43,7 @@ describe('the cover', () => {
     // In view every night north of +40°, on half the nights down to 0°.
     const sky = grid((_, dec) => (dec >= 40 ? 30 : dec >= 0 ? 15 : 0), 30);
     // Four units a pixel: too coarse for the hatch.
-    const pixels = coverRaster(sky, 360, 90, 45, plain());
+    const pixels = coverRaster(sky, 360, 180, 90, 45, plain());
     const at = (ra: number, dec: number) => alpha(pixels, 90, Math.floor(ra / 4), Math.floor((90 - dec) / 4));
     expect(at(10, 70)).toBe(0);
     expect(at(300, 60)).toBe(0);
@@ -65,7 +65,7 @@ describe('the cover', () => {
     // 2.5 units a pixel.
     const [width, height] = [144, 72];
     const south = (turned: number) => {
-      const pixels = coverRaster(sky, 360, width, height, plain(turned));
+      const pixels = coverRaster(sky, 360, 180, width, height, plain(turned));
       return Array.from({ length: 60 }, (_, i) => alpha(pixels, width, 20 + i, 60));
     };
     const row = south(0);
@@ -80,9 +80,22 @@ describe('the cover', () => {
     // The same stripes with the sky turned a quarter of the way round.
     expect(south(90)).toEqual(row);
     // Sky in view on some nights has no hatch.
-    const pixels = coverRaster(sky, 360, width, height, plain());
+    const pixels = coverRaster(sky, 360, 180, width, height, plain());
     const north = Array.from({ length: 60 }, (_, i) => alpha(pixels, width, 20 + i, 16));
     expect(new Set(north)).toEqual(new Set([128]));
+  });
+
+  it('samples a raster whose pixels are not square by its own scale each way', () => {
+    // In view north of the equator, never south of it: the cover's edge
+    // is at 90 units down a drawing 180 high, whatever the raster's shape.
+    const sky = grid((_, dec) => (dec >= 1 ? 30 : dec <= -1 ? 0 : 15), 30);
+    for (const [width, height] of [[90, 45], [90, 50], [90, 37]]) {
+      const pixels = coverRaster(sky, 360, 180, width, height, plain());
+      const down = Array.from({ length: height }, (_, py) => alpha(pixels, width, 10, py));
+      // The first row more than half covered, as a place in the drawing.
+      const row = down.findIndex((value) => value > 128);
+      expect(Math.abs((row + 0.5) * (180 / height) - 90), `${width} by ${height}`).toBeLessThanOrEqual(180 / height + 1e-9);
+    }
   });
 
   describe('as an image', () => {
@@ -90,7 +103,7 @@ describe('the cover', () => {
 
     it('is nothing where there is no canvas to paint on', () => {
       vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
-      expect(coverImage(grid(() => 1, 1), 360, 20, 10, plain())).toBeNull();
+      expect(coverImage(grid(() => 1, 1), 360, 180, 20, 10, plain())).toBeNull();
     });
 
     it('paints the raster on a canvas of its size and hands back its address', () => {
@@ -99,7 +112,7 @@ describe('the cover', () => {
       const context = { createImageData: vi.fn(() => image), putImageData: put } as unknown as CanvasRenderingContext2D;
       vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(context as never);
       vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue('data:image/png;base64,AAAA');
-      expect(coverImage(grid(() => 0, 1), 360, 20, 10, plain())).toBe('data:image/png;base64,AAAA');
+      expect(coverImage(grid(() => 0, 1), 360, 180, 20, 10, plain())).toBe('data:image/png;base64,AAAA');
       expect(context.createImageData).toHaveBeenCalledWith(20, 10);
       expect(put).toHaveBeenCalledWith(image, 0, 0);
       // The middle of the drawing is sky, and covered whole: never in view.

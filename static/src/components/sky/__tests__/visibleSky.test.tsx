@@ -6,12 +6,12 @@ import { formatNight } from '../skyModel';
 import {
   darknessNote,
   formatMinutes,
+  nextNightAt,
   nightCount,
   standing,
   visibleSkyError,
   visibleSkyLegend,
   visibleSkyShares,
-  visibleSkySummary,
 } from '../visibleSky';
 
 
@@ -51,19 +51,17 @@ describe('the legend', () => {
     const [first, last] = [formatNightDate('2026-09-24'), formatNightDate('2026-10-24')];
     // Nights asked for without a date start from tonight at the rig's site.
     expect(visibleSkyLegend(view(), 'C925')).toBe(`C925: in view 30 min or more · 31 nights from tonight, ${first}, to ${last} · the site's custom horizon, at least 25°`);
-    expect(visibleSkyLegend(view(), 'C925', false)).toBe(`C925: in view 30 min or more · 31 nights ${first} to ${last} · the site's custom horizon, at least 25°`);
     expect(visibleSkyLegend(view({ nights: nights('2026-09-24', 1, 1) }), 'C925')).toContain(`· tonight, ${first} ·`);
     const year = view({ span: 'year', every_nights: 7, nights: nights('2026-09-24', 53, 7), nights_counted: 365, minimum_minutes: 90, horizon: 'flat', horizon_from: 'none' });
     expect(visibleSkyLegend(year, 'C925')).toBe(`C925: in view 1 h 30 min or more · 365 nights from tonight, ${formatNight('2026-09-24')}, to ${formatNight('2027-09-23')}, one a week measured · flat horizon at 25°`);
     expect(formatMinutes(120)).toBe('2 h');
   });
 
-  it('puts the shares and the declination limits in words, for the map too', () => {
+  it('puts the shares and the declination limits in words', () => {
     expect(visibleSkyShares(view())).toBe('In view every night: 41% of the sky, declination −12° to +90°. On at least one night: 62% of the sky, declination −31° to +90°.');
     const never = view({ every_night: { lines: [], sky_fraction: 0, declinations: null } });
     expect(visibleSkyShares(never)).toMatch(/^In view every night: none of the sky\. On at least one night: 62%/);
     expect(visibleSkyShares(view({ any_night: null }))).toBe('In view: 41% of the sky, declination −12° to +90°.');
-    expect(visibleSkySummary(view(), 'C925')).toMatch(/^Map of the sky C925: in view 30 min or more · 31 nights from tonight.*In view every night: 41% of the sky/);
   });
 
   it('places a count among the lines', () => {
@@ -93,5 +91,15 @@ describe('the legend', () => {
     const noonUtc = Date.parse('2026-09-24T12:00:00Z');
     expect(nightCount(noonUtc + 1, 0)).toBe(nightCount(noonUtc - 1, 0) + 1);
     expect(nightCount(noonUtc + 1, -118.3)).toBe(nightCount(noonUtc - 1, -118.3));
+    // The next night begins when the count next steps, and not before.
+    for (const longitude of [0, -118.3, 151.2]) {
+      for (const at of [noonUtc - 5 * 3_600_000, noonUtc + 1, noonUtc + 9 * 3_600_000]) {
+        const next = nextNightAt(at, longitude);
+        expect(next).toBeGreaterThan(at);
+        expect(next - at).toBeLessThanOrEqual(86_400_000);
+        expect(nightCount(next, longitude)).toBe(nightCount(at, longitude) + 1);
+        expect(nightCount(next - 1, longitude)).toBe(nightCount(at, longitude));
+      }
+    }
   });
 });

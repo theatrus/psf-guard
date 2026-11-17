@@ -1,10 +1,10 @@
-import { useEffect, useId, useMemo, useRef } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { openSettings } from '../../utils/settingsIntent';
 import { SkyChoice } from '../sky/SkyChoices';
 import { coverImage } from '../sky/skyShade';
 import { formatMinutes } from '../sky/visibleSky';
 import type { Stage, StageView } from './framingModel';
-import { coverSize, stageLines, stagePlace } from './skyInViewStage';
+import { COVER_REST_MS, coverSize, stageLines, stagePlace } from './skyInViewStage';
 import { COVER_ACROSS, COVER_ACROSS_MOVING, MAX_MINUTES, SEASON_PAGE, SPANS, type SkyInViewModel } from './useSkyInView';
 import './SkyInView.css';
 
@@ -14,17 +14,31 @@ import './SkyInView.css';
  * pixels are white; how solid each is carries how much of the sky under
  * it is covered, and the stylesheet gives it its colour. It is made on an
  * animation frame, so however often the view moves in a frame it is made
- * once, and handed straight to its element. While the view or the slider
- * moves (`moving`) it is made smaller still.
+ * once, and handed straight to its element.
+ *
+ * Whatever changes what the cover shows, the view's middle, its zoom, the
+ * turn of the sky, the stage's size or the counts under a slider, it is
+ * first made small, and at full size once nothing has changed for a
+ * moment: a full picture at every frame of a drag would hold the drag up.
  */
-export function SkyInViewLayer({ layer, view, viewFov, stage, moving }: { layer: NonNullable<SkyInViewModel['layer']>; view: StageView; viewFov: number; stage: Stage; moving: boolean }) {
+export function SkyInViewLayer({ layer, view, viewFov, stage }: { layer: NonNullable<SkyInViewModel['layer']>; view: StageView; viewFov: number; stage: Stage }) {
   const maskId = useId();
   const image = useRef<SVGImageElement>(null);
   const { counts, lines } = layer;
+  // What the full-size cover on screen was made from: the counts, and
+  // the view by its numbers. Anything else is still moving.
+  const viewKey = [view.anchor.ra_degrees, view.anchor.dec_degrees, view.offset[0], view.offset[1], view.rotation, viewFov, stage.width, stage.height].join(' ');
+  const [rested, setRested] = useState<{ counts: typeof counts; viewKey: string } | null>(null);
+  const atRest = rested !== null && rested.counts === counts && rested.viewKey === viewKey;
   useEffect(() => {
-    const [width, height] = coverSize(stage, moving ? COVER_ACROSS_MOVING : COVER_ACROSS);
+    if (atRest) return;
+    const timer = window.setTimeout(() => setRested({ counts, viewKey }), COVER_REST_MS);
+    return () => window.clearTimeout(timer);
+  }, [counts, viewKey, atRest]);
+  useEffect(() => {
+    const [width, height] = coverSize(stage, atRest ? COVER_ACROSS : COVER_ACROSS_MOVING);
     const paint = () => {
-      const url = coverImage(counts, stage.width, width, height, stagePlace(view, viewFov, stage));
+      const url = coverImage(counts, stage.width, stage.height, width, height, stagePlace(view, viewFov, stage));
       if (url) image.current?.setAttribute('href', url);
       else image.current?.removeAttribute('href');
     };
@@ -34,7 +48,7 @@ export function SkyInViewLayer({ layer, view, viewFov, stage, moving }: { layer:
     }
     const frame = requestAnimationFrame(paint);
     return () => cancelAnimationFrame(frame);
-  }, [counts, view, viewFov, stage, moving]);
+  }, [counts, view, viewFov, stage, atRest]);
   const every = useMemo(() => stageLines(lines.every, view, viewFov, stage), [lines.every, view, viewFov, stage]);
   const any = useMemo(() => (lines.any ? stageLines(lines.any, view, viewFov, stage) : null), [lines.any, view, viewFov, stage]);
   return (
@@ -69,7 +83,7 @@ export function SkyInViewPanel({ model, onShow }: { model: SkyInViewModel; onSho
   return (
     <fieldset className="sky-in-view" data-testid="sky-in-view" aria-busy={panel.busy}>
       <legend>Sky in view{rig ? ` · ${rig.name}` : ''}</legend>
-      <p className="sky-in-view-status" data-testid="sky-in-view-status" title={panel.status}>{panel.status}</p>
+      <p className="sky-in-view-status" data-testid="sky-in-view-status" title={panel.status} data-stale={panel.stale ? 'true' : undefined}>{panel.status}</p>
       {panel.failure?.needsSite && rig && (
         <button type="button" className="link-button" onClick={() => openSettings('rigs', { databaseId: rig.slug ?? undefined })}>
           Open Rig setup

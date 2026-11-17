@@ -1,13 +1,15 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, configure, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { useMemo } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DirectorSkyPosition, DirectorVisiblePlacesRequest, DirectorVisibleSky, DirectorVisibleSkyRequest } from '../../api/directorTypes';
 import { formatNightDate } from '../nights/nightsModel';
 import { formatNight } from '../sky/skyModel';
 import { DEFAULT_STAGE, deprojectOn, fromStage, projectOn, skyAtStage, toStage, viewAt } from '../director/framingModel';
 import { SkyInViewLayer, SkyInViewPanel } from '../director/SkyInView';
-import { SEASON_SETTLE_MS, monthMarks, useSkyInView, type SkyInViewRig } from '../director/useSkyInView';
-import { stageLines, stagePlace } from '../director/skyInViewStage';
+import { monthMarks, useSkyInView, type SkyInViewRig } from '../director/useSkyInView';
+import { COVER_REST_MS, coverSize, stageLines, stagePlace, stageReach } from '../director/skyInViewStage';
+import { coverRaster, type SkyCounts } from '../sky/skyShade';
 
 configure({ asyncUtilTimeout: 5000 });
 
@@ -76,15 +78,18 @@ const stage = DEFAULT_STAGE;
 
 /** The overlay as Framing holds it: the layer on a stage looking at
  *  `looking`, and the panel beside it. */
-function Harness({ target, viewCenter = null, on = true, rigs = rig as SkyInViewRig | null, looking = { ra_degrees: 38.2, dec_degrees: 0 }, fov = 150 }: { target: DirectorSkyPosition | null; viewCenter?: DirectorSkyPosition | null; on?: boolean; rigs?: SkyInViewRig | null; looking?: DirectorSkyPosition; fov?: number }) {
+const LOOKING = { ra_degrees: 38.2, dec_degrees: 0 };
+function Harness({ target, viewCenter = null, on = true, rigs = rig as SkyInViewRig | null, waiting = null, targetMoving = false, ownFraming = false, turn = 0, fov = 150 }: { target: DirectorSkyPosition | null; viewCenter?: DirectorSkyPosition | null; on?: boolean; rigs?: SkyInViewRig | null; waiting?: string | null; targetMoving?: boolean; ownFraming?: boolean; turn?: number; fov?: number }) {
   const [shown, setShown] = [on, vi.fn()];
-  const model = useSkyInView({ rig: rigs, on: shown, target, viewCenter });
+  const model = useSkyInView({ rig: rigs, waiting, on: shown, target, targetMoving, ownFraming, viewCenter });
+  const stageView = useMemo(() => viewAt(LOOKING, LOOKING, turn), [turn]);
   return (
     <>
       <svg viewBox={`0 0 ${stage.width} ${stage.height}`}>
-        {model.layer && <SkyInViewLayer layer={model.layer} view={viewAt(looking, looking)} viewFov={fov} stage={stage} moving={model.changing} />}
+        {model.layer && <SkyInViewLayer layer={model.layer} view={stageView} viewFov={fov} stage={stage} />}
       </svg>
       <ul>{model.notes.map((note) => <li key={note.text} data-testid="note" title={note.title}>{note.text}</li>)}</ul>
+      <p data-testid="stale">{String(model.panel.stale)}</p>
       <SkyInViewPanel model={model} onShow={setShown} />
     </>
   );
@@ -152,7 +157,7 @@ describe('sky in view over the framing stage', () => {
     fireEvent.click(screen.getByRole('radio', { name: 'Year' }));
     await waitFor(() => expect(status()).toBe('The target is in view on all of the 365 nights of the year.'));
     // Year alone does not ask for the measured nights.
-    expect(asked.calls.at(-1)).toEqual({ rig: 'rig-1', span: 'year' });
+    expect(asked.calls.at(-1)).toEqual({ rig: 'rig-1', span: 'year', priority: 'interactive' });
     expect(container.querySelector('.sky-in-view-layer')?.getAttribute('data-nights')).toBe('365');
     expect(container.querySelector('.sky-in-view-body')?.textContent).toContain('Year counts every night. One night a week is measured');
     fireEvent.click(screen.getByRole('radio', { name: 'Now' }));
@@ -160,7 +165,7 @@ describe('sky in view over the framing stage', () => {
     fireEvent.change(field, { target: { value: '9' } });
     fireEvent.change(field, { target: { value: '90' } });
     fireEvent.keyDown(field, { key: 'Enter' });
-    await waitFor(() => expect(asked.calls.at(-1)).toEqual({ rig: 'rig-1', span: 'now', minimum_minutes: 90 }));
+    await waitFor(() => expect(asked.calls.at(-1)).toEqual({ rig: 'rig-1', span: 'now', minimum_minutes: 90, priority: 'interactive' }));
     expect(asked.calls.some((call) => call.minimum_minutes === 9)).toBe(false);
     fireEvent.click(await screen.findByRole('button', { name: "Use rig's 30 min" }));
     await waitFor(() => expect(field.value).toBe('30'));
@@ -173,7 +178,7 @@ describe('sky in view over the framing stage', () => {
     const slider = (await screen.findByRole('slider', { name: 'Time of year' })) as HTMLInputElement;
     await waitFor(() => expect(slider.disabled).toBe(false));
     // Season asks for the year with its measured nights.
-    expect(asked.calls).toEqual([{ rig: 'rig-1', span: 'now' }, { rig: 'rig-1', span: 'year', measured: true }]);
+    expect(asked.calls).toEqual([{ rig: 'rig-1', span: 'now' }, { rig: 'rig-1', span: 'year', measured: true, priority: 'interactive' }]);
     expect([slider.min, slider.max, slider.step, slider.value]).toEqual(['0', '48', '1', '0']);
     expect(slider.getAttribute('aria-valuetext')).toBe(`31 nights from ${formatNight('2026-09-24')}`);
     expect(status()).toBe('The target is in view on all of the 31 nights counted.');
@@ -214,8 +219,8 @@ describe('sky in view over the framing stage', () => {
     expect(asked.calls).toHaveLength(2);
   });
 
-  it('draws the cover small while the slider moves and whole once it rests', async () => {
-    show({ target: { ra_degrees: 38.2, dec_degrees: 0 } });
+  it('draws the cover small while anything moves and whole once it rests: the slider, the turn of the sky, the zoom', async () => {
+    const { again } = show({ target: { ra_degrees: 38.2, dec_degrees: 0 } });
     await waitFor(() => expect(status()).toContain('31 nights'));
     fireEvent.click(screen.getByRole('radio', { name: 'Season' }));
     const slider = (await screen.findByRole('slider', { name: 'Time of year' })) as HTMLInputElement;
@@ -226,16 +231,93 @@ describe('sky in view over the framing stage', () => {
       return null;
     });
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'requestAnimationFrame', 'cancelAnimationFrame'] });
-    try {
-      fireEvent.change(slider, { target: { value: '5' } });
-      act(() => { vi.advanceTimersByTime(20); });
-      expect(sizes.at(-1)).toBe(128);
-      act(() => { vi.advanceTimersByTime(SEASON_SETTLE_MS + 5); });
+    const rest = () => {
+      act(() => { vi.advanceTimersByTime(COVER_REST_MS + 5); });
       act(() => { vi.advanceTimersByTime(40); });
-      expect(sizes.at(-1)).toBe(384);
+    };
+    try {
+      rest();
+      const moves: Array<Array<() => void>> = [
+        [5, 6, 7].map((week) => () => { fireEvent.change(slider, { target: { value: String(week) } }); }),
+        [20, 21, 22].map((turn) => () => again({ turn })),
+        [90, 80, 70].map((fov) => () => again({ turn: 22, fov })),
+      ];
+      for (const [kind, steps] of moves.entries()) {
+        sizes.length = 0;
+        // Three moves in a row, a frame apart: each is drawn small.
+        for (const step of steps) {
+          step();
+          act(() => { vi.advanceTimersByTime(20); });
+        }
+        expect(sizes.length).toBeGreaterThanOrEqual(3);
+        expect(sizes, `move ${kind}`).toEqual(sizes.map(() => 128));
+        rest();
+        expect(sizes.at(-1)).toBe(384);
+        // And once at rest it is not drawn again.
+        const drawn = sizes.length;
+        act(() => { vi.advanceTimersByTime(1000); });
+        expect(sizes.length).toBe(drawn);
+      }
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('keeps the last words, dimmed, while the target moves, and counts it once it rests', async () => {
+    const { again } = show({ target: { ra_degrees: 38.2, dec_degrees: 61.45 } });
+    await waitFor(() => expect(status()).toBe('The target is in view on all of the 31 nights counted.'));
+    expect(screen.getByTestId('stale').textContent).toBe('false');
+    const asks = asked.places.length;
+    // Dragged: Framing still hands over the place it rested at.
+    again({ target: { ra_degrees: 38.2, dec_degrees: 61.45 }, targetMoving: true });
+    expect(status()).toBe('The target is in view on all of the 31 nights counted.');
+    expect(screen.getByTestId('stale').textContent).toBe('true');
+    expect(screen.getByTestId('sky-in-view-status').getAttribute('data-stale')).toBe('true');
+    expect(asked.places.length).toBe(asks);
+    // At rest somewhere new: the old words stay until the new count is here.
+    again({ target: { ra_degrees: 38.2, dec_degrees: -60 }, targetMoving: false });
+    expect(status()).toBe('The target is in view on all of the 31 nights counted.');
+    expect(screen.getByTestId('stale').textContent).toBe('true');
+    await waitFor(() => expect(status()).toBe('The target is never in view on the 31 nights counted.'));
+    expect(screen.getByTestId('stale').textContent).toBe('false');
+    expect(asked.places.length).toBe(asks + 1);
+  });
+
+  it("speaks of a rig's own framing when that is what it shoots, and of waiting when the rig is not known yet", async () => {
+    const { again } = show({ target: { ra_degrees: 38.2, dec_degrees: -60 }, ownFraming: true });
+    await waitFor(() => expect(status()).toBe("C925's own framing is never in view on the 31 nights counted."));
+    expect(notes()).toEqual([["C925's framing never in view", "C925's own framing is never in view on the 31 nights counted."]]);
+    again({ rigs: null, waiting: 'Loading the rigs…' });
+    expect(status()).toBe('Loading the rigs…');
+    again({ rigs: null, waiting: null });
+    expect(status()).toBe('This plan has no rig yet.');
+  });
+
+  it('asks as a page for the picture drawn unasked, and as a person for one chosen here', async () => {
+    show({ target: { ra_degrees: 38.2, dec_degrees: 61.45 } });
+    await waitFor(() => expect(status()).toContain('31 nights'));
+    expect(asked.calls).toEqual([{ rig: 'rig-1', span: 'now' }]);
+    fireEvent.click(screen.getByRole('radio', { name: 'Year' }));
+    await waitFor(() => expect(asked.calls.at(-1)).toEqual({ rig: 'rig-1', span: 'year', priority: 'interactive' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Season' }));
+    await waitFor(() => expect(asked.calls.at(-1)).toEqual({ rig: 'rig-1', span: 'year', measured: true, priority: 'interactive' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Now' }));
+    const field = screen.getByLabelText('Minimum minutes') as HTMLInputElement;
+    fireEvent.change(field, { target: { value: '90' } });
+    fireEvent.keyDown(field, { key: 'Enter' });
+    await waitFor(() => expect(asked.calls.at(-1)).toEqual({ rig: 'rig-1', span: 'now', minimum_minutes: 90, priority: 'interactive' }));
+    // A count for a place is never a person's request.
+    expect(asked.places.every((request) => !('priority' in request))).toBe(true);
+  });
+
+  it('shows the remedy, and no slider, when the year for Season cannot be fetched', async () => {
+    asked.answer = async (request) => { if (request.measured) throw new Error('boom'); return view(request); };
+    show({ target: { ra_degrees: 38.2, dec_degrees: 61.45 } });
+    await waitFor(() => expect(status()).toContain('31 nights'));
+    fireEvent.click(screen.getByRole('radio', { name: 'Season' }));
+    await waitFor(() => expect(status()).toBe('The sky in view could not be worked out.'));
+    expect(screen.queryByRole('slider')).toBeNull();
+    expect(screen.queryByText('Working out the year…')).toBeNull();
   });
 
   it('says so when a year cannot be read, and leaves Year to use', async () => {
@@ -353,5 +435,55 @@ describe('the stage', () => {
     expect(stageLines([[[120, 40], [122, 40]]], tight, 0.5, stage)).toEqual({ line: '', marks: '' });
     // Nor does one on the far side of the sky.
     expect(stageLines([[[300, -10], [302, -10]]], tight, 150, stage).line).toBe('');
+  });
+
+  it('reaches as far as its corners, so an upright stage keeps the lines its cover is drawn to', () => {
+    // A wide stage reaches 79° at the widest zoom; an upright one, 95°.
+    expect(stageReach(150, stage)).toBeCloseTo(78.6, 0);
+    const upright = { width: 768, height: 1024 };
+    expect(stageReach(150, upright)).toBeGreaterThan(94);
+    expect(stageReach(1, upright)).toBeLessThan(1);
+    // Two places near the upright stage's bottom corner, further from the
+    // middle than a wide stage reaches: the stretch between them is drawn.
+    const middle = { ra_degrees: 120, dec_degrees: 60 };
+    const corner = stagePlace(viewAt(middle, middle), 150, upright);
+    const low: Array<[number, number]> = [[...corner(40, 1000)] as [number, number], [...corner(120, 1010)] as [number, number]];
+    const rad = Math.PI / 180;
+    for (const [ra, dec] of low) {
+      const cos = Math.sin(dec * rad) * Math.sin(60 * rad) + Math.cos(dec * rad) * Math.cos(60 * rad) * Math.cos((ra - 120) * rad);
+      expect(Math.acos(cos) / rad).toBeGreaterThan(86);
+    }
+    const onUpright = stageLines([low], viewAt(middle, middle), 150, upright);
+    expect(onUpright.line).toMatch(/^M40\.0 1000\.0L120\.0 1010\.0$/);
+    // The wide stage does not reach them.
+    expect(stageLines([low], viewAt(middle, middle), 150, stage).line).toBe('');
+    // The far side of the sky is still left out on any stage.
+    expect(stageLines([[[298, -60], [300, -60], [302, -60]]], viewAt(middle, middle), 150, upright).line).toBe('');
+  });
+
+  it('draws the cover\'s edge where the line is, at the bottom of a stage, at both sizes of raster', () => {
+    // In view north of +21°, never south of +19°: the edge is at +20°,
+    // and so is the line. A stage 1024 by 700, 20° across, looking where
+    // the line runs near its bottom.
+    const counts = new Uint16Array(180 * 91);
+    for (let row = 0; row < 91; row += 1) counts.fill(-90 + row * 2 >= 22 ? 30 : -90 + row * 2 <= 18 ? 0 : 15, row * 180, (row + 1) * 180);
+    const sky: SkyCounts = { counts, nights: 30, columns: 180, rows: 91 };
+    const wide = { width: 1024, height: 700 };
+    const looking = { ra_degrees: 120, dec_degrees: 26 };
+    const stageView = viewAt(looking, looking);
+    const [, lineY] = toStage(projectOn(stageView, { ra_degrees: 120, dec_degrees: 20 })!, 20, wide);
+    expect(lineY).toBeGreaterThan(wide.height * 0.9);
+    for (const across of [384, 128]) {
+      const [width, height] = coverSize(wide, across);
+      const pixels = coverRaster(sky, wide.width, wide.height, width, height, stagePlace(stageView, 20, wide));
+      const column = Math.floor(width / 2);
+      const down = Array.from({ length: height }, (_, py) => pixels[(py * width + column) * 4 + 3]);
+      // Where the cover passes half, between the middles of two pixels.
+      const below = down.findIndex((value) => value >= 127.5);
+      expect(below).toBeGreaterThan(0);
+      const part = (127.5 - down[below - 1]) / (down[below] - down[below - 1]);
+      const edgeY = (below - 0.5 + part) * (wide.height / height);
+      expect(Math.abs(edgeY - lineY), `${across} across`).toBeLessThan(across === 384 ? 0.6 : 1.5);
+    }
   });
 });

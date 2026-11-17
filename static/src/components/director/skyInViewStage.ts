@@ -7,11 +7,28 @@ const MARGIN = 40;
 /** A side mark every this many stage units along a line, this long. */
 const MARK_EVERY = 46;
 const MARK_LENGTH = 7;
-/** At its widest the stage reaches 79° from its middle. A stretch of line
- *  with both ends further than this from the middle cannot cross it; drawn
- *  straight between where the stage would place its ends, far off on
- *  either side, it would seem to. */
-const REACH_DEGREES = 85;
+/** A stretch of line with both ends further from the stage's middle than
+ *  its corners, and this much more, cannot cross the stage; drawn straight
+ *  between where the stage would place its ends, far off on either side,
+ *  it would seem to. */
+const PAST_CORNERS_DEGREES = 6;
+/** Near the far side of the sky the stage places points nowhere useful:
+ *  no stretch is drawn from further than this, however wide the stage. */
+const FAR_SIDE_DEGREES = 170;
+/** How long the view must rest before the cover is drawn at full size. */
+export const COVER_REST_MS = 220;
+
+/**
+ * How far from its middle a stage reaches on the sky, in degrees: to its
+ * corners. The stage is stereographic, so a corner `r` stage degrees from
+ * the middle is `2 atan(r / 2)` away. A wide stage reaches 79° at the
+ * widest zoom; a square or upright one reaches further.
+ */
+export function stageReach(viewFov: number, stage: Stage = DEFAULT_STAGE): number {
+  const rad = Math.PI / 180;
+  const corner = (viewFov / 2) * Math.hypot(1, stage.height / stage.width) * rad;
+  return (2 * Math.atan(corner / 2)) / rad;
+}
 
 /** The sky under a point of the framing stage, as `[ra, dec]` in degrees:
  *  what the cover's raster asks for each of its pixels. */
@@ -67,7 +84,7 @@ export function stageLines(lines: LonLat[][], view: StageView, viewFov: number, 
   const rad = Math.PI / 180;
   const middle = deprojectOn(view, [0, 0]);
   const [sin0, cos0] = [Math.sin(middle.dec_degrees * rad), Math.cos(middle.dec_degrees * rad)];
-  const within = Math.cos(REACH_DEGREES * rad);
+  const within = Math.cos(Math.min(FAR_SIDE_DEGREES, stageReach(viewFov, stage) + PAST_CORNERS_DEGREES) * rad);
   for (const line of lines) {
     let last: [number, number] | null = null;
     let lastNear = false;

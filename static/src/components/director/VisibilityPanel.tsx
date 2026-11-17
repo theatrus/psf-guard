@@ -6,6 +6,7 @@ import { RUNTIME_LABEL, STATE_LABEL, formatClock, formatNightDate, markOrigin } 
 import { formatHours } from './visibilityFormat';
 import { roundRa } from './framingModel';
 import { retryWhenBusy } from './retry';
+import { visibilityRig, type ShownRig } from './visibilityRig';
 import './VisibilityPanel.css';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Feasibility request failed';
@@ -110,9 +111,9 @@ export default function VisibilityPanel({ projectId, center, rigCenters, enabled
   rigCenters?: Record<string, DirectorSkyPosition>;
   enabled?: boolean;
   compact?: boolean;
-  /** Told which rig the panel shows, so what sits beside it can follow
-   *  the same rig; null while there is none. */
-  onRig?: (rigId: string | null) => void;
+  /** Told which rig the panel shows, and while it is still finding out,
+   *  so what sits beside it can follow the same rig. */
+  onRig?: (shown: ShownRig) => void;
 }) {
   const round = (c: DirectorSkyPosition) => ({ ra_degrees: roundRa(c.ra_degrees, 3), dec_degrees: Number(c.dec_degrees.toFixed(3)) });
   const rigKey = JSON.stringify(Object.entries(rigCenters ?? {}).sort(([a], [b]) => a.localeCompare(b)).map(([id, c]) => [id, round(c)]));
@@ -130,9 +131,10 @@ export default function VisibilityPanel({ projectId, center, rigCenters, enabled
   });
   const [chosen, setChosen] = useState<string | null>(null);
   const data: DirectorFeasibility | undefined = query.data;
-  const rig = data?.rigs.find(r => r.rig.id === chosen) ?? data?.rigs[0];
+  const rig = visibilityRig(data?.rigs, chosen);
   const shownRig = rig?.rig.id ?? null;
-  useEffect(() => { onRig?.(shownRig); }, [onRig, shownRig]);
+  const shownState = data ? 'ready' : query.isError ? 'failed' : 'loading';
+  useEffect(() => { onRig?.(shownState === 'ready' ? { state: 'ready', rigId: shownRig } : { state: shownState }); }, [onRig, shownState, shownRig]);
   // Each activated rig's own schedule, which ranks the plan against the
   // rig's other work. It does not depend on the framing being edited.
   const projection = useQuery({

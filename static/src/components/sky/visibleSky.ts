@@ -21,6 +21,12 @@ export function nightCount(atMs: number, longitudeDegrees: number): number {
   return Math.floor((atMs + (longitudeDegrees / 15) * 3_600_000 - DAY_MS / 2) / DAY_MS);
 }
 
+/** The instant the night after the one at `atMs` begins at a longitude:
+ *  when [`nightCount`] next steps. */
+export function nextNightAt(atMs: number, longitudeDegrees: number): number {
+  return (nightCount(atMs, longitudeDegrees) + 1) * DAY_MS + DAY_MS / 2 - (longitudeDegrees / 15) * 3_600_000;
+}
+
 export function formatMinutes(minutes: number): string {
   if (minutes < 60) return `${minutes} min`;
   const hours = Math.floor(minutes / 60);
@@ -38,19 +44,18 @@ export function horizonText(view: SkyTerms): string {
 }
 
 /**
- * Which nights were counted, in a few words. `fromTonight` is for nights
- * asked for without a date: the server starts those from the night under
- * way at the rig's site, or from the next once its dark has ended, which
- * either way is the night a person there calls tonight.
+ * Which nights were counted, in a few words. The nights are asked for
+ * without a date: the server starts them from the night under way at the
+ * rig's site, or from the next once its dark has ended, which either way
+ * is the night a person there calls tonight.
  */
-export function nightsText(view: DirectorVisibleSky, fromTonight: boolean): string {
+export function nightsText(view: DirectorVisibleSky): string {
   const first = view.nights[0]?.date;
   const last = view.nights[view.nights.length - 1]?.date;
   if (!first || !last) return '';
-  const from = fromTonight ? 'from tonight, ' : '';
-  if (view.span === 'year') return `${view.nights_counted} nights ${from}${formatNight(first)}${fromTonight ? ',' : ''} to ${formatNight(last)}, one a week measured`;
-  if (view.nights.length === 1) return fromTonight ? `tonight, ${formatNightDate(first)}` : formatNightDate(first);
-  return `${view.nights.length} nights ${from}${formatNightDate(first)}${fromTonight ? ',' : ''} to ${formatNightDate(last)}`;
+  if (view.span === 'year') return `${view.nights_counted} nights from tonight, ${formatNight(first)}, to ${formatNight(last)}, one a week measured`;
+  if (view.nights.length === 1) return `tonight, ${formatNightDate(first)}`;
+  return `${view.nights.length} nights from tonight, ${formatNightDate(first)}, to ${formatNightDate(last)}`;
 }
 
 /** A legend: the rig, the minimum time, the nights in the words given,
@@ -60,8 +65,8 @@ export function skyLegend(view: SkyTerms, rigName: string, nights: string): stri
 }
 
 /** The legend of the server's picture. */
-export function visibleSkyLegend(view: DirectorVisibleSky, rigName: string, fromTonight = true): string {
-  return skyLegend(view, rigName, nightsText(view, fromTonight));
+export function visibleSkyLegend(view: DirectorVisibleSky, rigName: string): string {
+  return skyLegend(view, rigName, nightsText(view));
 }
 
 const percent = (fraction: number) => `${Math.round(fraction * 100)}%`;
@@ -79,16 +84,6 @@ function regionText(region: DirectorVisibleSky['every_night']): string {
 export function visibleSkyShares(view: SkyRegions): string {
   if (!view.any_night) return `In view: ${regionText(view.every_night)}.`;
   return `In view every night: ${regionText(view.every_night)}. On at least one night: ${regionText(view.any_night)}.`;
-}
-
-/** The map in words: what it shows, for whom, and the numbers. */
-export function visibleSkySummary(view: DirectorVisibleSky, rigName: string): string {
-  return skySummary(visibleSkyLegend(view, rigName), view);
-}
-
-/** A map in words, from its legend and its regions. */
-export function skySummary(legend: string, regions: SkyRegions): string {
-  return `Map of the sky ${legend}. ${visibleSkyShares(regions)} Sky out of view is covered.`;
 }
 
 /** Where a place stands, from the nights it is in view out of those counted. */

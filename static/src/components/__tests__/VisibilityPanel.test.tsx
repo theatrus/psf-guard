@@ -3,6 +3,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
 import { server } from '../../test/msw-server';
+import { visibilityRig } from '../director/visibilityRig';
 import VisibilityPanel from '../director/VisibilityPanel';
 import { formatHours } from '../director/visibilityFormat';
 import type { DirectorFeasibility, DirectorRigFeasibility } from '../../api/directorTypes';
@@ -108,5 +109,31 @@ describe('visibility panel', () => {
     const view = { center: { ra_degrees: 38.2, dec_degrees: 61.45 }, target_name: 'IC 1805', nights: 7, warnings: [], rigs: [rig('RedCat 61', 'a', 6.2, true, true)] };
     mount(view, false, undefined, { ...scheduled, outcome: { kind: 'done' } });
     expect(await screen.findByText('This rig has taken every frame.')).toBeInTheDocument();
+  });
+
+  it('tells what follows it which rig it shows, by the rule it chooses its own rig with', async () => {
+    const shown: unknown[] = [];
+    const view = { center: { ra_degrees: 38.2, dec_degrees: 61.45 }, target_name: 'IC 1805', nights: 7, warnings: [],
+      rigs: [rig('C925 data', 'b', 0, false, false), rig('RedCat 61', 'a', 6.2, true, true)] } as DirectorFeasibility;
+    server.use(
+      http.post('/api/director/v1/projects/project/feasibility', () => ok(view)),
+      http.post('/api/director/v1/projects/project/projection', () => ok({ nights: 14, warnings: [], rigs: [scheduled] })),
+    );
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    const onRig = (rig: unknown) => { shown.push(rig); };
+    render(<QueryClientProvider client={client}><VisibilityPanel projectId="project" center={{ ra_degrees: 38.2, dec_degrees: 61.45 }} compact onRig={onRig} /></QueryClientProvider>);
+    // Still timing the target: no rig is named, so nothing is measured for a guess.
+    expect(shown).toEqual([{ state: 'loading' }]);
+    // The first rig timed, whichever the plan lists first.
+    const select = await screen.findByLabelText('Visibility rig');
+    expect(shown.at(-1)).toEqual({ state: 'ready', rigId: view.rigs[0].rig.id });
+    fireEvent.change(select, { target: { value: view.rigs[1].rig.id } });
+    expect(shown.at(-1)).toEqual({ state: 'ready', rigId: view.rigs[1].rig.id });
+    // The rule itself.
+    expect(visibilityRig(view.rigs, null)).toBe(view.rigs[0]);
+    expect(visibilityRig(view.rigs, view.rigs[1].rig.id)).toBe(view.rigs[1]);
+    expect(visibilityRig(view.rigs, 'gone')).toBe(view.rigs[0]);
+    expect(visibilityRig([], null)).toBeUndefined();
+    expect(visibilityRig(undefined, null)).toBeUndefined();
   });
 });

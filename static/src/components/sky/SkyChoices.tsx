@@ -19,8 +19,8 @@ const SHAPES: ReadonlyArray<readonly [SkyMode, string]> = [['aitoff', 'Flat'], [
 
 /** The coordinate frame and the map's shape: the two choices the Sky view
  *  offers for its map. */
-export function SkyShapeChoices({ frame, mode, onFrame, onMode, shapeFirst = false }: { frame: SkyFrame; mode: SkyMode; onFrame: (next: SkyFrame) => void; onMode: (next: SkyMode) => void; shapeFirst?: boolean }) {
+export function SkyShapeChoices({ frame, mode, onFrame, onMode }: { frame: SkyFrame; mode: SkyMode; onFrame: (next: SkyFrame) => void; onMode: (next: SkyMode) => void }) {
   const frames = <SkyChoice label="Coordinate frame" options={FRAMES} value={frame} onChange={onFrame} />;
   const shapes = <SkyChoice label="Map shape" options={SHAPES} value={mode} onChange={onMode} />;
-  return shapeFirst ? <>{shapes}{frames}</> : <>{frames}{shapes}</>;
+  return <>{frames}{shapes}</>;
 }

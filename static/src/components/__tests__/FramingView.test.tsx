@@ -1881,6 +1881,7 @@ describe('Mosaic panels', () => {
   it('covers the sky the first rig cannot shoot, says where the target stands, and remembers when it is switched off', async () => {
     fixture();
     const asked: Array<Record<string, unknown>> = [];
+    const places: Array<{ ra_degrees: number; dec_degrees: number }> = [];
     const ring = (dec: number) => Array.from({ length: 181 }, (_, at) => [(at * 2) % 360, dec]);
     // In view every night north of +30°, never south of it.
     let packed = '';
@@ -1900,6 +1901,7 @@ describe('Mosaic panels', () => {
       }),
       http.post('/api/director/v1/sky/visible-places', async ({ request }) => {
         const body = await request.json() as { places: Array<{ ra_degrees: number; dec_degrees: number }> };
+        places.push(...body.places);
         return HttpResponse.json(ok({ first_night: '2026-09-24', nights_counted: 31, places: body.places.map(place => ({ ...place, nights_in_view: place.dec_degrees >= 30 ? 31 : 0 })) }));
       }),
     );
@@ -1918,11 +1920,18 @@ describe('Mosaic panels', () => {
     expect(drawn.indexOf(layer)).toBeGreaterThanOrEqual(0);
     expect(drawn.indexOf(layer)).toBeLessThan(drawn.indexOf(screen.getByTestId('framing-graticule')));
     expect(drawn.indexOf(layer)).toBeLessThan(drawn.indexOf(screen.getByTestId('framing-panels')));
-    // A target moved out of reach reads so on the stage, in a few words.
+    // A target typed a key at a time, as one dragged, is counted once it
+    // rests: the words stay, dimmed, and one request follows.
+    const counted = places.length;
+    for (const typed of ['-1', '-10', '-20', '-30']) fireEvent.change(screen.getByLabelText('Declination degrees'), { target: { value: typed } });
+    expect(screen.getByTestId('sky-in-view-status')).toHaveTextContent('The target is in view on all of the 31 nights counted.');
+    expect(screen.getByTestId('sky-in-view-status')).toHaveAttribute('data-stale', 'true');
     fireEvent.change(screen.getByLabelText('Declination degrees'), { target: { value: '-40' } });
     await waitFor(() => expect(screen.getByTestId('sky-in-view-status')).toHaveTextContent('The target is never in view on the 31 nights counted.'));
     expect(screen.getByTestId('sky-in-view-note')).toHaveTextContent('Target never in view');
     expect(screen.getByTestId('sky-in-view-note')).toHaveAttribute('title', 'The target is never in view on the 31 nights counted.');
+    expect(places.slice(counted)).toEqual([{ ra_degrees: seed.center.ra_degrees, dec_degrees: -40 }]);
+    expect(screen.getByTestId('sky-in-view-status')).not.toHaveAttribute('data-stale');
     // Switched off: the layer and its words go, and the choice is kept.
     fireEvent.click(toggle);
     expect(toggle).toHaveAttribute('aria-pressed', 'false');

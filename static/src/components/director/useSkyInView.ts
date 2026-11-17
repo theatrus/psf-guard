@@ -2,11 +2,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { keepPreviousData, useMutationState, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../../api/client';
 import type { DirectorSkyPosition, DirectorVisiblePlacesRequest, DirectorVisibleSky, DirectorVisibleSkyRequest } from '../../api/directorTypes';
-import { useDirectorClock } from '../../hooks/useDirectorClock';
 import { formatNight } from '../sky/skyModel';
 import { SEASON_NIGHTS, seasonDarknessNote, seasonDates, seasonFrom, seasonNights, seasonSky, seasonStarts, unpackMeasured } from '../sky/skySeason';
 import { unpackCounts, type SkyCounts } from '../sky/skyShade';
-import { darknessNote, nightCount, skyLegend, standing, visibleSkyError, visibleSkyLegend, visibleSkyLines, visibleSkyShares, type VisibleSkyLines } from '../sky/visibleSky';
+import { darknessNote, nextNightAt, skyLegend, standing, visibleSkyError, visibleSkyLegend, visibleSkyLines, visibleSkyShares, type VisibleSkyLines } from '../sky/visibleSky';
+import { separationDegrees } from './framingModel';
 import { retryWhenBusy } from './retry';
 import { SKY_INPUTS_MUTATION } from './skyInputs';
 
@@ -19,8 +19,6 @@ export const MAX_MINUTES = 24 * 60;
 /** How long the minimum field waits after the last keystroke or spinner
  *  step before it asks for a new picture. */
 export const MINIMUM_SETTLE_MS = 500;
-/** How long after the last slider step the cover is drawn at full size. */
-export const SEASON_SETTLE_MS = 180;
 /** Page Up and Page Down move the slider this many weeks: about a month. */
 export const SEASON_PAGE = 4;
 const DAY_MS = 86_400_000;
@@ -45,12 +43,6 @@ export interface SkyInViewRig {
 /** A place to a millionth of a degree: enough to tell two places apart,
  *  and steady from one render to the next. */
 const rounded = (center: DirectorSkyPosition): DirectorSkyPosition => ({ ra_degrees: (Math.round(center.ra_degrees * 1e6) / 1e6) % 360, dec_degrees: Math.round(center.dec_degrees * 1e6) / 1e6 });
-
-function apart(a: DirectorSkyPosition, b: DirectorSkyPosition): number {
-  const rad = Math.PI / 180;
-  const cos = Math.sin(a.dec_degrees * rad) * Math.sin(b.dec_degrees * rad) + Math.cos(a.dec_degrees * rad) * Math.cos(b.dec_degrees * rad) * Math.cos((a.ra_degrees - b.ra_degrees) * rad);
-  return Math.acos(Math.min(1, Math.max(-1, cos))) / rad;
-}
 
 /** Where each month begins along the slider, as a share of its length:
  *  the slider runs from the year's first night to `lastStart` nights on. */
@@ -88,15 +80,16 @@ export interface SkyInViewModel {
   on: boolean;
   /** The cover's counts and the lines, when there is a picture to draw. */
   layer: { counts: SkyCounts; lines: VisibleSkyLines } | null;
-  /** The cover is changing many times a second, under the slider. */
-  changing: boolean;
   /** A few words for the stage when the target, or the sky at the middle
    *  of the view, is not in view every night; `title` is the sentence. */
   notes: Array<{ text: string; title: string }>;
   panel: {
     busy: boolean;
-    /** One line for the panel's summary. */
+    /** The words about the target, or what stands in their way. */
     status: string;
+    /** The words are the last known, for a target that has since moved or
+     *  a picture not yet here: shown dimmed until the new ones arrive. */
+    stale: boolean;
     failure: { text: string; needsSite: boolean } | null;
     /** What the picture was drawn under, and the nights counted. */
     legend: string | null;
@@ -128,10 +121,23 @@ export interface SkyInViewModel {
  * moving its slider asks for nothing.
  *
  * `target` and `viewCenter` get words of their own: the server counts the
- * nights for each place itself, so the words agree with the lines.
+ * nights for each place itself, so the words agree with the lines. Both
+ * are places at rest: Framing hands them over once a drag has ended or
+ * typing has stopped, and says with `targetMoving` that the target is on
+ * its way somewhere else, so the last words stay, dimmed, until then.
+ * `ownFraming` is whether `target` is the centre the rig frames on its own
+ * rather than the plan's shared target. `waiting` is why there is no rig
+ * yet, when it is not that the plan has none.
  */
-export function useSkyInView({ rig, on, target, viewCenter }: { rig: SkyInViewRig | null; on: boolean; target: DirectorSkyPosition | null; viewCenter: DirectorSkyPosition | null }): SkyInViewModel {
-  const now = useDirectorClock();
+export function useSkyInView({ rig, waiting = null, on, target, targetMoving = false, ownFraming = false, viewCenter }: {
+  rig: SkyInViewRig | null;
+  waiting?: string | null;
+  on: boolean;
+  target: DirectorSkyPosition | null;
+  targetMoving?: boolean;
+  ownFraming?: boolean;
+  viewCenter: DirectorSkyPosition | null;
+}): SkyInViewModel {
   const [span, setSpan] = useState<Span>('now');
   // Minutes typed here; null uses the rig's minimum time. Another rig
   // starts from its own.
@@ -143,9 +149,13 @@ export function useSkyInView({ rig, on, target, viewCenter }: { rig: SkyInViewRi
   // only Season asks for: they treble the answer.
   const wantsSeason = span === 'season';
   const rigId = rig?.id ?? null;
+  // The month at the rig's own minimum is what Framing draws unasked. Any
+  // other picture is one a person chose here, and says so: the server
+  // gives it a person's priority.
+  const byHand = span !== 'now' || minimum !== null;
   const request: DirectorVisibleSkyRequest | null = useMemo(
-    () => (rigId ? { rig: rigId, span: wantsSeason ? 'year' : span, ...(wantsSeason ? { measured: true } : {}), ...(minimum !== null ? { minimum_minutes: minimum } : {}) } : null),
-    [rigId, span, wantsSeason, minimum]
+    () => (rigId ? { rig: rigId, span: wantsSeason ? 'year' : span, ...(wantsSeason ? { measured: true } : {}), ...(minimum !== null ? { minimum_minutes: minimum } : {}), ...(byHand ? { priority: 'interactive' as const } : {}) } : null),
+    [rigId, span, wantsSeason, minimum, byHand]
   );
   // The picture for fixed inputs does not change, so it is not fetched on
   // the app's timer or on focus. A superseded request is cancelled, and
@@ -165,13 +175,18 @@ export function useSkyInView({ rig, on, target, viewCenter }: { rig: SkyInViewRi
   // last one for this rig. Another rig's picture is never shown.
   const view: DirectorVisibleSky | undefined = on && request && !query.isError && query.data?.rig.id === request.rig ? query.data : undefined;
   const awaited = view !== undefined && (wantsSeason ? query.isPlaceholderData : view.span !== span);
-  // The nights start again at the next local noon at the rig's site.
+  // The nights start again at the next local noon at the rig's site: one
+  // timer for that instant, set only while the overlay is on and has a
+  // picture, reads it again. Nothing ticks in between.
   const longitude = query.data?.site.longitude_degrees;
-  const nightIsOver = on && request !== null && longitude !== undefined && !query.isPlaceholderData && nightCount(now, longitude) !== nightCount(query.dataUpdatedAt, longitude);
+  const readAt = on && request !== null && !query.isPlaceholderData && !query.isError ? query.dataUpdatedAt : 0;
   const refetch = query.refetch;
   useEffect(() => {
-    if (nightIsOver) void refetch();
-  }, [nightIsOver, refetch]);
+    if (!readAt || longitude === undefined) return;
+    const wait = Math.max(1000, nextNightAt(readAt, longitude) - Date.now() + 1000);
+    const timer = window.setTimeout(() => void refetch(), Math.min(wait, 0x7fffffff));
+    return () => window.clearTimeout(timer);
+  }, [readAt, longitude, refetch]);
   // A save that can move the rig's site, horizon, limits or minimum time
   // makes the picture out of date; no other save does.
   const client = useQueryClient();
@@ -242,17 +257,7 @@ export function useSkyInView({ rig, on, target, viewCenter }: { rig: SkyInViewRi
   }
   const position = Math.min(place, starts.length - 1);
   const season = useMemo(() => (view && measured ? seasonSky(view, measured, starts[position], SEASON_NIGHTS) : null), [view, measured, starts, position]);
-  // While the slider moves the cover is drawn small, and at full size
-  // once it rests.
-  const [sliding, setSliding] = useState(false);
-  const slideRest = useRef<number | null>(null);
-  useEffect(() => () => { if (slideRest.current !== null) window.clearTimeout(slideRest.current); }, []);
-  const slideTo = (next: number) => {
-    setPlace(Math.max(0, Math.min(starts.length - 1, next)));
-    setSliding(true);
-    if (slideRest.current !== null) window.clearTimeout(slideRest.current);
-    slideRest.current = window.setTimeout(() => setSliding(false), SEASON_SETTLE_MS);
-  };
+  const slideTo = (next: number) => setPlace(Math.max(0, Math.min(starts.length - 1, next)));
   // The server's picture, drawn as it came: not while a time of year made
   // from it is drawn instead, nor when that could not be made.
   const picture: DirectorVisibleSky | undefined = season || seasonBroken ? undefined : view;
@@ -267,7 +272,7 @@ export function useSkyInView({ rig, on, target, viewCenter }: { rig: SkyInViewRi
   // here, from the grid its lines are drawn from.
   const targetAt = useMemo(() => (target ? rounded(target) : null), [target?.ra_degrees, target?.dec_degrees]); // eslint-disable-line react-hooks/exhaustive-deps
   const viewAt = useMemo(() => (viewCenter ? rounded(viewCenter) : null), [viewCenter?.ra_degrees, viewCenter?.dec_degrees]); // eslint-disable-line react-hooks/exhaustive-deps
-  const viewApart = viewAt !== null && (targetAt === null || apart(viewAt, targetAt) > VIEW_APART_DEGREES);
+  const viewApart = viewAt !== null && (targetAt === null || separationDegrees(viewAt, targetAt) > VIEW_APART_DEGREES);
   const first = view?.nights[0]?.date;
   const asks = (at: DirectorSkyPosition | null): DirectorVisiblePlacesRequest | null =>
     !view || !first || !at || wantsSeason ? null : { rig: view.rig.id, span: view.span, minimum_minutes: view.minimum_minutes, first_night: first, places: [at] };
@@ -298,20 +303,32 @@ export function useSkyInView({ rig, on, target, viewCenter }: { rig: SkyInViewRi
   const year = !season && picture?.span === 'year';
   const targetNights = inView(targetAt, targetQuery.data);
   const viewNights = viewApart ? inView(viewAt, viewQuery.data) : null;
-  const targetWords = targetNights === null ? null : placeWords('The target', targetNights, counted, year);
+  // What the rig shoots: the plan's target, or its own framing of it.
+  const subject = ownFraming && rig ? `${rig.name}'s own framing` : 'The target';
+  const short = ownFraming && rig ? `${rig.name}'s framing` : 'Target';
+  // The words for the target as it stands, once known. While it moves, or
+  // while its nights are being counted, the last words stay.
+  const fresh = targetNights === null || targetMoving ? null : { words: placeWords(subject, targetNights, counted, year), nights: targetNights, counted };
+  const keptFor = `${rigId ?? ''} ${on}`;
+  const kept = useRef<{ key: string; target: NonNullable<typeof fresh> } | null>(null);
+  if (fresh) kept.current = { key: keptFor, target: fresh };
+  else if (kept.current && (kept.current.key !== keptFor || query.isError || seasonBroken)) kept.current = null;
+  const shownTarget = fresh ?? kept.current?.target ?? null;
+  const stale = fresh === null && shownTarget !== null;
+  const targetWords = shownTarget?.words ?? null;
   const viewWords = viewNights === null ? null : placeWords('The middle of the view', viewNights, counted, year);
   const notes: Array<{ text: string; title: string }> = [];
-  if (targetNights !== null && targetWords && targetNights < counted) notes.push({ text: targetNights === 0 ? 'Target never in view' : 'Target not in view every night', title: targetWords });
+  if (shownTarget && shownTarget.nights < shownTarget.counted) notes.push({ text: shownTarget.nights === 0 ? `${short} never in view` : `${short} not in view every night`, title: shownTarget.words });
   if (viewNights !== null && viewWords && viewNights < counted) notes.push({ text: viewNights === 0 ? 'This sky is never in view' : 'This sky is not in view every night', title: viewWords });
 
   const failure = on && query.isError ? visibleSkyError(query.error) : null;
   const broken = "The year's nights could not be read, so Season has nothing to show. Reload the page, or choose Year.";
-  const status = !rig ? 'This plan has no rig yet.'
+  const status = !rig ? waiting ?? 'This plan has no rig yet.'
     : !on ? 'Hidden'
     : failure ? failure.text
     : seasonBroken ? broken
     : !picture && !season ? 'Working out the sky in view…'
-    : targetWords ?? (targetQuery.isError ? "The target's nights could not be counted." : 'Counting the nights the target is in view…');
+    : targetWords ?? (targetQuery.isError ? 'Its nights in view could not be counted.' : 'Counting its nights in view…');
   const legend = !rig ? null
     : season && view ? `${skyLegend(view, rig.name, `${SEASON_NIGHTS} nights at a time from tonight, ${formatNight(view.nights[0]?.date ?? null)}, to ${formatNight(view.nights[view.nights.length - 1]?.date ?? null)}, one a week measured`)}.`
     : picture ? `${awaited ? `${SPAN_LABEL[picture.span]} is shown while ${SPAN_LABEL[span]} loads. ` : ''}${visibleSkyLegend(picture, rig.name)}.`
@@ -326,11 +343,11 @@ export function useSkyInView({ rig, on, target, viewCenter }: { rig: SkyInViewRi
     rig,
     on,
     layer: on ? layer : null,
-    changing: sliding,
     notes: on ? notes : [],
     panel: {
       busy: on && query.isFetching,
       status,
+      stale: on && !failure && !seasonBroken && stale,
       failure,
       legend: on && !failure && !seasonBroken ? legend : null,
       shares: on && !failure && !seasonBroken ? shares : null,
@@ -342,7 +359,7 @@ export function useSkyInView({ rig, on, target, viewCenter }: { rig: SkyInViewRi
       sendMinutes,
       rigMinimum: minimum !== null && rigMinimum !== null && minimum !== rigMinimum ? rigMinimum : null,
       useRigMinimum: () => setMinimum(null),
-      season: wantsSeason && !seasonBroken ? { position, last: starts.length - 1, from: season ? seasonFrom(season.view) : null, dates: season ? seasonDates(season.view) : null, slideTo, months } : null,
+      season: wantsSeason && !seasonBroken && !failure ? { position, last: starts.length - 1, from: season ? seasonFrom(season.view) : null, dates: season ? seasonDates(season.view) : null, slideTo, months } : null,
       year,
     },
   };
