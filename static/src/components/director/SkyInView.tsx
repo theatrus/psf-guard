@@ -164,14 +164,14 @@ export function SkyInViewPanel({ model, onShow }: { model: SkyInViewModel; onSho
             <p className="sky-in-view-key">
               <span className="sky-in-view-scale-end">No night</span>
               <span className="sky-in-view-scale" aria-hidden="true" />
-              <span className="sky-in-view-scale-end">Every night</span>
-              <span><span className="sky-in-view-key-solid" aria-hidden="true" />Edge of the sky in view every night</span>
+              <span className="sky-in-view-scale-end">{panel.clearNights !== null ? `${panel.clearNights} nights or more` : 'Every night'}</span>
+              <span><span className="sky-in-view-key-solid" aria-hidden="true" />{panel.clearNights !== null ? `Edge of the sky in view on ${panel.clearNights} nights or more` : 'Edge of the sky in view every night'}</span>
               <span><span className="sky-in-view-key-dashed" aria-hidden="true" />Edge of the sky in view on any night</span>
             </p>
             <p className="sky-in-view-text">
-              Covered sky is out of view on some nights. Hatched sky is never in view. Marks on the lines point into the sky in view.
+              {panel.clearNights !== null ? `Covered sky is in view on fewer than ${panel.clearNights} nights.` : 'Covered sky is out of view on some nights.'} Hatched sky is never in view. Marks on the lines point into the sky in view.
               {panel.span === 'season' && ' Season shows 31 nights of the year at a time. Its lines follow the 2° grid the year is measured on, so they are rougher than the lines in Now and Year.'}
-              {panel.year && ' Year counts every night. One night a week is measured and the nights between are worked out from the measured nights. The solid line is within about 2° of a line measured on every night.'}
+              {panel.year && panel.clearNights !== null && ` Year counts every night of the year. Clear sky is in view on at least ${panel.clearNights} of them, in total and not in a row. One night a week is measured and the nights between are worked out from the measured nights. The solid line is within about 1° of a line measured on every night.`}
             </p>
           </div>
         </details>

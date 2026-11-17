@@ -4,6 +4,7 @@ import type { LonLat } from '../../../utils/skyProjection';
 import { formatNightDate } from '../../nights/nightsModel';
 import { formatNight } from '../skyModel';
 import {
+  clearSkyShares,
   darknessNote,
   formatMinutes,
   nextNightAt,
@@ -62,6 +63,10 @@ describe('the legend', () => {
     const never = view({ every_night: { lines: [], sky_fraction: 0, declinations: null } });
     expect(visibleSkyShares(never)).toMatch(/^In view every night: none of the sky\. On at least one night: 62%/);
     expect(visibleSkyShares(view({ any_night: null }))).toBe('In view: 41% of the sky, declination −12° to +90°.');
+    // A year's clear sky is the sky in view on enough nights.
+    const clear = { nights: 7, lines: [], sky_fraction: 0.55, declinations: [-25.2, 90] as [number, number] };
+    expect(clearSkyShares({ at_least: clear, any_night: view().any_night })).toBe('In view on 7 nights or more: 55% of the sky, declination −25° to +90°. On at least one night: 62% of the sky, declination −31° to +90°.');
+    expect(clearSkyShares({ at_least: { ...clear, declinations: null }, any_night: null })).toBe('In view on 7 nights or more: none of the sky.');
   });
 
   it('places a count among the lines', () => {

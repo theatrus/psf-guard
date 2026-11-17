@@ -22,10 +22,14 @@ vi.mock('../../api/client', () => ({
     getDirectorVisiblePlaces: async (request: DirectorVisiblePlacesRequest) => {
       asked.places.push(request);
       const counted = request.span === 'year' ? 365 : 31;
+      if (request.span === 'year') return { first_night: request.first_night ?? '2026-09-24', nights_counted: 365, at_least_nights: 7, places: request.places.map((place) => ({ ...place, nights_in_view: yearNights(place.dec_degrees), at_least: yearNights(place.dec_degrees) >= 7 })) };
       return { first_night: request.first_night ?? '2026-09-24', nights_counted: counted, places: request.places.map((place) => ({ ...place, nights_in_view: place.dec_degrees >= 40 ? counted : place.dec_degrees >= -30 ? 12 : 0 })) };
     },
   },
 }));
+/** A year in the tests: every night north of +40°, 7 nights down to
+ *  +10°, 3 down to −30°, none south of that. */
+const yearNights = vi.hoisted(() => (dec: number) => (dec >= 40 ? 365 : dec >= 10 ? 7 : dec >= -30 ? 3 : 0));
 const openSettings = vi.hoisted(() => vi.fn());
 vi.mock('../../utils/settingsIntent', () => ({ openSettings }));
 
@@ -51,6 +55,14 @@ const measuredYear = () => {
   for (let i = 0; i < bytes.length; i += 4096) text += String.fromCharCode(...bytes.subarray(i, i + 4096));
   return { in_view: btoa(text), bytes_a_night: 2048, turn_degrees_a_night: 1 };
 };
+const yearCounts = () => {
+  let text = '';
+  for (let row = 0; row < 91; row += 1) {
+    const count = yearNights(-90 + row * 2);
+    text += String.fromCharCode(count & 255, count >> 8).repeat(180);
+  }
+  return btoa(text);
+};
 const ring = (dec: number) => Array.from({ length: 181 }, (_, i) => [(i * 2) % 360, dec] as [number, number]);
 const nightList = (count: number, every: number, first = '2026-09-24') =>
   Array.from({ length: count }, (_, i) => ({ date: new Date(Date.parse(`${first}T00:00:00Z`) + i * every * 86_400_000).toISOString().slice(0, 10), dusk_ms: Date.now() + 1, dawn_ms: Date.now() + 2 }));
@@ -65,9 +77,10 @@ const view = (request: DirectorVisibleSkyRequest, over: Partial<DirectorVisibleS
     minimum_minutes: request.minimum_minutes ?? 30, rig_minimum_minutes: 30, step_minutes: 5, dark_below_degrees: -12,
     nights: nightList(year ? 53 : 31, year ? 7 : 1), span: year ? 'year' : 'now', every_nights: year ? 7 : 1,
     nights_counted: year ? 365 : 31,
-    grid: { degrees: 2, columns: 180, rows: 91 }, counts: counts(year ? 365 : 31),
+    grid: { degrees: 2, columns: 180, rows: 91 }, counts: year ? yearCounts() : counts(31),
     every_night: { lines: [ring(40)], sky_fraction: 0.18, declinations: [39.6, 90] },
     any_night: { lines: [ring(-30)], sky_fraction: 0.75, declinations: [-30.4, 90] },
+    ...(year ? { at_least: { nights: 7, lines: [ring(10)], sky_fraction: 0.41, declinations: [9.8, 90] as [number, number] } } : {}),
     ...(request.measured ? { measured: measuredYear() } : {}),
     ...over,
   };
@@ -158,8 +171,18 @@ describe('sky in view over the framing stage', () => {
     await waitFor(() => expect(status()).toBe('The target is in view on all of the 365 nights of the year.'));
     // Year alone does not ask for the measured nights.
     expect(asked.calls.at(-1)).toEqual({ rig: 'rig-1', span: 'year', priority: 'interactive' });
-    expect(container.querySelector('.sky-in-view-layer')?.getAttribute('data-nights')).toBe('365');
-    expect(container.querySelector('.sky-in-view-body')?.textContent).toContain('Year counts every night. One night a week is measured');
+    // The cover is weighed against the 7 nights that leave sky clear, not
+    // against the 365, and the solid line is the server's line round that sky.
+    const layer = container.querySelector('.sky-in-view-layer');
+    expect(layer?.getAttribute('data-nights')).toBe('7');
+    expect(layer?.querySelector('.sky-in-view-line.sky-in-view-every')?.getAttribute('d')).toMatch(/^M/);
+    const body = container.querySelector('.sky-in-view-body')?.textContent ?? '';
+    expect(body).toContain('Year counts every night of the year. Clear sky is in view on at least 7 of them, in total and not in a row. One night a week is measured and the nights between are worked out from the measured nights. The solid line is within about 1° of a line measured on every night.');
+    expect(body).toContain('Covered sky is in view on fewer than 7 nights. Hatched sky is never in view.');
+    // The scale and the solid line's name follow.
+    expect(body).toContain('No night7 nights or moreEdge of the sky in view on 7 nights or moreEdge of the sky in view on any night');
+    expect(screen.getByTestId('sky-in-view-shares').textContent).toBe('In view on 7 nights or more: 41% of the sky, declination +10° to +90°. On at least one night: 75% of the sky, declination −30° to +90°.');
+    expect(notes()).toEqual([]);
     fireEvent.click(screen.getByRole('radio', { name: 'Now' }));
     const field = screen.getByLabelText('Minimum minutes') as HTMLInputElement;
     fireEvent.change(field, { target: { value: '9' } });
@@ -169,6 +192,33 @@ describe('sky in view over the framing stage', () => {
     expect(asked.calls.some((call) => call.minimum_minutes === 9)).toBe(false);
     fireEvent.click(await screen.findByRole('button', { name: "Use rig's 30 min" }));
     await waitFor(() => expect(field.value).toBe('30'));
+  });
+
+  it('in Year notes a target only when it falls short of a week of nights, and keeps the exact count in words', async () => {
+    const { again, container } = show({ target: { ra_degrees: 38.2, dec_degrees: 20 } });
+    await waitFor(() => expect(status()).toContain('31 nights'));
+    // In the month, 12 of 31 nights is short of every night.
+    expect(notes()).toEqual([['Target not in view every night', 'The target is in view on 12 of the 31 nights counted.']]);
+    fireEvent.click(screen.getByRole('radio', { name: 'Year' }));
+    // Seven nights of the year: clear, and no note.
+    await waitFor(() => expect(status()).toBe('The target is in view on 7 of the 365 nights of the year.'));
+    expect(notes()).toEqual([]);
+    // Three nights: short of a week.
+    again({ target: { ra_degrees: 38.2, dec_degrees: 0 } });
+    await waitFor(() => expect(status()).toBe('The target is in view on 3 of the 365 nights of the year.'));
+    expect(notes()).toEqual([['Target in view under a week a year', 'The target is in view on 3 of the 365 nights of the year.']]);
+    // None.
+    again({ target: { ra_degrees: 38.2, dec_degrees: -60 } });
+    await waitFor(() => expect(status()).toBe('The target is never in view on the 365 nights of the year.'));
+    expect(notes()).toEqual([['Target never in view', 'The target is never in view on the 365 nights of the year.']]);
+    // The middle of the view, somewhere else, by the same rule.
+    again({ target: { ra_degrees: 38.2, dec_degrees: 20 }, viewCenter: { ra_degrees: 100, dec_degrees: -10 } });
+    await waitFor(() => expect(screen.getByTestId('sky-in-view-view').textContent).toBe('The middle of the view is in view on 3 of the 365 nights of the year.'));
+    await waitFor(() => expect(notes()).toEqual([['This sky is in view under a week a year', 'The middle of the view is in view on 3 of the 365 nights of the year.']]));
+    // Back in the month the scale and the line are the every-night ones.
+    fireEvent.click(screen.getByRole('radio', { name: 'Now' }));
+    await waitFor(() => expect(container.querySelector('.sky-in-view-layer')?.getAttribute('data-nights')).toBe('31'));
+    expect(container.querySelector('.sky-in-view-body')?.textContent).toContain('No nightEvery nightEdge of the sky in view every night');
   });
 
   it('shows a month of the year at a time under a slider, asking once', async () => {
@@ -212,7 +262,7 @@ describe('sky in view over the framing stage', () => {
     expect(asked.places.every((request) => request.span === 'now')).toBe(true);
     // Year reads Season's answer: going between them asks for nothing.
     fireEvent.click(screen.getByRole('radio', { name: 'Year' }));
-    await waitFor(() => expect(container.querySelector('.sky-in-view-layer')?.getAttribute('data-nights')).toBe('365'));
+    await waitFor(() => expect(container.querySelector('.sky-in-view-layer')?.getAttribute('data-nights')).toBe('7'));
     expect(screen.queryByRole('slider')).toBeNull();
     fireEvent.click(screen.getByRole('radio', { name: 'Season' }));
     expect((screen.getByRole('slider', { name: 'Time of year' }) as HTMLInputElement).value).toBe('48');

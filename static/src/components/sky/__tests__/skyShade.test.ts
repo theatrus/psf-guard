@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { countAt, coverImage, coverRaster, unpackCounts, type SkyCounts } from '../skyShade';
+import { countAt, countsAgainst, coverImage, coverRaster, unpackCounts, type SkyCounts } from '../skyShade';
 
 /** A grid as the server sends it: 2° nodes, 180 by 91, from the south pole. */
 function grid(count: (ra: number, dec: number) => number, nights: number): SkyCounts {
@@ -96,6 +96,31 @@ describe('the cover', () => {
       const row = down.findIndex((value) => value > 128);
       expect(Math.abs((row + 0.5) * (180 / height) - 90), `${width} by ${height}`).toBeLessThanOrEqual(180 / height + 1e-9);
     }
+  });
+
+  it('weighs a year against the nights that are enough: clear from there up, heavier the further short', () => {
+    // Nights in view by declination: 300, 7, 6, 3, 1 and none.
+    const year = grid((_, dec) => (dec >= 60 ? 300 : dec >= 40 ? 7 : dec >= 20 ? 6 : dec >= 0 ? 3 : dec >= -20 ? 1 : 0), 365);
+    const week = countsAgainst(year, 7);
+    expect(week.nights).toBe(7);
+    expect(Math.max(...week.counts)).toBe(7);
+    // The year's own counts are left as they were.
+    expect(Math.max(...year.counts)).toBe(300);
+    const pixels = coverRaster(week, 360, 180, 90, 45, plain());
+    const at = (dec: number) => alpha(pixels, 90, 10, Math.floor((90 - dec) / 4));
+    // Seven nights or more is clear, whether 7 or 300.
+    expect(at(70)).toBe(0);
+    expect(at(50)).toBe(0);
+    // Six, three and one night of the seven: a seventh, four sevenths and
+    // six sevenths covered.
+    expect(at(30)).toBe(Math.round(255 / 7));
+    expect(at(10)).toBe(Math.round((255 * 4) / 7));
+    expect(at(-10)).toBe(Math.round((255 * 6) / 7));
+    // None: covered whole.
+    expect(at(-50)).toBe(255);
+    // Against all 365 nights the same sky would be nearly all covered.
+    const whole = coverRaster(year, 360, 180, 90, 45, plain());
+    expect(alpha(whole, 90, 10, Math.floor((90 - 50) / 4))).toBe(250);
   });
 
   describe('as an image', () => {

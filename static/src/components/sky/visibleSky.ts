@@ -86,6 +86,13 @@ export function visibleSkyShares(view: SkyRegions): string {
   return `In view every night: ${regionText(view.every_night)}. On at least one night: ${regionText(view.any_night)}.`;
 }
 
+/** What a year's lines enclose, in words: the sky in view on enough
+ *  nights to be left clear, and the sky in view on any. */
+export function clearSkyShares(view: { at_least: DirectorVisibleSky['every_night'] & { nights: number }; any_night: DirectorVisibleSky['any_night'] }): string {
+  const clear = `In view on ${view.at_least.nights} nights or more: ${regionText(view.at_least)}.`;
+  return view.any_night ? `${clear} On at least one night: ${regionText(view.any_night)}.` : clear;
+}
+
 /** Where a place stands, from the nights it is in view out of those counted. */
 export function standing(nights: number, counted: number): 'every' | 'some' | 'none' {
   return nights >= counted ? 'every' : nights > 0 ? 'some' : 'none';

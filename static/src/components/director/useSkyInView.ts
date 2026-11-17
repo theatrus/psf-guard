@@ -4,8 +4,8 @@ import { apiClient } from '../../api/client';
 import type { DirectorSkyPosition, DirectorVisiblePlacesRequest, DirectorVisibleSky, DirectorVisibleSkyRequest } from '../../api/directorTypes';
 import { formatNight } from '../sky/skyModel';
 import { SEASON_NIGHTS, seasonDarknessNote, seasonDates, seasonFrom, seasonNights, seasonSky, seasonStarts, unpackMeasured } from '../sky/skySeason';
-import { unpackCounts, type SkyCounts } from '../sky/skyShade';
-import { darknessNote, nextNightAt, skyLegend, standing, visibleSkyError, visibleSkyLegend, visibleSkyLines, visibleSkyShares, type VisibleSkyLines } from '../sky/visibleSky';
+import { countsAgainst, unpackCounts, type SkyCounts } from '../sky/skyShade';
+import { clearSkyShares, darknessNote, nextNightAt, skyLegend, standing, visibleSkyError, visibleSkyLegend, visibleSkyLines, visibleSkyShares, type VisibleSkyLines } from '../sky/visibleSky';
 import { separationDegrees } from './framingModel';
 import { retryWhenBusy } from './retry';
 import { SKY_INPUTS_MUTATION } from './skyInputs';
@@ -107,6 +107,8 @@ export interface SkyInViewModel {
     useRigMinimum: () => void;
     season: { position: number; last: number; from: string | null; dates: string | null; slideTo: (next: number) => void; months: Array<{ label: string; share: number }> } | null;
     year: boolean;
+    /** In a year: the nights that leave a place clear. */
+    clearNights: number | null;
   };
 }
 
@@ -262,8 +264,17 @@ export function useSkyInView({ rig, waiting = null, on, target, targetMoving = f
   // from it is drawn instead, nor when that could not be made.
   const picture: DirectorVisibleSky | undefined = season || seasonBroken ? undefined : view;
 
-  const counts = useMemo(() => (season ? season.counts : picture ? unpackCounts(picture.counts, picture.nights_counted, picture.grid.columns, picture.grid.rows) : null), [season, picture]);
-  const lines = useMemo(() => (season ? visibleSkyLines(season.view) : picture ? visibleSkyLines(picture) : null), [season, picture]);
+  // A year leaves clear the sky in view on enough nights of it, a week's
+  // worth, not the sky in view on every night, which is only the sky round
+  // the pole. The server gives the number and the line round that sky.
+  const clear = !season && picture?.span === 'year' && picture.at_least ? picture.at_least : null;
+  const clearNights = clear?.nights ?? null;
+  const counts = useMemo(() => {
+    if (season) return season.counts;
+    const all = picture ? unpackCounts(picture.counts, picture.nights_counted, picture.grid.columns, picture.grid.rows) : null;
+    return all && clearNights !== null ? countsAgainst(all, clearNights) : all;
+  }, [season, picture, clearNights]);
+  const lines = useMemo(() => (season ? visibleSkyLines(season.view) : picture && clear ? { every: clear.lines, any: picture.any_night ? picture.any_night.lines : null } : picture ? visibleSkyLines(picture) : null), [season, picture, clear]);
   const layer = useMemo(() => (counts && lines ? { counts, lines } : null), [counts, lines]);
 
   // The target, and the middle of the view when it is somewhere else: the
@@ -318,8 +329,12 @@ export function useSkyInView({ rig, waiting = null, on, target, targetMoving = f
   const targetWords = shownTarget?.words ?? null;
   const viewWords = viewNights === null ? null : placeWords('The middle of the view', viewNights, counted, year);
   const notes: Array<{ text: string; title: string }> = [];
-  if (shownTarget && shownTarget.nights < shownTarget.counted) notes.push({ text: shownTarget.nights === 0 ? `${short} never in view` : `${short} not in view every night`, title: shownTarget.words });
-  if (viewNights !== null && viewWords && viewNights < counted) notes.push({ text: viewNights === 0 ? 'This sky is never in view' : 'This sky is not in view every night', title: viewWords });
+  // A note on the stage when a place is covered: short of every night, or
+  // in a year short of the nights that leave it clear.
+  const enough = (of: number) => clearNights ?? of;
+  const shortfall = clearNights === null ? 'not in view every night' : clearNights === 7 ? 'in view under a week a year' : `in view on fewer than ${clearNights} nights a year`;
+  if (shownTarget && shownTarget.nights < enough(shownTarget.counted)) notes.push({ text: shownTarget.nights === 0 ? `${short} never in view` : `${short} ${shortfall}`, title: shownTarget.words });
+  if (viewNights !== null && viewWords && viewNights < enough(counted)) notes.push({ text: viewNights === 0 ? 'This sky is never in view' : `This sky is ${shortfall}`, title: viewWords });
 
   const failure = on && query.isError ? visibleSkyError(query.error) : null;
   const broken = "The year's nights could not be read, so Season has nothing to show. Reload the page, or choose Year.";
@@ -335,6 +350,7 @@ export function useSkyInView({ rig, waiting = null, on, target, targetMoving = f
     : null;
   const note = season ? seasonDarknessNote(season.view) : picture ? darknessNote(picture) : null;
   const shares = season ? `${seasonDates(season.view)}. ${visibleSkyShares(season.view)}${note ? ` ${note}` : ''}`
+    : picture && clear ? `${clearSkyShares({ at_least: clear, any_night: picture.any_night })}${note ? ` ${note}` : ''}`
     : picture ? `${visibleSkyShares(picture)}${note ? ` ${note}` : ''}`
     : null;
   const months = useMemo(() => (view && measured ? monthMarks(view.nights[0]?.date, starts[starts.length - 1]) : []), [view, measured, starts]);
@@ -361,6 +377,7 @@ export function useSkyInView({ rig, waiting = null, on, target, targetMoving = f
       useRigMinimum: () => setMinimum(null),
       season: wantsSeason && !seasonBroken && !failure ? { position, last: starts.length - 1, from: season ? seasonFrom(season.view) : null, dates: season ? seasonDates(season.view) : null, slideTo, months } : null,
       year,
+      clearNights,
     },
   };
 }
