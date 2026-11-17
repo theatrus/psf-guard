@@ -200,22 +200,25 @@ pub(super) fn count<E>(
 }
 
 /// Whether one place is in view on every night of the year, or, with
-/// `every` false, on any, stopping as soon as the answer is known.
+/// `every` false, on any: [`at_least`] all the nights, or one. The
+/// server asks [`at_least`] itself; this form is for the tests.
+#[cfg(test)]
 pub(super) fn all_or_any<E>(
     measured: usize,
     every: bool,
     seen: impl FnMut(usize, i32) -> Result<bool, E>,
 ) -> Result<bool, E> {
-    for night in nights(measured, seen) {
-        if night?.1 != every {
-            return Ok(!every);
-        }
-    }
-    Ok(every)
+    let wanted = if every {
+        nights_counted(measured) as u32
+    } else {
+        1
+    };
+    at_least(measured, wanted, seen)
 }
 
 /// Whether one place is in view on at least `wanted` nights of the year,
-/// stopping as soon as the answer is known.
+/// stopping as soon as the answer is known: once it has them, or once the
+/// nights left cannot make them up.
 pub(super) fn at_least<E>(
     measured: usize,
     wanted: u32,
@@ -224,11 +227,16 @@ pub(super) fn at_least<E>(
     if wanted == 0 {
         return Ok(true);
     }
+    let mut left = nights_counted(measured) as u32;
     let mut in_view = 0;
     for night in nights(measured, seen) {
         in_view += u32::from(night?.1);
+        left -= 1;
         if in_view >= wanted {
             return Ok(true);
+        }
+        if in_view + left < wanted {
+            return Ok(false);
         }
     }
     Ok(false)

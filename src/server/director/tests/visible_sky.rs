@@ -599,10 +599,9 @@ async fn the_month_and_the_year_count_the_nights_each_part_of_the_sky_is_in_view
         }
         (inside / whole * 10_000.0_f64).round() / 10_000.0
     };
-    assert_eq!(
-        year_share(365),
-        view["every_night"]["sky_fraction"].as_f64().unwrap()
-    );
+    // A year draws no every-night line: its clear sky is `at_least`.
+    assert!(view["every_night"].is_null());
+    assert!(!month["every_night"].is_null());
     assert_eq!(
         year_share(1),
         view["any_night"]["sky_fraction"].as_f64().unwrap()
