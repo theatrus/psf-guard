@@ -10,7 +10,7 @@ Only the selected page loads its controls.
 | **Presets** | **Processing setups**, **Exposure templates**, **Sites** |
 | **Processing** | **Calibration**, **Stacking** |
 | **Performance** | **CPU & memory**, **GPU**, **Workers** |
-| **Storage & backups** | **Folders & limits**, **Backups**, **Reference catalogs** |
+| **Storage & backups** | **Folders & limits**, **Backups**, **Reference catalogs**, **Offline sky maps** |
 | **Exports & integrations** | **Export defaults**, **PixInsight**, **AstroBin** |
 | **Review** | **Grading & display** |
 | **Server & access** | **Server**, **Users**, **Agents (MCP)** |
@@ -41,6 +41,10 @@ also offers its own worker controls under **Workers**.
 - **Storage** is now **Storage & backups → Folders & limits**.
 - **Catalogs** is now **Storage & backups → Reference catalogs**, for
   downloaded astronomy data such as solver indexes and Gaia colors.
+- **Offline sky maps** is on **Storage & backups**, shown when planning is
+  on. It installs, moves and removes the whole-sky maps Planning's framing
+  view draws without a connection, and chooses the folder they are kept in.
+  See [Offline sky maps](DIRECTOR.md#offline-sky-maps).
 - **Processing tools** is on **Processing → Stacking**. It lists every
   provider of a processing step with its state: the RC-Astro tools, Seiza's
   noise model and ONNX Runtime. It downloads ONNX Runtime and the noise
