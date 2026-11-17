@@ -265,6 +265,7 @@ async fn fetch(
         },
         MAX_ARCHIVE_BYTES,
         &|| false,
+        &|_| Ok(()),
         &progress,
     )
     .await
@@ -281,6 +282,7 @@ async fn fetch(
             "{} does not match its SHA-256: expected {}, found {sha256}. Nothing was installed",
             release.asset, release.sha256
         ),
+        Failure::Refused(error) => error,
         Failure::Stopped => "Stopped".into(),
     })
 }

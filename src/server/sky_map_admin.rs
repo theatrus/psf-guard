@@ -5,9 +5,11 @@
 //! PSF Guard never downloads a map by itself. A map is gigabytes, so an
 //! install runs as one job server-wide with a row in the job line and
 //! Stop. A person starts it, so it holds the interactive guard while it
-//! runs, as the star catalog and noise model downloads do. Stop is seen
-//! between chunks and unpacked files; an install past its last check
-//! finishes, and the install removes its own files either way.
+//! unpacks, which takes the disk and a processor; the download itself,
+//! which may take hours on a slow line, leaves background work running.
+//! Stop ends the download at once and the unpack between files; an install
+//! past its last check finishes, and the install removes its own files
+//! either way.
 
 use std::path::{Path as FilePath, PathBuf};
 use std::sync::{Arc, PoisonError, RwLock};
@@ -18,7 +20,7 @@ use axum::{Extension, Json};
 use serde::{Deserialize, Serialize};
 
 use crate::server::api::ApiResponse;
-use crate::server::auth::{AccessRole, RequestAccess};
+use crate::server::auth::RequestAccess;
 use crate::server::handlers::{require_database_management_allowed, update_registry, AppError};
 use crate::server::state::AppState;
 use crate::sky_map_install::{self as install, Set, Source};
@@ -97,18 +99,23 @@ impl SkyMapInstalls {
     /// Start installing `source` into `root` in the background and return at
     /// once. While one install runs, another start returns its progress
     /// without starting a second. Stop, or `server_stop` ending, ends it and
-    /// leaves nothing partly installed. `done` runs when it ends.
-    pub fn start<G, E>(
+    /// leaves nothing partly installed. `hold` is kept for the whole install,
+    /// and `while_unpacking`'s value for the unpack only. `done` runs when it
+    /// ends, before the progress says so.
+    #[allow(clippy::too_many_arguments)]
+    pub fn start<G, U, E>(
         &self,
         set_key: &str,
         source: Source,
         root: PathBuf,
         hold: G,
+        while_unpacking: impl FnOnce() -> U + Send + 'static,
         server_stop: E,
         done: impl FnOnce() + Send + 'static,
     ) -> InstallProgress
     where
         G: Send + 'static,
+        U: Send + 'static,
         E: std::future::Future<Output = ()> + Send + 'static,
     {
         {
@@ -140,30 +147,41 @@ impl SkyMapInstalls {
                     progress.bytes_total = step.bytes_total;
                 })
             };
-            // Stop and a stopping server ask the install to end, and the
+            // A stopping server stops the install the way Stop does. The
             // install is awaited to its end either way: it removes its own
             // files, and an install past its last check finishes, so the
             // message below says what happened.
-            let server_stopping = Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let (asked, watched) = (stop.clone(), Arc::clone(&server_stopping));
-            let stopped: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(move || {
-                asked.requested() || watched.load(std::sync::atomic::Ordering::Relaxed)
-            });
-            let watch = Arc::clone(&server_stopping);
+            let person = stop.clone();
+            let install_stop = crate::concurrency::Stop::new();
+            let (on_server, on_person) = (install_stop.clone(), install_stop.clone());
+            let server_stopped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let marked = Arc::clone(&server_stopped);
             let watcher = tokio::spawn(async move {
-                server_stop.await;
-                watch.store(true, std::sync::atomic::Ordering::Relaxed);
+                tokio::select! {
+                    () = server_stop => {
+                        marked.store(true, std::sync::atomic::Ordering::Relaxed);
+                        on_server.request();
+                    }
+                    () = person.stopped() => on_person.request(),
+                }
             });
-            let ended = install::install(&root, source, stopped, &report)
+            let ended = install::install(&root, source, install_stop, while_unpacking, &report)
                 .await
                 .map(|_| ());
             watcher.abort();
             let ended = match ended {
-                Err(error) if error == "Stopped" && !stop.requested() => {
+                Err(error)
+                    if error == "Stopped"
+                        && server_stopped.load(std::sync::atomic::Ordering::Relaxed) =>
+                {
                     Err("The server stopped".to_string())
                 }
                 other => other,
             };
+            // Framing's layers are read again before the progress says the
+            // install ended, so a page that refreshes on that word sees the
+            // new map.
+            done();
             installs.set(|progress| {
                 progress.running = false;
                 progress.bytes_completed = None;
@@ -182,7 +200,6 @@ impl SkyMapInstalls {
                     }
                 }
             });
-            done();
         });
         self.progress()
     }
@@ -329,10 +346,7 @@ async fn read_view(state: &Arc<AppState>, manages: bool) -> Result<SkyMapsView, 
 /// Whether the caller may see server paths and full errors: an editor, on a
 /// server that allows database management, as the job list decides.
 fn manages(state: &AppState, access: &Option<Extension<RequestAccess>>) -> bool {
-    let editor = access
-        .as_ref()
-        .is_none_or(|Extension(access)| access.role == AccessRole::ReadWrite);
-    editor && state.database_management_allowed()
+    RequestAccess::manages(access.as_ref().map(|Extension(access)| access), state)
 }
 
 /// GET /api/sky-maps
@@ -364,10 +378,13 @@ pub async fn start_install(
     let set = install::set(&request.set).ok_or_else(|| {
         AppError::BadRequest(format!("{} is not an offline sky map", request.set))
     })?;
-    // A person started it, so background work waits for it, as for the
-    // star catalog and noise model downloads.
-    let guard = state.begin_named_interactive_job("an offline sky map install");
-    let hold = (guard, state.shutdown.hold("an offline sky map install"));
+    let hold = state.shutdown.hold("an offline sky map install");
+    // A person started it, so background work waits for the unpack, which
+    // takes the disk and a processor. The download, which may take hours
+    // on a slow line and takes neither, leaves background work running.
+    let guarding = Arc::clone(&state);
+    let while_unpacking =
+        move || guarding.begin_named_interactive_job("an offline sky map install");
     let shutdown = Arc::clone(&state.shutdown);
     let refreshing = Arc::downgrade(&state);
     let progress = state.sky_map_installs.start(
@@ -375,6 +392,7 @@ pub async fn start_install(
         Source::Set(set),
         sky_maps::data_root(),
         hold,
+        while_unpacking,
         async move { shutdown.begun().await },
         move || {
             // Framing offers the new map at once, not half a minute on.
@@ -571,6 +589,7 @@ mod tests {
             Source::Url(url),
             root.path().to_path_buf(),
             (),
+            || (),
             std::future::pending(),
             move || told.send(()).unwrap(),
         );
@@ -600,6 +619,7 @@ mod tests {
                 Source::Url(slow.clone()),
                 root.path().to_path_buf(),
                 (),
+                || (),
                 std::future::pending(),
                 || {},
             )
@@ -624,6 +644,7 @@ mod tests {
             Source::Url(slow),
             root.path().to_path_buf(),
             (),
+            || (),
             std::future::ready(()),
             || {},
         );
@@ -636,6 +657,7 @@ mod tests {
             Source::Url(broken),
             root.path().to_path_buf(),
             (),
+            || (),
             std::future::pending(),
             || {},
         );
@@ -672,6 +694,7 @@ mod tests {
 
     #[test]
     fn only_an_editor_on_a_managed_server_is_given_paths() {
+        use crate::server::auth::AccessRole;
         let state = AppState::from_databases(
             Vec::new(),
             tempfile::tempdir()

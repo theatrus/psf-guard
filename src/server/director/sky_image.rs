@@ -204,8 +204,10 @@ pub struct SurveyInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stands_in_for: Option<String>,
     /// For an offline map, the version of its files, which cached views are
-    /// keyed by; empty for an online survey.
-    #[serde(skip)]
+    /// keyed by; empty for an online survey. The browser sends it back with
+    /// each view it asks for, so it never shows a replaced map's pictures
+    /// from its own cache.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub version: String,
 }
 
@@ -280,6 +282,10 @@ pub(super) struct CutoutQuery {
     height: u32,
     #[serde(default)]
     rotation: f64,
+    /// The map's version as the survey listing gave it. Only the browser's
+    /// cache reads it: the server keys a view by the version it has.
+    #[serde(default, rename = "v")]
+    _version: Option<String>,
 }
 fn default_size() -> u32 {
     1024
@@ -875,6 +881,7 @@ mod tests {
             width: 800,
             height: 600,
             rotation: 12.0,
+            _version: None,
         }
     }
 

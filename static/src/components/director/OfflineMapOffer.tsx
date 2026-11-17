@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../../api/client';
 import type { DirectorSurvey } from '../../api/directorTypes';
+import type { SkyMapsView } from '../../api/types';
 import { openSettings } from '../../utils/settingsIntent';
 import { gigabytes, skyMapsKey } from '../skyMapsShared';
 
@@ -38,13 +39,16 @@ export default function OfflineMapOffer({ surveys, canWrite }: {
     queryFn: apiClient.getSkyMaps,
     enabled: offering || started,
     refetchOnWindowFocus: false,
-    refetchInterval: (query) => (started || offering) && query.state.data?.install.running ? 2000 : false,
+    refetchInterval: (query) => query.state.data?.install.running ? 2000 : false,
   });
   const install = useMutation({
     mutationFn: () => apiClient.installSkyMap(OFFERED_SET),
     onSuccess: (progress) => {
       // The server answers with the install under way: when another set is
-      // installing, this click started nothing.
+      // installing, this click started nothing. Its answer replaces what
+      // the page knew, so an earlier failure does not show again.
+      queryClient.setQueryData<SkyMapsView>(skyMapsKey, (current) =>
+        current ? { ...current, install: progress } : current);
       if (progress.set === OFFERED_SET) setStarted(true);
       return queryClient.invalidateQueries({ queryKey: skyMapsKey });
     },
@@ -61,6 +65,15 @@ export default function OfflineMapOffer({ surveys, canWrite }: {
   }, [finished, queryClient]);
 
   if (!canWrite || !none) return null;
+  // The whole-sky map installing shows as such, however this page came to
+  // it: from this offer, Settings, or before the page was reloaded.
+  if (ours && progress?.running) {
+    const part = progress.bytes_total && progress.bytes_completed !== undefined
+      ? ` ${gigabytes(progress.bytes_completed)} of ${gigabytes(progress.bytes_total)}.` : '';
+    return <p className="framing-offline-offer" data-testid="offline-map-offer">
+      Installing the whole-sky map.{part} You can keep working.
+    </p>;
+  }
   if (started && ours && progress) {
     if (progress.running) {
       const part = progress.bytes_total && progress.bytes_completed !== undefined

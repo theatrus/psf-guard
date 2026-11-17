@@ -97,6 +97,16 @@ describe('Offline map offer', () => {
     expect(await screen.findByRole('button', { name: 'Install' })).toBeInTheDocument();
   });
 
+  it('shows the whole-sky map installing after the page is opened again', async () => {
+    server.use(http.get('/api/sky-maps', () => ok(maps({
+      running: true, set: 'full', message: 'Downloading…', bytes_completed: 1024 ** 3, bytes_total: 3526916102,
+    }))));
+    render(<OfflineMapOffer surveys={[online]} canWrite />, { wrapper: wrapper() });
+    await waitFor(() => expect(screen.getByTestId('offline-map-offer'))
+      .toHaveTextContent('Installing the whole-sky map. 1.0 GB of 3.3 GB.'));
+    expect(screen.queryByRole('button', { name: 'Install' })).toBeNull();
+  });
+
   it('does not take another set being installed for the whole-sky map', async () => {
     const installs: string[] = [];
     const nsns = { running: true, set: 'nsns-ohs', message: 'Downloading…' };

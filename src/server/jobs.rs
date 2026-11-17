@@ -26,7 +26,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::server::api::ApiResponse;
-use crate::server::auth::{AccessRole, RequestAccess};
+use crate::server::auth::RequestAccess;
 use crate::server::backup_job::{JobStatus as BackupJob, Location};
 use crate::server::calibration_duplicates::DuplicateJobStatus;
 use crate::server::catalog_install::{CatalogInstallPreset, CatalogInstallProgress};
@@ -2090,10 +2090,7 @@ pub async fn get_jobs(
     State(state): State<Arc<AppState>>,
     access: Option<Extension<RequestAccess>>,
 ) -> Json<ApiResponse<JobsResponse>> {
-    let editor = access
-        .as_ref()
-        .is_none_or(|Extension(access)| access.role == AccessRole::ReadWrite);
-    let manages = editor && state.database_management_allowed();
+    let manages = RequestAccess::manages(access.as_ref().map(|Extension(access)| access), &state);
     let transfers = match tokio::time::timeout(
         TRANSFERS_WAIT,
         crate::server::director::transfer_jobs(&state),

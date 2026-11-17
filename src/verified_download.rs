@@ -31,19 +31,24 @@ pub enum Failure {
         bytes: u64,
         sha256: String,
     },
+    /// `check_size` refused the size the server gave.
+    Refused(String),
     Stopped,
 }
 
 /// Stream `url` to `to`, at most `limit` bytes, and check it against
-/// `expected`. `progress` is told the bytes received and the total when it
-/// is known. `stopped` is read between chunks. Writing goes through tokio's
-/// file, so the transfer never blocks a runtime thread.
+/// `expected`. `check_size` is given the size once it is known, before
+/// anything is written, and may refuse it, as for want of room. `progress`
+/// is told the bytes received and the total when it is known. `stopped` is
+/// read between chunks. Writing goes through tokio's file, so the transfer
+/// never blocks a runtime thread.
 pub async fn fetch(
     url: &str,
     to: &Path,
     expected: Expected<'_>,
     limit: u64,
     stopped: &(dyn Fn() -> bool + Send + Sync),
+    check_size: &(dyn Fn(u64) -> Result<(), String> + Send + Sync),
     progress: &(dyn Fn(u64, Option<u64>) + Send + Sync),
 ) -> Result<(), Failure> {
     let client = reqwest::Client::builder()
@@ -68,6 +73,9 @@ pub async fn fetch(
     let total = expected.bytes.or(offered);
     if total.is_some_and(|total| total > limit) {
         return Err(Failure::TooLarge { limit });
+    }
+    if let Some(total) = total {
+        check_size(total).map_err(Failure::Refused)?;
     }
     let written = |error: std::io::Error| Failure::Write(format!("{}: {error}", to.display()));
     let mut file = tokio::fs::File::create(to).await.map_err(written)?;
@@ -140,7 +148,7 @@ mod tests {
         let quiet = |_: u64, _: Option<u64>| {};
         let get = |expected: Expected<'static>| {
             let (url, to) = (url.clone(), to.clone());
-            async move { fetch(&url, &to, expected, 1 << 20, &never, &quiet).await }
+            async move { fetch(&url, &to, expected, 1 << 20, &never, &|_| Ok(()), &quiet).await }
         };
         let hash: &'static str = Box::leak(hash.into_boxed_str());
         let size = body.len() as u64;
@@ -176,8 +184,35 @@ mod tests {
                 "{refused:?}"
             );
         }
-        let small = fetch(&url, &to, Expected::default(), 4, &never, &quiet).await;
+        let small = fetch(
+            &url,
+            &to,
+            Expected::default(),
+            4,
+            &never,
+            &|_| Ok(()),
+            &quiet,
+        )
+        .await;
         assert_eq!(small, Err(Failure::TooLarge { limit: 4 }));
+        // The size is offered to the caller before anything is written.
+        std::fs::remove_file(&to).unwrap();
+        let no_room = |bytes: u64| Err(format!("no room for {bytes}"));
+        let refused = fetch(
+            &url,
+            &to,
+            Expected::default(),
+            1 << 20,
+            &never,
+            &no_room,
+            &quiet,
+        )
+        .await;
+        assert_eq!(
+            refused,
+            Err(Failure::Refused(format!("no room for {size}")))
+        );
+        assert!(!to.exists());
     }
 
     #[tokio::test]
@@ -190,6 +225,7 @@ mod tests {
             Expected::default(),
             1 << 20,
             &|| true,
+            &|_| Ok(()),
             &|_, _| {},
         )
         .await;

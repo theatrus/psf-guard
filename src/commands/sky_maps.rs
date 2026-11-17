@@ -65,7 +65,8 @@ pub fn run(action: SkyMapsCommand) -> Result<()> {
                 .block_on(install::install(
                     &root,
                     source,
-                    std::sync::Arc::new(|| false),
+                    crate::concurrency::Stop::new(),
+                    || (),
                     &report,
                 ))
                 .map_err(|error| anyhow::anyhow!("{error}"))?;
