@@ -569,8 +569,7 @@ jobs:
           ubuntu-22.04)
             # Copy .deb packages
             find target/release/bundle/deb -name "*.deb" -exec cp {} release-assets/ \; 2>/dev/null || echo "No .deb files found"
-            # Copy AppImages
-            find target/release/bundle/appimage -name "*.AppImage" -exec cp {} release-assets/ \; 2>/dev/null || echo "No .AppImage files found"
+            # One AppImage serves both manual downloads and signed updates.
             updater=$(find target/release/bundle/appimage -name "*.AppImage" -print -quit)
             test -n "$updater" && test -s "$updater.sig"
             cp "$updater" "release-assets/PSF-Guard-${APP_VERSION}-linux-x86_64.AppImage"
@@ -579,13 +578,8 @@ jobs:
           windows-latest)
             # Copy .msi installers
             find target/release/bundle/msi -name "*.msi" -exec cp {} release-assets/ \; 2>/dev/null || echo "No .msi files found"
-            # Copy NSIS installers. -exec is space-safe: the old
-            # `cp "$file" release-assets/$(basename ...)-installer.exe` pipeline
-            # word-split on the space in "PSF Guard_..." and silently copied
-            # nothing (why v0.3.0/v0.4.0 releases initially lacked the NSIS
-            # asset). Keep the original "-setup.exe" name — it's what the docs
-            # reference.
-            find target/release/bundle/nsis -name "*.exe" -exec cp {} release-assets/ \; 2>/dev/null || echo "No NSIS .exe files found"
+            # One setup EXE serves both manual downloads and signed updates.
+            # Keep the MSI as a separate installation choice.
             updater=$(find target/release/bundle/nsis -name "*.exe" -print -quit)
             test -n "$updater" && test -s "$updater.sig"
             cp "$updater" "release-assets/PSF-Guard-${APP_VERSION}-windows-x64-setup.exe"
@@ -597,16 +591,8 @@ jobs:
             dmg=$(find target/release/bundle/dmg -name "*.dmg" -print -quit)
             test -n "$dmg" && test -s "$dmg"
             cp "$dmg" "release-assets/PSF.Guard_${APP_VERSION}_aarch64.dmg"
-            # Create zip of .app bundles
-            if [ -d "target/release/bundle/macos" ]; then
-              cd target/release/bundle/macos
-              for app in *.app; do
-                if [ -d "$app" ]; then
-                  zip -r "../../../../release-assets/${app%.app}-macos.zip" "$app" 2>/dev/null || echo "Failed to zip $app"
-                fi
-              done
-              cd ../../../../
-            fi
+            # The DMG is the manual installer; the archive is required by
+            # the signed updater. Do not publish a third copy as an app ZIP.
             updater=$(find target/release/bundle/macos -name "*.app.tar.gz" -print -quit)
             test -n "$updater" && test -s "$updater.sig"
             cp "$updater" "release-assets/PSF-Guard-${APP_VERSION}-macos-aarch64.app.tar.gz"

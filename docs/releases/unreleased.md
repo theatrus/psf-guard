@@ -6,4 +6,6 @@
 
 ## Changes
 
-No unreleased changes.
+- Release downloads omit duplicate installers and the extra macOS app ZIP.
+  Windows MSI installers remain available. Update notices keep dotted names
+  such as N.I.N.A. within the first sentence.
