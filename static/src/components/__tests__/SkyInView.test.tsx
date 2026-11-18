@@ -181,10 +181,10 @@ describe('sky in view over the framing stage', () => {
     expect(layer?.getAttribute('data-nights')).toBe('7');
     expect(layer?.querySelector('.sky-in-view-line.sky-in-view-every')?.getAttribute('d')).toMatch(/^M/);
     const body = container.querySelector('.sky-in-view-body')?.textContent ?? '';
-    expect(body).toContain('Year counts every night of the year. One night a week is measured and the nights between are worked out from the measured nights. Clear sky is in view on at least 7 of them, in total and not in a row. The solid line is within about 1° of a line measured on every night.');
-    expect(body).toContain('Covered sky is in view on fewer than 7 nights. Hatched sky is never in view.');
+    expect(body).toContain('Year estimates visibility for every night from weekly samples. Unshaded sky is in view on at least 7 nights; they need not be consecutive. The solid boundary is within about 1° of a boundary calculated for every night.');
+    expect(body).toContain('Shaded sky is in view on fewer than 7 nights. Hatched sky is never in view.');
     // The scale and the solid line's name follow.
-    expect(body).toContain('No night7 nights or moreEdge of the sky in view on 7 nights or moreEdge of the sky in view on any night');
+    expect(body).toContain('Never7 nights or moreIn view on at least 7 nightsIn view on at least one night');
     expect(screen.getByTestId('sky-in-view-shares').textContent).toBe('In view on 7 nights or more: 41% of the sky, declination +10° to +90°. On at least one night: 75% of the sky, declination −30° to +90°.');
     expect(notes()).toEqual([]);
     fireEvent.click(screen.getByRole('radio', { name: 'Now' }));
@@ -268,9 +268,9 @@ describe('sky in view over the framing stage', () => {
     fireEvent.click(screen.getByRole('radio', { name: 'Year' }));
     await waitFor(() => expect(container.querySelector('.sky-in-view-layer')?.getAttribute('data-nights')).toBe('365'));
     const body = container.querySelector('.sky-in-view-body')?.textContent ?? '';
-    expect(body).toContain('Year counts every night of the year. One night a week is measured and the nights between are worked out from the measured nights.');
-    expect(body).not.toContain('Clear sky is in view');
-    expect(body).toContain('No nightEvery night');
+    expect(body).toContain('Year estimates visibility for every night from weekly samples.');
+    expect(body).not.toContain('Unshaded sky is in view');
+    expect(body).toContain('NeverEvery night');
   });
 
   it("says a year's shortfall in weeks when the nights needed are whole weeks", () => {
@@ -303,7 +303,7 @@ describe('sky in view over the framing stage', () => {
     // Back in the month the scale and the line are the every-night ones.
     fireEvent.click(screen.getByRole('radio', { name: 'Now' }));
     await waitFor(() => expect(container.querySelector('.sky-in-view-layer')?.getAttribute('data-nights')).toBe('31'));
-    expect(container.querySelector('.sky-in-view-body')?.textContent).toContain('No nightEvery nightEdge of the sky in view every night');
+    expect(container.querySelector('.sky-in-view-body')?.textContent).toContain('NeverEvery nightIn view every night');
   });
 
   it('shows a month of the year at a time under a slider, asking once', async () => {

@@ -95,7 +95,7 @@ export function SkyInViewPanel({ model, onShow }: { model: SkyInViewModel; onSho
       </label>
       {model.on && rig && (
         <details className="sky-in-view-more">
-          <summary>Nights counted and how to read it</summary>
+          <summary>Time range and overlay key</summary>
           <div className="sky-in-view-body">
             <div className="sky-in-view-controls">
               <SkyChoice label="Time frame" options={SPANS} value={panel.span} onChange={panel.setSpan} />
@@ -162,17 +162,17 @@ export function SkyInViewPanel({ model, onShow }: { model: SkyInViewModel; onSho
             {panel.shares && <p className="sky-in-view-text" data-testid="sky-in-view-shares">{panel.shares}</p>}
             {panel.viewWords && <p className="sky-in-view-text" data-testid="sky-in-view-view">{panel.viewWords}</p>}
             <p className="sky-in-view-key">
-              <span className="sky-in-view-scale-end">No night</span>
+              <span className="sky-in-view-scale-end">Never</span>
               <span className="sky-in-view-scale" aria-hidden="true" />
               <span className="sky-in-view-scale-end">{panel.clearNights !== null ? `${panel.clearNights} nights or more` : 'Every night'}</span>
-              <span><span className="sky-in-view-key-solid" aria-hidden="true" />{panel.clearNights !== null ? `Edge of the sky in view on ${panel.clearNights} nights or more` : 'Edge of the sky in view every night'}</span>
-              <span><span className="sky-in-view-key-dashed" aria-hidden="true" />Edge of the sky in view on any night</span>
+              <span><span className="sky-in-view-key-solid" aria-hidden="true" />{panel.clearNights !== null ? `In view on at least ${panel.clearNights} nights` : 'In view every night'}</span>
+              <span><span className="sky-in-view-key-dashed" aria-hidden="true" />In view on at least one night</span>
             </p>
             <p className="sky-in-view-text">
-              {panel.clearNights !== null ? `Covered sky is in view on fewer than ${panel.clearNights} nights.` : 'Covered sky is out of view on some nights.'} Hatched sky is never in view. Marks on the lines point into the sky in view.
-              {panel.span === 'season' && ' Season shows 31 nights of the year at a time. Its lines follow the 2° grid the year is measured on, so they are rougher than the lines in Now and Year.'}
-              {panel.year && ' Year counts every night of the year. One night a week is measured and the nights between are worked out from the measured nights.'}
-              {panel.year && panel.clearNights !== null && ` Clear sky is in view on at least ${panel.clearNights} of them, in total and not in a row. The solid line is within about 1° of a line measured on every night.`}
+              {panel.clearNights !== null ? `Shaded sky is in view on fewer than ${panel.clearNights} nights.` : 'Shaded sky is out of view on some nights.'} Hatched sky is never in view. Line markers point toward visible sky.
+              {panel.span === 'season' && ' Season shows 31 nights at a time. Its boundaries follow a 2° grid and are less precise than Now and Year.'}
+              {panel.year && ' Year estimates visibility for every night from weekly samples.'}
+              {panel.year && panel.clearNights !== null && ` Unshaded sky is in view on at least ${panel.clearNights} nights; they need not be consecutive. The solid boundary is within about 1° of a boundary calculated for every night.`}
             </p>
           </div>
         </details>

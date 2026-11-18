@@ -27,6 +27,22 @@ Scheduler plans and reviewed grades.
 > [published releases](https://github.com/theatrus/psf-guard/releases) for the
 > version you install.
 
+## New in 0.14
+
+Follow Target Scheduler rigs in **Rigs › Live** with PSF Guard Sync, review
+plans that need activation in the Library, and check seasonal visibility in
+Framing. Install offline sky maps from Settings and choose the Seiza noise
+model for stack processing. **The Director acquisition plugin remains early
+beta; Live with Sync does not require it.**
+
+Read the [0.14 release notes](docs/releases/v0.14.0.md), including the planning
+backup and worker upgrade requirements, before updating.
+
+![Live table with Sync contacts, project links and stale reports](docs/screenshots/rigs-live-014.jpg)
+
+The captured rigs are offline or have never reported. Stale activity and
+forecasts remain labeled; this is not an active-exposure example.
+
 ## 🧭 Choose a workflow
 
 | Where you work | Start here |
@@ -161,12 +177,11 @@ also offers a custom destination path. See
 For new Target Scheduler databases, choose **Settings → Databases & rigs → New / import → Import
 from Target Scheduler** to import the database and set up sync.
 
-Your current Target Scheduler setup will keep working in 0.12. A later update
-will create a PSF Guard catalog for you and keep captures, plans and grades in
-sync with Target Scheduler.
-
-Separate catalogs let us add features to PSF Guard and support new Target
-Scheduler versions. We plan to remove direct database access in 0.13 or later.
+Your current direct Target Scheduler connection keeps working in 0.14,
+including saving grades and plans. Direct access is deprecated, and 0.14 does
+not automatically replace it. For a new setup, import the database into a
+PSF Guard catalog and keep the source connected, or use PSF Guard Sync.
+Separate catalogs let us add features and support new Target Scheduler versions.
 
 ### Plan captures across rigs
 
