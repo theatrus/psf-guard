@@ -81,6 +81,10 @@ every installed copy sees in its update banner, so write it for someone who
 has not read the rest of the file. Lead with a list or a heading and the
 banner falls back to "A new PSF Guard release is ready."
 
+After that opening paragraph, add direct download links for the Windows setup
+EXE and MSI, macOS DMG, and Linux AppImage and Debian package. Use the asset
+names below so readers can choose an installer without searching the asset list.
+
 ## 3. Run local gates
 
 Run the same broad checks used by CI:
@@ -150,6 +154,14 @@ jobs for the exact tag SHA. The release workflow:
 
 Tauri signs updater payloads, not the JSON manifest. The manifest carries the
 signature that the installed app checks with its embedded public key.
+
+Publish one setup EXE and one AppImage, using the updater names for manual
+downloads too: `PSF-Guard-VERSION-windows-x64-setup.exe` and
+`PSF-Guard-VERSION-linux-x86_64.AppImage`. Keep the Windows MSI, Linux Debian
+and RPM packages, and standalone CLI binaries. On macOS, offer the DMG for
+manual installs and retain the `.app.tar.gz` for signed updates. Do not publish
+an extra app ZIP, setup EXE, or AppImage. Keep all updater payloads, their
+`.sig` files, `updater.json`, and `notice.json`.
 
 Do not call the release complete because CI is green. Wait until GitHub shows a
 public, non-draft release and all expected assets.

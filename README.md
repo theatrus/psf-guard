@@ -272,9 +272,12 @@ Download the installer for your platform from the
 
 | Platform | Asset |
 |---|---|
-| Windows x64 | `PSF.Guard_<version>_x64_en-US.msi` or the `-setup.exe` installer |
+| Windows x64 | `PSF-Guard-<version>-windows-x64-setup.exe`, or `PSF.Guard_<version>_x64_en-US.msi` |
 | macOS (Apple Silicon) | `PSF.Guard_<version>_aarch64.dmg` |
-| Linux x64 | `PSF.Guard_<version>_amd64.deb` or `.AppImage` |
+| Linux x64 | `PSF-Guard-<version>-linux-x86_64.AppImage`, or `PSF.Guard_<version>_amd64.deb` |
+
+For a manual macOS install, choose the DMG. The `.app.tar.gz`, `.sig`, and
+JSON files support automatic updates; you do not need to download them yourself.
 
 Install and launch the app, then import your images or open an existing
 catalog. The Windows NSIS installer (`-setup.exe`) also installs
