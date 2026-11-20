@@ -8,7 +8,7 @@ import NumberInput from '../NumberInput';
 import { retryWhenBusy } from './retry';
 import { newId } from './planModel';
 import MoonSettings from './MoonSettings';
-import { moonProblem } from './moonPolicy';
+import { defaultMoonPolicy, moonProblem } from './moonPolicy';
 import './TemplateLibrary.css';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Template request failed';
@@ -16,16 +16,19 @@ type Draft = Omit<DirectorLibraryTemplate, 'bandpass'>;
 const blank = (): Draft => ({ id: newId(), revision: 0, name: '', filter_name: '', gain: null, offset: null, bin: 1, readout_mode: null, default_exposure_seconds: 120, updated_at_ms: 0 });
 const fromRig = (template: DirectorTemplate): Draft => ({ id: newId(), revision: 0, name: template.name, filter_name: template.filter_name, gain: template.gain, offset: template.offset, bin: template.bin, readout_mode: template.readout_mode, default_exposure_seconds: template.default_exposure > 0 ? template.default_exposure : 120, moon: template.moon, updated_at_ms: 0 });
 const numberOrNull = (value: string): number | null => { const parsed = Number(value); return value.trim() === '' || !Number.isFinite(parsed) ? null : Math.round(parsed); };
-const same = (a: Draft, b: Draft) => a.name === b.name && a.filter_name === b.filter_name && a.gain === b.gain && a.offset === b.offset && a.bin === b.bin && a.readout_mode === b.readout_mode && a.default_exposure_seconds === b.default_exposure_seconds && JSON.stringify(a.moon) === JSON.stringify(b.moon);
+/** Moon settings compared field by field, whatever order the keys arrived in. */
+const moonKey = (moon: Draft['moon']) => moon ? JSON.stringify(moon, Object.keys(moon).sort()) : '';
+const same = (a: Draft, b: Draft) => a.name === b.name && a.filter_name === b.filter_name && a.gain === b.gain && a.offset === b.offset && a.bin === b.bin && a.readout_mode === b.readout_mode && a.default_exposure_seconds === b.default_exposure_seconds && moonKey(a.moon) === moonKey(b.moon);
 /** A rig template set beside the library's of the same name and filter:
- *  whether the library has it with the same settings, and if not, the
- *  library's row to bring up to the rig's. */
+ *  whether one of them has the same settings, and if none does and there is
+ *  just one, that row brought up to the rig's. A row without Moon settings
+ *  has the defaults, as activation writes it. */
 function inLibrary(template: DirectorTemplate, saved: Draft[]): { matches: boolean; differs?: Draft } {
-  const twin = saved.find(t => t.name === template.name && t.filter_name.toLowerCase() === template.filter_name.toLowerCase());
-  if (!twin) return { matches: false };
-  const copied = { ...fromRig(template), id: twin.id, revision: twin.revision, updated_at_ms: twin.updated_at_ms, filter_name: twin.filter_name };
-  const settings = (draft: Draft) => ({ ...draft, bin: draft.bin ?? 1, moon: draft.moon ?? undefined });
-  return same(settings(copied), settings(twin)) ? { matches: true } : { matches: false, differs: copied };
+  const twins = saved.filter(t => t.name === template.name && t.filter_name.toLowerCase() === template.filter_name.toLowerCase());
+  const settings = (draft: Draft) => ({ ...draft, bin: draft.bin ?? 1, moon: draft.moon ?? defaultMoonPolicy() });
+  const as = (twin: Draft): Draft => ({ ...fromRig(template), id: twin.id, revision: twin.revision, updated_at_ms: twin.updated_at_ms, filter_name: twin.filter_name });
+  if (twins.some(twin => same(settings(as(twin)), settings(twin)))) return { matches: true };
+  return twins.length === 1 ? { matches: false, differs: as(twins[0]) } : { matches: false };
 }
 
 /** Director's exposure template library: settings any rig can shoot with.
@@ -115,7 +118,10 @@ export default function TemplateLibrary() {
         const title = matches ? 'Already in the library'
           : differs ? `Replace the library's ${template.name} with this database's settings` : `Copy ${template.name} into the library`;
         return <button key={template.id} type="button" disabled={matches || save.isPending} title={title}
-          onClick={() => save.mutate(differs ?? fromRig(template))}><Copy size={14} />{template.name} <small>({template.filter_name}{template.bin && template.bin > 1 ? `, ${template.bin}×${template.bin}` : ''}{matches ? ', in the library' : differs ? ', differs from the library' : ''})</small></button>;
+          onClick={() => {
+            if (differs && !window.confirm(`Replace the library's ${template.name} with this database's settings? Plans that use it change at their next activation${drafts[differs.id] ? ', and your unsaved changes to it are lost' : ''}.`)) return;
+            save.mutate(differs ?? fromRig(template));
+          }}><Copy size={14} />{template.name} <small>({template.filter_name}{template.bin && template.bin > 1 ? `, ${template.bin}×${template.bin}` : ''}{matches ? ', in the library' : differs ? ', differs from the library' : ''})</small></button>;
       })}
       {otherProfiles > 0 && <p className="director-muted">{otherProfiles === 1 ? '1 template' : `${otherProfiles} templates`} from other N.I.N.A. profiles {otherProfiles === 1 ? 'is' : 'are'} not listed.</p>}
     </div>}

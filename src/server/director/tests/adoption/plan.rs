@@ -202,3 +202,41 @@ async fn a_template_with_unusable_moon_rules_is_named_and_left_out_alone() {
         .clone();
     assert_eq!(row["plan"]["objectives"], 2, "{row}");
 }
+
+#[test]
+fn a_rig_lists_its_own_profiles_templates_and_counts_the_rest() {
+    use crate::server::director::plan::rig_templates;
+    let waiting = psf_guard_director_meta::SYNC_PLACED_PROFILE;
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch(&format!(
+        "CREATE TABLE project(Id INTEGER PRIMARY KEY, profileId TEXT);
+         CREATE TABLE exposuretemplate(Id INTEGER PRIMARY KEY, profileId TEXT, name TEXT, filtername TEXT,
+             gain INTEGER, offset INTEGER, bin INTEGER, readoutmode INTEGER, defaultexposure REAL, guid TEXT);
+         INSERT INTO project VALUES (1, 'PlayerOne-Profile'), (2, 'PlayerOne-Profile'), (3, 'wd20');
+         INSERT INTO exposuretemplate VALUES
+             (1, 'playerone-profile', 'B', 'Blue', 0, -1, 1, -1, 30, NULL),
+             (2, 'wd20', 'B', 'Blue', -1, -1, 1, -1, 60, NULL),
+             (3, 'wd20', 'G', 'Green', -1, -1, 1, -1, 60, NULL),
+             (4, '{waiting}', 'Ha', 'Ha', -1, -1, 1, -1, 300, NULL),
+             (5, 'wd20', 'Blank', '', 0, 0, 1, 0, 60, NULL);"
+    ))
+    .unwrap();
+    // The profile most projects use, whatever its case; PSF Guard's waiting
+    // rows stay; WD20's two filtered templates are counted, its blank one not.
+    let (templates, others) = rig_templates(&conn, "no-plugin").unwrap();
+    let kept: Vec<(i64, f64)> = templates
+        .usable
+        .iter()
+        .map(|t| (t.id, t.default_exposure))
+        .collect();
+    assert_eq!(kept, [(1, 30.0), (4, 300.0)]);
+    assert_eq!(others, 2);
+
+    // Every project still on the waiting profile: no profile to go by, so
+    // every template, as before.
+    conn.execute("UPDATE project SET profileId = ?1", [waiting])
+        .unwrap();
+    let (templates, others) = rig_templates(&conn, "no-plugin").unwrap();
+    assert_eq!(templates.usable.len(), 4);
+    assert_eq!(others, 0);
+}
