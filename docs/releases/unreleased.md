@@ -6,6 +6,10 @@
 
 ## Changes
 
+- **Run now** no longer fails with "an import is already running for this
+  database" while PSF Guard receives a remote upload or finishes other
+  work on the catalog. The run waits for that work and then starts.
+
 - When one Target Scheduler database serves several N.I.N.A. profiles, a
   rig now offers only its own profile's exposure templates. Before, the plan
   editor could give a plan another profile's template of the same name, with
