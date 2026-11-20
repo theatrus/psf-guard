@@ -647,6 +647,7 @@ async fn seed_recipes(
     if draft.revision != 1 || !draft.contributions.is_empty() {
         return Ok(());
     }
+    let catalog_id = catalog.id.clone();
     let templates = blocking(move || {
         let conn = crate::server::database_context::open_scheduler_connection_with_flags(
             &catalog.database_path,
@@ -656,7 +657,9 @@ async fn seed_recipes(
         .map_err(Error::from)?;
         conn.busy_timeout(Duration::from_secs(2))
             .map_err(StoreError::from)?;
-        plan::read_templates(&conn)
+        // The rig's own N.I.N.A. profile: another profile's template of the
+        // same filter is not this rig's to shoot with.
+        plan::rig_templates(&conn, &catalog_id).map(|(templates, _)| templates)
     })
     .await??
     .usable;
