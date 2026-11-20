@@ -6,6 +6,10 @@
 
 ## Changes
 
+- **Run now** right after an import finished no longer fails with "an import
+  is already running for this database". The import now frees the catalog
+  before it reports that it is complete.
+
 - When one Target Scheduler database serves several N.I.N.A. profiles, a
   rig now offers only its own profile's exposure templates. Before, the plan
   editor could give a plan another profile's template of the same name, with

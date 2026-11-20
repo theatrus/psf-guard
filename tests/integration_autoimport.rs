@@ -194,6 +194,13 @@ async fn empty_catalog(state: &Arc<AppState>, images: &std::path::Path) -> Strin
     let slug = body["data"]["database"]["id"].as_str().unwrap().to_string();
     let progress = wait_for_import(state, &slug).await;
     assert_eq!(progress["trigger"], "manual");
+    // An import that says it is complete has let go of the import lock, so
+    // Run now at once is not told an import is still running.
+    let ctx = state.get_database(&slug).unwrap();
+    assert!(
+        ctx.image_import_mutex.try_lock().is_ok(),
+        "the import lock outlived the import"
+    );
     slug
 }
 

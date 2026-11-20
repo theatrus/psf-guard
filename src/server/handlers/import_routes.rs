@@ -356,7 +356,7 @@ fn start_import_preview(
     let state = Arc::clone(state);
     runtime.spawn(async move {
         // The rolled-back transaction still takes the catalog's write lock.
-        let _import_guard = ctx.image_import_mutex.lock().await;
+        let import_guard = ctx.image_import_mutex.lock().await;
         let store = Arc::clone(&ctx.import_job);
         if !job::is_current(&store, claim) {
             return;
@@ -378,6 +378,8 @@ fn start_import_preview(
             )
         })
         .await;
+        // Free before the record says the preview ended, as for an import.
+        drop(import_guard);
         match preview {
             Ok(Ok(outcome)) => job::complete_import(&store, claim, outcome),
             Ok(Err(error)) => job::finish(&store, claim, Some(format!("{error:#}"))),
@@ -415,7 +417,7 @@ pub(crate) fn run_import(
     let job_store = Arc::clone(&ctx.import_job);
     let _person = (!automatic)
         .then(|| state.begin_named_interactive_job(format!("an import into {}", ctx.name)));
-    let _import_guard = ctx.image_import_mutex.blocking_lock();
+    let import_guard = ctx.image_import_mutex.blocking_lock();
     tracing::info!("📥 Import started for db={}", ctx.id);
     // The calibration frames before, so flat measuring is asked only for
     // the rigs this import touched.
@@ -433,6 +435,7 @@ pub(crate) fn run_import(
         Ok(outcome) => outcome,
         Err(error) => {
             tracing::warn!("📥 Import for db={} failed: {:#}", ctx.id, error);
+            drop(import_guard);
             job::finish(&job_store, claim, Some(format!("{error:#}")));
             return;
         }
@@ -452,6 +455,10 @@ pub(crate) fn run_import(
         }
     }
     let imported_any = outcome.imported > 0;
+    // The catalog is written. Let go of the import lock before saying the
+    // import is complete, so a run started on that word, such as Run now,
+    // does not find it still held by the follow-up work below.
+    drop(import_guard);
     job::complete_import(&job_store, claim, outcome);
     state.auto_stacks.touch_database(
         &ctx.id,
