@@ -284,8 +284,8 @@ pub async fn tick(state: &Arc<AppState>, now: Instant) {
     }
 }
 
-/// Start one run now. Returns `Ok(false)` when the database's import job or
-/// import lock is busy.
+/// Start one run now. Returns `Ok(false)` when the database's import job is
+/// busy, or for a scheduled or on-open run, when its import lock is.
 pub fn start(
     state: &Arc<AppState>,
     ctx: &Arc<DatabaseContext>,
@@ -308,9 +308,11 @@ pub fn start(
             missing.join(", ")
         );
     }
-    // A remote upload in flight holds this lock; let it finish rather than
-    // queue behind it and stall the next tick's decisions.
-    if ctx.image_import_mutex.try_lock().is_err() {
+    // A remote upload, calibrated-copy pairing or an import's follow-up
+    // work may hold this lock. A tick lets it finish rather than queue
+    // behind it and stall its next decisions. Run now, which a person
+    // clicked, queues: the import runner waits for the lock.
+    if !matches!(reason, Reason::Manual) && ctx.image_import_mutex.try_lock().is_err() {
         return Ok(false);
     }
     let options = ImportOptions {

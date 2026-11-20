@@ -317,6 +317,49 @@ async fn on_open_then_schedule_imports_only_what_is_new() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn run_now_waits_for_the_import_lock_rather_than_refusing() {
+    let dir = tempdir().unwrap();
+    let images = dir.path().join("incoming");
+    std::fs::create_dir_all(&images).unwrap();
+    let state = state_with_management(dir.path());
+    let slug = empty_catalog(&state, &images).await;
+    write_fits(
+        &images.join("ngc7000_001.fits"),
+        "NGC 7000",
+        "2026-02-01T02:00:00.000",
+    );
+    // A remote upload, pairing or an import's follow-up holds the lock.
+    let ctx = state.get_database(&slug).unwrap();
+    let held = ctx.image_import_mutex.lock().await;
+    let (status, body) = json_request(
+        build_app(state.clone()),
+        "POST",
+        &format!("/api/db/{slug}/autoimport/run"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["data"]["started"], true);
+    // A scheduled run gives way to the holder.
+    let settings = psf_guard::db_registry::AutoImportSettings::default();
+    assert!(!autoimport::start(
+        &state,
+        &ctx,
+        &settings,
+        autoimport::Reason::Schedule,
+        Instant::now()
+    )
+    .unwrap());
+    drop(held);
+    // The queued run went through once the lock was free: it read the new
+    // light (held for its new target, as the default settings ask).
+    let progress = wait_for_import(&state, &slug).await;
+    assert_eq!(progress["trigger"], "automatic", "{progress}");
+    assert_eq!(progress["outcome"]["scanned"], 1, "{progress}");
+    assert_eq!(progress["error"], Value::Null, "{progress}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn run_now_works_without_a_schedule_and_off_settings_clear_the_entry() {
     let dir = tempdir().unwrap();
     let images = dir.path().join("incoming");
