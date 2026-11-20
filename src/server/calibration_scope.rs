@@ -39,7 +39,7 @@ use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 /// Scopes kept at most per catalog; the oldest go first.
 const KEPT_SCOPES: usize = 32;
@@ -138,7 +138,7 @@ impl CatalogWork for ScopeWork {
         match item {
             Item::Refresh(project, ctx) => {
                 let outcome = read_only(&ctx.database_path)
-                    .and_then(|conn| revision(&conn, job, &ctx, project))
+                    .and_then(|conn| revision(&conn, job, project))
                     .and_then(|revision| work_out(state, job, &ctx, project, revision));
                 if let Err(error) = outcome {
                     tracing::warn!("Could not work out project {project}'s calibration: {error:#}");
@@ -206,14 +206,9 @@ fn read_count(job: &Job, project: i32) -> usize {
 
 /// The revision a project's scope depends on: the catalog's inputs, and
 /// which headers are known.
-fn revision(
-    conn: &Connection,
-    job: &Job,
-    ctx: &DatabaseContext,
-    project: i32,
-) -> anyhow::Result<Revision> {
+fn revision(conn: &Connection, job: &Job, project: i32) -> anyhow::Result<Revision> {
     let catalog = project_scope::scope_revision(conn, project)?;
-    let kept = crate::server::calibration_health::headers_stamp(&ctx.cache_dir_path, project);
+    let kept = crate::light_headers::project_stamp(conn, project);
     let read = read_count(job, project);
     Ok(format!("{catalog}:{kept}:{read}"))
 }
@@ -360,7 +355,7 @@ fn work_out(
     // Lights' nights as Images names them, at the server's setting.
     let nights = crate::calibration::LightNights::load(&conn, None);
     let (lights, missing) = crate::calibration::project_lights(&conn, project, &tree, &nights)?;
-    let headers = crate::server::calibration_health::kept_headers(&ctx.cache_dir_path, project);
+    let headers = crate::light_headers::project_headers(&conn, project).unwrap_or_default();
     let read = job.queue().read.get(&project).cloned().unwrap_or_default();
     let (metas, unread, wanted) = light_headers(&lights, &headers, &read);
     let pending = wanted.len();
@@ -395,7 +390,7 @@ pub(crate) fn scope_of(
 ) -> anyhow::Result<Arc<ProjectScope>> {
     let job = job(state, &ctx.database_path);
     let conn = read_only(&ctx.database_path)?;
-    let revision = revision(&conn, &job, ctx, project)?;
+    let revision = revision(&conn, &job, project)?;
     drop(conn);
     match kept(&job, project) {
         Some((kept_revision, scope)) if kept_revision == revision => {
@@ -451,16 +446,6 @@ pub async fn get_project_scope(
     Ok(Json(ApiResponse::success((*scope).clone())))
 }
 
-/// When the file was last modified, in nanoseconds, or 0 when it is not
-/// there.
-pub(crate) fn file_stamp(path: &std::path::Path) -> u128 {
-    std::fs::metadata(path)
-        .and_then(|metadata| metadata.modified())
-        .ok()
-        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-        .map_or(0, |since| since.as_nanos())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -486,6 +471,7 @@ mod tests {
     fn light(image_id: i32, path: &str) -> ProjectLight {
         ProjectLight {
             image_id,
+            image_guid: None,
             path: PathBuf::from(path),
             night: "2026-09-10".into(),
             filter: "Ha".into(),
@@ -553,7 +539,10 @@ mod tests {
                 path: PathBuf::from("one.fits"),
                 size: 1,
                 modified_ns: 1,
+                changed_ns: 1,
                 meta: readable.clone(),
+                located: false,
+                image_guid: None,
             },
         )]);
         let read = BTreeMap::from([
