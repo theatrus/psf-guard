@@ -31,7 +31,9 @@ const BUSY_WAIT: Duration = Duration::from_millis(250);
 #[derive(Default)]
 struct Pending {
     headers: BTreeMap<i32, KeptHeader>,
-    file_checks: Vec<FileCheck>,
+    /// By frame and file, so builds queued while the catalog stays busy do
+    /// not pile up copies of one check.
+    file_checks: BTreeMap<(String, std::path::PathBuf), FileCheck>,
 }
 
 static PENDING: LazyLock<Mutex<HashMap<String, Pending>>> = LazyLock::new(Default::default);
@@ -53,7 +55,11 @@ pub(crate) fn queue(
     let mut pending = PENDING.lock().unwrap_or_else(|p| p.into_inner());
     let entry = pending.entry(database_path.to_string()).or_default();
     entry.headers.extend(headers);
-    entry.file_checks.extend(file_checks);
+    entry.file_checks.extend(
+        file_checks
+            .into_iter()
+            .map(|check| ((check.frame_uuid.clone(), check.path.clone()), check)),
+    );
 }
 
 /// Write what waits for the catalog at `database_path`, on a connection of
@@ -77,7 +83,9 @@ pub(crate) fn write_pending(database_path: &str) {
             for (image_id, header) in headers {
                 entry.headers.entry(image_id).or_insert(header);
             }
-            entry.file_checks.extend(file_checks);
+            for (key, check) in file_checks {
+                entry.file_checks.entry(key).or_insert(check);
+            }
             return;
         }
         tracing::debug!(
@@ -92,17 +100,22 @@ pub(crate) fn write_pending(database_path: &str) {
 fn write(
     path: &str,
     headers: &BTreeMap<i32, KeptHeader>,
-    file_checks: &[FileCheck],
+    file_checks: &BTreeMap<(String, std::path::PathBuf), FileCheck>,
 ) -> anyhow::Result<()> {
     let conn = crate::server::database_context::open_scheduler_connection_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
     conn.busy_timeout(BUSY_WAIT)?;
+    // One write transaction for the lot: a commit per row would hold the
+    // runner for seconds on a catalog in rollback-journal mode.
+    let transaction = conn.unchecked_transaction()?;
     if !headers.is_empty() {
         crate::light_headers::store(&conn, headers.iter().map(|(id, header)| (*id, header)))?;
     }
-    crate::calibration::record_file_checks(&conn, file_checks)?;
+    let file_checks: Vec<FileCheck> = file_checks.values().cloned().collect();
+    crate::calibration::record_file_checks(&conn, &file_checks)?;
+    transaction.commit()?;
     Ok(())
 }
 

@@ -134,7 +134,7 @@ impl KeptLights {
     /// Hand over what preparation had to look up or read, with the
     /// calibration files `matcher` read, to be kept once the build has its
     /// place in the line.
-    pub(crate) fn keep(mut self, database_path: &str, matcher: Option<&mut LightMatcher>) {
+    pub(crate) fn keep(&mut self, database_path: &str, matcher: Option<&mut LightMatcher>) {
         crate::server::light_header_writes::queue(
             database_path,
             self.headers.take_fresh(),
@@ -142,6 +142,31 @@ impl KeptLights {
                 .map(LightMatcher::take_file_checks)
                 .unwrap_or_default(),
         );
+    }
+}
+
+/// A preparation's lights and calibration matcher, whose header reads and
+/// file checks are queued for the catalog when it is dropped: at the end
+/// of the preparation, or at an early return on an error.
+pub(crate) struct KeepOnExit {
+    database_path: String,
+    pub(crate) lights: KeptLights,
+    pub(crate) matcher: Option<LightMatcher>,
+}
+
+impl KeepOnExit {
+    pub(crate) fn new(database_path: &str, lights: KeptLights) -> Self {
+        Self {
+            database_path: database_path.to_string(),
+            lights,
+            matcher: None,
+        }
+    }
+}
+
+impl Drop for KeepOnExit {
+    fn drop(&mut self) {
+        self.lights.keep(&self.database_path, self.matcher.as_mut());
     }
 }
 

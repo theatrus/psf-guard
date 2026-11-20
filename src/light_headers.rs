@@ -194,16 +194,11 @@ pub(crate) fn replace_table_without(
     columns: &[&str],
     create: &str,
 ) -> Result<bool> {
-    let present: Vec<String> = conn
-        .prepare(&format!(
-            "SELECT lower(name) FROM pragma_table_info('{table}')"
-        ))?
-        .query_map([], |row| row.get(0))?
-        .collect::<rusqlite::Result<_>>()?;
+    let present = crate::calibration::table_column_names(conn, table)?;
     if !present.is_empty()
         && columns
             .iter()
-            .all(|column| present.iter().any(|name| name == column))
+            .all(|column| present.iter().any(|name| name.eq_ignore_ascii_case(column)))
     {
         return Ok(false);
     }
@@ -218,9 +213,14 @@ pub(crate) fn replace_table_without(
 /// Whether the catalog has the table. One that never had a header kept has
 /// none, and every header is read from its file.
 pub fn table_exists(conn: &Connection) -> bool {
+    has_table(conn, "psf_guard_light_header")
+}
+
+/// Whether the catalog has a table of this name.
+pub(crate) fn has_table(conn: &Connection, table: &str) -> bool {
     conn.query_row(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'psf_guard_light_header'",
-        [],
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+        [table],
         |_| Ok(()),
     )
     .optional()
@@ -454,23 +454,37 @@ pub fn prune(conn: &Connection) -> Result<usize> {
     )?)
 }
 
-/// Keep the header an import read for the light it just added as
-/// `image_id`, with the file as it stood before the read
-/// ([`FrameMeta::file_stamp`]). A header that cannot be kept is read again
-/// later; the import goes on.
-pub fn record_imported(conn: &Connection, image_id: i64, meta: &FrameMeta) {
-    if !meta.readable {
-        return;
+/// The headers an import read, kept with its lights in one write as the
+/// import commits.
+#[derive(Default)]
+pub struct ImportedHeaders(Vec<(i32, KeptHeader)>);
+
+impl ImportedHeaders {
+    /// The header of the light just inserted as `image_id`, when its file
+    /// was read whole and its size and time taken before the read.
+    pub fn add(&mut self, image_id: i64, meta: &FrameMeta) {
+        if !meta.readable {
+            return;
+        }
+        let (Ok(image_id), Some(stamp)) = (i32::try_from(image_id), meta.file_stamp) else {
+            return;
+        };
+        self.0
+            .push((image_id, KeptHeader::new(&meta.path, stamp, meta.clone())));
     }
-    let (Ok(image_id), Some(stamp)) = (i32::try_from(image_id), meta.file_stamp) else {
-        return;
-    };
-    let header = KeptHeader::new(&meta.path, stamp, meta.clone());
-    if let Err(error) = store(conn, [(image_id, &header)]) {
-        tracing::debug!(
-            "Could not keep the header of {}: {error:#}",
-            meta.path.display()
-        );
+
+    /// Keep them in the import's transaction. A failure costs one read of
+    /// each file later, never the import.
+    pub fn store(&self, conn: &Connection) {
+        if self.0.is_empty() {
+            return;
+        }
+        if let Err(error) = store(conn, self.0.iter().map(|(id, header)| (*id, header))) {
+            tracing::debug!(
+                "Could not keep the headers of {} imported light(s): {error:#}",
+                self.0.len()
+            );
+        }
     }
 }
 
@@ -561,6 +575,17 @@ impl LightHeaders {
                     },
                 ));
             }
+            return kept.meta.clone();
+        }
+        // Another reader, as the health pass, may find another copy of the
+        // light than a stack's lookup did. The stack's file, unchanged, is
+        // the same light: its header serves, and neither reader writes over
+        // the other's row on every round.
+        if !located
+            && let Some(kept) = self.kept.get(&image_id)
+            && kept.located
+            && kept.holds(&kept.path, FileStamp::of(&kept.path))
+        {
             return kept.meta.clone();
         }
         let meta = crate::commands::import::headers::read_frame_meta(path);
@@ -918,6 +943,31 @@ mod tests {
     }
 
     #[test]
+    fn another_reader_takes_the_stacks_copy_and_writes_nothing_over_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let stacked = light(temp.path(), "a.fits", "M31");
+        let other = temp.path().join("copy");
+        std::fs::create_dir_all(&other).unwrap();
+        let copy = light(&other, "a.fits", "M31");
+        let mut headers = LightHeaders::with_kept([(
+            1,
+            KeptHeader {
+                located: true,
+                ..header_of(&stacked)
+            },
+        )]);
+        // The health pass found the other copy: no read, nothing to keep.
+        let meta = headers.meta(1, &copy, FileStamp::of(&copy), false);
+        assert_eq!(meta.object.as_deref(), Some("M31"));
+        assert_eq!(headers.read(), 0);
+        assert!(headers.take_fresh().is_empty());
+        // Once the stack's file changes, the other copy is read.
+        std::fs::remove_file(&stacked).unwrap();
+        headers.meta(1, &copy, FileStamp::of(&copy), false);
+        assert_eq!(headers.read(), 1);
+    }
+
+    #[test]
     fn frame_meta_changes_bump_the_reader_version() {
         // A field added to FrameMeta leaves every kept header without it.
         // Bump FRAME_META_VERSION so they are read again, then update this
@@ -938,7 +988,7 @@ mod tests {
                  date_obs,date_obs_utc,dec_deg,exposure_s,filter,focal_length_mm,focal_ratio,\
                  focuser_position,focuser_temp,gain,height,image_scale_arcsec,image_type,object,offset,path,\
                  pier_side,processed,ra_deg,readable,readout_mode,readout_mode_name,\
-                 rotator_position,site_latitude,site_longitude,telescope,timestamp,width"
+                 rotator_position,site_latitude,site_longitude,software,telescope,timestamp,width"
                     .to_string()
             )
         );

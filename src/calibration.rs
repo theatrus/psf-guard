@@ -1889,7 +1889,7 @@ fn sync_table_by_key(
     Ok(counts)
 }
 
-fn table_column_names(conn: &Connection, table: &str) -> Result<Vec<String>> {
+pub(crate) fn table_column_names(conn: &Connection, table: &str) -> Result<Vec<String>> {
     let mut statement = conn.prepare(&format!("PRAGMA table_info('{table}')"))?;
     Ok(statement
         .query_map([], |row| row.get::<_, String>(1))?
@@ -2360,15 +2360,7 @@ fn ensure_file_check_table(conn: &Connection) -> Result<bool> {
 }
 
 fn file_check_table_exists(conn: &Connection) -> bool {
-    conn.query_row(
-        "SELECT 1 FROM sqlite_master
-         WHERE type = 'table' AND name = 'psf_guard_calibration_file_check'",
-        [],
-        |_| Ok(()),
-    )
-    .optional()
-    .map(|row| row.is_some())
-    .unwrap_or(false)
+    crate::light_headers::has_table(conn, "psf_guard_calibration_file_check")
 }
 
 /// A calibration file a header read found to be its frame.
@@ -2377,8 +2369,8 @@ pub(crate) struct FileCheck {
     pub(crate) frame_uuid: String,
     pub(crate) path: PathBuf,
     pub(crate) stamp: FileStamp,
-    /// The row's fingerprint then. A row written again since, by an import
-    /// or a repair, may describe another file.
+    /// [`check_key`] of the row then: a row written again since, or a
+    /// release that checks files another way, asks for a fresh check.
     pub(crate) row_fingerprint: String,
 }
 
@@ -2391,6 +2383,11 @@ pub(crate) fn record_file_checks(conn: &Connection, checks: &[FileCheck]) -> Res
         return Ok(());
     }
     ensure_file_check_table(conn)?;
+    // One transaction, not a commit per check, unless the caller has one.
+    let transaction = conn
+        .is_autocommit()
+        .then(|| conn.unchecked_transaction())
+        .transpose()?;
     let now = chrono::Utc::now().timestamp();
     let mut statement = conn.prepare(
         "INSERT INTO psf_guard_calibration_file_check
@@ -2418,11 +2415,15 @@ pub(crate) fn record_file_checks(conn: &Connection, checks: &[FileCheck]) -> Res
             now
         ])?;
     }
+    drop(statement);
     conn.execute(
         "DELETE FROM psf_guard_calibration_file_check
          WHERE frame_uuid NOT IN (SELECT frame_uuid FROM psf_guard_calibration_frame)",
         [],
     )?;
+    if let Some(transaction) = transaction {
+        transaction.commit()?;
+    }
     Ok(())
 }
 
@@ -2504,7 +2505,7 @@ impl FileChecks {
                         frame_uuid: frame.frame_uuid.clone(),
                         path: path.to_path_buf(),
                         stamp,
-                        row_fingerprint: frame.source_fingerprint.clone(),
+                        row_fingerprint: check_key(frame),
                     });
                 }
                 found
@@ -2516,16 +2517,14 @@ impl FileChecks {
         found
     }
 
+    /// Whether a header read found this file to be this frame before, while
+    /// both stood as they do now. Import's own record of the file is not
+    /// enough: the row may have been written again since, and the check
+    /// may have changed with a release.
     fn vouches(&self, frame: &CalibrationFrame, path: &Path, stamp: FileStamp) -> bool {
-        let recorded = path == frame.source_path
-            && self.recorded.get(&frame.id) == Some(&(stamp.size, stamp.modified_ns));
-        recorded
-            || self
-                .confirmed
-                .get(&(frame.frame_uuid.clone(), path.to_path_buf()))
-                .is_some_and(|(confirmed, fingerprint)| {
-                    *confirmed == stamp && *fingerprint == frame.source_fingerprint
-                })
+        self.confirmed
+            .get(&(frame.frame_uuid.clone(), path.to_path_buf()))
+            .is_some_and(|(confirmed, key)| *confirmed == stamp && *key == check_key(frame))
     }
 
     /// The fingerprint of `frame`'s file as it stands ([`file_fingerprint`]),
@@ -2548,6 +2547,21 @@ impl FileChecks {
         self.fingerprints.insert(path.clone(), fingerprint.clone());
         fingerprint
     }
+}
+
+/// What a file check stands on besides the file: this release, which may
+/// check files another way, and every field of the row the check compares
+/// or the row's file is known by. A person's choices on the row (kept out,
+/// validity, verified) leave it as it was.
+fn check_key(frame: &CalibrationFrame) -> String {
+    let mut row = serde_json::to_value(frame).unwrap_or_default();
+    if let Some(fields) = row.as_object_mut() {
+        for choice in ["id", "kept_out", "valid_direction", "source_verified"] {
+            fields.remove(choice);
+        }
+    }
+    let digest = Sha256::digest(format!("{}\u{1f}{row}", env!("CARGO_PKG_VERSION")).as_bytes());
+    crate::remote_work::hex(&digest)
 }
 
 /// The size and time import recorded of each frame's file, by row id. A
@@ -14017,10 +14031,19 @@ pub(crate) mod tests {
             "and fingerprinted once"
         );
         assert_eq!(
-            matcher.files.header_reads, 0,
-            "the files import recorded, unchanged, need no header read"
+            matcher.files.header_reads, flats,
+            "the first request reads each flat once"
         );
-        assert!(matcher.take_file_checks().is_empty());
+        let checks = matcher.take_file_checks();
+        assert_eq!(checks.len(), flats);
+        record_file_checks(&conn, &checks).unwrap();
+        let mut matcher = LightMatcher::load(&conn, false).unwrap();
+        for light in &lights {
+            matcher
+                .light_calibration(light, None, false, false)
+                .unwrap();
+        }
+        assert_eq!(matcher.files.header_reads, 0, "and the next none");
     }
 
     #[test]
@@ -14078,6 +14101,51 @@ pub(crate) mod tests {
         );
     }
 
+    #[test]
+    fn a_file_check_stands_on_the_rows_compared_fields_not_a_persons_choices() {
+        let frame = CalibrationFrame {
+            frame_uuid: "f".into(),
+            kind: CalibrationKind::Flat,
+            source_path: "/flats/a.fits".into(),
+            source_fingerprint: "print".into(),
+            filter: Some("L".into()),
+            exposure_s: Some(2.0),
+            ..CalibrationFrame::default()
+        };
+        let key = check_key(&frame);
+        for changed in [
+            CalibrationFrame {
+                filter: Some("Ha".into()),
+                ..frame.clone()
+            },
+            CalibrationFrame {
+                exposure_s: Some(3.0),
+                ..frame.clone()
+            },
+            CalibrationFrame {
+                camera_temp: Some(-10.0),
+                ..frame.clone()
+            },
+            CalibrationFrame {
+                rotation: Some(90.0),
+                ..frame.clone()
+            },
+            CalibrationFrame {
+                source_fingerprint: "another".into(),
+                ..frame.clone()
+            },
+        ] {
+            assert_ne!(check_key(&changed), key, "{changed:?}");
+        }
+        let chosen = CalibrationFrame {
+            id: 7,
+            kept_out: Some("dust".into()),
+            source_verified: true,
+            ..frame.clone()
+        };
+        assert_eq!(check_key(&chosen), key);
+    }
+
     /// Overwrite `path` with `bytes` and give it `modified` as its time.
     fn rewrite_at(path: &Path, bytes: &[u8], modified: std::time::SystemTime) {
         std::fs::write(path, bytes).unwrap();
@@ -14106,13 +14174,17 @@ pub(crate) mod tests {
         let garbage = vec![b'x'; fits.len()];
         let flats = |matcher: &mut LightMatcher| matcher.select_verified(&light, None).flat.len();
 
-        // As import recorded it, by size and modification time: trusted, not
-        // read. (Import records no change time.)
+        // Import's record of the file is not enough: the first request reads
+        // the header, as before, and refuses a file that is not the frame
+        // even at the size and time import recorded.
         rewrite_at(&path, &garbage, imported_at);
         assert!(!calibration_file_matches(&frame, &path));
         let mut matcher = LightMatcher::load(&conn, false).unwrap();
-        assert_eq!(flats(&mut matcher), 2);
-        assert_eq!(matcher.files.header_reads, 0);
+        assert_eq!(flats(&mut matcher), 1);
+        assert_eq!(matcher.files.header_reads, 2);
+        let checks = matcher.take_file_checks();
+        assert_eq!(checks.len(), 1, "only the other flat");
+        record_file_checks(&conn, &checks).unwrap();
 
         // Written again: read, and refused.
         let later = imported_at + std::time::Duration::from_secs(5);
@@ -14170,16 +14242,20 @@ pub(crate) mod tests {
         assert_eq!(flats(&mut matcher), 2);
         assert_eq!(matcher.files.header_reads, 1);
 
-        // A frame forgotten takes its checks along.
+        // A frame forgotten takes its checks along; the other flat's stay.
         forget_frames(&mut conn, std::slice::from_ref(&frame.frame_uuid)).unwrap();
-        let left: i64 = conn
-            .query_row(
-                "SELECT count(*) FROM psf_guard_calibration_file_check",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(left, 0);
+        let count = |sql: &str| -> i64 {
+            conn.query_row(sql, [&frame.frame_uuid], |row| row.get(0))
+                .unwrap()
+        };
+        assert_eq!(
+            count("SELECT count(*) FROM psf_guard_calibration_file_check WHERE frame_uuid = ?1"),
+            0
+        );
+        assert_eq!(
+            count("SELECT count(*) FROM psf_guard_calibration_file_check WHERE frame_uuid <> ?1"),
+            1
+        );
     }
 
     #[test]

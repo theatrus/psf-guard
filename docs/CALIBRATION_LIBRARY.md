@@ -475,29 +475,35 @@ handed to the integrator once even when two rows point at it.
 ### Headers read once
 
 Matching a light to the library needs the light's header and proof that
-each calibration file is still the frame its row describes. While the files
-are unchanged, both come from the catalog, so a stack build on a large
-project starts without opening thousands of files:
+each calibration file is still the frame its row describes. After the
+first build, both come from the catalog while the files are unchanged, so a
+stack build on a large project starts without opening thousands of files:
 
-- A calibration file at its row's own path, with the size and modification
-  time import recorded, is that frame without a header read. Import records
-  no change time, so this cannot tell a header edited in place with both put
-  back. A file written since, or one found by name after a move, has its
-  header read once; when it is the frame, the catalog remembers that file
-  with its size, modification time and change time, and the next request
-  trusts it while all three hold. A row written again, by an import or a
-  duplicate repair, is checked afresh.
-- Each light's header is kept with the light's guid and its file's path,
-  size, modification time and change time. Import keeps it as it adds the
-  light, the [calibration health](#calibration-health) pass keeps the ones it
-  reads, and a stack build keeps the ones it had to read once no other
-  build waits to be prepared. A catalog another program is writing, as an
-  import or N.I.N.A. may, does not delay a build: PSF Guard writes those
-  headers the next time it can. The build also notes where its own file lookup found each light
-  and goes straight there next time. A header is read again when its file
-  changes or moves, including an edit in place that puts the size and
-  modification time back (the change time cannot be put back), when its
-  light is deleted and its id given to another, and once with each release.
+- PSF Guard reads a calibration file's header the first time a build uses
+  it, as before, and checks it against the frame's row. When the file is
+  the frame, the catalog records that with the file's size, modification
+  time and change time. Later builds use the file without reading it while
+  all three are unchanged. PSF Guard checks the file again after the file
+  changes, after the frame's row changes (an import or a duplicate repair
+  writes it again, or a setting the check compares changes), and once with
+  each release. Keeping a frame out or marking its validity is not such a
+  change.
+- PSF Guard keeps each light's header with the light's guid and its file's
+  path, size, modification time and change time. Import keeps the headers
+  it read as it adds the lights. The
+  [calibration health](#calibration-health) pass and a stack build keep the
+  ones they had to read; a stack build keeps them once no other build waits
+  to be prepared, and keeps them even when its preparation fails. A catalog
+  another program is writing, as an import or N.I.N.A. may, does not delay a
+  build: PSF Guard writes those headers the next time it can.
+- A stack build also notes where its own file lookup found each light and
+  goes straight there next time. When the health pass finds another copy of
+  the same light, it uses the header of the copy the build found, while
+  that file is unchanged.
+- PSF Guard reads a light's header again when its file changes or moves,
+  including an edit in place that puts the size and modification time back
+  (the change time cannot be put back), when its light is deleted and its
+  id given to another, and once with each release.
 - A light without a guid keeps no header, so a build reads its header every
   time. Every light PSF Guard adds has a guid. Only a Target Scheduler
   database opened directly can have lights without one: one from before
@@ -506,10 +512,10 @@ project starts without opening thousands of files:
   Overview**, choose **Database & files**, and click **Fill in GUIDs** (see
   [Rigs and plans appear on their own](DIRECTOR.md#rigs-and-plans-appear-on-their-own)).
 
-These records hold this machine's paths and file times. Transfers and
-`sync pull` never carry them, and a catalog a newer build has upgraded is
-not written. They are only a cache: deleting the rows of
-`psf_guard_light_header` and `psf_guard_calibration_file_check` costs one
+These records store this machine's paths and file times. Transfers and
+`sync pull` never carry them, and PSF Guard does not write them into a
+catalog a newer build has upgraded. They are only a cache: deleting the rows
+of `psf_guard_light_header` and `psf_guard_calibration_file_check` costs one
 read of each file.
 
 ### Duplicates and their repair

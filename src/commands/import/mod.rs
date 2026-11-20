@@ -576,6 +576,7 @@ pub fn import_frames(
     let tx = conn
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .context("starting import transaction")?;
+    let mut headers = crate::light_headers::ImportedHeaders::default();
     // Templates the catalog repeats are merged first, so new plans find the
     // one kept.
     let merged = crate::template_repeats::merge_repeated(&tx, &HashSet::new())?;
@@ -808,6 +809,7 @@ pub fn import_frames(
                 images_only,
                 &mut templates,
                 &mut outcome,
+                &mut headers,
             )?;
             if !creates_targets {
                 let held: HashSet<&PathBuf> = attached
@@ -959,6 +961,7 @@ pub fn import_frames(
                         target_id,
                         plan_id,
                         &profile_id,
+                        &mut headers,
                     )?;
                     outcome.imported += 1;
                 }
@@ -1001,6 +1004,8 @@ pub fn import_frames(
         outcome.created_target_ids.clear();
         outcome.attached_target_ids.clear();
     } else {
+        // One write for every header the import read.
+        headers.store(&tx);
         tx.commit().context("committing import transaction")?;
     }
     Ok(outcome)
@@ -1229,6 +1234,7 @@ fn attach_frames_to_target(
     images_only: bool,
     templates: &mut TemplateChooser,
     outcome: &mut ImportOutcome,
+    headers: &mut crate::light_headers::ImportedHeaders,
 ) -> Result<Attached> {
     use rusqlite::OptionalExtension;
     let mut attached = Attached::default();
@@ -1334,6 +1340,7 @@ fn attach_frames_to_target(
                 target.id,
                 plan_id,
                 &target.profile_id,
+                headers,
             )?;
             outcome.imported += 1;
             attached.frames += 1;
@@ -1851,6 +1858,7 @@ fn insert_acquired_image(
     target_id: i64,
     exposure_plan_id: i64,
     profile_id: &str,
+    headers: &mut crate::light_headers::ImportedHeaders,
 ) -> Result<()> {
     let metadata = frame_metadata_json(frame);
     conn.execute(
@@ -1870,8 +1878,8 @@ fn insert_acquired_image(
         ],
     )?;
     // The header was just read: keep it, so a stack or the health pass need
-    // not read it again while the file stands as it is.
-    crate::light_headers::record_imported(conn, conn.last_insert_rowid(), frame);
+    // not read it again while the file is unchanged.
+    headers.add(conn.last_insert_rowid(), frame);
     Ok(())
 }
 

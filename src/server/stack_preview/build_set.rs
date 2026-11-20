@@ -1185,8 +1185,13 @@ pub(super) fn prepare_whole(
         (relevant, framing, mapped_sources, exposure_groups, mosaic)
     };
     // Where a build last found each light, and its header, so neither is
-    // looked up again while the file stands as it was.
-    let mut lights = crate::server::stack_preview::kept_lights::KeptLights::load(ctx, project_id);
+    // looked up again while the file is unchanged. What this preparation
+    // reads is queued for the catalog however it ends, an error included,
+    // so a retry does not read it all again.
+    let mut kept = crate::server::stack_preview::kept_lights::KeepOnExit::new(
+        &ctx.database_path,
+        crate::server::stack_preview::kept_lights::KeptLights::load(ctx, project_id),
+    );
 
     let quality = quality_results(
         ctx,
@@ -1303,7 +1308,7 @@ pub(super) fn prepare_whole(
     let prefix = hasher.clone();
     let mut identities = Vec::new();
     // Read from the library once, for every group, when the first needs it.
-    let mut matcher: Option<crate::calibration::LightMatcher> = None;
+    let matcher = &mut kept.matcher;
     let exclude_uncalibrated = crate::calibration::exclude_uncalibrated_enabled();
     for (index, ((target_id, target_name, filter_name, exposure_group_key), mut entries)) in
         grouped.into_iter().enumerate()
@@ -1382,7 +1387,8 @@ pub(super) fn prepare_whole(
                 continue;
             };
             let Some((path, source_fingerprint)) =
-                lights.locate(ctx, &image, &source_target_name, &filename, &mapped_sources)?
+                kept.lights
+                    .locate(ctx, &image, &source_target_name, &filename, &mapped_sources)?
             else {
                 missing_files += 1;
                 decisions.push(excluded_decision(
@@ -1431,7 +1437,7 @@ pub(super) fn prepare_whole(
             if matcher.is_none() {
                 let conn = ctx.db();
                 let conn = conn.lock().map_err(AppError::db)?;
-                matcher = Some(
+                *matcher = Some(
                     crate::calibration::LightMatcher::load(&conn, exclude_uncalibrated)
                         .map_err(AppError::db)?,
                 );
@@ -1440,7 +1446,7 @@ pub(super) fn prepare_whole(
             let gaps = group_calibration != crate::calibration::CalibrationMode::Off
                 && exclude_uncalibrated;
             for frame in &frames {
-                let light = lights.meta(frame.image_id, &frame.path);
+                let light = kept.lights.meta(frame.image_id, &frame.path);
                 let (fingerprint, gap) = matcher
                     .light_calibration_of(&light, Some(&directory_tree), flat_star_masking, gaps)
                     .map_err(AppError::db)?;
@@ -1576,7 +1582,7 @@ pub(super) fn prepare_whole(
         });
     }
 
-    lights.keep(&ctx.database_path, matcher.as_mut());
+    drop(kept);
 
     let digest = hasher.finalize();
     let mut job_id = String::with_capacity(digest.len() * 2);
