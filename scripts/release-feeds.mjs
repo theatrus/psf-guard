@@ -55,8 +55,12 @@ export function summaryFromNotes(markdown) {
 
   // First sentence. Require a few characters before the period so an
   // abbreviation does not end it early.
-  const sentence = /^(.{12,}?[.!?])(?:\s|$)/.exec(prose);
-  let summary = sentence ? sentence[1] : prose;
+  // A dotted name such as N.I.N.A. can occur inside the first sentence.
+  // Keep its final period from being mistaken for the sentence boundary.
+  const sentence = /^(.{12,}?[.!?])(?:\s|$)/.exec(
+    prose.replace(/\b(?:[A-Z]\.){2,}(?=\s+[a-z])/g, (name) => name.replaceAll('.', '\u2024')),
+  );
+  let summary = sentence ? prose.slice(0, sentence[1].length) : prose;
 
   if (summary.length > SUMMARY_LIMIT) {
     const clipped = summary.slice(0, SUMMARY_LIMIT);

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -156,6 +156,68 @@ test('strips markup and joins wrapped prose', () => {
   ].join('\n'));
 
   assert.equal(summary, 'Adds stacking for OSC frames and narrowband palettes.');
+});
+
+test('keeps dotted product names inside an update summary', () => {
+  assert.equal(
+    summaryFromNotes('PSF Guard 0.14 shows what your N.I.N.A. rigs are doing. More details follow.'),
+    'PSF Guard 0.14 shows what your N.I.N.A. rigs are doing.',
+  );
+  assert.equal(
+    summaryFromNotes('PSF Guard connects to N.I.N.A. More details follow.'),
+    'PSF Guard connects to N.I.N.A.',
+  );
+});
+
+test('stages one copy of each installer and keeps MSI and signed updater files', {
+  skip: process.platform === 'win32' ? 'POSIX staging fixtures run on Linux and macOS' : false,
+}, async (t) => {
+  const workflow = await readFile(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8');
+  const match = /    - name: Prepare release assets\n[\s\S]*?      run: \|\n((?:        .*\n|\n)+)/.exec(workflow);
+  assert.ok(match, 'release asset preparation step exists');
+  const script = match[1].split('\n').map((line) => line.slice(8)).join('\n');
+  const cases = [
+    {
+      os: 'ubuntu-22.04', cli: 'psf-guard-cli', asset: 'psf-guard-linux-x64',
+      inputs: ['deb/PSF Guard_1.2.3_amd64.deb', 'appimage/PSF Guard_1.2.3_amd64.AppImage', 'appimage/PSF Guard_1.2.3_amd64.AppImage.sig'],
+      outputs: ['PSF Guard_1.2.3_amd64.deb', 'PSF-Guard-1.2.3-linux-x86_64.AppImage', 'PSF-Guard-1.2.3-linux-x86_64.AppImage.sig'],
+    },
+    {
+      os: 'windows-latest', cli: 'psf-guard-cli.exe', asset: 'psf-guard-windows-x64.exe',
+      inputs: ['msi/PSF Guard_1.2.3_x64_en-US.msi', 'nsis/PSF Guard_1.2.3_x64-setup.exe', 'nsis/PSF Guard_1.2.3_x64-setup.exe.sig'],
+      outputs: ['PSF Guard_1.2.3_x64_en-US.msi', 'PSF-Guard-1.2.3-windows-x64-setup.exe', 'PSF-Guard-1.2.3-windows-x64-setup.exe.sig'],
+    },
+    {
+      os: 'macos-latest', cli: 'psf-guard-cli', asset: 'psf-guard-macos-arm64',
+      inputs: ['dmg/PSF Guard_1.2.3_aarch64.dmg', 'macos/PSF Guard.app/Contents/MacOS/psf-guard', 'macos/PSF Guard.app.tar.gz', 'macos/PSF Guard.app.tar.gz.sig'],
+      outputs: ['PSF.Guard_1.2.3_aarch64.dmg', 'PSF-Guard-1.2.3-macos-aarch64.app.tar.gz', 'PSF-Guard-1.2.3-macos-aarch64.app.tar.gz.sig'],
+    },
+  ];
+  for (const fixture of cases) {
+    await t.test(fixture.os, async (t) => {
+      const directory = await mkdtemp(path.join(os.tmpdir(), 'psf-release-assets-'));
+      t.after(() => rm(directory, { recursive: true, force: true }));
+      for (const name of [fixture.cli, ...fixture.inputs.map((name) => `bundle/${name}`)]) {
+        const file = path.join(directory, 'target/release', name);
+        await mkdir(path.dirname(file), { recursive: true });
+        await writeFile(file, `fixture ${name}\n`);
+      }
+      const expanded = script
+        .replaceAll('${{ matrix.os }}', fixture.os)
+        .replaceAll('${{ matrix.artifact_name }}', fixture.cli)
+        .replaceAll('${{ matrix.asset_name }}', fixture.asset);
+      await execFileAsync('bash', ['-e', '-c', expanded], { cwd: directory, env: { ...process.env, APP_VERSION: '1.2.3' } });
+      assert.deepEqual((await readdir(path.join(directory, 'release-assets'))).sort(), [...fixture.outputs, fixture.asset].sort());
+      const sourceSignature = fixture.inputs.find((name) => name.endsWith('.sig'));
+      const stagedSignature = fixture.outputs.find((name) => name.endsWith('.sig'));
+      for (const suffix of ['', '.sig']) {
+        assert.deepEqual(
+          await readFile(path.join(directory, 'release-assets', stagedSignature.slice(0, -4) + suffix)),
+          await readFile(path.join(directory, 'target/release/bundle', sourceSignature.slice(0, -4) + suffix)),
+        );
+      }
+    });
+  }
 });
 
 test('keeps the default when the notes carry no prose', () => {

@@ -1285,12 +1285,20 @@ each browser shows its own. Nights still run from noon to noon at the
 site's longitude, whatever the zone.
 
 A horizon is a N.I.N.A. `.hrz` file: one `azimuth altitude` pair per line in
-degrees, `#` for comments. Paste it or upload it, and download it back as a
-`.hrz` for N.I.N.A. The server reads the file, sorts the points, and closes
-the curve at 0° and 360°, taking the altitude where the line from the last
-point to the first crosses north. It refuses a line that is not two numbers,
-an azimuth outside 0 to 360, an altitude outside -90 to 90, and a repeated
-azimuth; the error says which line.
+degrees, separated by spaces, tabs, commas or semicolons, with `#` for
+comments. Paste it or upload it, and download it back as a `.hrz` for
+N.I.N.A. The server reads the file and sorts the points. It completes the
+curve at 0° and 360° as N.I.N.A. does: a file with only one of the two gives
+the other the same altitude, and a file with neither gives both the altitude
+of the point nearest north.
+
+A file may list one azimuth on several lines to draw the upright edge of a
+building. PSF Guard takes the highest of those altitudes, so a target must
+clear every line. N.I.N.A. takes the last line's altitude, so at that one
+azimuth PSF Guard may plan more strictly than N.I.N.A.
+
+The server refuses a line that is not two numbers, an azimuth outside 0 to
+360, and an altitude outside -90 to 90; the error says which line.
 
 | Method | Route | Body or query |
 | --- | --- | --- |
