@@ -6,9 +6,9 @@
 
 ## Changes
 
-- **Run now** right after an import finished no longer fails with "an import
-  is already running for this database". The import now frees the catalog
-  before it reports that it is complete.
+- **Run now** no longer fails with "an import is already running for this
+  database" while PSF Guard receives a remote upload or finishes other
+  work on the catalog. The run waits for that work and then starts.
 
 - When one Target Scheduler database serves several N.I.N.A. profiles, a
   rig now offers only its own profile's exposure templates. Before, the plan
