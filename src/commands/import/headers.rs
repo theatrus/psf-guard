@@ -135,7 +135,7 @@ impl FrameMeta {
 /// a field added to [`FrameMeta`], a header read another way, a frame
 /// classified differently. Headers the catalog keeps from another version
 /// are read again ([`crate::light_headers`]).
-pub const FRAME_META_VERSION: i64 = 1;
+pub const FRAME_META_VERSION: i64 = 2;
 
 /// Read one frame's headers. Unreadable files yield a `FrameMeta` with only
 /// `path` set (the caller decides whether to skip or report them).

@@ -475,9 +475,9 @@ handed to the integrator once even when two rows point at it.
 ### Headers read once
 
 Matching a light to the library needs the light's header and proof that
-each calibration file is still the frame its row describes. Both come from
-the catalog while the files stand as they were, so a stack build on a large
-project queues without opening thousands of files:
+each calibration file is still the frame its row describes. While the files
+are unchanged, both come from the catalog, so a stack build on a large
+project starts without opening thousands of files:
 
 - A calibration file at its row's own path, with the size and modification
   time import recorded, is that frame without a header read. Import records
@@ -492,8 +492,8 @@ project queues without opening thousands of files:
   light, the [calibration health](#calibration-health) pass keeps the ones it
   reads, and a stack build keeps the ones it had to read once no other
   build waits to be prepared. A catalog another program is writing, as an
-  import or N.I.N.A. may, holds up no build: those headers wait for the next
-  write. The build also notes where its own file lookup found each light
+  import or N.I.N.A. may, does not delay a build: PSF Guard writes those
+  headers the next time it can. The build also notes where its own file lookup found each light
   and goes straight there next time. A header is read again when its file
   changes or moves, including an edit in place that puts the size and
   modification time back (the change time cannot be put back), when its
@@ -502,7 +502,8 @@ project queues without opening thousands of files:
   time. Every light PSF Guard adds has a guid. Only a Target Scheduler
   database opened directly can have lights without one: one from before
   Target Scheduler's schema 22, or one whose upgrade skipped its older rows.
-  For the second, use **Fill in GUIDs** in Settings › Databases (see
+  For the second, open the database under **Settings → Databases & rigs →
+  Overview**, choose **Database & files**, and click **Fill in GUIDs** (see
   [Rigs and plans appear on their own](DIRECTOR.md#rigs-and-plans-appear-on-their-own)).
 
 These records hold this machine's paths and file times. Transfers and

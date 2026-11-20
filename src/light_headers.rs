@@ -932,11 +932,11 @@ mod tests {
         assert_eq!(
             (FRAME_META_VERSION, fields.join(",")),
             (
-                1,
+                2,
                 "airmass,aperture_mm,bayer_pattern,bayer_x_offset,bayer_y_offset,binning_x,\
                  binning_y,camera,camera_target_temp,camera_temp,channels,class,date_local,\
                  date_obs,date_obs_utc,dec_deg,exposure_s,filter,focal_length_mm,focal_ratio,\
-                 focuser_position,focuser_temp,gain,height,image_type,object,offset,path,\
+                 focuser_position,focuser_temp,gain,height,image_scale_arcsec,image_type,object,offset,path,\
                  pier_side,processed,ra_deg,readable,readout_mode,readout_mode_name,\
                  rotator_position,site_latitude,site_longitude,telescope,timestamp,width"
                     .to_string()
