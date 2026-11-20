@@ -6,11 +6,19 @@
 
 ## Changes
 
-- A N.I.N.A. horizon file that gives one azimuth on more than one line, as
-  files often do to draw the upright edge of a building, is now accepted in
-  Rig setup and Planning sites. Before, PSF Guard refused it. The azimuth
-  takes the altitude of its last line, as N.I.N.A. reads it, so Planning
-  plans against the same horizon N.I.N.A. uses.
+- PSF Guard now reads a N.I.N.A. horizon file that lists one azimuth on
+  several lines, as a file may do to draw the upright edge of a building, in
+  **Rig setup** and **Settings → Presets → Sites**. Before, it refused the
+  file. That azimuth takes the highest of its altitudes, so a target must
+  clear every line.
+
+- Horizon files are now read as N.I.N.A. reads them in two more ways:
+  commas, semicolons and tabs separate the columns, and a file with neither
+  0° nor 360° takes the altitude of the point nearest north at both ends.
+  Before, PSF Guard drew a line across north between the last and first
+  points, so its horizon near north could differ from N.I.N.A.'s by a few
+  degrees. A horizon already saved keeps its curve until you paste or
+  upload the file again.
 
 - **Run now** no longer fails with "an import is already running for this
   database" while PSF Guard receives a remote upload or finishes other
