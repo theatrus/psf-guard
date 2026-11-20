@@ -32,6 +32,9 @@ pub(super) struct TemplateList {
     templates: Vec<Template>,
     /// Templates left out because Director cannot plan with them, named.
     warnings: Vec<String>,
+    /// Templates of the database's other N.I.N.A. profiles, left out: the
+    /// rig shoots with its own profile's.
+    other_profile_templates: usize,
 }
 
 /// A rig database's templates, and the ones left out of them.
@@ -44,6 +47,7 @@ pub(super) struct Templates {
 /// refuses, such as a relax range that ends below where it starts.
 pub(super) struct Unusable {
     pub(super) id: i64,
+    pub(super) profile_id: String,
     pub(super) name: String,
 }
 
@@ -81,17 +85,67 @@ pub(super) async fn templates(
                 super::derived_identity(service.instance_id, &catalog.database_path)
             });
             let rig = store.catalog_rig(identity.id)?.map(|binding| binding.rig);
+            // The profile activation writes the rig's projects under: the
+            // one its Sync plugin reports, else the one the database's
+            // projects use.
+            let reported = crate::server::rig_plugins::reported_profile(&catalog.id);
+            // A database it cannot tell for, as one without projects'
+            // tables, lists every template, as before.
+            let profile = super::activation::resolve_profile(&connection, reported.as_deref())
+                .unwrap_or_else(|error| {
+                    tracing::debug!(
+                        "{}: no N.I.N.A. profile for its templates: {error}",
+                        catalog.id
+                    );
+                    None
+                });
             let templates = read_templates(&connection)?;
+            let (templates, other_profile_templates) =
+                own_profile_templates(templates, profile.as_deref());
             Ok::<_, Error>(TemplateList {
                 catalog_slug: catalog.id.clone(),
                 catalog_name: catalog.name.clone(),
                 rig,
                 templates: templates.usable,
                 warnings: templates.unusable.iter().map(Unusable::warning).collect(),
+                other_profile_templates,
             })
         })
         .await?;
     Ok(Json(ApiResponse::success(list)))
+}
+
+/// The templates of `profile`, and of the profile PSF Guard writes under
+/// until the Sync plugin moves its rows, with how many other profiles' were
+/// left out. One Target Scheduler database may serve several N.I.N.A.
+/// profiles with templates of the same names but other settings, and a rig
+/// shoots with its own profile's. Without a known profile, every template.
+pub(super) fn own_profile_templates(
+    templates: Templates,
+    profile: Option<&str>,
+) -> (Templates, usize) {
+    let Some(profile) = profile else {
+        return (templates, 0);
+    };
+    let own = |candidate: &str| {
+        candidate.eq_ignore_ascii_case(profile)
+            || candidate == psf_guard_director_meta::SYNC_PLACED_PROFILE
+    };
+    let total = templates.usable.len() + templates.unusable.len();
+    let kept = Templates {
+        usable: templates
+            .usable
+            .into_iter()
+            .filter(|template| own(&template.profile_id))
+            .collect(),
+        unusable: templates
+            .unusable
+            .into_iter()
+            .filter(|template| own(&template.profile_id))
+            .collect(),
+    };
+    let left_out = total - kept.usable.len() - kept.unusable.len();
+    (kept, left_out)
 }
 
 /// Every template with a filter. One whose Moon avoidance cannot be planned
@@ -162,7 +216,11 @@ pub(super) fn read_templates(connection: &Connection) -> Result<Templates, Error
         let moon = match read_moon_policy(connection, id) {
             Ok(moon) => moon,
             Err(error) if is_unusable_moon(&error) => {
-                templates.unusable.push(Unusable { id, name });
+                templates.unusable.push(Unusable {
+                    id,
+                    profile_id: profile_id.unwrap_or_default(),
+                    name,
+                });
                 continue;
             }
             Err(error) => return Err(StoreError::from(error).into()),

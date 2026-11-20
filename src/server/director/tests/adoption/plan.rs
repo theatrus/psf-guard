@@ -2,7 +2,7 @@ use super::rig_profile::bound_fixture;
 use super::*;
 
 #[tokio::test]
-async fn templates_list_every_profile_with_a_bandpass_and_plans_use_compare_and_set() {
+async fn templates_list_the_rigs_profile_with_a_bandpass_and_plans_use_compare_and_set() {
     let (f, rig) = bound_fixture().await;
     f.source
         .execute_batch(
@@ -10,8 +10,9 @@ async fn templates_list_every_profile_with_a_bandpass_and_plans_use_compare_and_
                 gain INTEGER, offset INTEGER, bin INTEGER, readoutmode INTEGER, defaultexposure REAL, guid TEXT);
              INSERT INTO exposuretemplate VALUES(1,'profile-a','Ha 300','Ha',100,30,1,-1,300.0,'6f1a1a1a-1111-4111-8111-111111111111');
              INSERT INTO exposuretemplate VALUES(2,'profile-a','Lum','L',-1,-1,1,NULL,120.0,NULL);
-             INSERT INTO exposuretemplate VALUES(3,'profile-b','O3 6.5nm','OIII 6.5nm',100,30,2,0,NULL,'6f1a1a1a-2222-4222-8222-222222222222');
-             INSERT INTO exposuretemplate VALUES(4,'profile-a','Blank','',0,0,1,0,60.0,NULL);",
+             INSERT INTO exposuretemplate VALUES(3,'profile-a','O3 6.5nm','OIII 6.5nm',100,30,2,0,NULL,'6f1a1a1a-2222-4222-8222-222222222222');
+             INSERT INTO exposuretemplate VALUES(4,'profile-a','Blank','',0,0,1,0,60.0,NULL);
+             INSERT INTO exposuretemplate VALUES(5,'profile-b','Ha 300','Ha',0,10,1,-1,60.0,NULL);",
         )
         .unwrap();
     let (status, listed) = call(
@@ -26,7 +27,10 @@ async fn templates_list_every_profile_with_a_bandpass_and_plans_use_compare_and_
     let data = &listed["data"];
     assert_eq!(data["rig"]["id"], rig.to_string());
     let templates = data["templates"].as_array().unwrap();
+    // profile-a owns most of the templates, so it is the rig's. profile-b's
+    // Ha 300, the same name with other settings, is left out and counted.
     assert_eq!(templates.len(), 3, "{templates:?}");
+    assert_eq!(data["other_profile_templates"], 1);
     let by_name = |name: &str| templates.iter().find(|t| t["name"] == name).unwrap();
     assert_eq!(
         by_name("Ha 300")["bandpass"],
@@ -40,7 +44,8 @@ async fn templates_list_every_profile_with_a_bandpass_and_plans_use_compare_and_
     assert_eq!(by_name("Lum")["gain"], Value::Null);
     assert_eq!(by_name("O3 6.5nm")["bandpass"]["id"], "oiii");
     assert_eq!(by_name("O3 6.5nm")["default_exposure"], 60.0);
-    assert_eq!(by_name("O3 6.5nm")["profile_id"], "profile-b");
+    assert!(templates.iter().all(|t| t["profile_id"] == "profile-a"));
+    assert_eq!(by_name("Ha 300")["default_exposure"], 300.0);
     assert_eq!(
         call(
             &f.app,

@@ -88,11 +88,11 @@ describe('Template library', () => {
     fireEvent.click(fresh.getByRole('button', { name: 'Save OIII 600' }));
     await waitFor(() => expect(saves).toHaveLength(2));
     expect(saves[1]).toMatchObject({ revision: 0, name: 'OIII 600', filter_name: 'OIII', default_exposure_seconds: 600 });
-    // Copying from a rig skips what the library already has.
+    // Copying from a rig: Lum 90 is in the library, but at 120 s since the
+    // edit, so the rig's copy differs from it.
     fireEvent.change(screen.getByLabelText('Copy templates from'), { target: { value: 'redcat' } });
     const copyList = await screen.findByRole('group', { name: 'Templates to copy' });
-    // The list says it is loading until the rig's templates arrive.
-    expect(await within(copyList).findByRole('button', { name: /Lum 90/ })).toBeDisabled();
+    expect(await within(copyList).findByRole('button', { name: /Lum 90.*differs from the library/ })).toBeEnabled();
     fireEvent.click(within(copyList).getByRole('button', { name: /Ha 300/ }));
     await waitFor(() => expect(saves).toHaveLength(3));
     expect(saves[2]).toMatchObject({ revision: 0, name: 'Ha 300', filter_name: 'Ha', gain: 100, default_exposure_seconds: 300 });
@@ -105,6 +105,30 @@ describe('Template library', () => {
     await waitFor(() => expect(deletes).toEqual(['11111111-1111-4111-8111-111111111111?3']));
     expect(await screen.findByText('Removed Lum 90.')).toBeInTheDocument();
     confirm.mockRestore();
+  });
+
+  it('lists one profile, marks what the library has, and brings a differing template up to the rig', async () => {
+    const { saves } = fixture();
+    // The rig's Lum 90 at 120 s against the library's at 90 s, and its Ha 300
+    // as the library would copy it; two templates of another profile.
+    server.use(http.get('/api/director/v1/catalogs/redcat/templates', () => HttpResponse.json(ok({ catalog_slug: 'redcat', catalog_name: 'RedCat 61', rig: redcat.rig, other_profile_templates: 2, templates: [
+      { id: 2, guid: null, profile_id: 'p', name: 'Lum 90', filter_name: 'L', gain: 100, offset: 30, bin: 1, readout_mode: null, default_exposure: 120, bandpass: { id: 'luminance', name: 'Luminance', kind: 'broadband' } },
+      { id: 3, guid: null, profile_id: 'p', name: 'Lum 90 copy', filter_name: 'L', gain: 100, offset: 30, bin: null, readout_mode: null, default_exposure: 90, bandpass: { id: 'luminance', name: 'Luminance', kind: 'broadband' } },
+    ] }))));
+    mount();
+    await screen.findByDisplayValue('Lum 90');
+    fireEvent.change(screen.getByLabelText('Copy templates from'), { target: { value: 'redcat' } });
+    const copyList = await screen.findByRole('group', { name: 'Templates to copy' });
+    expect(await within(copyList).findByText('2 templates from other N.I.N.A. profiles are not listed.')).toBeInTheDocument();
+    expect(within(copyList).getByRole('button', { name: /Lum 90 copy/ })).toBeEnabled();
+    const differs = within(copyList).getByRole('button', { name: /Lum 90 \(L, differs from the library\)/ });
+    expect(differs).toHaveAttribute('title', "Replace the library's Lum 90 with this database's settings");
+    fireEvent.click(differs);
+    await waitFor(() => expect(saves).toHaveLength(1));
+    // The library's own row, at the revision read, takes the rig's settings.
+    expect(saves[0]).toMatchObject({ id: '11111111-1111-4111-8111-111111111111', revision: 2, name: 'Lum 90', default_exposure_seconds: 120 });
+    // Once saved, the two match.
+    expect(await within(copyList).findByRole('button', { name: /Lum 90 \(L, in the library\)/ })).toBeDisabled();
   });
 
   it('lets the exposure be cleared and typed over', async () => {
