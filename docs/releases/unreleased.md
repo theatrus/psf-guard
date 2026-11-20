@@ -6,6 +6,12 @@
 
 ## Changes
 
+- A N.I.N.A. horizon file that gives one azimuth on more than one line, as
+  files often do to draw the upright edge of a building, is now accepted in
+  Rig setup and Planning sites. Before, PSF Guard refused it. The azimuth
+  takes the altitude of its last line, as N.I.N.A. reads it, so Planning
+  plans against the same horizon N.I.N.A. uses.
+
 - **Run now** no longer fails with "an import is already running for this
   database" while PSF Guard receives a remote upload or finishes other
   work on the catalog. The run waits for that work and then starts.

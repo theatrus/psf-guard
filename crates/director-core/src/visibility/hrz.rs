@@ -1,7 +1,9 @@
 //! N.I.N.A. horizon files (`.hrz`): one `azimuth altitude` pair per line in
 //! degrees, `#` comments, spaces or tabs between columns. A file need not
 //! start at 0° or end at 360°; the curve wraps, so the missing endpoints are
-//! interpolated across north. Output is the canonical form `Horizon` checks.
+//! interpolated across north. An azimuth given twice, as a file may to draw
+//! the upright edge of a building, keeps its last line's altitude, as
+//! N.I.N.A. reads it. Output is the canonical form `Horizon` checks.
 
 use super::{Horizon, HorizonPoint};
 use std::fmt::Write as _;
@@ -17,10 +19,6 @@ pub enum HrzError {
     OutOfRange {
         line: usize,
     },
-    /// The same azimuth twice, which leaves the curve undefined there.
-    RepeatedAzimuth {
-        line: usize,
-    },
     Empty,
     TooManyPoints,
 }
@@ -33,9 +31,6 @@ impl std::fmt::Display for HrzError {
                 f,
                 "line {line} is out of range: azimuth runs 0 to 360, altitude -90 to 90"
             ),
-            Self::RepeatedAzimuth { line } => {
-                write!(f, "line {line} repeats an azimuth from an earlier line")
-            }
             Self::Empty => write!(f, "the file has no horizon points"),
             Self::TooManyPoints => write!(f, "the file has more than {MAX_POINTS} points"),
         }
@@ -85,16 +80,18 @@ impl Horizon {
         if points.is_empty() {
             return Err(HrzError::Empty);
         }
+        // N.I.N.A. keeps a horizon as a sorted map from azimuth to altitude,
+        // so an azimuth given again replaces the altitude read before. The
+        // sort is stable: of equal azimuths, the last line comes last.
         points.sort_by(|a, b| a.0.azimuth_degrees.total_cmp(&b.0.azimuth_degrees));
-        if let Some(pair) = points
-            .windows(2)
-            .find(|pair| pair[0].0.azimuth_degrees == pair[1].0.azimuth_degrees)
-        {
-            return Err(HrzError::RepeatedAzimuth {
-                line: pair[0].1.max(pair[1].1),
-            });
-        }
         let mut points: Vec<HorizonPoint> = points.into_iter().map(|(point, _)| point).collect();
+        points.dedup_by(|later, kept| {
+            let same = later.azimuth_degrees == kept.azimuth_degrees;
+            if same {
+                *kept = *later;
+            }
+            same
+        });
         let first = points[0];
         let last = points[points.len() - 1];
         // The altitude where the curve crosses north, between the last point
@@ -241,11 +238,35 @@ mod tests {
             Horizon::from_hrz("0 10\n90 95\n"),
             Err(HrzError::OutOfRange { line: 2 })
         );
-        assert_eq!(
-            Horizon::from_hrz("90 10\n0 3\n90 4\n"),
-            Err(HrzError::RepeatedAzimuth { line: 3 })
-        );
         assert_eq!(Horizon::from_hrz("# nothing\n\n"), Err(HrzError::Empty));
+    }
+
+    #[test]
+    fn a_repeated_azimuth_keeps_its_last_altitude_as_nina_does() {
+        // The upright edge of a building at 321.74°, drawn as three lines,
+        // and another at 322.74° (#1126).
+        let horizon = Horizon::from_hrz(
+            "0 10\n320.74 7.45\n321.74 8.45\n321.74 12.45\n321.74 21.45\n\
+             322.74 11.45\n322.74 14.45\n325.74 25.45\n360 10\n",
+        )
+        .unwrap();
+        assert_eq!(
+            points(&horizon),
+            vec![
+                (0.0, 10.0),
+                (320.74, 7.45),
+                (321.74, 21.45),
+                (322.74, 14.45),
+                (325.74, 25.45),
+                (360.0, 10.0)
+            ]
+        );
+        horizon.validate().unwrap();
+        // Out of order too: the later line wins, wherever it sorts.
+        assert_eq!(
+            points(&Horizon::from_hrz("90 10\n0 3\n90 4\n").unwrap()),
+            vec![(0.0, 3.0), (90.0, 4.0), (360.0, 3.0)]
+        );
     }
 
     #[test]

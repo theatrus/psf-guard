@@ -1288,9 +1288,11 @@ A horizon is a N.I.N.A. `.hrz` file: one `azimuth altitude` pair per line in
 degrees, `#` for comments. Paste it or upload it, and download it back as a
 `.hrz` for N.I.N.A. The server reads the file, sorts the points, and closes
 the curve at 0° and 360°, taking the altitude where the line from the last
-point to the first crosses north. It refuses a line that is not two numbers,
-an azimuth outside 0 to 360, an altitude outside -90 to 90, and a repeated
-azimuth; the error says which line.
+point to the first crosses north. An azimuth given on more than one line, as a
+file may give to draw the upright edge of a building, takes the altitude of
+its last line, as N.I.N.A. reads it. The server refuses a line that is not
+two numbers, an azimuth outside 0 to 360, and an altitude outside -90 to 90;
+the error says which line.
 
 | Method | Route | Body or query |
 | --- | --- | --- |
