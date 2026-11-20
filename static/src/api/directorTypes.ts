@@ -465,7 +465,7 @@ export interface DirectorTemplate {
   moon?: DirectorMoonPolicy;
   bandpass: DirectorBandpass;
 }
-export interface DirectorTemplateList { catalog_slug: string; catalog_name: string; rig: DirectorIdentity | null; templates: DirectorTemplate[]; /** Templates left out by name, with why. */ warnings?: string[] }
+export interface DirectorTemplateList { catalog_slug: string; catalog_name: string; rig: DirectorIdentity | null; templates: DirectorTemplate[]; /** Templates left out by name, with why. */ warnings?: string[]; /** Templates of the database's other N.I.N.A. profiles, left out: the rig uses its own profile's. */ other_profile_templates?: number }
 /** A template in Director's own library: settings any rig can shoot with; activation writes it into a rig database that lacks it. */
 export interface DirectorLibraryTemplate {
   id: string;
