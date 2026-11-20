@@ -48,6 +48,9 @@ if [[ -z "$VERSION" ]]; then
     echo "could not determine version" >&2
     exit 1
 fi
+# RPM cannot use '-' in a version: main's 0.15.0-dev is 0.15.0~dev in the
+# spec, which RPM also sorts before 0.15.0.
+VERSION="${VERSION//-/\~}"
 
 NAME="psf-guard"
 PREFIX="${NAME}-${VERSION}"

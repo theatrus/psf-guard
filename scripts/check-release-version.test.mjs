@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { checkReleaseVersion, checkReleaseHighlights } from './check-release-version.mjs';
+import { checkReleaseVersion, checkReleaseHighlights, checkVersionAgreement } from './check-release-version.mjs';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -29,6 +29,17 @@ test('rejects a tag that does not match the package version', async () => {
     checkReleaseVersion(repositoryRoot, 'v9.9.9'),
     /does not match v/,
   );
+});
+
+test('a pre-release version agrees with its RPM and MSI spellings', () => {
+  const dev = { cargoVersion: '0.15.0-dev', lockVersion: '0.15.0-dev', tauriVersion: '0.15.0-dev' };
+  assert.doesNotThrow(() => checkVersionAgreement({ ...dev, msiVersion: '0.15.0', rpmVersion: '0.15.0~dev' }));
+  assert.throws(() => checkVersionAgreement({ ...dev, msiVersion: '0.15.0', rpmVersion: '0.15.0' }), /do not match/);
+  assert.throws(() => checkVersionAgreement({ ...dev, msiVersion: '0.14.0', rpmVersion: '0.15.0~dev' }), /must be 0.15.0 or absent/);
+  const release = { cargoVersion: '0.15.0', lockVersion: '0.15.0', tauriVersion: '0.15.0', rpmVersion: '0.15.0' };
+  assert.doesNotThrow(() => checkVersionAgreement(release));
+  assert.doesNotThrow(() => checkVersionAgreement({ ...release, msiVersion: '0.15.0' }));
+  assert.throws(() => checkVersionAgreement({ ...release, tauriVersion: '0.15.0-dev' }), /do not match/);
 });
 
 const highlight = { title: 'Changed behavior', body: 'What to do next.' };
