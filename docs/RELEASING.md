@@ -384,16 +384,31 @@ announce them a second time.
 
 ## Main's version between releases
 
-Once a release branch exists, stamp `main` with the next minor version as an
-interim development version: `Cargo.toml`, the root package in `Cargo.lock`,
-`tauri.conf.json`, and the RPM spec, whose changelog gets the line "Interim
-development version on main; released builds come from release/* branches".
-Add no release notes or highlights for it. 0.11.0 (#545) and 0.13.0 were
-stamped this way.
+Once a release branch exists, stamp `main` with the next minor version and a
+`-dev` suffix, such as `0.15.0-dev`:
 
-Under the last release's number, every build from `main` reports each new
-patch as an available update, though it already has the patch's fixes. The
-end-to-end servers run with
-`PSF_GUARD_UPDATE_NOTICE=off`, so a release does not change their pages
-whatever `main`'s version is. The minor release keeps the interim number and
-replaces the interim changelog line with its own entry.
+- `Cargo.toml` and the root package in `Cargo.lock`: `0.15.0-dev`;
+- `tauri.conf.json`: `version` `0.15.0-dev`, and `bundle.windows.wix.version`
+  `0.15.0`, because an MSI needs a numeric version;
+- the RPM spec: `Version: 0.15.0~dev`, because RPM cannot use `-` in a
+  version. `scripts/make-rpm-sources.sh` names the source tarballs the same
+  way. The changelog gets the line "Interim development version on main;
+  released builds come from release/* branches".
+
+Add no release notes or highlights for it. `scripts/check-release-version.mjs`
+accepts these spellings as one version.
+
+A build from `main` then reports `0.15.0-dev`. That sorts after every 0.14
+patch and before 0.15.0, so it does not offer a 0.14 patch as an update, and
+it shows no **What's new** for the interim version. The version is not a
+release: the release check refuses to tag it without notes and highlights,
+and the demo, Docker `latest` and the update feeds follow `vX.Y.Z` tags
+only. The end-to-end servers run with `PSF_GUARD_UPDATE_NOTICE=off`, so a
+release does not change their pages whatever `main`'s version is.
+
+To prepare the minor release, set every file to `0.15.0`. Leave
+`bundle.windows.wix.version` at `0.15.0` or remove it; the release check
+refuses any other value. Replace the interim changelog line with the
+release's entry. 0.11.0 (#545) and 0.13.0 were stamped without the suffix,
+so their `main` builds offered each patch as an update; 0.15.0-dev was the
+first stamped this way.

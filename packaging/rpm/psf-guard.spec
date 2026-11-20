@@ -8,7 +8,7 @@
 %global rustflags_debuginfo 0
 
 Name:           psf-guard
-Version:        0.14.0
+Version:        0.15.0~dev
 Release:        1%{?dist}
 Summary:        Astronomical image analysis and quality assessment tool for N.I.N.A.
 
@@ -105,6 +105,15 @@ install -Dpm0600 packaging/rpm/systemd/psf-guard-worker.conf \
 %config(noreplace) %attr(0600,root,root) %{_sysconfdir}/%{name}/worker.conf
 
 %changelog
+* Fri Nov 20 2026 Yann Ramin <github@theatr.us> - 0.15.0~dev-1
+- Interim development version on main; released builds come from release/* branches
+
+* Fri Nov 20 2026 Yann Ramin <github@theatr.us> - 0.14.1-1
+- Offer only the rig's own N.I.N.A. profile's exposure templates
+- Accept horizon files that repeat an azimuth, read as N.I.N.A. reads them
+- Let Run now wait for the import lock instead of failing
+- Remove duplicate release downloads and fix update summaries
+
 * Tue Nov 17 2026 Yann Ramin <github@theatr.us> - 0.14.0-1
 - Add Sync live status, rig plugin setup and activation review in the Library
 - Add seasonal sky visibility, offline maps and Seiza noise reduction

@@ -1,5 +1,24 @@
 [
   {
+    "version": "0.14.1",
+    "deprecations": [],
+    "upgradeNotes": [],
+    "highlights": [
+      {
+        "title": "Exposure templates for each profile",
+        "body": "When one Target Scheduler database serves several N.I.N.A. profiles, a rig offers only its own profile's exposure templates. Before, a plan could get another profile's template of the same name, with that profile's gain and exposure."
+      },
+      {
+        "title": "More horizon files read",
+        "body": "A horizon file may list one azimuth on several lines; PSF Guard uses the highest altitude. Commas, semicolons and tabs separate columns, and a file without 0° or 360° is closed at north as N.I.N.A. does."
+      },
+      {
+        "title": "Run now waits for other import work",
+        "body": "Run now no longer fails with \"an import is already running for this database\" while a remote upload or other catalog work finishes. The run starts when that work is done."
+      }
+    ]
+  },
+  {
     "version": "0.14.0",
     "deprecations": [
       {

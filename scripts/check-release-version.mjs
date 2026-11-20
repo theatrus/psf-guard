@@ -38,6 +38,31 @@ export function checkReleaseHighlights(releases, requiredVersion) {
   }
 }
 
+// Between releases main carries a pre-release version such as 0.15.0-dev.
+// RPM cannot use '-' in a version, so the spec writes it 0.15.0~dev, which
+// RPM also sorts before 0.15.0. An MSI needs a numeric version, so
+// tauri.conf.json sets bundle.windows.wix.version to the version without
+// its pre-release part.
+export function checkVersionAgreement({ cargoVersion, lockVersion, tauriVersion, msiVersion, rpmVersion }) {
+  const versions = new Map([
+    ['Cargo.toml', cargoVersion],
+    ['Cargo.lock', lockVersion],
+    ['tauri.conf.json', tauriVersion],
+    ['RPM spec', rpmVersion.replaceAll('~', '-')],
+  ]);
+  const mismatches = [...versions].filter(([, version]) => version !== cargoVersion);
+  if (mismatches.length > 0) {
+    const detail = [...versions].map(([file, version]) => `${file}=${version}`).join(', ');
+    throw new Error(`Release versions do not match: ${detail}`);
+  }
+  const numericVersion = cargoVersion.split(/[-+]/)[0];
+  if (msiVersion !== undefined && msiVersion !== numericVersion) {
+    throw new Error(
+      `tauri.conf.json bundle.windows.wix.version is ${msiVersion}; it must be ${numericVersion} or absent.`,
+    );
+  }
+}
+
 export async function checkReleaseVersion(repositoryRoot, expectedTag) {
   const [cargoToml, cargoLock, tauriConfig, rpmSpec] = await Promise.all([
     readFile(path.join(repositoryRoot, 'Cargo.toml'), 'utf8'),
@@ -57,20 +82,15 @@ export async function checkReleaseVersion(repositoryRoot, expectedTag) {
     .find((block) => /^name = "psf-guard"$/m.test(block));
   if (!lockPackage) throw new Error('Could not find psf-guard in Cargo.lock.');
   const lockVersion = capture(lockPackage, /^version = "([^"]+)"$/m, 'Cargo.lock version');
-  const tauriVersion = JSON.parse(tauriConfig).version;
+  const tauri = JSON.parse(tauriConfig);
   const rpmVersion = capture(rpmSpec, /^Version:\s*(\S+)$/m, 'RPM version');
-
-  const versions = new Map([
-    ['Cargo.toml', cargoVersion],
-    ['Cargo.lock', lockVersion],
-    ['tauri.conf.json', tauriVersion],
-    ['RPM spec', rpmVersion],
-  ]);
-  const mismatches = [...versions].filter(([, version]) => version !== cargoVersion);
-  if (mismatches.length > 0) {
-    const detail = [...versions].map(([file, version]) => `${file}=${version}`).join(', ');
-    throw new Error(`Release versions do not match: ${detail}`);
-  }
+  checkVersionAgreement({
+    cargoVersion,
+    lockVersion,
+    tauriVersion: tauri.version,
+    msiVersion: tauri.bundle?.windows?.wix?.version,
+    rpmVersion,
+  });
 
   const tag = `v${cargoVersion}`;
   if (expectedTag && expectedTag !== tag) {
