@@ -6,6 +6,11 @@
 
 ## Changes
 
+- **Folders & limits** heads each disk with the folder that holds its storage
+  folders, such as `./cache`. Before, it showed one database's folder inside
+  the cache, such as `./cache/db-e075b4ec`, though the disk's use and limit
+  cover every database on it.
+
 - Release downloads omit duplicate installers and the extra macOS app ZIP.
   Windows MSI installers remain available. Update notices keep dotted names
   such as N.I.N.A. within the first sentence.

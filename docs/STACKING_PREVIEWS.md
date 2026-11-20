@@ -1106,7 +1106,9 @@ a restart keeps the old folders until the next full start.
 
 Settings → **Storage & backups** → **Folders & limits** → **Disk use** shows every volume the three folders sit
 on: how full it is, which folders and databases it holds, and how much of it
-is previews, stacks and masters.
+is previews, stacks and masters. Each volume is headed by the folder that
+holds all its storage folders, such as the cache folder. Each database keeps
+its files in a folder of its own inside, named for the database's slug.
 
 **Volume usage limit** (90% by default) is the highest share of the
 whole volume, other files included, that may be used, as `df` counts it. Limits
