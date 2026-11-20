@@ -5,6 +5,7 @@
 use super::*;
 use psf_guard_director_core::bandpass::{bandpass_for_filter, Bandpass};
 use psf_guard_director_meta::plan::PlanDraft;
+use psf_guard_director_meta::SYNC_PLACED_PROFILE;
 use rusqlite::{Connection, OpenFlags};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -32,6 +33,9 @@ pub(super) struct TemplateList {
     templates: Vec<Template>,
     /// Templates left out because Director cannot plan with them, named.
     warnings: Vec<String>,
+    /// Templates of the database's other N.I.N.A. profiles, left out: the
+    /// rig shoots with its own profile's.
+    other_profile_templates: usize,
 }
 
 /// A rig database's templates, and the ones left out of them.
@@ -56,8 +60,8 @@ impl Unusable {
     }
 }
 
-/// Every exposure template in the rig database, across profiles, with the
-/// bandpass its filter name resolves to. Read-only; no template is created.
+/// The exposure templates a rig shoots with ([`rig_templates`]), with the
+/// bandpass each filter name resolves to. Read-only; no template is created.
 pub(super) async fn templates(
     State(state): State<Arc<AppState>>,
     Path(slug): Path<String>,
@@ -81,22 +85,72 @@ pub(super) async fn templates(
                 super::derived_identity(service.instance_id, &catalog.database_path)
             });
             let rig = store.catalog_rig(identity.id)?.map(|binding| binding.rig);
-            let templates = read_templates(&connection)?;
+            let (templates, other_profile_templates) = rig_templates(&connection, &catalog.id)?;
             Ok::<_, Error>(TemplateList {
                 catalog_slug: catalog.id.clone(),
                 catalog_name: catalog.name.clone(),
                 rig,
                 templates: templates.usable,
                 warnings: templates.unusable.iter().map(Unusable::warning).collect(),
+                other_profile_templates,
             })
         })
         .await?;
     Ok(Json(ApiResponse::success(list)))
 }
 
+/// The N.I.N.A. profile a rig's templates come from: the one activation
+/// writes the rig's projects under, which its Sync plugin reports, else the
+/// one most of the database's projects use. `None` when the database cannot
+/// tell, as one without a projects table, or when that is PSF Guard's own
+/// waiting profile, which holds only what PSF Guard wrote.
+pub(super) fn rig_profile(connection: &Connection, catalog_id: &str) -> Option<String> {
+    let reported = crate::server::rig_plugins::reported_profile(catalog_id);
+    match super::activation::resolve_profile(connection, reported.as_deref()) {
+        Ok(Some(profile)) if !profile.eq_ignore_ascii_case(SYNC_PLACED_PROFILE) => Some(profile),
+        Ok(_) => None,
+        Err(error) => {
+            tracing::debug!("{catalog_id}: no N.I.N.A. profile for its templates: {error}");
+            None
+        }
+    }
+}
+
+/// The templates a rig shoots with, and how many of the database's other
+/// N.I.N.A. profiles' templates were left out. One Target Scheduler database
+/// may serve several profiles with templates of the same names but other
+/// settings. A rig uses its own profile's, and those PSF Guard wrote under
+/// its waiting profile; without a known profile, every template.
+pub(super) fn rig_templates(
+    connection: &Connection,
+    catalog_id: &str,
+) -> Result<(Templates, usize), Error> {
+    let profile = rig_profile(connection, catalog_id);
+    let templates = read_templates_of(connection, profile.as_deref())?;
+    let Some(profile) = profile else {
+        return Ok((templates, 0));
+    };
+    let others: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM exposuretemplate
+             WHERE TRIM(IFNULL(filtername, '')) <> ''
+               AND lower(IFNULL(profileId, '')) NOT IN (lower(?1), lower(?2))",
+            [profile.as_str(), SYNC_PLACED_PROFILE],
+            |row| row.get(0),
+        )
+        .map_err(StoreError::from)?;
+    Ok((templates, usize::try_from(others).unwrap_or(0)))
+}
+
 /// Every template with a filter. One whose Moon avoidance cannot be planned
 /// is set apart by name rather than failing the rig's whole list.
 pub(super) fn read_templates(connection: &Connection) -> Result<Templates, Error> {
+    read_templates_of(connection, None)
+}
+
+/// [`read_templates`], of one N.I.N.A. profile and PSF Guard's waiting one
+/// when `profile` is given.
+fn read_templates_of(connection: &Connection, profile: Option<&str>) -> Result<Templates, Error> {
     let has = |column: &str| {
         connection
             .prepare("PRAGMA table_info(exposuretemplate)")
@@ -128,11 +182,13 @@ pub(super) fn read_templates(connection: &Connection) -> Result<Templates, Error
     let mut statement = connection
         .prepare(&format!(
             "SELECT Id, {guid}, profileId, name, filtername, gain, offset, bin, {readout}, {default_exposure}
-             FROM exposuretemplate ORDER BY filtername, name, Id LIMIT 512"
+             FROM exposuretemplate
+             WHERE ?1 IS NULL OR lower(IFNULL(profileId, '')) IN (lower(?1), lower(?2))
+             ORDER BY filtername, name, Id LIMIT 512"
         ))
         .map_err(StoreError::from)?;
     let rows = statement
-        .query_map([], |row| {
+        .query_map(rusqlite::params![profile, SYNC_PLACED_PROFILE], |row| {
             Ok((
                 row.get::<_, i64>(0)?,
                 row.get::<_, Option<String>>(1)?,

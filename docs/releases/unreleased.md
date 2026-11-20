@@ -6,6 +6,20 @@
 
 ## Changes
 
+- When one Target Scheduler database serves several N.I.N.A. profiles, a
+  rig now offers only its own profile's exposure templates. Before, the plan
+  editor could give a plan another profile's template of the same name, with
+  that profile's gain and exposure, and **Copy from** on **Settings → Presets
+  → Exposure templates** listed each name once per profile. **Copy from** now
+  says how many templates from other profiles it leaves out. A template whose
+  name is in the library with other settings reads **differs from the
+  library**; click it to replace the library's settings with the rig's.
+
+- **Folders & limits** heads each disk with the folder that holds its storage
+  folders, such as `./cache`. Before, it showed one database's folder inside
+  the cache, such as `./cache/db-e075b4ec`, though the disk's use and limit
+  cover every database on it.
+
 - Release downloads omit duplicate installers and the extra macOS app ZIP.
   Windows MSI installers remain available. Update notices keep dotted names
   such as N.I.N.A. within the first sentence.

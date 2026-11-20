@@ -156,7 +156,8 @@ pub fn last_reports(budget: &CacheBudget) -> Vec<VolumeReport> {
 /// One volume holding storage folders, as the last pass found it.
 #[derive(Debug, Clone, Serialize)]
 pub struct VolumeReport {
-    /// A storage folder on the volume, for people to find it by.
+    /// The folder holding every storage folder on the volume, for people to
+    /// find it by: the cache folder, not one database's folder inside it.
     pub path: String,
     pub databases: Vec<String>,
     /// Which of the cache, stacks and calibration masters live here.
@@ -242,6 +243,9 @@ pub fn record(budget: &CacheBudget, reports: Vec<VolumeReport>) {
 struct Folder {
     database: String,
     path: PathBuf,
+    /// The folder a person chose, which holds one folder per database: the
+    /// cache folder for `<cache>/<database>`.
+    root: PathBuf,
     kinds: Vec<StorageKind>,
     /// The database, for the catalog the master step reads.
     context: Option<Arc<crate::server::database_context::DatabaseContext>>,
@@ -269,6 +273,7 @@ fn folders(state: &AppState) -> Vec<Folder> {
                 Some(folder) => folder.kinds.push(kind),
                 None => folders.push(Folder {
                     database: ctx.name.clone(),
+                    root: root_of(path, &ctx.id),
                     path: path.clone(),
                     kinds: vec![kind],
                     context: Some(Arc::clone(&ctx)),
@@ -277,6 +282,42 @@ fn folders(state: &AppState) -> Vec<Folder> {
         }
     }
     folders
+}
+
+/// The folder a person chose for `path`: the one above it when `path` is
+/// the database's own folder inside it, else `path` itself.
+fn root_of(path: &Path, database_id: &str) -> PathBuf {
+    match path.parent() {
+        Some(parent)
+            if path.file_name() == Some(std::ffi::OsStr::new(database_id))
+                && !parent.as_os_str().is_empty() =>
+        {
+            parent.to_path_buf()
+        }
+        _ => path.to_path_buf(),
+    }
+}
+
+/// The deepest folder holding every chosen folder on one volume: the cache
+/// folder when everything lives in it. A shared folder on another volume,
+/// as when a database's folder is a disk mounted inside the cache folder,
+/// gives way to the first database's own folder, which is on this one.
+fn heading(folders: &[Folder], device: u64) -> Option<PathBuf> {
+    let first = folders.first()?;
+    let mut shared: Vec<std::path::Component> = first.root.components().collect();
+    for folder in &folders[1..] {
+        let same = shared
+            .iter()
+            .zip(folder.root.components())
+            .take_while(|(a, b)| *a == b)
+            .count();
+        shared.truncate(same);
+    }
+    let shared: PathBuf = shared.into_iter().collect();
+    if shared.as_os_str().is_empty() || device_of(&shared) != Some(device) {
+        return Some(first.path.clone());
+    }
+    Some(shared)
 }
 
 /// One pass over every volume: read it, cull if it is over, report.
@@ -462,7 +503,10 @@ fn report_volume(
     }
     kinds.sort_by_key(|kind| *kind as usize);
     Some(VolumeReport {
-        path: first.display().to_string(),
+        path: heading(folders, device)
+            .unwrap_or_else(|| first.clone())
+            .display()
+            .to_string(),
         databases,
         kinds,
         total_bytes: usage.total,
@@ -885,12 +929,14 @@ mod tests {
             Folder {
                 database: "Rig".into(),
                 path: cache.clone(),
+                root: cache.clone(),
                 kinds: vec![StorageKind::Cache, StorageKind::Calibration],
                 context: None,
             },
             Folder {
                 database: "Rig".into(),
                 path: stacks.clone(),
+                root: stacks.clone(),
                 kinds: vec![StorageKind::Stacks],
                 context: None,
             },
@@ -913,6 +959,48 @@ mod tests {
                 StorageKind::Stacks,
                 StorageKind::Calibration
             ]
+        );
+    }
+
+    /// A volume's row shows the cache folder its databases share, not the
+    /// first database's folder inside it.
+    #[test]
+    fn a_volume_is_shown_by_the_folder_holding_its_databases() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache = temp.path().join("cache");
+        let stacks = temp.path().join("stacks");
+        let folder = |path: PathBuf, id: &str| {
+            std::fs::create_dir_all(&path).unwrap();
+            Folder {
+                database: id.into(),
+                root: root_of(&path, id),
+                path,
+                kinds: vec![StorageKind::Cache],
+                context: None,
+            }
+        };
+        let device = device_of(temp.path()).unwrap();
+        let shown = |folders: &[Folder]| heading(folders, device).unwrap();
+
+        let one = folder(cache.join("db-e075b4ec"), "db-e075b4ec");
+        let two = folder(cache.join("imaging-rig"), "imaging-rig");
+        assert_eq!(shown(std::slice::from_ref(&one)), cache);
+        assert_eq!(shown(&[one.clone(), two.clone()]), cache);
+        // Stacks in a folder of their own on the same disk: the folder that
+        // holds both.
+        let stacked = folder(stacks.join("db-e075b4ec"), "db-e075b4ec");
+        assert_eq!(shown(&[one, two, stacked]), temp.path());
+        // A folder not named for its database is a chosen folder itself.
+        let own = folder(temp.path().join("rig-cache"), "db-e075b4ec");
+        assert_eq!(shown(&[own]), temp.path().join("rig-cache"));
+        // A relative cache folder stays as it was written.
+        assert_eq!(
+            root_of(Path::new("./cache/db-e075b4ec"), "db-e075b4ec"),
+            Path::new("./cache")
+        );
+        assert_eq!(
+            root_of(Path::new("db-e075b4ec"), "db-e075b4ec"),
+            Path::new("db-e075b4ec")
         );
     }
 
@@ -947,6 +1035,7 @@ mod tests {
         let folder = |kinds: Vec<StorageKind>| Folder {
             database: "Rig".into(),
             path: PathBuf::new(),
+            root: PathBuf::new(),
             kinds,
             context: None,
         };

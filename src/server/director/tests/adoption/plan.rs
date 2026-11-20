@@ -2,7 +2,7 @@ use super::rig_profile::bound_fixture;
 use super::*;
 
 #[tokio::test]
-async fn templates_list_every_profile_with_a_bandpass_and_plans_use_compare_and_set() {
+async fn templates_list_the_rigs_profile_with_a_bandpass_and_plans_use_compare_and_set() {
     let (f, rig) = bound_fixture().await;
     f.source
         .execute_batch(
@@ -10,8 +10,9 @@ async fn templates_list_every_profile_with_a_bandpass_and_plans_use_compare_and_
                 gain INTEGER, offset INTEGER, bin INTEGER, readoutmode INTEGER, defaultexposure REAL, guid TEXT);
              INSERT INTO exposuretemplate VALUES(1,'profile-a','Ha 300','Ha',100,30,1,-1,300.0,'6f1a1a1a-1111-4111-8111-111111111111');
              INSERT INTO exposuretemplate VALUES(2,'profile-a','Lum','L',-1,-1,1,NULL,120.0,NULL);
-             INSERT INTO exposuretemplate VALUES(3,'profile-b','O3 6.5nm','OIII 6.5nm',100,30,2,0,NULL,'6f1a1a1a-2222-4222-8222-222222222222');
-             INSERT INTO exposuretemplate VALUES(4,'profile-a','Blank','',0,0,1,0,60.0,NULL);",
+             INSERT INTO exposuretemplate VALUES(3,'profile-a','O3 6.5nm','OIII 6.5nm',100,30,2,0,NULL,'6f1a1a1a-2222-4222-8222-222222222222');
+             INSERT INTO exposuretemplate VALUES(4,'profile-a','Blank','',0,0,1,0,60.0,NULL);
+             INSERT INTO exposuretemplate VALUES(5,'profile-b','Ha 300','Ha',0,10,1,-1,60.0,NULL);",
         )
         .unwrap();
     let (status, listed) = call(
@@ -26,7 +27,10 @@ async fn templates_list_every_profile_with_a_bandpass_and_plans_use_compare_and_
     let data = &listed["data"];
     assert_eq!(data["rig"]["id"], rig.to_string());
     let templates = data["templates"].as_array().unwrap();
+    // profile-a owns most of the templates, so it is the rig's. profile-b's
+    // Ha 300, the same name with other settings, is left out and counted.
     assert_eq!(templates.len(), 3, "{templates:?}");
+    assert_eq!(data["other_profile_templates"], 1);
     let by_name = |name: &str| templates.iter().find(|t| t["name"] == name).unwrap();
     assert_eq!(
         by_name("Ha 300")["bandpass"],
@@ -40,7 +44,8 @@ async fn templates_list_every_profile_with_a_bandpass_and_plans_use_compare_and_
     assert_eq!(by_name("Lum")["gain"], Value::Null);
     assert_eq!(by_name("O3 6.5nm")["bandpass"]["id"], "oiii");
     assert_eq!(by_name("O3 6.5nm")["default_exposure"], 60.0);
-    assert_eq!(by_name("O3 6.5nm")["profile_id"], "profile-b");
+    assert!(templates.iter().all(|t| t["profile_id"] == "profile-a"));
+    assert_eq!(by_name("Ha 300")["default_exposure"], 300.0);
     assert_eq!(
         call(
             &f.app,
@@ -196,4 +201,42 @@ async fn a_template_with_unusable_moon_rules_is_named_and_left_out_alone() {
         .unwrap()
         .clone();
     assert_eq!(row["plan"]["objectives"], 2, "{row}");
+}
+
+#[test]
+fn a_rig_lists_its_own_profiles_templates_and_counts_the_rest() {
+    use crate::server::director::plan::rig_templates;
+    let waiting = psf_guard_director_meta::SYNC_PLACED_PROFILE;
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch(&format!(
+        "CREATE TABLE project(Id INTEGER PRIMARY KEY, profileId TEXT);
+         CREATE TABLE exposuretemplate(Id INTEGER PRIMARY KEY, profileId TEXT, name TEXT, filtername TEXT,
+             gain INTEGER, offset INTEGER, bin INTEGER, readoutmode INTEGER, defaultexposure REAL, guid TEXT);
+         INSERT INTO project VALUES (1, 'PlayerOne-Profile'), (2, 'PlayerOne-Profile'), (3, 'wd20');
+         INSERT INTO exposuretemplate VALUES
+             (1, 'playerone-profile', 'B', 'Blue', 0, -1, 1, -1, 30, NULL),
+             (2, 'wd20', 'B', 'Blue', -1, -1, 1, -1, 60, NULL),
+             (3, 'wd20', 'G', 'Green', -1, -1, 1, -1, 60, NULL),
+             (4, '{waiting}', 'Ha', 'Ha', -1, -1, 1, -1, 300, NULL),
+             (5, 'wd20', 'Blank', '', 0, 0, 1, 0, 60, NULL);"
+    ))
+    .unwrap();
+    // The profile most projects use, whatever its case; PSF Guard's waiting
+    // rows stay; WD20's two filtered templates are counted, its blank one not.
+    let (templates, others) = rig_templates(&conn, "no-plugin").unwrap();
+    let kept: Vec<(i64, f64)> = templates
+        .usable
+        .iter()
+        .map(|t| (t.id, t.default_exposure))
+        .collect();
+    assert_eq!(kept, [(1, 30.0), (4, 300.0)]);
+    assert_eq!(others, 2);
+
+    // Every project still on the waiting profile: no profile to go by, so
+    // every template, as before.
+    conn.execute("UPDATE project SET profileId = ?1", [waiting])
+        .unwrap();
+    let (templates, others) = rig_templates(&conn, "no-plugin").unwrap();
+    assert_eq!(templates.usable.len(), 4);
+    assert_eq!(others, 0);
 }
