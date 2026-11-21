@@ -1,5 +1,24 @@
 [
   {
+    "version": "0.14.2",
+    "deprecations": [],
+    "upgradeNotes": [],
+    "highlights": [
+      {
+        "title": "Noise model download works again",
+        "body": "Microsoft's ONNX Runtime downloads have been offline since about 18 November. Download both now gets the same ONNX Runtime 1.31.1 archive from PSF Guard's own GitHub release, checked against the same SHA-256."
+      },
+      {
+        "title": "Start a plan from nothing",
+        "body": "New plan is in the Library's toolbar and at the top of the header's project picker. Create plan opens the plan on Framing, ready for a target."
+      },
+      {
+        "title": "Add objective for a new plan",
+        "body": "A plan with no objectives shows an Add objective button on Rigs and Framing. A rig can join the plan once it has an objective."
+      }
+    ]
+  },
+  {
     "version": "0.14.1",
     "deprecations": [],
     "upgradeNotes": [],

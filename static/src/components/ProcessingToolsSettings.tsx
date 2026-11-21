@@ -169,7 +169,7 @@ export default function ProcessingToolsSettings({
             <small>
               {installed.runtime_path
                 ?? (seiza.runtime_download
-                  ? `For the Seiza noise model · Microsoft’s release ${seiza.runtime_download}, checked against its SHA-256`
+                  ? `For the Seiza noise model · Microsoft’s ONNX Runtime ${seiza.runtime_download}, checked against its SHA-256`
                   : 'PSF Guard has no download for this computer. Install ONNX Runtime 1.17 or later and set its path.')}
             </small>
           </div>

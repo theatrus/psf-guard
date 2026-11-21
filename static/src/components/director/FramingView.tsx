@@ -25,6 +25,7 @@ import { shapeCenter, shapeOverlap, sharedStrips, splitApart, type PanelShape, t
 import TargetSearch, { type TargetPick } from './TargetSearch';
 import SkyCanvas, { type SkyTileImage } from './SkyCanvas';
 import { useDebounced, useSurveyCutout } from './useSurveyCutout';
+import NeedsObjectiveNote from './NeedsObjectiveNote';
 import './FramingView.css';
 
 /** A value shown to the places that mean something; the state keeps every digit. */
@@ -166,7 +167,7 @@ const layoutIn = (current: FramingState, rig: string | null) => rig ? current.ri
 const withLayout = (current: FramingState, rig: string | null, layout: DirectorLayout): Partial<FramingState> => rig
   ? { rigFramings: current.rigFramings.map(own => own.rig_id === rig ? { ...own, layout } : own) } : { layout };
 
-function StartFraming({ canWrite, onStart }: { canWrite: boolean; onStart: (seed: FramingSeed) => void }) {
+function StartFraming({ canWrite, focusSearch, onStart }: { canWrite: boolean; focusSearch: boolean; onStart: (seed: FramingSeed) => void }) {
   const [name, setName] = useState('');
   const [ra, setRa] = useState('');
   const [dec, setDec] = useState('');
@@ -180,7 +181,7 @@ function StartFraming({ canWrite, onStart }: { canWrite: boolean; onStart: (seed
   if (!canWrite) return <p className="director-muted">This project has no framing yet.</p>;
   return <form className="framing-start" aria-label="Start framing" onSubmit={event => event.preventDefault()}>
     <p className="director-muted">No catalog target yet. Search for a name or enter coordinates.</p>
-    <TargetSearch label="Object name" ariaLabel="Object name to resolve" placeholder="IC 1805" buttonLabel="Look up name" hint="Online lookups go to CDS Sesame."
+    <TargetSearch label="Object name" ariaLabel="Object name to resolve" placeholder="IC 1805" buttonLabel="Look up name" hint="Online lookups go to CDS Sesame." focusOnMount={focusSearch}
       onPick={pick => onStart({ name: pick.name, center: pick.center, position_angle_degrees: 0 })} />
     <div className="framing-grid">
       <label>Name for coordinates<input aria-label="Name for typed coordinates" value={name} maxLength={128} placeholder="Target" onChange={event => setName(event.target.value)} /></label>
@@ -206,10 +207,15 @@ export interface FramingViewProps {
   onToggleRig?: (rigId: string, on: boolean) => boolean | void;
   /** Why a rig cannot join yet, such as a plan with no objectives. */
   joinBlocked?: string;
+  /** Given when the plan has no objectives: adds one, so rigs can join. */
+  onAddObjective?: () => void;
+  /** Focus the target search of a plan New plan just made: it has no
+   *  target yet, so this is Object name on the starter form. */
+  focusTargetSearch?: boolean;
 }
 
 /** Frame one project on the sky: target, angle, mosaic and rig footprints over a survey. */
-export default function FramingView({ projectId, seed, preferredRigIds = [], shootingRigIds, onToggleRig, joinBlocked }: FramingViewProps) {
+export default function FramingView({ projectId, seed, preferredRigIds = [], shootingRigIds, onToggleRig, joinBlocked, onAddObjective, focusTargetSearch = false }: FramingViewProps) {
   const { canWrite } = useAccess();
   const client = useQueryClient();
   const draftKey = ['directorFraming', projectId];
@@ -1340,7 +1346,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
   // A refetch that fails keeps the framing on screen, edits and all, under
   // a line that offers to try again; only a first load has nothing to show.
   if (draft.isError && !draft.data) return <p className="director-error" role="alert">{message(draft.error)} <button type="button" onClick={() => void draft.refetch()}>Retry</button></p>;
-  if (!state) return <StartFraming canWrite={canWrite} onStart={setStarted} />;
+  if (!state) return <StartFraming canWrite={canWrite} focusSearch={focusTargetSearch} onStart={setStarted} />;
   geometryRef.current = active?.geometry;
   const ownEditor = editing && (() => {
           const own = ownRigs.find(entry => entry.rigId === editing.rig_id);
@@ -1642,6 +1648,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
         <legend>Rigs</legend>
         {rigs.isError && <p className="director-error" role="alert">Rigs could not be loaded: {message(rigs.error)} <button type="button" onClick={() => void rigs.refetch()}>Retry</button></p>}
         {!rigs.isError && rigList.length === 0 && <p className="director-muted">{rigs.isPending ? 'Loading rigs...' : 'No rigs yet'}</p>}
+        {onAddObjective && rigList.length > 0 && <NeedsObjectiveNote onAdd={onAddObjective} />}
         {onToggleRig ? <>
           {/* On a page that keeps the plan: rigs that shoot it, then the rest. */}
           <h4 className="framing-rig-group">On</h4>

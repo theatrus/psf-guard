@@ -322,3 +322,12 @@ a.workspace-pill:hover { color: var(--color-text-primary); }
   .plugins-on-rig li { grid-template-columns: 1fr auto; }
   .plugins-on-rig li > :last-child { grid-column: 1 / -1; }
 }
+
+/* A plan with no objectives: why no rig can join, and the way out. */
+.plan-needs-objective {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin: 6px 0;
+}
