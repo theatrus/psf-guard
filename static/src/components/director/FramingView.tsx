@@ -166,7 +166,7 @@ const layoutIn = (current: FramingState, rig: string | null) => rig ? current.ri
 const withLayout = (current: FramingState, rig: string | null, layout: DirectorLayout): Partial<FramingState> => rig
   ? { rigFramings: current.rigFramings.map(own => own.rig_id === rig ? { ...own, layout } : own) } : { layout };
 
-function StartFraming({ canWrite, onStart }: { canWrite: boolean; onStart: (seed: FramingSeed) => void }) {
+function StartFraming({ canWrite, focusSearch, onStart }: { canWrite: boolean; focusSearch: boolean; onStart: (seed: FramingSeed) => void }) {
   const [name, setName] = useState('');
   const [ra, setRa] = useState('');
   const [dec, setDec] = useState('');
@@ -180,7 +180,7 @@ function StartFraming({ canWrite, onStart }: { canWrite: boolean; onStart: (seed
   if (!canWrite) return <p className="director-muted">This project has no framing yet.</p>;
   return <form className="framing-start" aria-label="Start framing" onSubmit={event => event.preventDefault()}>
     <p className="director-muted">No catalog target yet. Search for a name or enter coordinates.</p>
-    <TargetSearch label="Object name" ariaLabel="Object name to resolve" placeholder="IC 1805" buttonLabel="Look up name" hint="Online lookups go to CDS Sesame."
+    <TargetSearch label="Object name" ariaLabel="Object name to resolve" placeholder="IC 1805" buttonLabel="Look up name" hint="Online lookups go to CDS Sesame." focusOnMount={focusSearch}
       onPick={pick => onStart({ name: pick.name, center: pick.center, position_angle_degrees: 0 })} />
     <div className="framing-grid">
       <label>Name for coordinates<input aria-label="Name for typed coordinates" value={name} maxLength={128} placeholder="Target" onChange={event => setName(event.target.value)} /></label>
@@ -208,7 +208,8 @@ export interface FramingViewProps {
   joinBlocked?: string;
   /** Given when the plan has no objectives: adds one, so rigs can join. */
   onAddObjective?: () => void;
-  /** Focus Find a target once it appears, for a plan New plan just made. */
+  /** Focus the target search of a plan New plan just made: it has no
+   *  target yet, so this is Object name on the starter form. */
   focusTargetSearch?: boolean;
 }
 
@@ -1344,7 +1345,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
   // A refetch that fails keeps the framing on screen, edits and all, under
   // a line that offers to try again; only a first load has nothing to show.
   if (draft.isError && !draft.data) return <p className="director-error" role="alert">{message(draft.error)} <button type="button" onClick={() => void draft.refetch()}>Retry</button></p>;
-  if (!state) return <StartFraming canWrite={canWrite} onStart={setStarted} />;
+  if (!state) return <StartFraming canWrite={canWrite} focusSearch={focusTargetSearch} onStart={setStarted} />;
   geometryRef.current = active?.geometry;
   const ownEditor = editing && (() => {
           const own = ownRigs.find(entry => entry.rigId === editing.rig_id);
@@ -1624,7 +1625,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
       <fieldset>
         <legend>Target</legend>
         {layoutLocked && <p className="director-muted framing-mosaic-note" data-testid="framing-held">{heldNote}</p>}
-        <TargetSearch label="Find a target" ariaLabel="Find a target" placeholder="M 31, NGC 7000, Heart Nebula" buttonLabel="Go" disabled={!canWrite || centerHeld} focusOnMount={focusTargetSearch}
+        <TargetSearch label="Find a target" ariaLabel="Find a target" placeholder="M 31, NGC 7000, Heart Nebula" buttonLabel="Go" disabled={!canWrite || centerHeld}
           hint="Online lookups go to CDS Sesame." onPick={pickTarget} />
         <label>Name<input aria-label="Target name" value={state.targetName} maxLength={256} onChange={event => update({ targetName: event.target.value })} /></label>
         <div className="framing-grid">

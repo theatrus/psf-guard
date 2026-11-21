@@ -402,15 +402,14 @@ describe('Framing view', () => {
     expect(screen.queryByRole('button', { name: 'Back to saved framing' })).not.toBeInTheDocument();
   });
 
-  it('focuses Find a target for a plan just made, and only then', async () => {
+  it('focuses the object name search for a plan just made, and only then', async () => {
     fixture();
-    const first = mount(true, true, [], true);
-    await screen.findByLabelText('Target name');
-    await waitFor(() => expect(screen.getByLabelText('Find a target')).toHaveFocus());
+    const first = mount(true, false, [], true);
+    await waitFor(() => expect(screen.getByLabelText('Object name to resolve')).toHaveFocus());
     first.unmount();
-    mount();
-    await screen.findByLabelText('Target name');
-    expect(screen.getByLabelText('Find a target')).not.toHaveFocus();
+    mount(true, false);
+    const box = await screen.findByLabelText('Object name to resolve');
+    expect(box).not.toHaveFocus();
   });
 
   it('offers the local catalog names as they are typed and picks one without going online', async () => {

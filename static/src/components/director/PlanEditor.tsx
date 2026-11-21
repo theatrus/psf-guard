@@ -10,7 +10,7 @@ import { useAccess } from '../../auth/access';
 import type { DirectorContribution, DirectorFrameCounts, DirectorGoal, DirectorObjective, DirectorPlanDraft, DirectorPlanView, DirectorRigProfileSummary, DirectorTemplate } from '../../api/directorTypes';
 import { layoutOf } from './framingModel';
 import { hasFilter } from './rigProfileForm';
-import { PURPOSES, bandpassKind, bandpassOptions, bindOwnTemplates, choiceFrom, convertGoal, coverageGaps, goalFor, speedAdjustedHours, defaultExposure, emptyPlan, formatHours, framesFor, goalExposure, hoursFor, libraryChoice, libraryFor, newContribution, newLibraryContribution, newObjective, objectiveName, onePartEach, ownTwin, panelIds, partStatus, panelsByRig, planProblem, rigPanels, rigStatus, rigTotals, samePlan, shootingRigs, templateValue, templatesFor } from './planModel';
+import { PURPOSES, bandpassKind, nextObjectiveBand, bandpassOptions, bindOwnTemplates, choiceFrom, convertGoal, coverageGaps, goalFor, speedAdjustedHours, defaultExposure, emptyPlan, formatHours, framesFor, goalExposure, hoursFor, libraryChoice, libraryFor, newContribution, newLibraryContribution, newObjective, objectiveName, onePartEach, ownTwin, panelIds, partStatus, panelsByRig, planProblem, rigPanels, rigStatus, rigTotals, samePlan, shootingRigs, templateValue, templatesFor } from './planModel';
 import './PlanEditor.css';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Plan request failed';
@@ -165,8 +165,8 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
 
   const addObjective = () => update(current => {
     const used = new Set(current.objectives.map(o => o.bandpass_id));
-    const next = options.find(o => !used.has(o.id)) ?? options[0];
-    return { ...current, objectives: [...current.objectives, newObjective(next?.id ?? 'luminance')] };
+    const covered = new Set([...Object.values(templatesByRig).flat(), ...library].map(t => t.bandpass.id));
+    return { ...current, objectives: [...current.objectives, newObjective(nextObjectiveBand(options, used, covered) ?? 'luminance')] };
   });
   const changeObjective = (id: string, patch: Partial<DirectorObjective>) => update(current => {
     const objectives = current.objectives.map(o => o.id === id ? { ...o, ...patch } : o);

@@ -712,11 +712,14 @@ A plan needs no images, database or Target Scheduler project to start.
 1. Click **New plan** in the Library's toolbar, or choose **New plan...** at
    the top of the header's project picker.
 2. Enter a **Plan name** and click **Create plan**. PSF Guard opens the plan
-   on **Framing** with **Find a target** ready for a name, such as M 31.
+   on **Framing** with **Object name** ready for a target name, such as
+   M 31. You can enter coordinates there instead.
 3. On **Exposures**, click **Add objective** and choose its bandpass and goal.
    A rig joins a plan by shooting its objectives, so **Add a rig** and the
    rig switches on **Framing** stay disabled until the plan has one. Both
    places offer **Add objective**, which adds one and opens **Exposures**.
+   It starts on a band that some rig, or the template library, has a
+   template for.
 4. On **Rigs**, choose a rig under **Add a rig**. Activation creates the
    project in that rig's database.
 
