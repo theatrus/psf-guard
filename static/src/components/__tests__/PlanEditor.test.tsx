@@ -140,6 +140,26 @@ describe('Plan editor', () => {
     expect(screen.getByLabelText('RedCat 61 template for H-alpha')).toHaveValue('lib:11111111-1111-4111-8111-111111111111');
   });
 
+  it('adds an objective clicked before the templates load once they have, on a band a rig can shoot', async () => {
+    fixture(null, null, []);
+    let release = () => {};
+    const loaded = new Promise<void>(resolve => { release = resolve; });
+    server.use(http.get('/api/director/v1/catalogs/redcat/templates', async () => {
+      await loaded;
+      return HttpResponse.json(ok({ catalog_slug: 'redcat', catalog_name: 'RedCat 61', rig: redcat.rig, templates: [template(1, 'Ha 300', 'Ha', 'h_alpha', 'narrowband', 300)] }));
+    }), http.get('/api/director/v1/catalogs/c925/templates', async () => {
+      await loaded;
+      return HttpResponse.json(ok({ catalog_slug: 'c925', catalog_name: 'C925 data', rig: c925.rig, templates: [] }));
+    }));
+    mount();
+    fireEvent.click(await screen.findByRole('button', { name: 'Add objective' }));
+    // Neither rig has a Luminance template, so the band waits for the templates.
+    expect(screen.queryByLabelText('Objective bandpass')).not.toBeInTheDocument();
+    release();
+    expect(await screen.findByLabelText('Objective bandpass')).toHaveValue('h_alpha');
+    expect(screen.getAllByLabelText('Objective bandpass')).toHaveLength(1);
+  });
+
   it("warns beside a template whose filter is not on the rig's filter list", async () => {
     fixture();
     const typed = { reported: false, filters: ['L', 'R', 'G', 'B'].map(name => ({ name, bandpass: name })) };

@@ -30,6 +30,13 @@ export function bandpassOptions(templatesByRig: Record<string, DirectorTemplate[
   return [...options.values()];
 }
 
+/** The band a new objective starts on: the first the plan has no objective
+ *  for that a rig's template or the library covers, so a rig can join with
+ *  it; else the first unused, else the first. */
+export function nextObjectiveBand(options: Array<{ id: string }>, used: ReadonlySet<string>, covered: ReadonlySet<string>): string | undefined {
+  return (options.find(o => !used.has(o.id) && covered.has(o.id)) ?? options.find(o => !used.has(o.id)) ?? options[0])?.id;
+}
+
 export function bandpassKind(id: string, templatesByRig: Record<string, DirectorTemplate[]>, library: DirectorLibraryTemplate[] = []): 'broadband' | 'narrowband' {
   return bandpassOptions(templatesByRig, library).find(b => b.id === id)?.kind ?? 'broadband';
 }

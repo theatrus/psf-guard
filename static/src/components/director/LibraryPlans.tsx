@@ -6,11 +6,12 @@ import type { DirectorIdentity, DirectorPlanLink, DirectorPlanRow } from '../../
 import { useAccess } from '../../auth/access';
 import { usePlans } from '../header/useCurrentPlan';
 import type { LibraryShow } from '../libraryShow';
-import { identityId } from './identityId';
 import { matchesSearch } from './planFilters';
 import { linksInScope, shownWaitingPlans, waitingPlans } from './waitingPlans';
 import PlanRow from './PlanRow';
 import PlanDeleteDialog from './PlanDeleteDialog';
+import NewPlanDialog from './NewPlanDialog';
+import { planNameProblem } from './planName';
 import { coordinatorResult } from './collaborationLeaveText';
 import { listNames } from './listNames';
 import { CLOSED_PROJECT_STATE, INACTIVE_PROJECT_STATE } from '../../utils/projectNavigation';
@@ -24,7 +25,7 @@ const message = (error: unknown) => error instanceof Error ? error.message : 'Di
 const closedLinks = (row: DirectorPlanRow, dbFilter: string | null): DirectorPlanLink[] =>
   linksInScope(row, dbFilter).filter(link => link.source_row_id !== null && link.source_state === CLOSED_PROJECT_STATE);
 
-interface Edit { record: DirectorIdentity; creating: boolean }
+interface Edit { record: DirectorIdentity }
 
 /** Planning's part of the Library: plans with nothing captured yet, with
  *  the way to start one and to rename one. The Library lists projects that
@@ -37,17 +38,17 @@ export default function LibraryPlans({ search, show, listed, dbFilter = null, in
   const client = useQueryClient();
   const plans = usePlans();
   const [edit, setEdit] = useState<Edit | null>(null);
+  const [creating, setCreating] = useState(false);
   const [name, setName] = useState('');
   const [notice, setNotice] = useState('');
   const [validation, setValidation] = useState('');
   const submitting = useRef(false);
   const save = useMutation({
     retry: false,
-    mutationFn: async ({ record, creating, name }: Edit & { name: string }) => creating
-      ? apiClient.createDirectorIdentity('projects', { id: record.id, name })
-      : apiClient.renameDirectorIdentity('projects', record.id, { expected_revision: record.revision, name }),
-    onSuccess: (record, variables) => {
-      setNotice(`${variables.creating ? 'Created' : 'Renamed'} ${record.name}.`);
+    mutationFn: async ({ record, name }: Edit & { name: string }) =>
+      apiClient.renameDirectorIdentity('projects', record.id, { expected_revision: record.revision, name }),
+    onSuccess: (record) => {
+      setNotice(`Renamed ${record.name}.`);
       setEdit(null);
       void client.invalidateQueries({ queryKey: ['directorPlans'] });
     },
@@ -96,17 +97,14 @@ export default function LibraryPlans({ search, show, listed, dbFilter = null, in
     event.preventDefault();
     if (!edit || !canWrite || submitting.current) return;
     const trimmed = name.trim();
-    const hasControl = [...trimmed].some(char => char.charCodeAt(0) < 32 || (char.charCodeAt(0) >= 127 && char.charCodeAt(0) <= 159));
-    if (!trimmed || new TextEncoder().encode(trimmed).length > 512 || hasControl) {
-      setValidation('Enter a name of at most 512 UTF-8 bytes, without control characters.');
-      return;
-    }
-    setValidation('');
+    const problem = planNameProblem(trimmed);
+    setValidation(problem);
+    if (problem) return;
     submitting.current = true;
     save.mutate({ ...edit, name: trimmed });
   };
   const form = edit && canWrite && (
-    <form className="director-edit" onSubmit={submit} aria-label={`${edit.creating ? 'New' : 'Rename'} plan`}>
+    <form className="director-edit" onSubmit={submit} aria-label="Rename plan">
       <label htmlFor="director-name">Plan name</label>
       <div className="director-edit-controls">
         <input id="director-name" value={name} onChange={event => setName(event.target.value)} required maxLength={512} autoFocus disabled={save.isPending} />
@@ -123,24 +121,24 @@ export default function LibraryPlans({ search, show, listed, dbFilter = null, in
   // Nothing to show and nothing to do: stay out of the Library.
   if (!canWrite && shown.length === 0 && !plans.error && !plans.query.data?.warnings.length) return null;
   const item = (row: DirectorPlanRow) => <li key={row.project.id} className="director-plan">
-    <PlanRow row={row} href={plans.hrefFor(row)} canWrite={canWrite} editing={!!edit} onRename={() => begin({ creating: false, record: row.project })}
+    <PlanRow row={row} href={plans.hrefFor(row)} canWrite={canWrite} editing={!!edit} onRename={() => begin({ record: row.project })}
       reopenOn={closedLinks(row, dbFilter).map(link => link.catalog_name)} reopenDisabled={reopen.isPending}
       onReopen={() => { setNotice(''); reopen.mutate(row); }} reopening={reopen.isPending && reopen.variables?.project.id === row.project.id}
       onDelete={deleteAllowed ? () => { setNotice(''); setDeleting(row); } : undefined} />
-    {edit?.record.id === row.project.id && !edit.creating && form}
+    {edit?.record.id === row.project.id && form}
   </li>;
   return <section id="library-plans" className="director-page director-embedded library-plans" aria-label="Plans with nothing captured yet">
     <div className="director-toolbar">
       <h3>Plans with nothing captured yet</h3>
       <div className="director-actions">
         <button type="button" title="Refresh plans" aria-label="Refresh plans" disabled={plans.query.isFetching || !!edit} onClick={() => void plans.query.refetch()}><RefreshCw size={16} /></button>
-        {canWrite && <button type="button" disabled={!!edit} onClick={() => begin({ creating: true, record: { id: identityId(), name: '', revision: 1 } })}><Plus size={16} />New plan</button>}
+        {canWrite && <button type="button" disabled={!!edit} onClick={() => setCreating(true)}><Plus size={16} />New plan</button>}
       </div>
     </div>
     {plans.query.data?.warnings.map(warning => <p key={warning} className="director-error" role="alert">{warning}</p>)}
     {incomplete && <p className="director-muted">Some databases could not be read, so their plans are left out here.</p>}
     {notice && <p ref={noticeRef} tabIndex={-1} className="library-plans-notice" role="status">{notice}</p>}
-    {edit?.creating && form}
+    {creating && <NewPlanDialog onClose={() => setCreating(false)} />}
     {plans.loading && <p role="status">Loading plans...</p>}
     {plans.error && <p className="director-error" role="alert">{message(plans.query.error)}</p>}
     {plans.query.isSuccess && shown.length === 0 && <p className="director-muted">{waiting.length === 0 ? 'Every plan has frames.' : 'No plan matches.'}</p>}

@@ -8,12 +8,13 @@ import ActivateButton, { LibraryActivationHost, NeedsActivationPill } from './di
 import { filtersOf, recallLibraryFilters, rememberLibraryFilters } from './libraryFilterMemory';
 import { usePlans } from './header/useCurrentPlan';
 import LibraryPlans from './director/LibraryPlans';
+import NewPlanDialog from './director/NewPlanDialog';
 import { shownWaitingPlans, waitingPlans } from './director/waitingPlans';
 import { stage, stageShort } from './director/planCardModel';
 import type { DirectorPlanRow } from '../api/directorTypes';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Merge, Search } from 'lucide-react';
+import { Merge, Plus, Search } from 'lucide-react';
 import PillSelect from './toolbar/PillSelect';
 import { apiClient } from '../api/client';
 import type {
@@ -210,6 +211,7 @@ function LibraryPage() {
       name: project.display_name,
     });
   const { canWrite } = useAccess();
+  const [creatingPlan, setCreatingPlan] = useState(false);
   // Moving targets and exposures edits catalog rows: an editor's work.
   const organizeAllowed = canWrite;
   // Deleting a project changes a database the server was pointed at: it
@@ -1032,6 +1034,11 @@ function LibraryPage() {
                   <option value="images">Most images</option>
                 </PillSelect>
                 <DensityToggle density={density} onChange={chooseDensity} />
+                {plans.enabled && canWrite && (
+                  <button type="button" className="toolbar-button library-new-plan" onClick={() => setCreatingPlan(true)}>
+                    <Plus size={14} aria-hidden="true" />New plan
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -1813,6 +1820,7 @@ function LibraryPage() {
 
           <LibraryPlans search={projectSearch} show={show} listed={projectKeys} dbFilter={dbFilter} incomplete={projectsIncomplete}
             onShowNoRig={() => updateParams(headerDatabase ? { dbfilter: null, db: null, show: 'unlinked' } : { dbfilter: null, show: 'unlinked' })} />
+          {creatingPlan && <NewPlanDialog onClose={() => setCreatingPlan(false)} />}
 
           {/* Outside the archive: reopening its last project removes it. */}
           {stateNotice?.inArchive && <p ref={archiveNotice} tabIndex={-1} className="library-narrowed" role="status">{stateNotice.text}</p>}

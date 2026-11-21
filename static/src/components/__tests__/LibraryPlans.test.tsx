@@ -1,7 +1,7 @@
 import { type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it, vi } from 'vitest';
 import { server } from '../../test/msw-server';
@@ -17,18 +17,26 @@ const enabled = { protocol_version: 1, enabled: true, instance_id: record.id, da
 const row = (project = record, extra: Partial<DirectorPlanRow> = {}): DirectorPlanRow => ({ project, links: [], progress: null, framing: null, plan: null, activation: null, ...extra });
 const list = (rows: DirectorPlanRow[], warnings: string[] = []) => ({ rows, warnings });
 
+/** Where New plan went, and the navigation state it sent. */
+function OpenedPlan() {
+  const location = useLocation();
+  return <p data-testid="opened">{`${location.pathname}${location.search}`} {JSON.stringify(location.state)}</p>;
+}
+
 function mount(canWrite = true, props: { search?: string; show?: LibraryShow; listed?: Set<string>; dbFilter?: string } = {}, status: unknown = enabled) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   function Wrapper({ children }: { children: ReactNode }) {
     const access = useAccess();
-    return <QueryClientProvider client={client}><AccessContext.Provider value={{ ...access, canWrite }}><MemoryRouter initialEntries={['/?db=c925&project=3']}>{children}</MemoryRouter></AccessContext.Provider></QueryClientProvider>;
+    return <QueryClientProvider client={client}><AccessContext.Provider value={{ ...access, canWrite }}><MemoryRouter initialEntries={['/?db=c925&project=3']}>
+      <Routes><Route path="/" element={children} /><Route path="/plan" element={<OpenedPlan />} /></Routes>
+    </MemoryRouter></AccessContext.Provider></QueryClientProvider>;
   }
   server.use(http.get('/api/director/v1/status', () => HttpResponse.json(ok(status))));
   return render(<LibraryPlans search={props.search ?? ''} show={props.show ?? 'all'} listed={props.listed ?? new Set()} dbFilter={props.dbFilter} />, { wrapper: Wrapper });
 }
 
 describe("The Library's plans with nothing captured yet", () => {
-  it('creates with the same UUID after an ambiguous failure, and trims names', async () => {
+  it('creates with the same UUID after an ambiguous failure, trims names, and opens the plan', async () => {
     const requests: { id: string; name: string }[] = [];
     let committed = false;
     server.use(
@@ -41,16 +49,40 @@ describe("The Library's plans with nothing captured yet", () => {
     );
     mount();
     fireEvent.click(await screen.findByRole('button', { name: 'New plan' }));
+    const dialog = await screen.findByRole('dialog', { name: 'New plan' });
+    await waitFor(() => expect(screen.getByLabelText('Plan name')).toHaveFocus());
     fireEvent.change(screen.getByLabelText('Plan name'), { target: { value: '  Sky survey  ' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('Network Error');
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    expect(await screen.findByText('Created Sky survey.')).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create plan' }));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Network Error');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create plan' }));
+    expect(await screen.findByTestId('opened')).toHaveTextContent(`/plan?db=c925&project=3&plan=${requests[0].id} {"newPlan":true}`);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(requests).toHaveLength(2);
     expect(requests[0]).toEqual(requests[1]);
     expect(requests[0].name).toBe('Sky survey');
     expect(requests[0].id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
-    expect(await screen.findByRole('link', { name: 'Open Sky survey' })).toHaveAttribute('href', `/plan?db=c925&project=3&plan=${requests[0].id}`);
+  });
+
+  it('gives a renamed retry a new UUID, since the server refuses an id under another name', async () => {
+    const requests: { id: string; name: string }[] = [];
+    server.use(
+      http.get('/api/director/v1/plans', () => HttpResponse.json(ok(list(requests.length > 1 ? [row({ ...record, ...requests[1] })] : [])))),
+      http.post('/api/director/v1/projects', async ({ request }) => {
+        requests.push(await request.json() as { id: string; name: string });
+        return requests.length === 1 ? HttpResponse.error() : HttpResponse.json(ok({ ...requests[1], revision: 1 }));
+      }),
+    );
+    mount();
+    fireEvent.click(await screen.findByRole('button', { name: 'New plan' }));
+    const dialog = await screen.findByRole('dialog', { name: 'New plan' });
+    fireEvent.change(screen.getByLabelText('Plan name'), { target: { value: 'Sky survey' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create plan' }));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Network Error');
+    fireEvent.change(screen.getByLabelText('Plan name'), { target: { value: 'Heart survey' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create plan' }));
+    expect(await screen.findByTestId('opened')).toHaveTextContent(`plan=${requests[1].id} `);
+    expect(requests.map(request => request.name)).toEqual(['Sky survey', 'Heart survey']);
+    expect(requests[1].id).not.toBe(requests[0].id);
   });
 
   it('keeps a stale rename draft until canceled and reloads the current revision', async () => {
@@ -89,7 +121,7 @@ describe("The Library's plans with nothing captured yet", () => {
     mount();
     fireEvent.click(await screen.findByRole('button', { name: 'New plan' }));
     fireEvent.change(screen.getByLabelText('Plan name'), { target: { value: 'é'.repeat(300) } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create plan' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('512 UTF-8 bytes');
     expect(create).not.toHaveBeenCalled();
   });
