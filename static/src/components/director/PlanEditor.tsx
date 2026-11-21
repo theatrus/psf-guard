@@ -163,11 +163,23 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
   const update = (change: (current: DirectorPlanDraft) => DirectorPlanDraft) => setPlan(current => current ? change(current) : current);
   const number = (value: string, fallback: number) => { const parsed = Number(value); return Number.isFinite(parsed) ? parsed : fallback; };
 
-  const addObjective = () => update(current => {
+  const addObjectiveNow = () => update(current => {
     const used = new Set(current.objectives.map(o => o.bandpass_id));
     const covered = new Set([...Object.values(templatesByRig).flat(), ...library].map(t => t.bandpass.id));
     return { ...current, objectives: [...current.objectives, newObjective(nextObjectiveBand(options, used, covered) ?? 'luminance')] };
   });
+  // The band a new objective starts on depends on the rigs' templates, so a
+  // click before they load adds the objective once they have.
+  const templatesLoading = templateQueries.some(query => query.isPending) || libraryQuery.isPending;
+  const [objectiveWaiting, setObjectiveWaiting] = useState(false);
+  const addObjective = () => { if (templatesLoading) setObjectiveWaiting(true); else addObjectiveNow(); };
+  const addWaitingObjective = useRef(addObjectiveNow);
+  addWaitingObjective.current = addObjectiveNow;
+  useEffect(() => {
+    if (!objectiveWaiting || templatesLoading) return;
+    setObjectiveWaiting(false);
+    addWaitingObjective.current();
+  }, [objectiveWaiting, templatesLoading]);
   const changeObjective = (id: string, patch: Partial<DirectorObjective>) => update(current => {
     const objectives = current.objectives.map(o => o.id === id ? { ...o, ...patch } : o);
     // A new bandpass invalidates templates picked for the old one.

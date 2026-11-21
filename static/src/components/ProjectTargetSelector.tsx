@@ -332,7 +332,7 @@ export default function ProjectTargetSelector() {
                 <button
                   type="button"
                   className="selector-option selector-new-plan"
-                  onClick={() => { setPickerOpen(false); setSearch(''); setCreatingPlan(true); }}
+                  onClick={() => { setPickerOpen(false); setSearch(''); triggerRef.current?.focus(); setCreatingPlan(true); }}
                 >
                   <span>New plan...</span>
                   <small>Name it, then choose a target</small>

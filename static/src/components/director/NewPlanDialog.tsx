@@ -6,18 +6,19 @@ import { apiClient } from '../../api/client';
 import Dialog from '../Dialog';
 import { identityId } from './identityId';
 import { planHref } from './planAddress';
-import { FIND_TARGET_STATE, planNameProblem } from './planName';
+import { NEW_PLAN_STATE, planNameProblem } from './planName';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Director request failed';
 
 /** Start a plan from nothing: give it a name, and PlanPage opens it on
- *  Framing. The plan's id is fixed when the dialog opens, so trying again
- *  after a failed answer cannot make a second plan. */
+ *  Framing. Trying again under the same name reuses the plan's id, so a
+ *  create whose answer was lost cannot make a second plan. A new name gets
+ *  a new id, since the server refuses an id it holds under another name. */
 export default function NewPlanDialog({ onClose }: { onClose: () => void }) {
   const client = useQueryClient();
   const navigate = useNavigate();
   const [params] = useSearchParams();
-  const [id] = useState(identityId);
+  const attempt = useRef<{ id: string; name: string } | null>(null);
   const [name, setName] = useState('');
   const [validation, setValidation] = useState('');
   const input = useRef<HTMLInputElement>(null);
@@ -25,12 +26,17 @@ export default function NewPlanDialog({ onClose }: { onClose: () => void }) {
   useEffect(() => { const handle = setTimeout(() => input.current?.focus(), 0); return () => clearTimeout(handle); }, []);
   const create = useMutation({
     retry: false,
-    mutationFn: (trimmed: string) => apiClient.createDirectorIdentity('projects', { id, name: trimmed }),
-    onSuccess: async () => {
+    mutationFn: async (trimmed: string) => {
+      const id = attempt.current?.name === trimmed ? attempt.current.id : identityId();
+      attempt.current = { id, name: trimmed };
+      await apiClient.createDirectorIdentity('projects', { id, name: trimmed });
+      return id;
+    },
+    onSuccess: async id => {
       // The plan page finds the plan in this list, so it must hold it first.
       await client.invalidateQueries({ queryKey: ['directorPlans'] });
       onClose();
-      navigate(planHref(id, params), { state: FIND_TARGET_STATE });
+      navigate(planHref(id, params), { state: NEW_PLAN_STATE });
     },
   });
   const busy = create.isPending;

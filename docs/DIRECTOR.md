@@ -716,10 +716,10 @@ A plan needs no images, database or Target Scheduler project to start.
    M 31. You can enter coordinates there instead.
 3. On **Exposures**, click **Add objective** and choose its bandpass and goal.
    A rig joins a plan by shooting its objectives, so **Add a rig** and the
-   rig switches on **Framing** stay disabled until the plan has one. Both
-   places offer **Add objective**, which adds one and opens **Exposures**.
-   It starts on a band that some rig, or the template library, has a
-   template for.
+   rig switches on **Framing** stay disabled until the plan has one. **Rigs**
+   and **Framing** show an **Add objective** button that adds an objective
+   and opens **Exposures**. The objective starts on a band that some rig,
+   or the template library, has a template for.
 4. On **Rigs**, choose a rig under **Add a rig**. Activation creates the
    project in that rig's database.
 

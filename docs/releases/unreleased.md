@@ -6,13 +6,14 @@
 
 ## Changes
 
-- **New plan** now sits in the Library's toolbar and at the top of the
-  header's project picker, so you can start a plan with no images or
-  database. **Create plan** opens the plan on **Framing** with **Object
-  name** ready for the target. Before, **New plan** was at the bottom of the Library, and
-  saving left you in the list.
-- A new plan offers **Add objective** beside its rigs. A rig joins a plan by
-  shooting its objectives, so **Add a rig** and the rig switches on
-  **Framing** stay disabled until the plan has one; before, only a tooltip
-  and a grey line explained why. The new objective starts on a band that a
-  rig or the template library has a template for, so a rig can join.
+- You can start a plan with no images or database from **New plan** in the
+  Library's toolbar or **New plan...** at the top of the header's project
+  picker. **Create plan** opens the plan on **Framing** with **Object name**
+  ready for the target. Before, **New plan** was only at the bottom of the
+  Library, and saving left you in the list.
+- **Rigs** and **Framing** show an **Add objective** button for a plan with
+  no objectives. A rig joins a plan by shooting its objectives, so **Add a
+  rig** and the rig switches on **Framing** stay disabled until the plan
+  has one; before, only a tooltip and a grey line explained why. The new
+  objective starts on a band that a rig or the template library has a
+  template for, so a rig can join.

@@ -10,6 +10,7 @@ import type { DirectorPlanLink, DirectorPlanRow } from '../../api/directorTypes'
 import type { PlanRigControls, RigChange } from './PlanEditor';
 import { useActivationState } from './activationState';
 import { retryWhenBusy } from './retry';
+import NeedsObjectiveNote from './NeedsObjectiveNote';
 import './PlanRigs.css';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Director request failed';
@@ -163,8 +164,7 @@ export default function PlanRigs({ row, rows, joined, objectives, ready, control
           </optgroup>}
         </select></label>
       {waitTitle && fresh.length > 0 && (onAddObjective
-        ? <p className="plan-needs-objective" role="note">A rig joins a plan by shooting its objectives, and this plan has none yet.{' '}
-            <button type="button" onClick={onAddObjective}><Plus size={16} />Add objective</button></p>
+        ? <NeedsObjectiveNote onAdd={onAddObjective} />
         : <p className="director-muted">{ready ? 'Add an objective first' : 'Plan still loading'}</p>)}
       {chosen && <p className="director-muted" role="note">
         {chosen.plan.links.length > 1 ? `Merge “${chosen.plan.project.name}” and its ${chosen.plan.links.length} databases into this plan?` : `Merge “${chosen.plan.project.name}” into this plan?`}

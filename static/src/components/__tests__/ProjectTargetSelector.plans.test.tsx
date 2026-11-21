@@ -69,6 +69,8 @@ describe('plans in the project picker', () => {
     expect(within(dialog).getByLabelText('Plan name')).toBeInTheDocument();
     await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
     expect(screen.queryByRole('dialog', { name: 'New plan' })).not.toBeInTheDocument();
+    // Focus goes back to the picker's button, not to the top of the page.
+    expect(document.querySelector('#scope-select')).toHaveFocus();
   });
   it('marks the plan whose workspace is open as current', async () => {
     server.use(http.get('/api/databases', () => ok([])));

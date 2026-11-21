@@ -17,7 +17,7 @@ const enabled = { protocol_version: 1, enabled: true, instance_id: record.id, da
 const row = (project = record, extra: Partial<DirectorPlanRow> = {}): DirectorPlanRow => ({ project, links: [], progress: null, framing: null, plan: null, activation: null, ...extra });
 const list = (rows: DirectorPlanRow[], warnings: string[] = []) => ({ rows, warnings });
 
-/** Where New plan went, and whether it asked for Find a target. */
+/** Where New plan went, and the navigation state it sent. */
 function OpenedPlan() {
   const location = useLocation();
   return <p data-testid="opened">{`${location.pathname}${location.search}`} {JSON.stringify(location.state)}</p>;
@@ -55,12 +55,34 @@ describe("The Library's plans with nothing captured yet", () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Create plan' }));
     expect(await within(dialog).findByRole('alert')).toHaveTextContent('Network Error');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Create plan' }));
-    expect(await screen.findByTestId('opened')).toHaveTextContent(`/plan?db=c925&project=3&plan=${requests[0].id} {"findTarget":true}`);
+    expect(await screen.findByTestId('opened')).toHaveTextContent(`/plan?db=c925&project=3&plan=${requests[0].id} {"newPlan":true}`);
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(requests).toHaveLength(2);
     expect(requests[0]).toEqual(requests[1]);
     expect(requests[0].name).toBe('Sky survey');
     expect(requests[0].id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  });
+
+  it('gives a renamed retry a new UUID, since the server refuses an id under another name', async () => {
+    const requests: { id: string; name: string }[] = [];
+    server.use(
+      http.get('/api/director/v1/plans', () => HttpResponse.json(ok(list(requests.length > 1 ? [row({ ...record, ...requests[1] })] : [])))),
+      http.post('/api/director/v1/projects', async ({ request }) => {
+        requests.push(await request.json() as { id: string; name: string });
+        return requests.length === 1 ? HttpResponse.error() : HttpResponse.json(ok({ ...requests[1], revision: 1 }));
+      }),
+    );
+    mount();
+    fireEvent.click(await screen.findByRole('button', { name: 'New plan' }));
+    const dialog = await screen.findByRole('dialog', { name: 'New plan' });
+    fireEvent.change(screen.getByLabelText('Plan name'), { target: { value: 'Sky survey' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create plan' }));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Network Error');
+    fireEvent.change(screen.getByLabelText('Plan name'), { target: { value: 'Heart survey' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create plan' }));
+    expect(await screen.findByTestId('opened')).toHaveTextContent(`plan=${requests[1].id} `);
+    expect(requests.map(request => request.name)).toEqual(['Sky survey', 'Heart survey']);
+    expect(requests[1].id).not.toBe(requests[0].id);
   });
 
   it('keeps a stale rename draft until canceled and reloads the current revision', async () => {

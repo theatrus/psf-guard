@@ -8,8 +8,8 @@ export function planNameProblem(trimmed: string): string {
     : '';
 }
 
-/** The plan page reads this from the navigation state and focuses Find a
- *  target, the first thing a plan with no target needs. */
-export const FIND_TARGET_STATE = { findTarget: true } as const;
-export const wantsFindTarget = (state: unknown) =>
-  typeof state === 'object' && state !== null && (state as { findTarget?: unknown }).findTarget === true;
+/** New plan opens the plan with this navigation state. The plan page then
+ *  focuses Object name, the search for the plan's first target. */
+export const NEW_PLAN_STATE = { newPlan: true } as const;
+export const isNewPlan = (state: unknown) =>
+  typeof state === 'object' && state !== null && (state as { newPlan?: unknown }).newPlan === true;

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
-import { Check, Crosshair, Plus, Eye, Globe, Grid3x3, Images, Layers, LocateFixed, Magnet, Move, Orbit, RefreshCw, RotateCw, Sparkles, SquareDashedMousePointer, Sun, Telescope, Undo2 } from 'lucide-react';
+import { Check, Crosshair, Eye, Globe, Grid3x3, Images, Layers, LocateFixed, Magnet, Move, Orbit, RefreshCw, RotateCw, Sparkles, SquareDashedMousePointer, Sun, Telescope, Undo2 } from 'lucide-react';
 import NumberInput from '../NumberInput';
 import { useDraftSection } from './pageDraftsState';
 import { describeFramingChanges } from './draftChanges';
@@ -25,6 +25,7 @@ import { shapeCenter, shapeOverlap, sharedStrips, splitApart, type PanelShape, t
 import TargetSearch, { type TargetPick } from './TargetSearch';
 import SkyCanvas, { type SkyTileImage } from './SkyCanvas';
 import { useDebounced, useSurveyCutout } from './useSurveyCutout';
+import NeedsObjectiveNote from './NeedsObjectiveNote';
 import './FramingView.css';
 
 /** A value shown to the places that mean something; the state keeps every digit. */
@@ -1647,10 +1648,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
         <legend>Rigs</legend>
         {rigs.isError && <p className="director-error" role="alert">Rigs could not be loaded: {message(rigs.error)} <button type="button" onClick={() => void rigs.refetch()}>Retry</button></p>}
         {!rigs.isError && rigList.length === 0 && <p className="director-muted">{rigs.isPending ? 'Loading rigs...' : 'No rigs yet'}</p>}
-        {onAddObjective && rigList.length > 0 && <p className="plan-needs-objective" role="note">
-          A rig joins a plan by shooting its objectives, and this plan has none yet.{' '}
-          <button type="button" onClick={onAddObjective}><Plus size={16} />Add objective</button>
-        </p>}
+        {onAddObjective && rigList.length > 0 && <NeedsObjectiveNote onAdd={onAddObjective} />}
         {onToggleRig ? <>
           {/* On a page that keeps the plan: rigs that shoot it, then the rest. */}
           <h4 className="framing-rig-group">On</h4>

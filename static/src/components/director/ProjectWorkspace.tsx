@@ -1,7 +1,7 @@
 import { type KeyboardEvent as ReactKeyboardEvent, useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useLocation, useSearchParams } from 'react-router-dom';
-import { wantsFindTarget } from './planName';
+import { isNewPlan } from './planName';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import FramingView from './FramingView';
@@ -41,9 +41,9 @@ const PAGE_KEYS = ['plan'];
  *  and the project priority. */
 export default function ProjectWorkspace({ instanceId, projectId }: { instanceId: string; projectId: string }) {
   const [params, setParams] = useSearchParams();
-  // A plan New plan just made opens with Find a target focused.
+  // A plan New plan just made opens with Object name focused.
   const { state: navigationState } = useLocation();
-  const [findTarget] = useState(() => wantsFindTarget(navigationState));
+  const [justMade] = useState(() => isNewPlan(navigationState));
   const { canWrite } = useAccess();
   const profiles = useQuery({ queryKey: ['directorRigProfiles'], queryFn: apiClient.getDirectorRigProfiles, retry: retryWhenBusy, retryDelay: 700, refetchOnWindowFocus: false });
   const plans = useQuery({ queryKey: ['directorPlans', instanceId], queryFn: apiClient.getDirectorPlans, retry: retryWhenBusy, retryDelay: 1200, refetchOnWindowFocus: false, refetchOnMount: 'always' });
@@ -154,7 +154,7 @@ export default function ProjectWorkspace({ instanceId, projectId }: { instanceId
     </div>
     <div {...panel('framing')}>
       {!framingShown ? <p role="status">Loading targets...</p> : <FramingView projectId={projectId} seed={seed} preferredRigIds={summaryRigs.map(rig => rig.id)}
-        shootingRigIds={planRigs.rigIds} onToggleRig={toggleFromFraming} joinBlocked={joinBlocked} onAddObjective={addFirstObjective} focusTargetSearch={findTarget} />}
+        shootingRigIds={planRigs.rigIds} onToggleRig={toggleFromFraming} joinBlocked={joinBlocked} onAddObjective={addFirstObjective} focusTargetSearch={justMade} />}
     </div>
     <div {...panel('exposures')}>
       <PlanEditor projectId={projectId} linkedRigIds={row.links.map(link => link.rig.id)} controls={planControls} onRigsChange={reportRigs} />
