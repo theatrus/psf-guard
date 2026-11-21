@@ -8,6 +8,11 @@ use std::path::Path;
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
 
+/// How long a server may take to accept the connection.
+const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// How long a transfer may go without receiving anything.
+const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// What the file must be, when PSF Guard has a record of it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Expected<'a> {
@@ -51,8 +56,13 @@ pub async fn fetch(
     check_size: &(dyn Fn(u64) -> Result<(), String> + Send + Sync),
     progress: &(dyn Fn(u64, Option<u64>) + Send + Sync),
 ) -> Result<(), Failure> {
+    // A server that accepts the connection and then goes quiet fails the
+    // download instead of holding it open, so a caller with another source
+    // can try that one.
     let client = reqwest::Client::builder()
         .user_agent(concat!("psf-guard/", env!("CARGO_PKG_VERSION")))
+        .connect_timeout(CONNECT_TIMEOUT)
+        .read_timeout(READ_TIMEOUT)
         .build()
         .map_err(|error| Failure::Transfer(error.to_string()))?;
     let mut response = client
