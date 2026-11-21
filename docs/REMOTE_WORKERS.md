@@ -338,7 +338,9 @@ PSF Guard never downloads them by itself. On the worker computer:
 
 1. Run `psf-guard-cli noise-model download`. The command downloads
    Microsoft's ONNX Runtime release, checks it against a SHA-256 pinned in
-   PSF Guard, then downloads Seiza's latest published noise model. When
+   PSF Guard, then downloads Seiza's latest published noise model. The
+   archive comes from PSF Guard's copy first, as on the server: see
+   [Seiza's noise model](STACKING_PREVIEWS.md#seizas-noise-model). When
    that ONNX Runtime release is installed already, the command keeps it;
    `--force` downloads it again. Both go
    to `noise-model` in PSF Guard's data folder for your account; set

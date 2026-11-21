@@ -1526,6 +1526,10 @@ and never downloads them by itself. To install them on the server:
 2. Click **Download both**. PSF Guard downloads Microsoft's ONNX Runtime
    release and checks it against a SHA-256 pinned in PSF Guard, then
    downloads Seiza's latest published noise model, which Seiza verifies.
+   Microsoft's GitHub repository for ONNX Runtime has been offline since
+   November 2026, so PSF Guard downloads a copy of the same archive from its
+   own [onnxruntime-1.31.1](https://github.com/theatrus/psf-guard/releases/tag/onnxruntime-1.31.1)
+   release, and tries Microsoft's address second.
    The job line shows the download, and **Stop download** ends it; a part
    that was not finished is not installed. Each ONNX Runtime download goes
    to a folder of its own, and PSF Guard switches to it once it is whole,
