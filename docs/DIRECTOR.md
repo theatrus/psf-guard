@@ -705,6 +705,25 @@ Sites are shared records under **Settings → Presets → Sites**. Each rig
 chooses a **Planning site** in **Rig setup → Site** and can override that
 site's location or horizon in its own profile.
 
+### Start a plan from nothing
+
+A plan needs no images, database or Target Scheduler project to start.
+
+1. Click **New plan** in the Library's toolbar, or choose **New plan...** at
+   the top of the header's project picker.
+2. Enter a **Plan name** and click **Create plan**. PSF Guard opens the plan
+   on **Framing** with **Find a target** ready for a name, such as M 31.
+3. On **Exposures**, click **Add objective** and choose its bandpass and goal.
+   A rig joins a plan by shooting its objectives, so **Add a rig** and the
+   rig switches on **Framing** stay disabled until the plan has one. Both
+   places offer **Add objective**, which adds one and opens **Exposures**.
+4. On **Rigs**, choose a rig under **Add a rig**. Activation creates the
+   project in that rig's database.
+
+Until its first frame arrives, the plan is listed in the Library under
+**Plans with nothing captured yet** and in the picker under **Plans waiting
+for frames**.
+
 ### Rigs and plans appear on their own
 
 When you open the Library or a view with the project selector, PSF Guard adds

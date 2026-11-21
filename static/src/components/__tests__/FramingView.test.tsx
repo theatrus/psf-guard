@@ -72,13 +72,13 @@ function fixture(existing: DirectorFramingDraft | null = null) {
   );
   return { saves, cutouts };
 }
-function mount(canWrite = true, withSeed = true, preferredRigIds: string[] = []) {
+function mount(canWrite = true, withSeed = true, preferredRigIds: string[] = [], focusTargetSearch = false) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   function Wrapper({ children }: { children: ReactNode }) {
     const access = useAccess();
     return <QueryClientProvider client={client}><AccessContext.Provider value={{ ...access, canWrite }}>{children}</AccessContext.Provider></QueryClientProvider>;
   }
-  return render(<FramingView projectId="project" seed={withSeed ? seed : null} preferredRigIds={preferredRigIds} />, { wrapper: Wrapper });
+  return render(<FramingView projectId="project" seed={withSeed ? seed : null} preferredRigIds={preferredRigIds} focusTargetSearch={focusTargetSearch} />, { wrapper: Wrapper });
 }
 type Drafts = ReturnType<typeof usePageDrafts>;
 /** The view on a page that keeps drafts, as the project workspace does. */
@@ -400,6 +400,17 @@ describe('Framing view', () => {
     expect(screen.queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument();
     // With nothing saved yet there is no saved framing to go back to.
     expect(screen.queryByRole('button', { name: 'Back to saved framing' })).not.toBeInTheDocument();
+  });
+
+  it('focuses Find a target for a plan just made, and only then', async () => {
+    fixture();
+    const first = mount(true, true, [], true);
+    await screen.findByLabelText('Target name');
+    await waitFor(() => expect(screen.getByLabelText('Find a target')).toHaveFocus());
+    first.unmount();
+    mount();
+    await screen.findByLabelText('Target name');
+    expect(screen.getByLabelText('Find a target')).not.toHaveFocus();
   });
 
   it('offers the local catalog names as they are typed and picks one without going online', async () => {

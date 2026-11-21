@@ -18,7 +18,7 @@ const message = (error: unknown) => error instanceof Error ? error.message : 'Di
  *  a rig with a new project or one its database already has, drop or
  *  detach one, and once a rig's database has the project, its Target
  *  Scheduler settings. */
-export default function PlanRigs({ row, rows, joined, objectives, ready, controls, cameFrom, load }: {
+export default function PlanRigs({ row, rows, joined, objectives, ready, controls, cameFrom, load, onAddObjective }: {
   row: DirectorPlanRow;
   /** Every plan, for projects other plans hold that could join this one. */
   rows: DirectorPlanRow[];
@@ -33,6 +33,8 @@ export default function PlanRigs({ row, rows, joined, objectives, ready, control
   cameFrom: string | null;
   /** Load each database's Target Scheduler rows; false until the tab is opened. */
   load: boolean;
+  /** Given when the plan has no objectives: adds one, so rigs can join. */
+  onAddObjective?: () => void;
 }) {
   const projectId = row.project.id;
   const { canWrite } = useAccess();
@@ -160,7 +162,10 @@ export default function PlanRigs({ row, rows, joined, objectives, ready, control
             {candidates.map(entry => <option key={entry.key} value={entry.key}>{entry.link.catalog_name}: {entry.link.source_name ?? entry.link.source_project_guid}{entry.plan.project.name !== (entry.link.source_name ?? '') ? ` (plan “${entry.plan.project.name}”)` : ''}</option>)}
           </optgroup>}
         </select></label>
-      {waitTitle && fresh.length > 0 && <p className="director-muted">{ready ? 'Add an objective first' : 'Plan still loading'}</p>}
+      {waitTitle && fresh.length > 0 && (onAddObjective
+        ? <p className="plan-needs-objective" role="note">A rig joins a plan by shooting its objectives, and this plan has none yet.{' '}
+            <button type="button" onClick={onAddObjective}><Plus size={16} />Add objective</button></p>
+        : <p className="director-muted">{ready ? 'Add an objective first' : 'Plan still loading'}</p>)}
       {chosen && <p className="director-muted" role="note">
         {chosen.plan.links.length > 1 ? `Merge “${chosen.plan.project.name}” and its ${chosen.plan.links.length} databases into this plan?` : `Merge “${chosen.plan.project.name}” into this plan?`}
         <span className="director-actions"><button type="button" disabled={attach.isPending} onClick={() => attach.mutate(chosen.plan.project.id)}><Link2 size={16} />{attach.isPending ? 'Attaching…' : 'Attach'}</button><button type="button" onClick={() => setPick('')}>Cancel</button></span>

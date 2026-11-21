@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
-import { Check, Crosshair, Eye, Globe, Grid3x3, Images, Layers, LocateFixed, Magnet, Move, Orbit, RefreshCw, RotateCw, Sparkles, SquareDashedMousePointer, Sun, Telescope, Undo2 } from 'lucide-react';
+import { Check, Crosshair, Plus, Eye, Globe, Grid3x3, Images, Layers, LocateFixed, Magnet, Move, Orbit, RefreshCw, RotateCw, Sparkles, SquareDashedMousePointer, Sun, Telescope, Undo2 } from 'lucide-react';
 import NumberInput from '../NumberInput';
 import { useDraftSection } from './pageDraftsState';
 import { describeFramingChanges } from './draftChanges';
@@ -206,10 +206,14 @@ export interface FramingViewProps {
   onToggleRig?: (rigId: string, on: boolean) => boolean | void;
   /** Why a rig cannot join yet, such as a plan with no objectives. */
   joinBlocked?: string;
+  /** Given when the plan has no objectives: adds one, so rigs can join. */
+  onAddObjective?: () => void;
+  /** Focus Find a target once it appears, for a plan New plan just made. */
+  focusTargetSearch?: boolean;
 }
 
 /** Frame one project on the sky: target, angle, mosaic and rig footprints over a survey. */
-export default function FramingView({ projectId, seed, preferredRigIds = [], shootingRigIds, onToggleRig, joinBlocked }: FramingViewProps) {
+export default function FramingView({ projectId, seed, preferredRigIds = [], shootingRigIds, onToggleRig, joinBlocked, onAddObjective, focusTargetSearch = false }: FramingViewProps) {
   const { canWrite } = useAccess();
   const client = useQueryClient();
   const draftKey = ['directorFraming', projectId];
@@ -1620,7 +1624,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
       <fieldset>
         <legend>Target</legend>
         {layoutLocked && <p className="director-muted framing-mosaic-note" data-testid="framing-held">{heldNote}</p>}
-        <TargetSearch label="Find a target" ariaLabel="Find a target" placeholder="M 31, NGC 7000, Heart Nebula" buttonLabel="Go" disabled={!canWrite || centerHeld}
+        <TargetSearch label="Find a target" ariaLabel="Find a target" placeholder="M 31, NGC 7000, Heart Nebula" buttonLabel="Go" disabled={!canWrite || centerHeld} focusOnMount={focusTargetSearch}
           hint="Online lookups go to CDS Sesame." onPick={pickTarget} />
         <label>Name<input aria-label="Target name" value={state.targetName} maxLength={256} onChange={event => update({ targetName: event.target.value })} /></label>
         <div className="framing-grid">
@@ -1642,6 +1646,10 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
         <legend>Rigs</legend>
         {rigs.isError && <p className="director-error" role="alert">Rigs could not be loaded: {message(rigs.error)} <button type="button" onClick={() => void rigs.refetch()}>Retry</button></p>}
         {!rigs.isError && rigList.length === 0 && <p className="director-muted">{rigs.isPending ? 'Loading rigs...' : 'No rigs yet'}</p>}
+        {onAddObjective && rigList.length > 0 && <p className="plan-needs-objective" role="note">
+          A rig joins a plan by shooting its objectives, and this plan has none yet.{' '}
+          <button type="button" onClick={onAddObjective}><Plus size={16} />Add objective</button>
+        </p>}
         {onToggleRig ? <>
           {/* On a page that keeps the plan: rigs that shoot it, then the rest. */}
           <h4 className="framing-rig-group">On</h4>

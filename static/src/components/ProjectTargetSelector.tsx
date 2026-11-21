@@ -15,6 +15,8 @@ import ProjectFamilyOption from './projectSelector/ProjectFamilyOption';
 import { useCurrentPlan, usePlans } from './header/useCurrentPlan';
 import { plansWaitingForFrames } from './director/waitingPlans';
 import { listNames } from './director/listNames';
+import NewPlanDialog from './director/NewPlanDialog';
+import { useAccess } from '../auth/access';
 
 export default function ProjectTargetSelector() {
   const {
@@ -37,6 +39,8 @@ export default function ProjectTargetSelector() {
   const revealedSelectionRef = useRef(false);
   const searchExpansionSeedRef = useRef<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const { canWrite } = useAccess();
+  const [creatingPlan, setCreatingPlan] = useState(false);
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState('');
@@ -324,6 +328,16 @@ export default function ProjectTargetSelector() {
               </div>
             )}
             <div ref={optionsRef} className="selector-options" aria-label="Projects and targets">
+              {plans.enabled && canWrite && (
+                <button
+                  type="button"
+                  className="selector-option selector-new-plan"
+                  onClick={() => { setPickerOpen(false); setSearch(''); setCreatingPlan(true); }}
+                >
+                  <span>New plan...</span>
+                  <small>Name it, then choose a target</small>
+                </button>
+              )}
               <button
                 type="button"
                 className="selector-option"
@@ -405,7 +419,7 @@ export default function ProjectTargetSelector() {
           </div>
         )}
       </div>
-
+      {creatingPlan && <NewPlanDialog onClose={() => setCreatingPlan(false)} />}
     </div>
   );
 }

@@ -31,6 +31,8 @@ export interface RigChange { done: boolean; note: string | null }
  *  add or drop one, filling in a template for each objective as a tick does. */
 export interface PlanRigControls {
   setRig: (rigId: string, on: boolean) => RigChange;
+  /** Add an objective, as Add objective does, for a plan with none. */
+  addObjective: () => void;
 }
 
 /** What the plan editor tells the page: the rigs shooting the plan and its
@@ -225,7 +227,7 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
     controls.current = { setRig: (rigId, on) => {
       const rig = rigList.find(entry => entry.rig.id === rigId);
       return rig ? toggleRig(rig, on) : { done: false, note: rigs.isPending ? 'rigs still loading' : 'not a planning rig' };
-    } };
+    }, addObjective };
   });
   const setRigPanels = (rig: DirectorRigProfileSummary, chosen: string[]) => update(current => ({
     ...current,

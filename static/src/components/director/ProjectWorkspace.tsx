@@ -1,6 +1,7 @@
 import { type KeyboardEvent as ReactKeyboardEvent, useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useSearchParams } from 'react-router-dom';
+import { wantsFindTarget } from './planName';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import FramingView from './FramingView';
@@ -40,6 +41,9 @@ const PAGE_KEYS = ['plan'];
  *  and the project priority. */
 export default function ProjectWorkspace({ instanceId, projectId }: { instanceId: string; projectId: string }) {
   const [params, setParams] = useSearchParams();
+  // A plan New plan just made opens with Find a target focused.
+  const { state: navigationState } = useLocation();
+  const [findTarget] = useState(() => wantsFindTarget(navigationState));
   const { canWrite } = useAccess();
   const profiles = useQuery({ queryKey: ['directorRigProfiles'], queryFn: apiClient.getDirectorRigProfiles, retry: retryWhenBusy, retryDelay: 700, refetchOnWindowFocus: false });
   const plans = useQuery({ queryKey: ['directorPlans', instanceId], queryFn: apiClient.getDirectorPlans, retry: retryWhenBusy, retryDelay: 1200, refetchOnWindowFocus: false, refetchOnMount: 'always' });
@@ -130,6 +134,10 @@ export default function ProjectWorkspace({ instanceId, projectId }: { instanceId
     return change.done;
   };
   const joinBlocked = !canWrite ? undefined : !planRigs.ready ? 'Plan still loading' : planRigs.objectives === 0 ? 'Add an objective on Exposures first' : undefined;
+  // A new plan has no objectives, so no rig can join it: Add objective
+  // beside the rigs adds one and opens Exposures to set it.
+  const needsObjective = canWrite && planRigs.ready && planRigs.objectives === 0;
+  const addFirstObjective = needsObjective ? () => { planControls.current?.addObjective(); chooseTab('exposures'); } : undefined;
   return <DraftProvider drafts={drafts}><section aria-label="Project planning" className="director-workspace" ref={section}>
     <div className="workspace-top" ref={measureTop}>
       <SaveBar drafts={drafts} canWrite={canWrite} pageKeys={PAGE_KEYS} />
@@ -146,13 +154,13 @@ export default function ProjectWorkspace({ instanceId, projectId }: { instanceId
     </div>
     <div {...panel('framing')}>
       {!framingShown ? <p role="status">Loading targets...</p> : <FramingView projectId={projectId} seed={seed} preferredRigIds={summaryRigs.map(rig => rig.id)}
-        shootingRigIds={planRigs.rigIds} onToggleRig={toggleFromFraming} joinBlocked={joinBlocked} />}
+        shootingRigIds={planRigs.rigIds} onToggleRig={toggleFromFraming} joinBlocked={joinBlocked} onAddObjective={addFirstObjective} focusTargetSearch={findTarget} />}
     </div>
     <div {...panel('exposures')}>
       <PlanEditor projectId={projectId} linkedRigIds={row.links.map(link => link.rig.id)} controls={planControls} onRigsChange={reportRigs} />
     </div>
     <div {...panel('rigs')}>
-      <PlanRigs row={row} rows={plans.data?.rows ?? []} joined={planRigs.rigIds} objectives={planRigs.objectives} ready={planRigs.ready} controls={planControls} cameFrom={cameFrom} load={visited.has('rigs')} />
+      <PlanRigs row={row} rows={plans.data?.rows ?? []} joined={planRigs.rigIds} objectives={planRigs.objectives} ready={planRigs.ready} controls={planControls} cameFrom={cameFrom} load={visited.has('rigs')} onAddObjective={addFirstObjective} />
       <h3 className="director-section-heading">Scheduling limits for every rig<EditedMark drafts={drafts} id="scheduling" /></h3>
       <PlanScheduling projectId={projectId} rigs={summaryRigs} />
     </div>

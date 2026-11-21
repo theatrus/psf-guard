@@ -16,6 +16,8 @@ vi.mock('../director/FramingView', () => ({
 // The editor keeps which rigs shoot the plan; the stub does the same, lets
 // the Rigs tab add and drop them through `controls`, and holds one draft
 // field so the save bar and the tabs have an edit to track.
+// How many objectives the stub plan starts with; a test sets 0 for a new plan.
+const stubPlan = vi.hoisted(() => ({ objectives: 1 }));
 vi.mock('../director/PlanEditor', async () => {
   const { useEffect, useState } = await vi.importActual<typeof import('react')>('react');
   const { useDraftSection } = await vi.importActual<typeof import('../director/pageDraftsState')>('../director/pageDraftsState');
@@ -26,12 +28,13 @@ vi.mock('../director/PlanEditor', async () => {
   }
   function StubPlanEditor({ projectId, controls, onRigsChange }: {
     projectId: string;
-    controls?: { current: { setRig: (id: string, on: boolean) => { done: boolean; note: string | null } } | null };
+    controls?: { current: { setRig: (id: string, on: boolean) => { done: boolean; note: string | null }; addObjective: () => void } | null };
     onRigsChange?: (state: { rigIds: string[]; objectives: number; ready: boolean }) => void;
   }) {
     const [joined, setJoined] = useState<string[]>([]);
-    useEffect(() => { if (controls) controls.current = { setRig: (id, on) => { setJoined(ids => on ? [...ids, id] : ids.filter(other => other !== id)); return { done: true, note: null }; } }; });
-    useEffect(() => { onRigsChange?.({ rigIds: joined, objectives: 1, ready: true }); }, [joined, onRigsChange]);
+    const [objectives, setObjectives] = useState(stubPlan.objectives);
+    useEffect(() => { if (controls) controls.current = { setRig: (id, on) => { setJoined(ids => on ? [...ids, id] : ids.filter(other => other !== id)); return { done: true, note: null }; }, addObjective: () => setObjectives(count => count + 1) }; });
+    useEffect(() => { onRigsChange?.({ rigIds: joined, objectives, ready: true }); }, [joined, objectives, onRigsChange]);
     return <div><output>{`Plan ${projectId}: ${joined.join(', ') || 'no rigs'}`}</output><Goal /></div>;
   }
   return { default: StubPlanEditor };
@@ -437,5 +440,23 @@ describe('attaching and detaching database projects', () => {
     fireEvent.click(within(spare).getByRole('button', { name: 'Drop Spare data from the plan' }));
     expect(screen.queryByRole('group', { name: 'Spare data' })).not.toBeInTheDocument();
     expect(screen.getByText('Plan project: no rigs')).toBeInTheDocument();
+  });
+
+  it('offers Add objective where a plan with none keeps every rig out, and opens Exposures', async () => {
+    stubPlan.objectives = 0;
+    try {
+      mountTwo();
+      fireEvent.click(await screen.findByRole('tab', { name: 'Rigs' }));
+      const add = await screen.findByLabelText('Add a rig');
+      expect(within(add).getByRole('option', { name: 'Spare data' })).toBeDisabled();
+      expect(screen.getByRole('note')).toHaveTextContent('A rig joins a plan by shooting its objectives, and this plan has none yet.');
+      fireEvent.click(screen.getByRole('button', { name: 'Add objective' }));
+      expect(screen.getByRole('tab', { name: 'Exposures' })).toHaveAttribute('aria-selected', 'true');
+      fireEvent.click(screen.getByRole('tab', { name: 'Rigs' }));
+      expect(within(screen.getByLabelText('Add a rig')).getByRole('option', { name: 'Spare data' })).toBeEnabled();
+      expect(screen.queryByRole('button', { name: 'Add objective' })).not.toBeInTheDocument();
+    } finally {
+      stubPlan.objectives = 1;
+    }
   });
 });
