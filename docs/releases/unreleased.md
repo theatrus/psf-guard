@@ -17,3 +17,8 @@
   has one; before, only a tooltip and a grey line explained why. The new
   objective starts on a band that a rig or the template library has a
   template for, so a rig can join.
+- **Download both** and `psf-guard-cli noise-model download` work again.
+  Microsoft's GitHub repository for ONNX Runtime has been offline since
+  about 18 November, so the download failed with a 404. PSF Guard now
+  downloads a copy of the same ONNX Runtime 1.31.1 archive from its own
+  GitHub release, checked against the same SHA-256 as before.

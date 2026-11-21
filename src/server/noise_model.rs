@@ -153,7 +153,8 @@ pub async fn update_settings(
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DownloadPart {
-    /// ONNX Runtime, from Microsoft's release.
+    /// ONNX Runtime: Microsoft's release archive, from the first of
+    /// `install::SOURCES` that serves it.
     Runtime,
     /// The latest noise model Seiza publishes.
     Model,
