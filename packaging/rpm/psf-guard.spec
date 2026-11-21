@@ -105,8 +105,13 @@ install -Dpm0600 packaging/rpm/systemd/psf-guard-worker.conf \
 %config(noreplace) %attr(0600,root,root) %{_sysconfdir}/%{name}/worker.conf
 
 %changelog
-* Fri Nov 20 2026 Yann Ramin <github@theatr.us> - 0.15.0~dev-1
+* Sat Nov 21 2026 Yann Ramin <github@theatr.us> - 0.15.0~dev-1
 - Interim development version on main; released builds come from release/* branches
+
+* Sat Nov 21 2026 Yann Ramin <github@theatr.us> - 0.14.2-1
+- Download ONNX Runtime from PSF Guard's copy while Microsoft's is offline
+- Start a plan from the Library toolbar or the project picker
+- Add objective so a rig can join a plan that has none
 
 * Fri Nov 20 2026 Yann Ramin <github@theatr.us> - 0.14.1-1
 - Offer only the rig's own N.I.N.A. profile's exposure templates
