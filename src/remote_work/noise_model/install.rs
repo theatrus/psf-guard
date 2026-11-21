@@ -4,19 +4,42 @@
 //! The model comes through Seiza, which verifies each file against its
 //! manifest. Seiza does not fetch ONNX Runtime, so PSF Guard downloads
 //! Microsoft's release archive for this platform, checks it against the
-//! SHA-256 below, and unpacks the libraries into its own folder.
+//! SHA-256 below, and unpacks the libraries into its own folder. The
+//! archive comes from the first of [`SOURCES`] that serves it.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use super::{Config, LIBRARY_FILE};
 
+/// The release's version as a literal, so [`SOURCES`] can be built from it.
+macro_rules! onnxruntime_version {
+    () => {
+        "1.31.1"
+    };
+}
+
 /// The ONNX Runtime release PSF Guard downloads. `seiza-model` pins
 /// `ort =2.0.0-rc.15`, which opens ONNX Runtime 1.17 or later; Seiza
 /// measured its model against this release.
-pub const ONNXRUNTIME_VERSION: &str = "1.31.1";
+pub const ONNXRUNTIME_VERSION: &str = onnxruntime_version!();
 
-const RELEASE_URL: &str = "https://github.com/microsoft/onnxruntime/releases/download";
+/// Where the archives come from, tried in order. Microsoft's repository
+/// has returned 404 since about 2026-11-18, so PSF Guard's own release
+/// `onnxruntime-1.31.1` serves a copy of each archive Microsoft published.
+/// Microsoft's address stays second in case it comes back. Every download
+/// is checked against the SHA-256 in [`release_for`], whichever source
+/// serves it.
+pub const SOURCES: [&str; 2] = [
+    concat!(
+        "https://github.com/theatrus/psf-guard/releases/download/onnxruntime-",
+        onnxruntime_version!()
+    ),
+    concat!(
+        "https://github.com/microsoft/onnxruntime/releases/download/v",
+        onnxruntime_version!()
+    ),
+];
 
 /// One release archive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -174,20 +197,17 @@ pub async fn download_runtime(
     report: &(dyn Fn(Step) + Send + Sync),
 ) -> Result<RuntimeInstall, String> {
     let release = release().ok_or_else(|| NO_RELEASE.to_string())?;
-    download_runtime_from(
-        config,
-        release,
-        &format!("{RELEASE_URL}/v{ONNXRUNTIME_VERSION}/{}", release.asset),
-        force,
-        report,
-    )
-    .await
+    let urls: Vec<String> = SOURCES
+        .iter()
+        .map(|source| format!("{source}/{}", release.asset))
+        .collect();
+    download_runtime_from(config, release, &urls, force, report).await
 }
 
 async fn download_runtime_from(
     config: &Config,
     release: Release,
-    url: &str,
+    urls: &[String],
     force: bool,
     report: &(dyn Fn(Step) + Send + Sync),
 ) -> Result<RuntimeInstall, String> {
@@ -213,7 +233,7 @@ async fn download_runtime_from(
         staging: folder.join(format!("{STAGING_PREFIX}{tag}")),
         cancelled: std::sync::Arc::default(),
     };
-    fetch(url, &cleanup.archive, release, report).await?;
+    fetch_first(urls, &cleanup.archive, release, report).await?;
     report(Step::say(format!(
         "Unpacking ONNX Runtime {ONNXRUNTIME_VERSION}…"
     )));
@@ -239,14 +259,70 @@ fn unique_tag() -> String {
     format!("{:x}-{:x}", std::process::id(), nanos)
 }
 
+/// Download the archive from the first of `urls` that serves the file on
+/// record. A source that cannot be reached, refuses, stalls, or serves
+/// another file passes the download to the next one, and the job line says
+/// so. A failure on this computer, such as a full disk, ends the download
+/// at once, since another source would fail the same way. When no source
+/// serves the file, the error lists each source's failure.
+async fn fetch_first(
+    urls: &[String],
+    archive: &Path,
+    release: Release,
+    report: &(dyn Fn(Step) + Send + Sync),
+) -> Result<(), String> {
+    use crate::verified_download::Failure;
+
+    let mut failures = Vec::new();
+    for (index, url) in urls.iter().enumerate() {
+        let failure = match fetch(url, archive, release, report).await {
+            Ok(()) => return Ok(()),
+            Err(failure) => failure,
+        };
+        let reason = describe(&failure, release);
+        if matches!(failure, Failure::Write(_) | Failure::Stopped) {
+            return Err(format!("{reason}. Nothing was installed"));
+        }
+        tracing::warn!("ONNX Runtime download from {url} failed: {reason}");
+        failures.push(format!("{url}: {reason}"));
+        if let Some(next) = urls.get(index + 1) {
+            report(Step::say(format!(
+                "{} failed, so PSF Guard is trying {next}",
+                release.asset
+            )));
+        }
+    }
+    Err(format!(
+        "No source served {}, so nothing was installed. {}",
+        release.asset,
+        failures.join("; ")
+    ))
+}
+
+/// Why a source did not serve the archive, without the source's address.
+fn describe(failure: &crate::verified_download::Failure, release: Release) -> String {
+    use crate::verified_download::Failure;
+    match failure {
+        Failure::Transfer(error) => error.clone(),
+        Failure::Write(error) => format!("Writing {error}"),
+        Failure::TooLarge { limit } => format!("the file is larger than {limit} bytes"),
+        Failure::NotOnRecord { sha256, .. } => format!(
+            "the file does not match its SHA-256: expected {}, found {sha256}",
+            release.sha256
+        ),
+        Failure::Refused(error) => error.clone(),
+        Failure::Stopped => "Stopped".into(),
+    }
+}
+
 /// Download `url` to `archive` and check it against the release's hash.
 async fn fetch(
     url: &str,
     archive: &Path,
     release: Release,
     report: &(dyn Fn(Step) + Send + Sync),
-) -> Result<(), String> {
-    use crate::verified_download::{Expected, Failure};
+) -> Result<(), crate::verified_download::Failure> {
+    use crate::verified_download::Expected;
 
     let message = format!("Downloading ONNX Runtime {ONNXRUNTIME_VERSION}…");
     let progress = |done: u64, total: Option<u64>| {
@@ -269,22 +345,6 @@ async fn fetch(
         &progress,
     )
     .await
-    .map_err(|failure| match failure {
-        Failure::Transfer(error) => format!("Downloading {}: {error}", release.asset),
-        Failure::Write(error) => format!("Writing {error}"),
-        Failure::TooLarge { limit } => {
-            format!(
-                "{} is larger than {limit} bytes. Nothing was installed",
-                release.asset
-            )
-        }
-        Failure::NotOnRecord { sha256, .. } => format!(
-            "{} does not match its SHA-256: expected {}, found {sha256}. Nothing was installed",
-            release.asset, release.sha256
-        ),
-        Failure::Refused(error) => error,
-        Failure::Stopped => "Stopped".into(),
-    })
 }
 
 /// No ONNX Runtime archive Microsoft publishes comes near this.
@@ -865,10 +925,10 @@ mod tests {
             sha256: "",
         };
         // The address answers nothing: reaching for it would fail.
-        let nowhere = "http://127.0.0.1:9/ort.tgz";
+        let nowhere = ["http://127.0.0.1:9/ort.tgz".to_string()];
         let said = std::sync::Mutex::new(Vec::new());
         let report = |step: Step| said.lock().unwrap().push(step.message);
-        let kept = download_runtime_from(&config, release, nowhere, false, &report)
+        let kept = download_runtime_from(&config, release, &nowhere, false, &report)
             .await
             .unwrap();
         assert_eq!(
@@ -882,7 +942,7 @@ mod tests {
         // Forced, it tries the download, which fails here and leaves the
         // install in use as it was, with no archive behind.
         assert!(
-            download_runtime_from(&config, release, nowhere, true, &report)
+            download_runtime_from(&config, release, &nowhere, true, &report)
                 .await
                 .is_err()
         );
@@ -891,5 +951,99 @@ mod tests {
             .path()
             .join(format!(".ort.tgz{PART_SUFFIX}"))
             .exists());
+    }
+
+    #[test]
+    fn every_source_serves_this_release() {
+        for source in SOURCES {
+            assert!(source.starts_with("https://"), "{source}");
+            assert!(source.ends_with(ONNXRUNTIME_VERSION), "{source}");
+        }
+    }
+
+    async fn serve(body: Option<Vec<u8>>) -> String {
+        use axum::http::StatusCode;
+        use axum::routing::get;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = axum::Router::new().route(
+            "/ort.tgz",
+            get(move || {
+                let body = body.clone();
+                async move { body.ok_or(StatusCode::NOT_FOUND) }
+            }),
+        );
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        format!("http://{address}/ort.tgz")
+    }
+
+    #[tokio::test]
+    async fn the_archive_comes_from_the_first_source_that_serves_the_file_on_record() {
+        use sha2::Digest;
+        let body = b"the archive".to_vec();
+        let hash = crate::remote_work::hex(&sha2::Sha256::digest(&body));
+        let release = Release {
+            asset: "ort.tgz",
+            sha256: Box::leak(hash.into_boxed_str()),
+        };
+        let gone = serve(None).await;
+        let other = serve(Some(b"another file".to_vec())).await;
+        let good = serve(Some(body.clone())).await;
+        let folder = tempfile::tempdir().unwrap();
+        let archive = folder.path().join("ort.tgz.part");
+        let quiet = |_: Step| {};
+        let said = std::sync::Mutex::new(Vec::new());
+        let note = |step: Step| said.lock().unwrap().push(step.message);
+        // A missing file and a file not on record both pass to the next
+        // source, and the job line says which source comes next.
+        fetch_first(
+            &[gone.clone(), other.clone(), good.clone()],
+            &archive,
+            release,
+            &note,
+        )
+        .await
+        .unwrap();
+        assert_eq!(std::fs::read(&archive).unwrap(), body);
+        let said = said.into_inner().unwrap();
+        assert!(
+            said.contains(&format!("ort.tgz failed, so PSF Guard is trying {other}")),
+            "{said:?}"
+        );
+        assert!(
+            said.contains(&format!("ort.tgz failed, so PSF Guard is trying {good}")),
+            "{said:?}"
+        );
+        // When no source serves it, the error lists each source's failure.
+        let failed = fetch_first(&[gone.clone(), other.clone()], &archive, release, &quiet)
+            .await
+            .unwrap_err();
+        assert!(
+            failed.starts_with("No source served ort.tgz, so nothing was installed. "),
+            "{failed}"
+        );
+        assert!(
+            failed.contains(&format!("{gone}: HTTP status client error (404")),
+            "{failed}"
+        );
+        assert!(
+            failed.contains(&format!("{other}: the file does not match its SHA-256")),
+            "{failed}"
+        );
+        // A failure on this computer ends the download without trying the
+        // next source.
+        let nowhere = folder.path().join("missing").join("ort.tgz.part");
+        let said = std::sync::Mutex::new(Vec::new());
+        let note = |step: Step| said.lock().unwrap().push(step.message);
+        let failed = fetch_first(&[good.clone(), good], &nowhere, release, &note)
+            .await
+            .unwrap_err();
+        assert!(failed.starts_with("Writing "), "{failed}");
+        assert!(failed.ends_with(". Nothing was installed"), "{failed}");
+        assert!(!said
+            .into_inner()
+            .unwrap()
+            .iter()
+            .any(|message| message.contains("trying")));
     }
 }
