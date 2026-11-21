@@ -20,9 +20,12 @@ test('plans without a database survive reload, conflicts, and narrow viewports i
   await plans.getByRole('button', { name: 'New plan' }).click();
   await page.getByLabel('Plan name').fill('Multi-rig Andromeda');
   const createdResponse = page.waitForResponse(response => response.url().endsWith('/api/director/v1/projects') && response.request().method() === 'POST');
-  await page.getByRole('button', { name: 'Save', exact: true }).click();
-  await expect(page.getByText('Created Multi-rig Andromeda.')).toBeVisible();
+  await page.getByRole('button', { name: 'Create plan', exact: true }).click();
   const project = (await (await createdResponse).json()).data;
+  // A new plan opens on its own page; the Library is one step back.
+  await expect(page).toHaveURL(new RegExp(`#/plan\\?.*plan=${project.id}`));
+  await page.goBack();
+  await expect(plans.getByTestId('plan-row').filter({ hasText: 'Multi-rig Andromeda' })).toHaveCount(1);
 
   await page.getByRole('button', { name: 'Rename Multi-rig Andromeda' }).click();
   const changed = await request.patch(`/api/director/v1/projects/${project.id}`, { data: { expected_revision: 1, name: 'Edited from another session' } });

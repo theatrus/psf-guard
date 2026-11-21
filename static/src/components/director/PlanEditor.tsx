@@ -10,7 +10,7 @@ import { useAccess } from '../../auth/access';
 import type { DirectorContribution, DirectorFrameCounts, DirectorGoal, DirectorObjective, DirectorPlanDraft, DirectorPlanView, DirectorRigProfileSummary, DirectorTemplate } from '../../api/directorTypes';
 import { layoutOf } from './framingModel';
 import { hasFilter } from './rigProfileForm';
-import { PURPOSES, bandpassKind, bandpassOptions, bindOwnTemplates, choiceFrom, convertGoal, coverageGaps, goalFor, speedAdjustedHours, defaultExposure, emptyPlan, formatHours, framesFor, goalExposure, hoursFor, libraryChoice, libraryFor, newContribution, newLibraryContribution, newObjective, objectiveName, onePartEach, ownTwin, panelIds, partStatus, panelsByRig, planProblem, rigPanels, rigStatus, rigTotals, samePlan, shootingRigs, templateValue, templatesFor } from './planModel';
+import { PURPOSES, bandpassKind, nextObjectiveBand, bandpassOptions, bindOwnTemplates, choiceFrom, convertGoal, coverageGaps, goalFor, speedAdjustedHours, defaultExposure, emptyPlan, formatHours, framesFor, goalExposure, hoursFor, libraryChoice, libraryFor, newContribution, newLibraryContribution, newObjective, objectiveName, onePartEach, ownTwin, panelIds, partStatus, panelsByRig, planProblem, rigPanels, rigStatus, rigTotals, samePlan, shootingRigs, templateValue, templatesFor } from './planModel';
 import './PlanEditor.css';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Plan request failed';
@@ -31,6 +31,8 @@ export interface RigChange { done: boolean; note: string | null }
  *  add or drop one, filling in a template for each objective as a tick does. */
 export interface PlanRigControls {
   setRig: (rigId: string, on: boolean) => RigChange;
+  /** Add an objective, as Add objective does, for a plan with none. */
+  addObjective: () => void;
 }
 
 /** What the plan editor tells the page: the rigs shooting the plan and its
@@ -161,11 +163,23 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
   const update = (change: (current: DirectorPlanDraft) => DirectorPlanDraft) => setPlan(current => current ? change(current) : current);
   const number = (value: string, fallback: number) => { const parsed = Number(value); return Number.isFinite(parsed) ? parsed : fallback; };
 
-  const addObjective = () => update(current => {
+  const addObjectiveNow = () => update(current => {
     const used = new Set(current.objectives.map(o => o.bandpass_id));
-    const next = options.find(o => !used.has(o.id)) ?? options[0];
-    return { ...current, objectives: [...current.objectives, newObjective(next?.id ?? 'luminance')] };
+    const covered = new Set([...Object.values(templatesByRig).flat(), ...library].map(t => t.bandpass.id));
+    return { ...current, objectives: [...current.objectives, newObjective(nextObjectiveBand(options, used, covered) ?? 'luminance')] };
   });
+  // The band a new objective starts on depends on the rigs' templates, so a
+  // click before they load adds the objective once they have.
+  const templatesLoading = templateQueries.some(query => query.isPending) || libraryQuery.isPending;
+  const [objectiveWaiting, setObjectiveWaiting] = useState(false);
+  const addObjective = () => { if (templatesLoading) setObjectiveWaiting(true); else addObjectiveNow(); };
+  const addWaitingObjective = useRef(addObjectiveNow);
+  addWaitingObjective.current = addObjectiveNow;
+  useEffect(() => {
+    if (!objectiveWaiting || templatesLoading) return;
+    setObjectiveWaiting(false);
+    addWaitingObjective.current();
+  }, [objectiveWaiting, templatesLoading]);
   const changeObjective = (id: string, patch: Partial<DirectorObjective>) => update(current => {
     const objectives = current.objectives.map(o => o.id === id ? { ...o, ...patch } : o);
     // A new bandpass invalidates templates picked for the old one.
@@ -225,7 +239,7 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
     controls.current = { setRig: (rigId, on) => {
       const rig = rigList.find(entry => entry.rig.id === rigId);
       return rig ? toggleRig(rig, on) : { done: false, note: rigs.isPending ? 'rigs still loading' : 'not a planning rig' };
-    } };
+    }, addObjective };
   });
   const setRigPanels = (rig: DirectorRigProfileSummary, chosen: string[]) => update(current => ({
     ...current,

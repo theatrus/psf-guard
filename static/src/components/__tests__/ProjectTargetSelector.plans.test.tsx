@@ -59,6 +59,19 @@ function renderAt(route: string) {
 }
 
 describe('plans in the project picker', () => {
+  it('starts a new plan from the picker in a dialog, closing the picker', async () => {
+    server.use(http.get('/api/databases', () => ok([])));
+    renderAt('/');
+    await userEvent.click(document.querySelector('#scope-select')!);
+    await userEvent.click(await screen.findByRole('button', { name: /New plan/ }));
+    expect(screen.queryByRole('dialog', { name: 'Choose a project or target' })).not.toBeInTheDocument();
+    const dialog = await screen.findByRole('dialog', { name: 'New plan' });
+    expect(within(dialog).getByLabelText('Plan name')).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog', { name: 'New plan' })).not.toBeInTheDocument();
+    // Focus goes back to the picker's button, not to the top of the page.
+    expect(document.querySelector('#scope-select')).toHaveFocus();
+  });
   it('marks the plan whose workspace is open as current', async () => {
     server.use(http.get('/api/databases', () => ok([])));
     renderAt('/plan?plan=veil');

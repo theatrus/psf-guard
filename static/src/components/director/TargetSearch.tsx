@@ -20,8 +20,8 @@ export interface TargetPick { name: string; center: DirectorSkyPosition; source:
  *  and the last row asks CDS Sesame for the name as typed (the server keeps
  *  those answers). Enter takes the highlighted row, else an exact local
  *  match, else goes online. */
-export default function TargetSearch({ label, ariaLabel, placeholder, buttonLabel, disabled = false, hint, onPick }: {
-  label: string; ariaLabel: string; placeholder?: string; buttonLabel: string; disabled?: boolean; hint: string; onPick: (pick: TargetPick) => void;
+export default function TargetSearch({ label, ariaLabel, placeholder, buttonLabel, disabled = false, focusOnMount = false, hint, onPick }: {
+  label: string; ariaLabel: string; placeholder?: string; buttonLabel: string; disabled?: boolean; focusOnMount?: boolean; hint: string; onPick: (pick: TargetPick) => void;
 }) {
   const [text, setText] = useState('');
   const [open, setOpen] = useState(false);
@@ -30,6 +30,13 @@ export default function TargetSearch({ label, ariaLabel, placeholder, buttonLabe
   const typed = useDebounced(text.trim(), 150);
   const listId = useId();
   const input = useRef<HTMLInputElement>(null);
+  // Once, as it appears: the page stays where it is.
+  const focusOnce = useRef(focusOnMount);
+  useEffect(() => {
+    if (!focusOnce.current || disabled) return;
+    focusOnce.current = false;
+    input.current?.focus({ preventScroll: true });
+  }, [disabled]);
   const suggestions = useQuery({
     queryKey: ['directorNameSearch', typed],
     queryFn: () => apiClient.searchDirectorNames(typed),
