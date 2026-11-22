@@ -6,6 +6,7 @@ import { HttpResponse, http } from 'msw';
 import { describe, expect, it } from 'vitest';
 import { server } from '../../test/msw-server';
 import SeizaCatalogControls from '../SeizaCatalogControls';
+import { OPEN_SETTINGS_EVENT } from '../../utils/settingsIntent';
 
 function wrapper() {
   const queryClient = new QueryClient({
@@ -183,5 +184,24 @@ describe('SeizaCatalogControls', () => {
     expect(await screen.findByText('✓ Color calibration')).toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'Gaia colors' })).toHaveTextContent('Installed · 476 MiB');
     expect(screen.getByRole('button', { name: 'Update Gaia colors' })).toBeEnabled();
+  });
+
+  it('sends a person looking for the noise model to Processing tools', async () => {
+    server.use(
+      http.get('/api/astrometry/capabilities', () =>
+        capabilities({ name: 'gaia_photometry', status: 'missing' }, false)
+      )
+    );
+    const opened: unknown[] = [];
+    const listen = (event: Event) => opened.push((event as CustomEvent).detail);
+    window.addEventListener(OPEN_SETTINGS_EVENT, listen);
+    try {
+      render(<SeizaCatalogControls />, { wrapper: wrapper() });
+      expect(screen.getByText(/noise model and ONNX Runtime are in Processing tools/)).toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: 'Open Processing tools' }));
+      expect(opened).toEqual([{ intent: 'processing-tools' }]);
+    } finally {
+      window.removeEventListener(OPEN_SETTINGS_EVENT, listen);
+    }
   });
 });

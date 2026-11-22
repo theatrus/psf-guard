@@ -207,6 +207,9 @@ pub enum Remedy {
     License,
     /// Download ONNX Runtime and the noise model in Settings.
     DownloadNoiseModel,
+    /// Change where processing steps run in Settings › Workers: the only
+    /// machines that have the provider are ones the placement leaves out.
+    ChangePlacement,
 }
 
 /// What a machine needs to run a step, handed to its runner.

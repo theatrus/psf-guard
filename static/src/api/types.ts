@@ -1384,10 +1384,12 @@ export interface ProcessingProvider {
   /** The step's key: `bxt`, `nxt`, `noise-model`, `sxt`. */
   provider: string;
   name: string;
-  state: 'ready' | 'not_licensed' | 'not_installed';
+  /** `excluded`: only machines that Settings › Workers keeps processing
+   *  steps off have it, such as this server under Workers only. */
+  state: 'ready' | 'not_licensed' | 'not_installed' | 'excluded';
   /** Why it cannot run, with what to do about it. */
   reason?: string;
-  remedy?: 'install_rc_astro' | 'license' | 'download_noise_model';
+  remedy?: 'install_rc_astro' | 'license' | 'download_noise_model' | 'change_placement';
   /** The version the next run uses, for display. */
   version?: string;
   /** Present when some machine has the provider. */

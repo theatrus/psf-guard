@@ -325,7 +325,9 @@ you set:
   is the fallback when a worker is stopped or unreachable. This is the
   default for processing steps.
 - **Workers only.** Only workers run the work. With no worker connected, it
-  fails rather than run on the server.
+  fails rather than run on the server. A provider installed only on the
+  server, such as the noise model, shows as **Not used** in **Processing
+  tools**.
 - **This server only.** The server runs the work, and workers are not sent
   it. This is the default for stack builds.
 
@@ -584,8 +586,8 @@ or printed no report.
 executable. An rc-astro from before RC-Astro's account system has no such
 check; the command says so.
 
-For this server's own rc-astro, use **Check license** under **Processing
-tools** in **Settings › Processing › Stacking**.
+For this server's own rc-astro, use **Check license** in **Settings ›
+Processing › Processing tools**.
 
 ## Stop, failures and recovery
 

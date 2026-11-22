@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
+import { openSettings } from '../utils/settingsIntent';
 import type {
   AstrometryResourceCapability,
   CatalogInstallPreset,
@@ -147,6 +148,13 @@ export default function SeizaCatalogControls({
           </div>
         )}
       </div>
+
+      <p className="catalog-footnote">
+        Seiza&apos;s noise model and ONNX Runtime are in Processing tools.{' '}
+        <button type="button" className="link-button" onClick={() => openSettings('processing-tools')}>
+          Open Processing tools
+        </button>
+      </p>
 
       {capabilities.isError && (
         <div className="catalog-error">

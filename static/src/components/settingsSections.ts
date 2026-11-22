@@ -2,7 +2,7 @@
 export type SettingsSection =
   | 'rig-databases' | 'database-overview' | 'database-add' | 'database-import' | 'sites' | 'databases' | 'rigs' | 'sync'
   | 'setups' | 'templates'
-  | 'calibration' | 'stacking'
+  | 'calibration' | 'stacking' | 'processing-tools'
   | 'performance' | 'gpu' | 'workers'
   | 'storage' | 'backups' | 'catalogs' | 'sky-maps'
   | 'exports' | 'pixinsight' | 'astrobin'
@@ -32,6 +32,7 @@ const GROUPS: readonly SettingsGroup[] = [
   { id: 'processing', label: 'Processing', pages: [
     { id: 'calibration', label: 'Calibration' },
     { id: 'stacking', label: 'Stacking' },
+    { id: 'processing-tools', label: 'Processing tools' },
   ] },
   { id: 'performance', label: 'Performance', pages: [
     { id: 'performance', label: 'CPU & memory' },

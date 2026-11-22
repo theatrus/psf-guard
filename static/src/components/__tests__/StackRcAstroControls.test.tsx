@@ -291,7 +291,7 @@ describe('StackRcAstroControls', () => {
     fireEvent.click(within(denoise).getByRole('button', { name: 'Download in Settings' }));
     window.removeEventListener(OPEN_SETTINGS_EVENT, opened);
     expect((opened.mock.calls[0][0] as CustomEvent).detail)
-      .toEqual({ intent: 'stacking', field: 'processing_tools' });
+      .toEqual({ intent: 'processing-tools' });
   });
 
   it('keeps a saved step of a provider that is not installed, with its reason', async () => {

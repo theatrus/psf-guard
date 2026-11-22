@@ -1430,13 +1430,31 @@ impl Board {
     /// placement of processing steps: other machines' by name, then this
     /// server's, which is the fallback.
     pub fn step_offers(&self) -> Vec<(String, bool, Vec<crate::remote_work::steps::StepOffer>)> {
+        self.step_offers_where(true)
+    }
+
+    /// The providers of the connected machines the placement of processing
+    /// steps leaves out, such as this server under Workers only: a step
+    /// they offer does not run there.
+    pub fn excluded_step_offers(
+        &self,
+    ) -> Vec<(String, bool, Vec<crate::remote_work::steps::StepOffer>)> {
+        self.step_offers_where(false)
+    }
+
+    /// The offers of the connected machines the placement allows, or of
+    /// those it leaves out.
+    fn step_offers_where(
+        &self,
+        allowed: bool,
+    ) -> Vec<(String, bool, Vec<crate::remote_work::steps::StepOffer>)> {
         let now = Instant::now();
         let inner = self.lock();
         let placement = inner.placement(TaskKind::ProcessingStep);
         let mut offers = inner
             .sessions
             .values()
-            .filter(|found| found.online(now) && placement.allows(found.local))
+            .filter(|found| found.online(now) && placement.allows(found.local) == allowed)
             .map(|found| {
                 (
                     found.name.clone(),

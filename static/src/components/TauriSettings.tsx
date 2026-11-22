@@ -722,7 +722,7 @@ export default function TauriSettings({
     ...(planningEnabled || (managementAllowed && canEdit && hasDatabases) ? ['rigs'] as const : []),
     ...(planningEnabled ? ['templates', 'sites'] as const : []),
     ...(canEdit && hasDatabases ? ['sync'] as const : []),
-    'setups', 'calibration', 'stacking', 'performance', 'gpu',
+    'setups', 'calibration', 'stacking', 'processing-tools', 'performance', 'gpu',
     ...(isTauri || (canEdit && managementAllowed) ? ['workers'] as const : []),
     'storage',
     ...(canEdit && managementAllowed ? ['backups'] as const : []),
@@ -1691,8 +1691,12 @@ export default function TauriSettings({
             <div className="settings-setups">
               <StackMethodSettings />
               <StackAutomationSettings />
-              <ProcessingToolsSettings canManage={managementAllowed && canEdit}
-                focus={initialIntent === 'stacking' ? initialField : null} />
+            </div>
+          )}
+
+          {currentTab === 'processing-tools' && (
+            <div className="settings-setups">
+              <ProcessingToolsSettings canManage={managementAllowed && canEdit} />
             </div>
           )}
 

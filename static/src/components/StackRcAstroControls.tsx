@@ -11,7 +11,6 @@ import {
   categoryOf,
   orderedSteps,
   PROCESSING_CATEGORIES,
-  PROCESSING_TOOLS_FIELD,
 } from './processingTools';
 import { toolName } from './stackProcessingLabel';
 import { openSettings } from '../utils/settingsIntent';
@@ -45,6 +44,7 @@ const stateMark: Record<ProcessingProvider['state'], string> = {
   ready: '',
   not_licensed: ' (not licensed)',
   not_installed: ' (not installed)',
+  excluded: ' (not used)',
 };
 
 /**
@@ -282,9 +282,13 @@ function ProviderNote({ provider, named = false }: { provider: ProcessingProvide
     <p className="stack-rc-astro-note">
       {named && `${toolName(provider.name)}: `}{reason}{' '}
       {provider.remedy === 'download_noise_model' && (
-        <button type="button"
-          onClick={() => openSettings('stacking', { field: PROCESSING_TOOLS_FIELD })}>
+        <button type="button" onClick={() => openSettings('processing-tools')}>
           Download in Settings
+        </button>
+      )}
+      {provider.remedy === 'change_placement' && (
+        <button type="button" onClick={() => openSettings('workers')}>
+          Open Workers
         </button>
       )}
     </p>

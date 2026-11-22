@@ -32,6 +32,9 @@ pub enum ProviderReadiness {
     NotLicensed,
     /// No machine the placement allows has it.
     NotInstalled,
+    /// Only machines the placement leaves out have it: this server under
+    /// Workers only, or a worker under This server only.
+    Excluded,
 }
 
 /// One provider's state, as `GET /api/tools/processing` lists it.
@@ -85,10 +88,13 @@ impl ProviderState {
 
 /// One provider's state from the offers of the machines that may run it:
 /// other machines' first, by name, then this server's. A licensed schema
-/// wins over an unlicensed one.
+/// wins over an unlicensed one. `excluded` is what the machines the
+/// placement leaves out offer, so a provider only they have says why it
+/// does not run rather than that it is missing.
 fn provider_state(
     provider: &steps::Provider,
     offers: &[(String, bool, Vec<StepOffer>)],
+    excluded: &[(String, bool, Vec<StepOffer>)],
 ) -> ProviderState {
     let having: Vec<(&String, bool, &ExternalToolSchema)> = offers
         .iter()
@@ -117,11 +123,18 @@ fn provider_state(
             )),
             Some(Remedy::License),
         ),
-        None => (
-            ProviderReadiness::NotInstalled,
-            Some(missing.to_string()),
-            Some(remedy),
-        ),
+        None => match excluded_reason(provider, excluded) {
+            Some(reason) => (
+                ProviderReadiness::Excluded,
+                Some(reason),
+                Some(Remedy::ChangePlacement),
+            ),
+            None => (
+                ProviderReadiness::NotInstalled,
+                Some(missing.to_string()),
+                Some(remedy),
+            ),
+        },
     };
     ProviderState {
         category: provider.category,
@@ -148,6 +161,36 @@ fn provider_state(
     }
 }
 
+/// Why `provider` does not run when only machines the placement leaves out
+/// have it, or `None` when none of them has it either.
+fn excluded_reason(
+    provider: &steps::Provider,
+    excluded: &[(String, bool, Vec<StepOffer>)],
+) -> Option<String> {
+    let having: Vec<(&String, bool, &ExternalToolSchema)> = excluded
+        .iter()
+        .filter_map(|(name, local, steps)| {
+            let offer = steps.iter().find(|offer| offer.provider == provider.key)?;
+            Some((name, *local, &offer.schema))
+        })
+        .collect();
+    let (_, _, schema) = having.first()?;
+    let name = &schema.name;
+    Some(if having.iter().any(|(_, local, _)| *local) {
+        format!(
+            "{name} is installed on this server, but Processing steps is set to \
+             Workers only in Settings › Performance › Workers, and no connected worker has it"
+        )
+    } else {
+        let workers: Vec<&str> = having.iter().map(|(name, _, _)| name.as_str()).collect();
+        format!(
+            "{name} is installed on {}, but Processing steps is set to This server only \
+             in Settings › Performance › Workers, and this server does not have it",
+            workers.join(", ")
+        )
+    })
+}
+
 impl Workers {
     /// Whether this server would run a step with `schema` itself, were it
     /// queued now. See [`super::board::Board::runs_here`].
@@ -164,9 +207,10 @@ impl Workers {
     pub fn providers(&self) -> Vec<ProviderState> {
         self.refresh_local();
         let offers = self.board.step_offers();
+        let excluded = self.board.excluded_step_offers();
         steps::PROVIDERS
             .iter()
-            .map(|provider| provider_state(provider, &offers))
+            .map(|provider| provider_state(provider, &offers, &excluded))
             .collect()
     }
 
@@ -175,7 +219,12 @@ impl Workers {
         let known = steps::provider(provider)
             .ok_or_else(|| format!("unknown processing step {provider:?}"))?;
         self.refresh_local();
-        provider_state(known, &self.board.step_offers()).runnable()
+        provider_state(
+            known,
+            &self.board.step_offers(),
+            &self.board.excluded_step_offers(),
+        )
+        .runnable()
     }
 }
 
@@ -297,7 +346,7 @@ mod tests {
             false,
             vec![offer(false, Some("Trial of Ann Example expired"))],
         )];
-        let state = provider_state(nxt, &offers);
+        let state = provider_state(nxt, &offers, &[]);
         assert_eq!(state.state, ProviderReadiness::NotLicensed);
         assert_eq!(state.remedy, Some(Remedy::License));
         assert_eq!(
@@ -320,13 +369,13 @@ mod tests {
     #[test]
     fn a_provider_no_machine_has_reports_what_to_do_and_one_that_is_ready_reports_nothing() {
         let nxt = steps::provider("nxt").unwrap();
-        let missing = provider_state(nxt, &[]);
+        let missing = provider_state(nxt, &[], &[]);
         assert_eq!(missing.state, ProviderReadiness::NotInstalled);
         assert_eq!(missing.remedy, Some(Remedy::InstallRcAstro));
         assert_eq!(missing.reason.as_deref(), Some(NOT_INSTALLED));
         let model = steps::provider(crate::remote_work::noise_model::TOOL).unwrap();
         assert_eq!(
-            provider_state(model, &[]).remedy,
+            provider_state(model, &[], &[]).remedy,
             Some(Remedy::DownloadNoiseModel)
         );
         // A licensed copy on this server wins over an unlicensed one on a
@@ -337,6 +386,7 @@ mod tests {
                 ("studio".to_string(), false, vec![offer(false, None)]),
                 ("This server".to_string(), true, vec![offer(true, None)]),
             ],
+            &[],
         );
         assert_eq!(ready.state, ProviderReadiness::Ready);
         assert_eq!(ready.reason, None);

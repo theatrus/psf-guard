@@ -7,6 +7,7 @@ import { http, HttpResponse } from 'msw';
 import { server } from '../../test/msw-server';
 import ProcessingToolsSettings from '../ProcessingToolsSettings';
 import type { RcAstroCapabilities, SeizaNoiseModel } from '../../api/types';
+import { OPEN_SETTINGS_EVENT } from '../../utils/settingsIntent';
 
 function ok(data: unknown) {
   return HttpResponse.json({ success: true, data, error: null });
@@ -279,17 +280,50 @@ describe('ProcessingToolsSettings', () => {
     expect(screen.queryByRole('button')).toBeNull();
   });
 
-  it('scrolls into view when a processing card sent the person here', async () => {
-    server.use(http.get('/api/tools/rc-astro', () => ok(answer(seizaMissing))));
-    const scrolled: Element[] = [];
-    const original = Element.prototype.scrollIntoView;
-    Element.prototype.scrollIntoView = function scrollIntoView() { scrolled.push(this); };
+  it('says why an installed model does not run under Workers only, with the setting to open', async () => {
+    const base = answer(seizaReady);
+    server.use(http.get('/api/tools/rc-astro', () => ok({
+      ...base,
+      providers: base.providers!.map((provider) => provider.provider !== 'noise-model' ? provider : {
+        ...provider, state: 'excluded', remedy: 'change_placement',
+        reason: 'Seiza noise model is installed on this server, but Processing steps is set to Workers only in Settings › Performance › Workers, and no connected worker has it',
+      }),
+    })));
+    const opened: unknown[] = [];
+    const listen = (event: Event) => opened.push((event as CustomEvent).detail);
+    window.addEventListener(OPEN_SETTINGS_EVENT, listen);
     try {
-      render(<ProcessingToolsSettings canManage focus="processing_tools" />, { wrapper: wrapper() });
-      const heading = await screen.findByRole('heading', { name: 'Processing tools' });
-      expect(scrolled).toEqual([heading.closest('section')]);
+      render(<ProcessingToolsSettings canManage />, { wrapper: wrapper() });
+      await screen.findByText('Seiza noise model');
+      expect(row('noise-model').getByText('Not used')).toBeInTheDocument();
+      expect(row('noise-model').getByText(/installed on this server, but Processing steps is set to Workers only/)).toBeInTheDocument();
+      expect(row('noise-model').getByRole('button', { name: 'Update the noise model' })).toBeEnabled();
+      await userEvent.click(row('noise-model').getByRole('button', { name: 'Open Workers' }));
+      expect(opened).toEqual([{ intent: 'workers' }]);
     } finally {
-      Element.prototype.scrollIntoView = original;
+      window.removeEventListener(OPEN_SETTINGS_EVENT, listen);
     }
+  });
+
+  it('asks again when a download ends, so the model shows as ready', async () => {
+    // The last poll of a download can carry the providers from before it
+    // ended; only the read after it lists the model as ready.
+    const finished = { running: false, message: 'Downloaded', finished_at: 1 };
+    let phase: 'running' | 'ending' | 'ended' = 'running';
+    server.use(http.get('/api/tools/rc-astro', () => {
+      if (phase === 'running') {
+        return ok(answer({ ...seizaMissing, download: { running: true, part: 'model', message: 'Installing noise-v1-d33…' } }));
+      }
+      if (phase === 'ending') {
+        phase = 'ended';
+        return ok(answer({ ...seizaReady, download: finished }));
+      }
+      return ok(answer({ ...seizaReady, download: finished }, true));
+    }));
+    render(<ProcessingToolsSettings canManage />, { wrapper: wrapper() });
+    expect(await screen.findByText('Installing noise-v1-d33…')).toBeInTheDocument();
+    phase = 'ending';
+    await screen.findByText('Downloaded', {}, { timeout: 3000 });
+    expect(await row('noise-model').findByText('Ready', {}, { timeout: 3000 })).toBeInTheDocument();
   });
 });

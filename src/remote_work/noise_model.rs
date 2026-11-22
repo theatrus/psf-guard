@@ -207,7 +207,7 @@ pub struct StepSpec {
 /// The message when no machine has the noise model, with what to do.
 pub const NOT_INSTALLED: &str =
     "The noise model is not installed on this server or on a connected worker. \
-     Open Settings, choose Stacking, and click Download under Processing tools";
+     Open Settings › Processing › Processing tools and click Download";
 
 /// Seiza's noise model as a provider of processing steps.
 pub struct SeizaNoiseEngine;
