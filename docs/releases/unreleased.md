@@ -17,5 +17,10 @@
   many times you clicked **Update**, and a stack that used the model failed
   with a message that told you to download it again. The same applies to a
   tool only a worker has when the setting is **This server only**.
+- **Rig setup** has a **Target Scheduler templates** tab. It lists the Target
+  Scheduler exposure templates in the rig's database and lets you change
+  their gain, offset, binning, readout mode, default exposure, twilight,
+  humidity limit, dither interval and Moon avoidance. Before, you had to
+  change them in N.I.N.A.
 - The noise model shows as ready as soon as its download ends. Before, the
   page could keep showing it as not installed until you reopened it.
