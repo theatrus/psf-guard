@@ -1,0 +1,78 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { http, HttpResponse } from 'msw';
+import { describe, expect, it } from 'vitest';
+import { server } from '../../test/msw-server';
+import RigExposureTemplates from '../director/RigExposureTemplates';
+import type { ExposureTemplateDetails } from '../../api/types';
+
+const ok = (data: unknown) => ({ success: true, data, error: null });
+
+const ha: ExposureTemplateDetails = {
+  id: 7, profile_id: 'p', name: 'Ha 300', filter_name: 'Ha', gain: -1, offset: -1, bin: 1, readout_mode: -1,
+  twilight_level: 0, moon_avoidance_enabled: false, moon_avoidance_separation: 60, moon_avoidance_width: 7,
+  maximum_humidity: 0, default_exposure: 300, moon_relax_scale: 0, moon_relax_max_altitude: 5,
+  moon_relax_min_altitude: -15, moon_down_enabled: false, dither_every: -1, minutes_offset: 0, plan_count: 3,
+};
+
+function fixture() {
+  const saves: Array<Record<string, unknown>> = [];
+  let rows = [ha];
+  server.use(
+    http.get('/api/db/rig/exposure-templates', () => HttpResponse.json(ok(rows))),
+    http.put('/api/db/rig/exposure-templates/:id', async ({ request }) => {
+      const body = await request.json() as Record<string, unknown>;
+      saves.push(body);
+      const saved = { ...ha, ...body, gain: body.gain ?? -1, offset: body.offset ?? -1, readout_mode: body.readout_mode ?? -1 } as ExposureTemplateDetails;
+      rows = [saved];
+      return HttpResponse.json(ok(saved));
+    }),
+  );
+  return { saves };
+}
+
+function mount(canEdit = true) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  return render(<QueryClientProvider client={client}><RigExposureTemplates slug="rig" canEdit={canEdit} /></QueryClientProvider>);
+}
+
+describe('Rig exposure templates', () => {
+  it('saves Moon avoidance, twilight and gain on a rig template', async () => {
+    const { saves } = fixture();
+    mount();
+    expect(screen.queryByRole('button', { name: 'Save Ha 300' })).not.toBeInTheDocument();
+    fireEvent.change(await screen.findByLabelText('Gain of Ha 300'), { target: { value: '139' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Moon and twilight settings for Ha 300' }));
+    fireEvent.change(screen.getByLabelText('Twilight for Ha 300'), { target: { value: '1' } });
+    fireEvent.click(screen.getByLabelText('Enable Moon avoidance'));
+    fireEvent.change(screen.getByLabelText(/Separation at full Moon/), { target: { value: '110' } });
+    fireEvent.change(screen.getByLabelText(/Half-separation width/), { target: { value: '0' } });
+    expect(screen.getByRole('button', { name: 'Save Ha 300' })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText(/Half-separation width/), { target: { value: '10' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Ha 300' }));
+
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0]).toMatchObject({
+      name: 'Ha 300', gain: 139, offset: null, readout_mode: null, bin: 1, twilight_level: 1,
+      moon_avoidance_enabled: true, moon_avoidance_separation: 110, moon_avoidance_width: 10,
+    });
+    expect(saves[0]).not.toHaveProperty('filter_name');
+    expect(await screen.findByText('Ha 300 saved')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Save Ha 300' })).not.toBeInTheDocument();
+  });
+
+  it('shows the templates without edits when this server does not allow database management', async () => {
+    fixture();
+    mount(false);
+    expect(await screen.findByLabelText('Gain of Ha 300')).toBeDisabled();
+    expect(screen.getByText(/View only/)).toBeInTheDocument();
+  });
+
+  it('drops edits with Undo', async () => {
+    fixture();
+    mount();
+    fireEvent.change(await screen.findByLabelText('Name of Ha 300'), { target: { value: 'Ha 240' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Drop changes to Ha 300' }));
+    expect(screen.getByLabelText('Name of Ha 300')).toHaveValue('Ha 300');
+  });
+});

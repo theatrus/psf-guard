@@ -22,3 +22,15 @@
 .template-moon-fields label { display: flex; flex-direction: column; gap: 6px; }
 .template-moon-fields span { display: flex; align-items: center; gap: 6px; color: var(--color-text-secondary); }
 .template-table .template-moon-fields input { width: 100px; min-width: 0; }
+/* A rig's Target Scheduler templates: narrower names, so Save stays in view. */
+.rig-templates .template-table td:first-child input { min-width: 6.5rem; }
+.rig-templates .template-table th, .rig-templates .template-table td { padding-left: 4px; padding-right: 4px; }
+.rig-templates .template-table td:first-child small { display: block; margin-top: 2px; }
+.rig-templates .template-table input[type='number'] { min-width: 4.25rem; }
+.rig-templates .template-table td.rig-template-bin input { min-width: 3rem; }
+.rig-template-details { font-size: 13px; margin-top: 12px; padding-top: 8px; border-top: 1px solid var(--color-border-secondary); }
+.rig-template-details h5 { margin: 0 0 4px; }
+.rig-template-details .template-moon { width: 100%; position: static; }
+.rig-template-details .template-moon input[type='checkbox'] { width: auto; }
+.rig-template-details .template-moon-fields input { width: 100px; }
+.rig-template-details .template-moon-fields select { width: auto; }
