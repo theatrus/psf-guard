@@ -93,6 +93,8 @@ import type { GuidFillReport, GuidReport, ImportedCopiesMerge, ImportedCopiesRep
   TargetSchedulerUpdate,
   CreateExposurePlanRequest,
   ExposurePlanDetails,
+  ExposureTemplateDetails,
+  UpdateExposureTemplateRequest,
   OverallStats,
   SkyCoverage,
   CacheRefreshProgress,
@@ -3927,6 +3929,29 @@ export const apiClient = {
       request
     );
     if (!data.data) throw new Error(data.error || 'Failed to update exposure plan');
+  },
+
+  getExposureTemplates: async (dbId: string): Promise<ExposureTemplateDetails[]> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<ExposureTemplateDetails[]>>(
+      dbPath(dbId, '/exposure-templates')
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to load exposure templates');
+    return data.data;
+  },
+
+  updateExposureTemplate: async (
+    dbId: string,
+    templateId: number,
+    request: UpdateExposureTemplateRequest
+  ): Promise<ExposureTemplateDetails> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.put<ApiResponse<ExposureTemplateDetails>>(
+      dbPath(dbId, `/exposure-templates/${templateId}`),
+      request
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to save exposure template');
+    return data.data;
   },
 
   getTargetsOverview: async (dbId: string): Promise<TargetOverview[]> => {

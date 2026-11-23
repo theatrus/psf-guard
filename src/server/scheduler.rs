@@ -132,6 +132,35 @@ pub struct UpdateExposurePlanRequest {
     pub enabled: bool,
 }
 
+/// Every setting of an exposure template a person may change. The filter
+/// stays: exposure plans and frames already captured depend on it.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateExposureTemplateRequest {
+    pub name: String,
+    /// None, or -1, uses the camera's default.
+    pub gain: Option<i32>,
+    pub offset: Option<i32>,
+    pub bin: i32,
+    pub readout_mode: Option<i32>,
+    pub default_exposure: f64,
+    /// 0 = nighttime, 1 = astronomical, 2 = nautical, 3 = civil.
+    pub twilight_level: i32,
+    /// Minutes the twilight limit moves: later at dusk, earlier at dawn.
+    pub minutes_offset: i32,
+    /// 0 turns the humidity limit off.
+    pub maximum_humidity: f64,
+    /// -1 uses the project's dither setting.
+    pub dither_every: i32,
+    pub moon_avoidance_enabled: bool,
+    pub moon_avoidance_separation: f64,
+    pub moon_avoidance_width: i32,
+    pub moon_relax_scale: f64,
+    pub moon_relax_min_altitude: f64,
+    pub moon_relax_max_altitude: f64,
+    pub moon_down_enabled: bool,
+}
+
 fn default_true() -> bool {
     true
 }
@@ -208,7 +237,27 @@ fn templates_for_project(
     profile_id: &str,
     project_id: i32,
 ) -> rusqlite::Result<Vec<ExposureTemplateResponse>> {
-    let mut stmt = conn.prepare(
+    read_templates(
+        conn,
+        "WHERE et.profileId = ?1
+            OR EXISTS (
+                SELECT 1 FROM exposureplan linked_ep
+                JOIN target linked_target ON linked_target.Id = linked_ep.targetid
+                WHERE linked_ep.exposureTemplateId = et.Id
+                  AND linked_target.projectid = ?2
+            )",
+        params![profile_id, project_id],
+    )
+}
+
+/// Exposure templates matching `filter`, a `WHERE` clause over `et`, with
+/// how many exposure plans use each.
+fn read_templates(
+    conn: &Connection,
+    filter: &str,
+    values: impl rusqlite::Params,
+) -> rusqlite::Result<Vec<ExposureTemplateResponse>> {
+    let mut stmt = conn.prepare(&format!(
         "SELECT et.Id, et.profileId, et.name, et.filtername,
                 et.gain, et.offset, et.bin, et.readoutmode,
                 COALESCE(et.twilightlevel, 0),
@@ -226,17 +275,11 @@ fn templates_for_project(
                 COUNT(ep.Id)
          FROM exposuretemplate et
          LEFT JOIN exposureplan ep ON ep.exposureTemplateId = et.Id
-         WHERE et.profileId = ?1
-            OR EXISTS (
-                SELECT 1 FROM exposureplan linked_ep
-                JOIN target linked_target ON linked_target.Id = linked_ep.targetid
-                WHERE linked_ep.exposureTemplateId = et.Id
-                  AND linked_target.projectid = ?2
-            )
+         {filter}
          GROUP BY et.Id
-         ORDER BY et.filtername, et.name, et.Id",
-    )?;
-    stmt.query_map(params![profile_id, project_id], |row| {
+         ORDER BY et.filtername, et.name, et.Id"
+    ))?;
+    stmt.query_map(values, |row| {
         Ok(ExposureTemplateResponse {
             id: row.get(0)?,
             profile_id: row.get(1)?,
@@ -751,6 +794,135 @@ pub async fn update_exposure_plan(
     )))
 }
 
+/// `GET /api/db/{db_id}/exposure-templates`: every exposure template in
+/// the database, for every N.I.N.A. profile.
+pub async fn list_exposure_templates(
+    ctx: DbContext,
+) -> Result<Json<ApiResponse<Vec<ExposureTemplateResponse>>>, AppError> {
+    let conn = ctx.db();
+    let conn = conn.lock().map_err(AppError::db)?;
+    let templates = read_templates(&conn, "", []).map_err(AppError::db)?;
+    Ok(Json(ApiResponse::success(templates)))
+}
+
+/// `PUT /api/db/{db_id}/exposure-templates/{template_id}`: change a
+/// template's capture, twilight, humidity, dither and Moon settings.
+pub async fn update_exposure_template(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+    Path((_db_id, template_id)): Path<(String, i32)>,
+    Json(req): Json<UpdateExposureTemplateRequest>,
+) -> Result<Json<ApiResponse<ExposureTemplateResponse>>, AppError> {
+    crate::server::handlers::require_database_management_allowed(&state)?;
+    let name = validate_template(&req)?;
+    let conn = ctx.db();
+    let conn = conn.lock().map_err(AppError::db)?;
+    let changed = conn
+        .execute(
+            "UPDATE exposuretemplate SET
+                name = ?1, gain = ?2, offset = ?3, bin = ?4, readoutmode = ?5,
+                defaultexposure = ?6, twilightlevel = ?7, minutesOffset = ?8,
+                maximumhumidity = ?9, ditherevery = ?10,
+                moonavoidanceenabled = ?11, moonavoidanceseparation = ?12,
+                moonavoidancewidth = ?13, moonrelaxscale = ?14,
+                moonrelaxminaltitude = ?15, moonrelaxmaxaltitude = ?16,
+                moondownenabled = ?17
+             WHERE Id = ?18",
+            params![
+                name,
+                req.gain.unwrap_or(-1),
+                req.offset.unwrap_or(-1),
+                req.bin,
+                req.readout_mode.unwrap_or(-1),
+                req.default_exposure,
+                req.twilight_level,
+                req.minutes_offset,
+                req.maximum_humidity,
+                req.dither_every,
+                i32::from(req.moon_avoidance_enabled),
+                req.moon_avoidance_separation,
+                req.moon_avoidance_width,
+                req.moon_relax_scale,
+                req.moon_relax_min_altitude,
+                req.moon_relax_max_altitude,
+                i32::from(req.moon_down_enabled),
+                template_id,
+            ],
+        )
+        .map_err(AppError::db)?;
+    if changed == 0 {
+        return Err(AppError::BadRequest(format!(
+            "exposure template {template_id} not found"
+        )));
+    }
+    let template = read_templates(&conn, "WHERE et.Id = ?1", [template_id])
+        .map_err(AppError::db)?
+        .pop()
+        .ok_or_else(|| {
+            AppError::BadRequest(format!("exposure template {template_id} not found"))
+        })?;
+    Ok(Json(ApiResponse::success(template)))
+}
+
+/// The template's trimmed name, or why its settings are refused. The
+/// limits are Target Scheduler's own.
+fn validate_template(req: &UpdateExposureTemplateRequest) -> Result<String, AppError> {
+    let refuse = |message: &str| Err(AppError::BadRequest(message.into()));
+    let within =
+        |value: f64, low: f64, high: f64| value.is_finite() && (low..=high).contains(&value);
+    let name = req.name.trim();
+    if name.is_empty() || name.len() > 256 || name.chars().any(char::is_control) {
+        return refuse("the template name must be 1 to 256 characters, with no line breaks");
+    }
+    for (label, value) in [
+        ("gain", req.gain),
+        ("offset", req.offset),
+        ("readout mode", req.readout_mode),
+    ] {
+        if value.is_some_and(|value| value < -1) {
+            return refuse(&format!(
+                "{label} must be -1 for the camera default, or zero or more"
+            ));
+        }
+    }
+    if !(1..=16).contains(&req.bin) {
+        return refuse("binning must be between 1 and 16");
+    }
+    if !req.default_exposure.is_finite() || req.default_exposure <= 0.0 {
+        return refuse("the default exposure must be greater than zero");
+    }
+    if !(0..=3).contains(&req.twilight_level) {
+        return refuse("twilight must be nighttime, astronomical, nautical or civil");
+    }
+    if !(-720..=720).contains(&req.minutes_offset) {
+        return refuse("the twilight offset must be between -720 and 720 minutes");
+    }
+    if !within(req.maximum_humidity, 0.0, 100.0) {
+        return refuse("maximum humidity must be between 0 and 100 percent");
+    }
+    if req.dither_every < -1 {
+        return refuse("dither every must be -1 for the project setting, or zero or more");
+    }
+    if !within(req.moon_avoidance_separation, 0.0, 180.0) {
+        return refuse("Moon separation must be between 0 and 180 degrees");
+    }
+    if !(1..=14).contains(&req.moon_avoidance_width) {
+        return refuse("Moon avoidance width must be between 1 and 14 days");
+    }
+    if !within(req.moon_relax_scale, 0.0, 180.0) {
+        return refuse("Moon relaxation must be between 0 and 180");
+    }
+    if !within(req.moon_relax_min_altitude, -90.0, 90.0)
+        || !within(req.moon_relax_max_altitude, -90.0, 90.0)
+        || req.moon_relax_min_altitude >= req.moon_relax_max_altitude
+    {
+        return refuse(
+            "the lower Moon altitude must be below the upper altitude, between -90 and 90 degrees",
+        );
+    }
+    Ok(name.to_owned())
+}
+
 fn validate_plan_values(exposure: f64, desired: i32) -> Result<(), AppError> {
     if !exposure.is_finite() || (exposure != -1.0 && exposure <= 0.0) {
         return Err(AppError::BadRequest(
@@ -808,5 +980,166 @@ mod tests {
         .unwrap();
         let details = project_details(&old, 1).unwrap().unwrap();
         assert_eq!(details.flats_handling, 0);
+    }
+}
+
+/// Exposure template edits through the HTTP API.
+#[cfg(test)]
+mod template_http_tests {
+    use crate::server::state::AppState;
+    use axum::{body::Body, http::Request, Router};
+    use serde_json::{json, Value};
+    use std::sync::Arc;
+    use tower::ServiceExt;
+
+    fn rig(manage: bool) -> (tempfile::TempDir, std::path::PathBuf, Router) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rig.sqlite");
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        crate::ts_schema::apply_schema(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO exposuretemplate (Id,profileId,name,filtername,gain,offset,bin,readoutmode,
+                defaultexposure,twilightlevel,moonavoidanceenabled,moonavoidanceseparation,
+                moonavoidancewidth,maximumhumidity,moonrelaxscale,moonrelaxmaxaltitude,
+                moonrelaxminaltitude,moondownenabled,ditherevery,minutesOffset,guid)
+             VALUES (1,'p','Ha 300','Ha',-1,-1,1,-1,300,0,0,60,7,0,0,5,-15,0,-1,0,'ha'),
+                    (2,'other','OIII','OIII',100,30,1,-1,300,0,0,60,7,0,0,5,-15,0,-1,0,'oiii');",
+        )
+        .unwrap();
+        drop(conn);
+        let catalog = crate::server::database_context::DatabaseContext::new(
+            "rig".into(),
+            "Rig".into(),
+            path.display().to_string(),
+            vec![dir.path().display().to_string()],
+            None,
+            None,
+            None,
+            dir.path().join("cache"),
+        )
+        .unwrap();
+        let state = AppState::new_for_test(rusqlite::Connection::open_in_memory().unwrap());
+        state.set_allow_database_management(manage);
+        {
+            let mut databases = state.databases.write().unwrap();
+            databases.clear();
+            databases.insert(catalog.id.clone(), Arc::new(catalog));
+        }
+        let app = Router::new().nest("/api", crate::server::api_router(Arc::new(state)));
+        (dir, path, app)
+    }
+
+    async fn send(app: &Router, method: &str, uri: &str, body: Value) -> (u16, Value) {
+        let request = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("host", "localhost")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        let status = response.status().as_u16();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        )
+    }
+
+    fn edit() -> Value {
+        json!({
+            "name": " Ha 300 dark sky ", "gain": 139, "offset": 21, "bin": 2, "readout_mode": null,
+            "default_exposure": 240.0, "twilight_level": 1, "minutes_offset": 15,
+            "maximum_humidity": 85.0, "dither_every": 3,
+            "moon_avoidance_enabled": true, "moon_avoidance_separation": 120.0,
+            "moon_avoidance_width": 10, "moon_relax_scale": 2.0,
+            "moon_relax_min_altitude": -10.0, "moon_relax_max_altitude": 10.0,
+            "moon_down_enabled": true
+        })
+    }
+
+    #[tokio::test]
+    async fn a_template_lists_for_every_profile_and_saves_its_moon_settings() {
+        let (_dir, path, app) = rig(true);
+        let (status, body) = send(&app, "GET", "/api/db/rig/exposure-templates", Value::Null).await;
+        assert_eq!(status, 200, "{body}");
+        let names: Vec<_> = body["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|template| template["name"].as_str().unwrap().to_owned())
+            .collect();
+        assert_eq!(names, ["Ha 300", "OIII"]);
+
+        let (status, body) = send(&app, "PUT", "/api/db/rig/exposure-templates/1", edit()).await;
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body["data"]["name"], "Ha 300 dark sky");
+        assert_eq!(body["data"]["moon_avoidance_separation"], 120.0);
+        assert_eq!(body["data"]["filter_name"], "Ha");
+
+        let row: String = rusqlite::Connection::open(&path)
+            .unwrap()
+            .query_row(
+                "SELECT json_array(name, gain, bin, readoutmode, defaultexposure, twilightlevel,
+                        maximumhumidity, moonavoidanceenabled, moonavoidancewidth,
+                        moonrelaxscale, moonrelaxminaltitude, moondownenabled,
+                        ditherevery, minutesOffset, filtername)
+                 FROM exposuretemplate WHERE Id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&row).unwrap(),
+            json!([
+                "Ha 300 dark sky",
+                139,
+                2,
+                -1,
+                240.0,
+                1,
+                85.0,
+                1,
+                10,
+                2.0,
+                -10.0,
+                1,
+                3,
+                15,
+                "Ha"
+            ])
+        );
+    }
+
+    #[tokio::test]
+    async fn a_template_edit_is_refused_out_of_range_or_without_database_management() {
+        let (_dir, _path, app) = rig(true);
+        let mut bad = edit();
+        bad["moon_relax_min_altitude"] = json!(20.0);
+        let (status, body) = send(&app, "PUT", "/api/db/rig/exposure-templates/1", bad).await;
+        assert_eq!(status, 400, "{body}");
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap()
+                .contains("lower Moon altitude"),
+            "{body}"
+        );
+
+        let mut filter = edit();
+        filter["filter_name"] = json!("OIII");
+        let (status, _) = send(&app, "PUT", "/api/db/rig/exposure-templates/1", filter).await;
+        assert_eq!(status, 422, "the filter is not editable");
+
+        let (status, _) = send(&app, "PUT", "/api/db/rig/exposure-templates/9", edit()).await;
+        assert_eq!(status, 400);
+
+        let (_dir, _path, app) = rig(false);
+        let (status, _) = send(&app, "PUT", "/api/db/rig/exposure-templates/1", edit()).await;
+        assert_eq!(status, 403);
+        let (status, _) = send(&app, "GET", "/api/db/rig/exposure-templates", Value::Null).await;
+        assert_eq!(status, 200, "reading needs no database management");
     }
 }

@@ -4263,6 +4263,28 @@ export interface ExposureTemplateDetails {
   plan_count: number;
 }
 
+/** The settings of an exposure template a person may change; the filter stays. */
+export interface UpdateExposureTemplateRequest {
+  name: string;
+  /** null uses the camera's default. */
+  gain: number | null;
+  offset: number | null;
+  bin: number;
+  readout_mode: number | null;
+  default_exposure: number;
+  twilight_level: number;
+  minutes_offset: number;
+  maximum_humidity: number;
+  dither_every: number;
+  moon_avoidance_enabled: boolean;
+  moon_avoidance_separation: number;
+  moon_avoidance_width: number;
+  moon_relax_scale: number;
+  moon_relax_min_altitude: number;
+  moon_relax_max_altitude: number;
+  moon_down_enabled: boolean;
+}
+
 export interface SchedulerTargetDetails {
   id: number;
   name: string;

@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } fr
 import { SKY_INPUTS_MUTATION } from './skyInputs';
 import { type QueryClient, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError, type AxiosError } from 'axios';
-import { Camera, Check, CloudSun, Download, Link2, MapPin, Plug, SlidersHorizontal } from 'lucide-react';
+import { Camera, Check, CloudSun, Download, Layers, Link2, MapPin, Plug, SlidersHorizontal } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import type { DirectorRigProfileView, DirectorRigSite } from '../../api/directorTypes';
@@ -14,6 +14,8 @@ import SchedulingFields from './SchedulingFields';
 import { compactOverrides, inheritedLimits, sameOverrides } from './schedulingModel';
 import EarlyBeta from './EarlyBeta';
 import RigPluginPanel from './RigPluginPanel';
+import RigExposureTemplates from './RigExposureTemplates';
+import { isTauriApp } from '../../utils/tauri';
 import PluginsOnRig from '../rigs/PluginsOnRig';
 import RigWeatherPanel from './RigWeather';
 import WorkspaceTabs from './WorkspaceTabs';
@@ -30,7 +32,7 @@ class SettingsNotSaved extends Error {}
 const httpErrorOf = (error: unknown): AxiosError | null => isAxiosError(error) ? error
   : error instanceof Error ? httpErrorOf(error.cause) : null;
 
-const TABS = [{ id: 'optics', label: 'Optics', icon: <Camera size={16} /> }, { id: 'site', label: 'Site', icon: <MapPin size={16} /> }, { id: 'limits', label: 'Limits and delivery', icon: <SlidersHorizontal size={16} /> }, { id: 'weather', label: 'Weather', icon: <CloudSun size={16} /> }, { id: 'director', label: 'Plugins', icon: <Plug size={16} /> }, { id: 'collaboration', label: 'Collaboration', icon: <Link2 size={16} /> }] as const;
+const TABS = [{ id: 'optics', label: 'Optics', icon: <Camera size={16} /> }, { id: 'site', label: 'Site', icon: <MapPin size={16} /> }, { id: 'limits', label: 'Limits and delivery', icon: <SlidersHorizontal size={16} /> }, { id: 'templates', label: 'Target Scheduler templates', icon: <Layers size={16} /> }, { id: 'weather', label: 'Weather', icon: <CloudSun size={16} /> }, { id: 'director', label: 'Plugins', icon: <Plug size={16} /> }, { id: 'collaboration', label: 'Collaboration', icon: <Link2 size={16} /> }] as const;
 type Tab = (typeof TABS)[number]['id'];
 /** A Rig setup tab. `director` is the Plugins tab: its id predates the Sync plugin moving there. */
 export type RigSetupTab = Tab;
@@ -106,6 +108,8 @@ export default function RigProfileCard({ slug, syncPlugin, initialTab }: {
     // Director admits one metadata request at a time; a 503 means wait, not fail.
     retry: (count, error) => count < 5 && statusOf(error) === 503, retryDelay: 700 });
   const peers = useQuery({ queryKey: ['peers'], queryFn: apiClient.getPeers, retry: false, refetchOnWindowFocus: false });
+  // Editing exposure templates needs database management as well as an editor's account.
+  const { data: serverInfo } = useQuery({ queryKey: ['serverInfo'], queryFn: apiClient.getServerInfo, staleTime: 5 * 60 * 1000 });
   // Where the rig stands for planning: the site it names, and what that
   // gives it. The rig's own location and horizon still win.
   const rigId = loaded.data?.rig.id;
@@ -227,7 +231,7 @@ export default function RigProfileCard({ slug, syncPlugin, initialTab }: {
     {data && form && <div className="rig-setup-layout">
     <WorkspaceTabs id={id} className="rig-setup-nav" orientation={vertical ? 'vertical' : 'horizontal'} label="Rig setup sections" tabs={TABS} value={tab} onChange={next => { setTab(next); if (next === 'collaboration') setCollaborationVisited(true); }} />
     <div className="rig-setup-content">
-    <form onSubmit={submit} className="rig-profile-form" hidden={tab === 'collaboration' || tab === 'weather' || tab === 'director'}>
+    <form onSubmit={submit} className="rig-profile-form" hidden={tab === 'collaboration' || tab === 'weather' || tab === 'director' || tab === 'templates'}>
       <div {...workspacePanel(id, 'optics', tab)}>
       <fieldset disabled={disabled}>
         <legend>Mode</legend>
@@ -356,6 +360,7 @@ export default function RigProfileCard({ slug, syncPlugin, initialTab }: {
       {canWrite && <div className="director-actions"><button type="submit" disabled={disabled}><Check size={16} />{save.isPending ? 'Saving...' : 'Save rig profile'}</button>{unsaved && !save.isPending && <span className="unsaved-note">Unsaved changes</span>}</div>}
       {!canWrite && <p className="director-muted">Read only</p>}
     </form>
+    <div {...workspacePanel(id, 'templates', tab)}>{tab === 'templates' && <RigExposureTemplates slug={slug} canEdit={canWrite && (isTauriApp() || !!serverInfo?.allow_database_management)} />}</div>
     <div {...workspacePanel(id, 'weather', tab)}>{tab === 'weather' && <RigWeatherPanel rig={data.rig.id} />}</div>
     <div {...workspacePanel(id, 'director', tab)}>{tab === 'director' && <>
       <PluginsOnRig databaseId={slug} director={{ mode: data.mode.runtime, onChangeMode: () => setTab('optics') }} />

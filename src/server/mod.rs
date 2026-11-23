@@ -435,6 +435,14 @@ pub fn api_router(state: Arc<AppState>) -> Router {
             "/exposure-plans/{plan_id}",
             put(scheduler::update_exposure_plan),
         )
+        .route(
+            "/exposure-templates",
+            get(scheduler::list_exposure_templates),
+        )
+        .route(
+            "/exposure-templates/{template_id}",
+            put(scheduler::update_exposure_template),
+        )
         .route("/projects/overview", get(handlers::get_projects_overview))
         .route("/targets", get(handlers::list_all_targets))
         .route("/targets/overview", get(handlers::get_targets_overview))
