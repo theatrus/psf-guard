@@ -38,6 +38,10 @@ test("a rig's exposure template takes new gain, twilight and Moon settings from 
     const templates = page.getByRole('region', { name: 'Target Scheduler templates' });
 
     await templates.getByRole('spinbutton', { name: 'Gain of Ha 300' }).fill('139');
+    // An unsaved edit survives a trip to another Rig setup tab.
+    await page.getByRole('tab', { name: 'Optics', exact: true }).click();
+    await page.getByRole('tab', { name: 'Target Scheduler templates', exact: true }).click();
+    await expect(templates.getByRole('spinbutton', { name: 'Gain of Ha 300' })).toHaveValue('139');
     await templates.getByRole('button', { name: 'Moon and twilight settings for Ha 300' }).click();
     await templates.getByRole('combobox', { name: 'Twilight for Ha 300' }).selectOption('Astronomical');
     await templates.getByLabel('Enable Moon avoidance').check();

@@ -8,6 +8,7 @@ import type { ExposureTemplateDetails, UpdateExposureTemplateRequest } from '../
 import NumberInput from '../NumberInput';
 import MoonSettings from './MoonSettings';
 import { moonProblem } from './moonPolicy';
+import { useUnsavedChanges } from '../../hooks/useUnsavedChanges';
 import './TemplateLibrary.css';
 
 const TWILIGHT = ['Nighttime', 'Astronomical', 'Nautical', 'Civil'];
@@ -67,7 +68,8 @@ function problemWith(draft: Draft): string | null {
   if (!Number.isInteger(draft.minutes_offset) || Math.abs(draft.minutes_offset) > 720) return 'The twilight offset must be a whole number of minutes between -720 and 720.';
   if (!Number.isFinite(draft.maximum_humidity) || draft.maximum_humidity < 0 || draft.maximum_humidity > 100) return 'Maximum humidity must be between 0 and 100 percent.';
   if (!Number.isInteger(draft.dither_every) || draft.dither_every < -1) return 'Dither every must be -1 for the project setting, or 0 or more.';
-  return moonProblem(draft.moon);
+  // Target Scheduler ignores the Moon fields while avoidance is off.
+  return draft.moon.enabled ? moonProblem(draft.moon) : null;
 }
 
 /** The drafts with this template's dropped. */
@@ -101,12 +103,16 @@ export default function RigExposureTemplates({ slug, canEdit }: { slug: string; 
   const [notice, setNotice] = useState('');
   const save = useMutation({
     mutationFn: ({ id, draft }: { id: number; draft: Draft }) => apiClient.updateExposureTemplate(slug, id, requestOf(draft)),
-    onSuccess: (saved) => {
+    onSuccess: (saved, sent) => {
       client.setQueryData<ExposureTemplateDetails[]>(queryKey, current => current?.map(row => row.id === saved.id ? saved : row));
-      setDrafts(current => without(current, saved.id));
+      // Edits typed while the save ran stay as a draft.
+      setDrafts(current => current[saved.id] === sent.draft ? without(current, saved.id) : current);
       setNotice(`${saved.name} saved`);
-      // Project views list the same templates.
-      return client.invalidateQueries({ queryKey: ['db', slug] });
+      // Project views and plan editors list the same templates.
+      return Promise.all([
+        client.invalidateQueries({ queryKey: ['db', slug, 'project-scheduler'] }),
+        client.invalidateQueries({ queryKey: ['directorTemplates', slug] }),
+      ]);
     },
   });
 
@@ -132,10 +138,14 @@ export default function RigExposureTemplates({ slug, canEdit }: { slug: string; 
     </>;
   };
   const opened = rows.find(row => row.id === expanded);
+  // Why each changed row cannot be saved. The open Moon fields show their own problem.
+  const problems = rows.map(row => ({ row, ...stateOf(row) }))
+    .filter(entry => entry.dirty && entry.trouble && !(entry.row.id === expanded && entry.trouble === moonProblem(entry.draft.moon)));
+  useUnsavedChanges('Target Scheduler templates', rows.some(row => stateOf(row).dirty));
 
   return <section className="template-library rig-templates" aria-label="Target Scheduler templates">
     <p className="director-muted">The exposure templates in this rig's Target Scheduler database. A change applies to every exposure plan that uses the template. An empty gain, offset or readout mode uses the camera's default. A plan that uses a template from the template library keeps the library's Moon settings when it is activated.</p>
-    {!canEdit && <p className="director-muted">View only. Changing templates needs database management on this server.</p>}
+    {!canEdit && <p className="director-muted">View only. Sign in with an editor's account to change templates.</p>}
     {templates.isPending && <p role="status">Loading exposure templates...</p>}
     {templates.isError && <p className="director-error" role="alert">{message(templates.error)}</p>}
     {templates.data && rows.length === 0 && <p className="director-muted">No exposure templates in this database.</p>}
@@ -163,7 +173,7 @@ export default function RigExposureTemplates({ slug, canEdit }: { slug: string; 
       })}</tbody>
     </table></div>}
     {opened && (() => {
-      const { draft, trouble, label } = stateOf(opened);
+      const { draft, label } = stateOf(opened);
       return <div className="rig-template-details" role="group" aria-label={`${label}: Moon and twilight`}>
         <h5>{label}: Moon and twilight</h5>
         <fieldset className="template-moon" disabled={!canEdit || save.isPending}>
@@ -186,9 +196,9 @@ export default function RigExposureTemplates({ slug, canEdit }: { slug: string; 
           </div>
         </fieldset>
         <MoonSettings value={draft.moon} disabled={!canEdit || save.isPending} onChange={moon => edit(opened, { moon })} />
-        {trouble && trouble !== moonProblem(draft.moon) && <p className="director-error" role="alert">{trouble}</p>}
       </div>;
     })()}
+    {problems.map(({ row, label, trouble }) => <p key={row.id} className="director-error" role="alert">{label}: {trouble}</p>)}
     {notice && <p role="status">{notice}</p>}
     {save.isError && <p className="director-error" role="alert">{message(save.error)}</p>}
   </section>;
