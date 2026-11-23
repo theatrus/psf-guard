@@ -1920,8 +1920,19 @@ library's Moon settings. When activation finds that the rig's template no
 longer has them, it uses or creates a template that does. To change Moon
 settings for such a plan, change them in the library.
 
-Saving needs the server's database-management permission. Without it, the
-tab shows the templates read only. Over the API,
+A change to the camera settings or default exposure marks each Director
+plan that uses the template as changed since its last activation, until you
+activate it again.
+
+Unsaved changes stay when you switch Rig setup tabs, and Settings asks
+before closing over them. Moon fields are checked only while Moon avoidance
+is on, since Target Scheduler ignores them otherwise. An older Target
+Scheduler database may lack a setting, such as the twilight offset; the tab
+then shows its default and refuses a change to it until Target Scheduler is
+updated in N.I.N.A.
+
+Saving needs an editor's account. A read-only viewer sees the templates
+without edits. Over the API,
 `GET /api/db/{db_id}/exposure-templates` lists the templates and
 `PUT /api/db/{db_id}/exposure-templates/{id}` saves one.
 

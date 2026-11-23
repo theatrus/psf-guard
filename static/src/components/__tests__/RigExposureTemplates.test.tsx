@@ -15,9 +15,9 @@ const ha: ExposureTemplateDetails = {
   moon_relax_min_altitude: -15, moon_down_enabled: false, dither_every: -1, minutes_offset: 0, plan_count: 3,
 };
 
-function fixture() {
+function fixture(first: ExposureTemplateDetails = ha) {
   const saves: Array<Record<string, unknown>> = [];
-  let rows = [ha];
+  let rows = [first];
   server.use(
     http.get('/api/db/rig/exposure-templates', () => HttpResponse.json(ok(rows))),
     http.put('/api/db/rig/exposure-templates/:id', async ({ request }) => {
@@ -74,5 +74,43 @@ describe('Rig exposure templates', () => {
     fireEvent.change(await screen.findByLabelText('Name of Ha 300'), { target: { value: 'Ha 240' } });
     fireEvent.click(screen.getByRole('button', { name: 'Drop changes to Ha 300' }));
     expect(screen.getByLabelText('Name of Ha 300')).toHaveValue('Ha 300');
+  });
+
+  it('saves a template whose Moon values are out of range while avoidance is off', async () => {
+    const { saves } = fixture({ ...ha, moon_relax_min_altitude: 10, moon_relax_max_altitude: 5, moon_avoidance_width: 0 });
+    mount();
+    fireEvent.change(await screen.findByLabelText('Gain of Ha 300'), { target: { value: '120' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Ha 300' }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0]).toMatchObject({ gain: 120, moon_avoidance_enabled: false, moon_relax_min_altitude: 10 });
+  });
+
+  it('explains on the page why a row cannot be saved', async () => {
+    fixture();
+    mount();
+    fireEvent.change(await screen.findByLabelText('Gain of Ha 300'), { target: { value: '1.5' } });
+    expect(screen.getByRole('button', { name: 'Save Ha 300' })).toBeDisabled();
+    expect(screen.getByRole('alert')).toHaveTextContent('Ha 300: Gain, offset and readout mode must be whole numbers');
+  });
+
+  it('keeps an edit typed while the save runs', async () => {
+    let finish: () => void = () => {};
+    const held = new Promise<void>(resolve => { finish = resolve; });
+    server.use(
+      http.get('/api/db/rig/exposure-templates', () => HttpResponse.json(ok([ha]))),
+      http.put('/api/db/rig/exposure-templates/:id', async ({ request }) => {
+        const body = await request.json() as Record<string, unknown>;
+        await held;
+        return HttpResponse.json(ok({ ...ha, ...body, gain: body.gain ?? -1, offset: -1, readout_mode: -1 }));
+      }),
+    );
+    mount();
+    fireEvent.change(await screen.findByLabelText('Gain of Ha 300'), { target: { value: '120' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Ha 300' }));
+    fireEvent.change(screen.getByLabelText('Offset of Ha 300'), { target: { value: '25' } });
+    finish();
+    expect(await screen.findByText('Ha 300 saved')).toBeInTheDocument();
+    expect(screen.getByLabelText('Offset of Ha 300')).toHaveValue(25);
+    expect(screen.getByRole('button', { name: 'Save Ha 300' })).toBeEnabled();
   });
 });

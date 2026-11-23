@@ -15,7 +15,6 @@ import { compactOverrides, inheritedLimits, sameOverrides } from './schedulingMo
 import EarlyBeta from './EarlyBeta';
 import RigPluginPanel from './RigPluginPanel';
 import RigExposureTemplates from './RigExposureTemplates';
-import { isTauriApp } from '../../utils/tauri';
 import PluginsOnRig from '../rigs/PluginsOnRig';
 import RigWeatherPanel from './RigWeather';
 import WorkspaceTabs from './WorkspaceTabs';
@@ -89,6 +88,8 @@ export default function RigProfileCard({ slug, syncPlugin, initialTab }: {
   const id = useId();
   const [tab, setTab] = useState<Tab>(initialTab ?? 'optics');
   const [collaborationVisited, setCollaborationVisited] = useState(false);
+  // Kept once opened, so its unsaved template edits survive a tab switch.
+  const [templatesVisited, setTemplatesVisited] = useState(initialTab === 'templates');
   const [vertical, setVertical] = useState(() => window.matchMedia?.('(min-width: 800px)').matches ?? false);
   useEffect(() => {
     const media = window.matchMedia?.('(min-width: 800px)');
@@ -108,8 +109,6 @@ export default function RigProfileCard({ slug, syncPlugin, initialTab }: {
     // Director admits one metadata request at a time; a 503 means wait, not fail.
     retry: (count, error) => count < 5 && statusOf(error) === 503, retryDelay: 700 });
   const peers = useQuery({ queryKey: ['peers'], queryFn: apiClient.getPeers, retry: false, refetchOnWindowFocus: false });
-  // Editing exposure templates needs database management as well as an editor's account.
-  const { data: serverInfo } = useQuery({ queryKey: ['serverInfo'], queryFn: apiClient.getServerInfo, staleTime: 5 * 60 * 1000 });
   // Where the rig stands for planning: the site it names, and what that
   // gives it. The rig's own location and horizon still win.
   const rigId = loaded.data?.rig.id;
@@ -229,7 +228,7 @@ export default function RigProfileCard({ slug, syncPlugin, initialTab }: {
       ? 'The rig profile was saved. Its planning site and Target Scheduler limits changed since you loaded them. '
       : 'This rig changed since you loaded it. '}<button type="button" onClick={reload}>Reload</button></p>}
     {data && form && <div className="rig-setup-layout">
-    <WorkspaceTabs id={id} className="rig-setup-nav" orientation={vertical ? 'vertical' : 'horizontal'} label="Rig setup sections" tabs={TABS} value={tab} onChange={next => { setTab(next); if (next === 'collaboration') setCollaborationVisited(true); }} />
+    <WorkspaceTabs id={id} className="rig-setup-nav" orientation={vertical ? 'vertical' : 'horizontal'} label="Rig setup sections" tabs={TABS} value={tab} onChange={next => { setTab(next); if (next === 'collaboration') setCollaborationVisited(true); if (next === 'templates') setTemplatesVisited(true); }} />
     <div className="rig-setup-content">
     <form onSubmit={submit} className="rig-profile-form" hidden={tab === 'collaboration' || tab === 'weather' || tab === 'director' || tab === 'templates'}>
       <div {...workspacePanel(id, 'optics', tab)}>
@@ -360,7 +359,7 @@ export default function RigProfileCard({ slug, syncPlugin, initialTab }: {
       {canWrite && <div className="director-actions"><button type="submit" disabled={disabled}><Check size={16} />{save.isPending ? 'Saving...' : 'Save rig profile'}</button>{unsaved && !save.isPending && <span className="unsaved-note">Unsaved changes</span>}</div>}
       {!canWrite && <p className="director-muted">Read only</p>}
     </form>
-    <div {...workspacePanel(id, 'templates', tab)}>{tab === 'templates' && <RigExposureTemplates slug={slug} canEdit={canWrite && (isTauriApp() || !!serverInfo?.allow_database_management)} />}</div>
+    <div {...workspacePanel(id, 'templates', tab)}>{templatesVisited && <RigExposureTemplates slug={slug} canEdit={canWrite} />}</div>
     <div {...workspacePanel(id, 'weather', tab)}>{tab === 'weather' && <RigWeatherPanel rig={data.rig.id} />}</div>
     <div {...workspacePanel(id, 'director', tab)}>{tab === 'director' && <>
       <PluginsOnRig databaseId={slug} director={{ mode: data.mode.runtime, onChangeMode: () => setTab('optics') }} />
