@@ -144,10 +144,13 @@ collaboration host for each remote agent to avoid duplicate assignments or repor
 
 Open **Settings → Databases & rigs → Overview**, open the rig database, then
 choose **Rig setup**. The selected rig's header
-stays above its setup. **Optics**, **Site**, **Limits and delivery**, and
-**Collaboration** use a section rail on desktop and a compact strip on narrow
-screens, separate from the smaller collaboration tabs. Changes stay in
-the form when you switch tabs; choose **Save rig profile** to save them.
+stays above its setup. **Optics**, **Site**, **Limits and delivery**,
+**Target Scheduler templates**, **Weather**, **Plugins** and **Collaboration** use a
+section rail on desktop and a compact strip on narrow screens, separate from
+the smaller collaboration tabs. Changes to **Optics**, **Site** and **Limits
+and delivery** stay in the form when you switch tabs; choose **Save rig
+profile** to save them. **Target Scheduler templates** saves each template on its
+own; see [Rig exposure templates](#rig-exposure-templates).
 
 In **Collaboration**, choose **Connect server**. The setup wizard has three
 steps: **Server**, **Sign in**, and **Capture**. Enter the server's HTTPS URL
@@ -1888,6 +1891,50 @@ in one profile with the same name and filter and every other setting equal.
 Each copy's exposure plans move to the template most plans use, and the copy
 is deleted. The preview lists each copy as **Merged** under **Exposure
 templates**.
+
+## Rig exposure templates
+
+**Rig setup › Target Scheduler templates** lists the Target Scheduler exposure
+templates in the rig's database, for every N.I.N.A. profile in it, with the
+number of exposure plans that use each. Use it to adjust what Target
+Scheduler runs without opening N.I.N.A.
+
+1. Edit the template's name, gain, offset, binning, readout mode or default
+   exposure in its row. Leave gain, offset or readout mode empty to use the
+   camera's default.
+2. To change the twilight level, twilight offset, maximum humidity, dither
+   interval or Moon avoidance, click the button in the template's **Moon and
+   twilight** column. A maximum humidity of 0 turns the humidity limit off, and a dither
+   interval of -1 uses the project's setting. The Moon fields are the same as
+   in the [exposure template library](#exposure-moon-rules).
+3. Click the row's check mark to save the template, or its undo arrow to
+   drop the changes.
+
+A change applies to every exposure plan that uses the template, in every
+project. The rig receives it with its next sync, like other Target Scheduler
+edits. The filter cannot change, because the template's exposure plans and
+frames use it.
+
+A plan that uses a template from the exposure template library keeps the
+library's Moon settings. When activation finds that the rig's template no
+longer has them, it uses or creates a template that does. To change Moon
+settings for such a plan, change them in the library.
+
+A change to the camera settings or default exposure marks each Director
+plan that uses the template as changed since its last activation, until you
+activate it again.
+
+Unsaved changes stay when you switch Rig setup tabs, and Settings asks
+before closing over them. Moon fields are checked only while Moon avoidance
+is on, since Target Scheduler ignores them otherwise. An older Target
+Scheduler database may lack a setting, such as the twilight offset; the tab
+then shows its default and refuses a change to it until Target Scheduler is
+updated in N.I.N.A.
+
+Saving needs an editor's account. A read-only viewer sees the templates
+without edits. Over the API,
+`GET /api/db/{db_id}/exposure-templates` lists the templates and
+`PUT /api/db/{db_id}/exposure-templates/{id}` saves one.
 
 ## Activation
 
