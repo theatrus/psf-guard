@@ -6,9 +6,9 @@ import { useRcAstroCapabilities } from './rcAstroSchema';
 import {
   NOISE_MODEL_PROVIDER,
   PROCESSING_CATEGORIES,
-  PROCESSING_TOOLS_FIELD,
   processingCapabilitiesKey,
 } from './processingTools';
+import { openSettings } from '../utils/settingsIntent';
 import type {
   NoiseModelDownloadPart,
   ProcessingCapabilities,
@@ -23,6 +23,7 @@ const stateLabel: Record<ProcessingProvider['state'], string> = {
   ready: 'Ready',
   not_licensed: 'Not licensed',
   not_installed: 'Not installed',
+  excluded: 'Not used',
 };
 
 /** Where a provider is installed, as "this server, studio". */
@@ -31,7 +32,7 @@ function machines(provider: ProcessingProvider): string {
 }
 
 /**
- * Settings › Stacking › Processing tools: every provider of a processing
+ * Settings › Processing › Processing tools: every provider of a processing
  * step with its state, and what a person can do about it. The RC-Astro tools
  * show their license state and version. Seiza's noise model and the ONNX
  * Runtime it needs have downloads, which start only on a click, and a path
@@ -39,19 +40,12 @@ function machines(provider: ProcessingProvider): string {
  */
 export default function ProcessingToolsSettings({
   canManage,
-  focus = null,
 }: {
   /** Whether this person may set a path on the server. */
   canManage: boolean;
-  /** `processing_tools` when a processing card sent the person here. */
-  focus?: string | null;
 }) {
   const queryClient = useQueryClient();
   const capabilities = useRcAstroCapabilities({ refetchOnMount: 'always' });
-  const section = useRef<HTMLElement>(null);
-  useEffect(() => {
-    if (focus === PROCESSING_TOOLS_FIELD) section.current?.scrollIntoView?.({ block: 'start' });
-  }, [focus]);
 
   const data = capabilities.data;
   const seiza = data?.seiza;
@@ -86,6 +80,15 @@ export default function ProcessingToolsSettings({
 
   const progress = seiza?.download;
   const running = !!progress?.running;
+  // Ask once more when a download ends, so the providers include what it
+  // installed.
+  const wasRunning = useRef(false);
+  useEffect(() => {
+    if (wasRunning.current && !running) {
+      void queryClient.invalidateQueries({ queryKey: processingCapabilitiesKey });
+    }
+    wasRunning.current = running;
+  }, [queryClient, running]);
   const busy = running || download.isPending;
   const installed = seiza?.installed;
   const runtimeReady = !!installed?.runtime_version;
@@ -100,7 +103,7 @@ export default function ProcessingToolsSettings({
       .map((provider) => ({ provider, label })));
 
   return (
-    <section className="settings-section catalog-settings" aria-labelledby="processing-tools-title" ref={section}>
+    <section className="settings-section catalog-settings" aria-labelledby="processing-tools-title">
       <div className="catalog-heading">
         <div>
           <h3 id="processing-tools-title">Processing tools</h3>
@@ -132,6 +135,11 @@ export default function ProcessingToolsSettings({
                 {where ? ` · on ${where}` : ''}
               </small>
               {provider.state !== 'ready' && provider.reason && <small>{provider.reason}</small>}
+              {provider.remedy === 'change_placement' && (
+                <button type="button" className="link-button" onClick={() => openSettings('workers')}>
+                  Open Workers
+                </button>
+              )}
             </div>
             <span className="catalog-optional-state" data-installed={provider.state === 'ready' ? 'true' : 'false'}>
               {stateLabel[provider.state]}

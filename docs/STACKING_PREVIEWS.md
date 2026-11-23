@@ -1522,7 +1522,8 @@ RC-Astro license. It runs Seiza's learned noise model on the linear stack.
 PSF Guard does not ship the model or ONNX Runtime, the library that runs it,
 and never downloads them by itself. To install them on the server:
 
-1. Open **Settings › Processing › Stacking** and find **Processing tools**.
+1. Open **Settings › Processing › Processing tools**. **Settings › Storage &
+   backups › Reference catalogs** links there too.
 2. Click **Download both**. PSF Guard downloads Microsoft's ONNX Runtime
    archive and checks it against a SHA-256 pinned in PSF Guard, then
    downloads Seiza's latest published noise model, which Seiza verifies.
@@ -1557,7 +1558,12 @@ Set how much of the noise the model finds is removed, each from 0 to 1:
 - **Mottle** is the wider blotches. The default is 0.9.
 
 Until the model is installed, the picker lists it as not installed and the
-card offers **Download in Settings**. A saved setup or view that uses it
+card offers **Download in Settings**. When **Processing steps** in
+**Settings › Performance › Workers** is set to **Workers only**, the server
+does not run the step even with the model installed. **Processing tools**
+then lists **Seiza noise model** as **Not used**, explains why, and offers
+**Open Workers**. Choose **Workers first** to let the server run it while
+no worker that has the model is connected. A saved setup or view that uses it
 keeps its settings, and applying it fails with a message that explains where
 to download the model.
 

@@ -152,7 +152,7 @@ test('Check license starts a check, waits for it, and shows RC-Astro’s report'
 
   await page.goto('/');
   await openSettings(page);
-  await selectSettingsSection(page, 'stacking');
+  await selectSettingsSection(page, 'processing-tools');
   const check = page.getByRole('group', { name: 'RC-Astro license on this server' });
   await check.scrollIntoViewIfNeeded();
   // Opening the page asked RC-Astro nothing.

@@ -259,6 +259,10 @@ pub struct ProcessingCapabilities {
 }
 
 fn capabilities(state: &AppState) -> ProcessingCapabilities {
+    // The download first: one that reads as finished has already had this
+    // server's tools probed again, so the providers include what it
+    // installed.
+    let seiza = crate::server::noise_model::install_state(state);
     let providers = state.workers.providers();
     let rc_astro: Vec<_> = providers
         .iter()
@@ -285,7 +289,7 @@ fn capabilities(state: &AppState) -> ProcessingCapabilities {
             .map(|provider| (provider.provider.clone(), provider.workers.clone()))
             .collect(),
         error: state.workers.local_rc_astro_problem(),
-        seiza: crate::server::noise_model::install_state(state),
+        seiza,
         providers,
     }
 }
@@ -1268,6 +1272,50 @@ mod tests {
                 ExternalParameterValue::Float(grain),
             )]),
         }
+    }
+
+    #[test]
+    fn a_noise_model_on_this_server_under_workers_only_says_why_it_does_not_run() {
+        use crate::db_registry::{RemoteWorkerSettings, WorkPlacement};
+        use crate::remote_work::noise_model::testing::FixedEngine;
+        use crate::server::workers::rc_astro::ProviderReadiness;
+
+        let exchange = tempfile::tempdir().unwrap();
+        let workers = workers_with_noise_model(FixedEngine::new("noise-v1"));
+        let place = |rc_astro| {
+            workers.configure(
+                RemoteWorkerSettings {
+                    rc_astro,
+                    ..Default::default()
+                },
+                exchange.path().to_path_buf(),
+            )
+        };
+        let noise_model = || {
+            workers
+                .providers()
+                .into_iter()
+                .find(|provider| provider.provider == crate::remote_work::noise_model::TOOL)
+                .unwrap()
+        };
+
+        place(WorkPlacement::WorkersOnly);
+        let excluded = noise_model();
+        assert_eq!(excluded.state, ProviderReadiness::Excluded);
+        assert_eq!(excluded.remedy, Some(steps::Remedy::ChangePlacement));
+        let reason = excluded.reason.unwrap();
+        assert!(reason.contains("installed on this server"), "{reason}");
+        assert!(reason.contains("Workers only"), "{reason}");
+        // A step that asks for it fails with the same reason, not a call to
+        // download what is already there.
+        let config = RcAstroProcessing {
+            steps: vec![noise_step(0.5)],
+        };
+        let refused = schemas_for(&workers, &config).unwrap_err();
+        assert!(refused.contains("Workers only"), "{refused}");
+
+        place(WorkPlacement::WorkersFirst);
+        assert_eq!(noise_model().state, ProviderReadiness::Ready);
     }
 
     #[test]

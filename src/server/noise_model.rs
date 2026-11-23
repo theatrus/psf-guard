@@ -273,7 +273,8 @@ impl NoiseModelDownloads {
     }
 
     /// [`Self::start`], with the work that fetches one part, what else ends
-    /// it, and what runs when it ends, given.
+    /// it, and what runs when it ends, before its progress reads as
+    /// finished, given.
     fn start_with<G, E, F, Fut>(
         &self,
         parts: Vec<DownloadPart>,
@@ -325,6 +326,10 @@ impl NoiseModelDownloads {
                 () = stop.stopped() => Err("Stopped".to_string()),
                 () = server_stop => Err("The server stopped".to_string()),
             };
+            // Before the download reads as finished: a page stops asking
+            // once it does, so the providers it reads then must already
+            // be probed with what was installed.
+            done();
             downloads.set(|progress| {
                 progress.running = false;
                 progress.bytes_completed = None;
@@ -348,7 +353,6 @@ impl NoiseModelDownloads {
                     }
                 }
             });
-            done();
         });
         self.progress()
     }
@@ -415,11 +419,13 @@ mod tests {
     async fn a_download_fetches_its_parts_in_order_and_runs_once() {
         let downloads = NoiseModelDownloads::default();
         let fetched = Arc::new(Mutex::new(Vec::new()));
-        let ended = Arc::new(Mutex::new(false));
+        // Whether the download still read as running when its end ran.
+        let ended = Arc::new(Mutex::new(None));
         let release = Arc::new(tokio::sync::Notify::new());
         let started = {
             let (fetched, release) = (Arc::clone(&fetched), Arc::clone(&release));
             let ended = Arc::clone(&ended);
+            let watched = downloads.clone();
             downloads.start_with(
                 vec![DownloadPart::Runtime, DownloadPart::Model],
                 (),
@@ -435,7 +441,7 @@ mod tests {
                         Ok(())
                     }
                 },
-                move || *ended.lock().unwrap() = true,
+                move || *ended.lock().unwrap() = Some(watched.progress().running),
             )
         };
         assert!(started.running);
@@ -457,7 +463,9 @@ mod tests {
             *fetched.lock().unwrap(),
             [DownloadPart::Runtime, DownloadPart::Model]
         );
-        assert!(*ended.lock().unwrap());
+        // The tools were probed again before a page could read the
+        // download as finished and stop asking.
+        assert_eq!(*ended.lock().unwrap(), Some(true));
     }
 
     #[tokio::test]

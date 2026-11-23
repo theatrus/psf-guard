@@ -10,10 +10,6 @@ import type {
 /** The query every view shares for the server's processing providers. */
 export const processingCapabilitiesKey = ['rc-astro-capabilities'] as const;
 
-/** The Settings field a processing card opens: the Processing tools section
- *  on the Stacking page. */
-export const PROCESSING_TOOLS_FIELD = 'processing_tools';
-
 /** Seiza's noise model among the providers. */
 export const NOISE_MODEL_PROVIDER = 'noise-model';
 
