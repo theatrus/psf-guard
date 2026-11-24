@@ -70,9 +70,9 @@ pub struct SourceDeletionRules {
     /// GUIDs of frames reported to a collaboration. A project with one,
     /// among its frames or its removed rejects, stays.
     pub protected_frames: std::collections::BTreeSet<String>,
-    /// When set, the only project GUIDs (lower case) this run may delete:
-    /// the ones its preview listed. Set by an apply that reads its source
-    /// again rather than the previewed copy.
+    /// When set, the only project and exposure template GUIDs (lower case)
+    /// this run may delete: the ones its preview listed. Set by an apply
+    /// that reads its source again rather than the previewed copy.
     pub previewed: Option<HashSet<String>>,
     /// When set, no project is deleted this run, and each that would be
     /// stays with this reason: say, Planning could not be read to check
@@ -131,6 +131,9 @@ pub struct PullSummary {
     /// source catalog deleted them. The server tells Planning to forget
     /// them once the transaction commits.
     pub deleted_project_guids: Vec<String>,
+    /// GUIDs of the destination exposure templates this pull deleted
+    /// because the source catalog deleted them.
+    pub deleted_template_guids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1612,6 +1615,94 @@ fn used_template_ids(src: &Connection, plans: Option<&HashSet<i64>>) -> Result<H
     Ok(used)
 }
 
+/// Templates deleted here stay deleted: the source's copy is left out,
+/// like a project deleted here. A copy under another GUID is found by its
+/// settings, as the template upsert finds it, and the deletion record
+/// takes that GUID so it reaches the copy too. When a plan this sync sends
+/// uses one, the template comes back instead and its deletion record goes,
+/// since the plan cannot arrive without it. `needed` lists the source
+/// templates those plans use. `quiet` leaves out the change line for each
+/// template left out, for the automatic capture import.
+fn leave_out_removed_templates(
+    src: &Connection,
+    tx: &Transaction,
+    scope: Option<HashSet<i64>>,
+    needed: &HashSet<i64>,
+    quiet: bool,
+    changes: &mut Vec<String>,
+) -> Result<Option<HashSet<i64>>> {
+    use crate::commands::template_removal::{
+        adopt, forget, removed_templates, select_list, settings_key, sync_guid, template_columns,
+    };
+    let removed = removed_templates(tx)?;
+    if removed.guids.is_empty() {
+        return Ok(scope);
+    }
+    // Settings compare only when the source has every column the keys
+    // were made from.
+    let columns = template_columns(tx)?;
+    let by_settings = !removed.keys.is_empty()
+        && columns
+            .iter()
+            .all(|column| super::table_has_column(src, "exposuretemplate", column));
+    let mut here = HashSet::new();
+    if by_settings {
+        let mut statement = tx.prepare("SELECT guid FROM exposuretemplate")?;
+        for guid in statement.query_map([], |row| row.get::<_, Option<String>>(0))? {
+            here.extend(sync_guid(guid?.as_deref()));
+        }
+    }
+    let settings = if by_settings {
+        format!(", {}", select_list(&columns))
+    } else {
+        String::new()
+    };
+    let mut statement = src.prepare(&format!(
+        "SELECT Id, guid, name{settings} FROM exposuretemplate"
+    ))?;
+    let mut rows = statement.query([])?;
+    let mut kept = HashSet::new();
+    while let Some(row) = rows.next()? {
+        let id: i64 = row.get(0)?;
+        if !scope.as_ref().is_none_or(|scope| scope.contains(&id)) {
+            continue;
+        }
+        let guid = sync_guid(row.get::<_, Option<String>>(1)?.as_deref());
+        let name = row.get::<_, Option<String>>(2)?.unwrap_or_default();
+        let record = match &guid {
+            Some(guid) if removed.guids.contains(guid) => Some(guid.clone()),
+            _ if by_settings && guid.as_ref().is_none_or(|guid| !here.contains(guid)) => {
+                let values = (0..columns.len())
+                    .map(|index| row.get::<_, Value>(index + 3))
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                removed.keys.get(&settings_key(&columns, &values)).cloned()
+            }
+            _ => None,
+        };
+        let Some(record) = record else {
+            kept.insert(id);
+            continue;
+        };
+        if needed.contains(&id) {
+            forget(tx, &record)?;
+            changes.push(format!(
+                "bring back exposuretemplate \"{name}\": deleted in this catalog, but a plan from the source uses it"
+            ));
+            kept.insert(id);
+            continue;
+        }
+        if let Some(guid) = guid.filter(|guid| guid != &record) {
+            adopt(tx, &record, &guid)?;
+        }
+        if !quiet {
+            changes.push(format!(
+                "leave out exposuretemplate \"{name}\": deleted in this catalog"
+            ));
+        }
+    }
+    Ok(Some(kept))
+}
+
 /// Which exposure templates a structure sync sends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum TemplateScope {
@@ -1640,6 +1731,9 @@ pub(super) struct StructureSync {
     /// GUIDs of the destination projects deleted because the source
     /// catalog deleted them.
     pub deleted_project_guids: Vec<String>,
+    /// GUIDs of the destination templates deleted because the source
+    /// catalog deleted them.
+    pub deleted_template_guids: Vec<String>,
     /// Source targets of a project deleted here that a person moved here
     /// to a project that stays: source target Id to destination project Id.
     /// They and their frames arrive under that project.
@@ -1786,10 +1880,19 @@ pub(super) fn sync_structure(
     };
 
     // Templates are profile-scoped; see [`TemplateScope`].
+    let needed_templates = used_template_ids(src, included_plans.as_ref())?;
     let used_templates = match templates {
         TemplateScope::All => None,
-        TemplateScope::UsedByPlans => Some(used_template_ids(src, included_plans.as_ref())?),
+        TemplateScope::UsedByPlans => Some(needed_templates.clone()),
     };
+    let used_templates = leave_out_removed_templates(
+        src,
+        tx,
+        used_templates,
+        &needed_templates,
+        preserve_existing,
+        changes,
+    )?;
     // Templates the destination repeats are merged first, so a source
     // template finds the one kept.
     // The copy kept is the one with a GUID this sync sends, so it keeps
@@ -1810,7 +1913,7 @@ pub(super) fn sync_structure(
             merged.name, merged.removed_id, merged.kept_id, merged.plans
         ));
     }
-    let mut tmpl = upsert_guid_table(
+    let tmpl = upsert_guid_table(
         src,
         tx,
         "exposuretemplate",
@@ -1820,7 +1923,8 @@ pub(super) fn sync_structure(
         preserve_existing,
         changes,
     )?;
-    tmpl.counts.deleted = merged_templates.len();
+    let mut template_counts = tmpl.counts;
+    template_counts.deleted = merged_templates.len();
     let tmpl_map = tmpl.id_map;
 
     let proj = upsert_guid_table(
@@ -1903,6 +2007,22 @@ pub(super) fn sync_structure(
         now,
         changes,
     )?;
+    // Templates the source deleted, deleted here too when no plan here
+    // uses them. After the plans, so a plan the source moved to another
+    // template no longer counts against this one. Templates belong to no
+    // project, so a sync limited to some projects deletes none.
+    let deleted_templates = if project_filter.is_none() {
+        crate::commands::template_removal::apply_source_deletions(
+            src,
+            tx,
+            destination == SyncDestination::Catalog,
+            deletions.rules.previewed.as_ref(),
+            changes,
+        )?
+    } else {
+        Vec::new()
+    };
+    template_counts.deleted += deleted_templates.len();
     let mut project = proj.counts;
     project.deleted = deleted.projects;
     let mut target = target_counts;
@@ -1910,7 +2030,7 @@ pub(super) fn sync_structure(
     let mut exposureplan = plan.counts;
     exposureplan.deleted = deleted.exposure_plans;
     Ok(StructureSync {
-        exposuretemplate: tmpl.counts,
+        exposuretemplate: template_counts,
         project,
         ruleweight,
         target,
@@ -1920,6 +2040,7 @@ pub(super) fn sync_structure(
         plan_map: plan.id_map,
         selected_project_ids: included_projects,
         deleted_project_guids: deleted.guids,
+        deleted_template_guids: deleted_templates,
         moved_targets: moved
             .into_iter()
             .map(|(target, (_, project))| (target, project))
@@ -2381,6 +2502,7 @@ pub(crate) fn sync_arrivals(
         &mut summary.changes,
     )?;
     summary.deleted_project_guids = structure.deleted_project_guids.clone();
+    summary.deleted_template_guids = structure.deleted_template_guids.clone();
     upsert_acquired_images(
         src,
         tx,
@@ -2441,6 +2563,7 @@ pub(crate) fn sync_pull_in_transaction(
     summary.target = structure.target;
     summary.exposureplan = structure.exposureplan;
     summary.deleted_project_guids = structure.deleted_project_guids.clone();
+    summary.deleted_template_guids = structure.deleted_template_guids.clone();
 
     // 6. acquiredimage (grade fill-if-pending; remap proj/tgt/exposureId)
     let img_map = upsert_acquired_images(

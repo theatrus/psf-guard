@@ -69,6 +69,9 @@ pub struct ExposureTemplateResponse {
     pub dither_every: i32,
     pub minutes_offset: i32,
     pub plan_count: i32,
+    /// Whether the template has a UUID GUID, so syncs can match it in
+    /// other catalogs and on the rig, and carry its deletion there.
+    pub syncable: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -303,11 +306,17 @@ fn read_templates(
         })
         .collect::<Vec<_>>()
         .join(",\n                ");
+    let guid = if columns.contains("guid") {
+        "et.guid"
+    } else {
+        "NULL"
+    };
     let mut stmt = conn.prepare(&format!(
         "SELECT et.Id, et.profileId, et.name, et.filtername,
                 et.gain, et.offset, et.bin, et.readoutmode,
                 {optional},
-                COUNT(ep.Id)
+                COUNT(ep.Id),
+                {guid}
          FROM exposuretemplate et
          LEFT JOIN exposureplan ep ON ep.exposureTemplateId = et.Id
          {filter}
@@ -337,6 +346,10 @@ fn read_templates(
             dither_every: row.get(18)?,
             minutes_offset: row.get(19)?,
             plan_count: row.get(20)?,
+            syncable: crate::commands::template_removal::sync_guid(
+                row.get::<_, Option<String>>(21)?.as_deref(),
+            )
+            .is_some(),
         })
     })?
     .collect()
@@ -916,6 +929,46 @@ pub async fn update_exposure_template(
     Ok(Json(ApiResponse::success(template)))
 }
 
+#[derive(Debug, Serialize)]
+pub struct DeleteExposureTemplateResponse {
+    pub id: i64,
+    pub name: String,
+    /// Whether syncs carry the deletion to other catalogs and the rig. A
+    /// template without a GUID cannot be matched there.
+    pub synced: bool,
+}
+
+/// Delete an exposure template no exposure plan uses. Syncs carry the
+/// deletion to other catalogs and to the rig, which delete their copy when
+/// no plan there uses it; see `crate::commands::template_removal`.
+pub async fn delete_exposure_template(
+    ctx: DbContext,
+    Path((_db_id, template_id)): Path<(String, i64)>,
+) -> Result<Json<ApiResponse<DeleteExposureTemplateResponse>>, AppError> {
+    use crate::commands::template_removal::{remove, Refusal};
+    let conn = ctx.db();
+    let mut conn = conn.lock().map_err(AppError::db)?;
+    match remove(&mut conn, template_id).map_err(|error| AppError::db(format!("{error:#}")))? {
+        Ok(removed) => Ok(Json(ApiResponse::success(DeleteExposureTemplateResponse {
+            id: removed.id,
+            name: removed.name,
+            synced: removed.synced,
+        }))),
+        Err(Refusal::Missing) => Err(AppError::NotFoundMessage(format!(
+            "exposure template {template_id} not found"
+        ))),
+        Err(Refusal::InUse { name, plans }) => Err(AppError::Conflict(format!(
+            "{name} is used by {plans} exposure {}; change or delete {} first",
+            if plans == 1 { "plan" } else { "plans" },
+            if plans == 1 {
+                "that plan"
+            } else {
+                "those plans"
+            },
+        ))),
+    }
+}
+
 /// Whether `value` is the setting an absent column reads as.
 fn same_value(value: &rusqlite::types::Value, default: &str) -> bool {
     let Ok(default) = default.parse::<f64>() else {
@@ -1248,5 +1301,66 @@ mod template_http_tests {
         let (status, body) = send(&app, "PUT", "/api/db/rig/exposure-templates/1", plain).await;
         assert_eq!(status, 200, "{body}");
         assert_eq!(body["data"]["gain"], 139);
+    }
+
+    #[tokio::test]
+    async fn deletes_an_unused_template_and_refuses_one_a_plan_uses() {
+        let (_dir, path, app) = rig();
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "INSERT INTO project (Id, profileId, name, state, guid) VALUES (1, 'p', 'M31', 1, 'pg');
+             INSERT INTO target (Id, name, active, epochcode, projectid, guid) VALUES (10, 'M31', 1, 0, 1, 'tg');
+             INSERT INTO exposureplan (Id, profileId, exposure, desired, acquired, accepted, targetid, exposureTemplateId, guid)
+               VALUES (100, 'p', 300, 10, 0, 0, 10, 1, 'eg');
+             UPDATE exposuretemplate SET guid = '33333333-3333-4333-8333-333333333333' WHERE Id = 2;",
+        )
+        .unwrap();
+
+        let (status, body) = send(
+            &app,
+            "DELETE",
+            "/api/db/rig/exposure-templates/1",
+            Value::Null,
+        )
+        .await;
+        assert_eq!(status, 409, "{body}");
+        assert_eq!(
+            body["error"],
+            "Ha 300 is used by 1 exposure plan; change or delete that plan first"
+        );
+
+        let (status, body) = send(
+            &app,
+            "DELETE",
+            "/api/db/rig/exposure-templates/2",
+            Value::Null,
+        )
+        .await;
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(
+            body["data"],
+            json!({ "id": 2, "name": "OIII", "synced": true })
+        );
+        let recorded: String = conn
+            .query_row(
+                "SELECT template_guid FROM psf_guard_removed_template",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(recorded, "33333333-3333-4333-8333-333333333333");
+
+        let (status, _) = send(
+            &app,
+            "DELETE",
+            "/api/db/rig/exposure-templates/2",
+            Value::Null,
+        )
+        .await;
+        assert_eq!(status, 404);
+        let (_, body) = send(&app, "GET", "/api/db/rig/exposure-templates", Value::Null).await;
+        assert_eq!(body["data"].as_array().unwrap().len(), 1);
+        // Its GUID is not a UUID: no sync can match it elsewhere.
+        assert_eq!(body["data"][0]["syncable"], false);
     }
 }

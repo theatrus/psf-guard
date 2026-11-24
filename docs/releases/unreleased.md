@@ -22,5 +22,10 @@
   their gain, offset, binning, readout mode, default exposure, twilight,
   humidity limit, dither interval and Moon avoidance. Before, you had to
   change them in N.I.N.A.
+- You can delete a Target Scheduler exposure template that no exposure plan
+  uses from **Rig setup › Target Scheduler templates**. The rig's next push
+  does not bring it back, other PSF Guard catalogs delete their copy when
+  they sync, and the N.I.N.A. Sync plugin deletes it in Target Scheduler at
+  its next **Pull planning** once you update the plugin.
 - The noise model shows as ready as soon as its download ends. Before, the
   page could keep showing it as not installed until you reopened it.

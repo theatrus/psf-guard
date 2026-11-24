@@ -441,7 +441,7 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         )
         .route(
             "/exposure-templates/{template_id}",
-            put(scheduler::update_exposure_template),
+            put(scheduler::update_exposure_template).delete(scheduler::delete_exposure_template),
         )
         .route("/projects/overview", get(handlers::get_projects_overview))
         .route("/targets", get(handlers::list_all_targets))

@@ -95,6 +95,7 @@ import type { GuidFillReport, GuidReport, ImportedCopiesMerge, ImportedCopiesRep
   ExposurePlanDetails,
   ExposureTemplateDetails,
   UpdateExposureTemplateRequest,
+  DeletedExposureTemplate,
   OverallStats,
   SkyCoverage,
   CacheRefreshProgress,
@@ -3951,6 +3952,15 @@ export const apiClient = {
       request
     );
     if (!data.data) throw new Error(data.error || 'Failed to save exposure template');
+    return data.data;
+  },
+
+  deleteExposureTemplate: async (dbId: string, templateId: number): Promise<DeletedExposureTemplate> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.delete<ApiResponse<DeletedExposureTemplate>>(
+      dbPath(dbId, `/exposure-templates/${templateId}`)
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to delete exposure template');
     return data.data;
   },
 

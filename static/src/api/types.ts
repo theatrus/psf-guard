@@ -4261,6 +4261,17 @@ export interface ExposureTemplateDetails {
   dither_every: number;
   minutes_offset: number;
   plan_count: number;
+  /** Whether syncs can match the template elsewhere (it has a UUID GUID),
+   *  and so carry its deletion. Absent on older servers. */
+  syncable?: boolean;
+}
+
+/** A template the server deleted. `synced` is false for a template without
+ *  a GUID: syncs cannot carry its deletion to other catalogs or the rig. */
+export interface DeletedExposureTemplate {
+  id: number;
+  name: string;
+  synced: boolean;
 }
 
 /** The settings of an exposure template a person may change; the filter stays. */
@@ -4932,8 +4943,9 @@ export interface RemoteSyncRequest {
   dry_run: boolean;
   reviewed_only?: boolean;
   with_image_data?: boolean;
-  /** For a pull that writes: the projects its preview listed for deletion.
-   *  The apply reads the peer again and deletes only these. */
+  /** For a pull that writes: the projects and exposure templates its
+   *  preview listed for deletion. The apply reads the peer again and
+   *  deletes only these. */
   previewed_deletions?: string[];
 }
 
@@ -4946,6 +4958,8 @@ export interface RemoteSyncResult {
    *  delete, because the peer's catalog deleted them. Absent on older
    *  servers. */
   deleted_projects?: string[];
+  /** The same for exposure templates. Absent on older servers. */
+  deleted_templates?: string[];
 }
 export type FlatHistoryState =
   | 'recorded' | 'pending' | 'removed' | 'absent' | 'conflict' | 'superseded';

@@ -1931,10 +1931,34 @@ Scheduler database may lack a setting, such as the twilight offset; the tab
 then shows its default and refuses a change to it until Target Scheduler is
 updated in N.I.N.A.
 
-Saving needs an editor's account. A read-only viewer sees the templates
-without edits. Over the API,
-`GET /api/db/{db_id}/exposure-templates` lists the templates and
-`PUT /api/db/{db_id}/exposure-templates/{id}` saves one.
+### Delete a template
+
+Click the trash can in a template's row, then confirm. The button is
+disabled while any exposure plan uses the template; change those plans to
+another template, or delete them, first.
+
+PSF Guard records the deletion, so the rig's next push from N.I.N.A. does
+not bring the template back. Syncs carry the deletion:
+
+- The N.I.N.A. Sync plugin deletes the template in Target Scheduler at its
+  next **Pull planning**. This needs a Sync plugin release with deleted
+  template support; an older plugin leaves the template there.
+- A PSF Guard catalog that syncs with this one deletes its copy.
+
+Where an exposure plan still uses the template, a sync keeps it, and the
+sync log shows how many plans use it. When a plan from the rig starts using a template deleted
+here, the next sync brings the template back here, since the plan needs it.
+
+A template without a GUID, which an older Target Scheduler can leave, is
+deleted only here, because other catalogs cannot match it. The
+confirmation warns you before you delete it.
+
+Saving and deleting need an editor's account. A read-only viewer sees the
+templates without edits. Over the API,
+`GET /api/db/{db_id}/exposure-templates` lists the templates,
+`PUT /api/db/{db_id}/exposure-templates/{id}` saves one, and
+`DELETE /api/db/{db_id}/exposure-templates/{id}` deletes one (409 while an
+exposure plan uses it).
 
 ## Activation
 

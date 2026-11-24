@@ -72,6 +72,8 @@ pub struct RemoteSyncOutcome {
     /// Planning to forget the ones an apply deleted, and holds an apply to
     /// the ones its preview listed.
     pub deleted_project_guids: Vec<String>,
+    /// The same for exposure templates the peer's catalog deleted.
+    pub deleted_template_guids: Vec<String>,
     pub peer_product: String,
     pub peer_catalog: String,
 }
@@ -97,10 +99,12 @@ pub async fn sync_remote(options: RemoteSyncOptions) -> Result<RemoteSyncOutcome
     );
 
     let mut deleted_project_guids = Vec::new();
+    let mut deleted_template_guids = Vec::new();
     let summary = match options.direction {
         RemoteDirection::Pull => {
-            let (summary, deleted) = pull_from(&client, &catalog, &options).await?;
-            deleted_project_guids = deleted;
+            let (summary, projects, templates) = pull_from(&client, &catalog, &options).await?;
+            deleted_project_guids = projects;
+            deleted_template_guids = templates;
             summary
         }
         RemoteDirection::PushPlanning | RemoteDirection::PushGrades => {
@@ -119,6 +123,7 @@ pub async fn sync_remote(options: RemoteSyncOptions) -> Result<RemoteSyncOutcome
         applied: !options.dry_run,
         summary,
         deleted_project_guids,
+        deleted_template_guids,
         peer_product,
         peer_catalog: catalog,
     })
@@ -131,7 +136,7 @@ async fn pull_from(
     client: &SyncClient,
     catalog: &str,
     options: &RemoteSyncOptions,
-) -> Result<(BTreeMap<String, i64>, Vec<String>)> {
+) -> Result<(BTreeMap<String, i64>, Vec<String>, Vec<String>)> {
     use crate::commands::sync::{require_pull_capable, sync_pull, PullOptions};
 
     let bundle = client.export(catalog, SyncOperation::Merge, false).await?;
@@ -184,6 +189,7 @@ async fn pull_from(
         Ok((
             pull_summary(&summary),
             summary.deleted_project_guids.clone(),
+            summary.deleted_template_guids.clone(),
         ))
     })
     .await

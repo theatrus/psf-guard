@@ -133,8 +133,9 @@ describe('RemotePeerSync', () => {
             applied: !body.dry_run,
             peer_product: 'PSF Guard 0.5.0',
             peer_catalog: 'scope',
-            summary: { project_deleted: 1 },
+            summary: { project_deleted: 1, exposuretemplate_deleted: 1 },
             deleted_projects: ['d0d0d0d0-0000-4000-8000-00000000000d'],
+            deleted_templates: ['7e7e7e7e-0000-4000-8000-00000000000e'],
           },
           error: null,
           status: 'ok',
@@ -149,7 +150,10 @@ describe('RemotePeerSync', () => {
     expect(bodies[0].previewed_deletions).toBeUndefined();
     await user.click(screen.getByRole('button', { name: 'Apply this preview' }));
     await waitFor(() => expect(bodies).toHaveLength(2));
-    expect(bodies[1].previewed_deletions).toEqual(['d0d0d0d0-0000-4000-8000-00000000000d']);
+    expect(bodies[1].previewed_deletions).toEqual([
+      'd0d0d0d0-0000-4000-8000-00000000000d',
+      '7e7e7e7e-0000-4000-8000-00000000000e',
+    ]);
   });
 
   it('drops a preview when the direction changes under it', async () => {
