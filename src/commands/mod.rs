@@ -26,6 +26,7 @@ pub mod sky_maps;
 pub mod stack_snr;
 pub mod stretch_to_png;
 pub mod sync;
+pub mod template_removal;
 pub mod update_grade;
 pub mod users;
 pub mod visualize_psf;

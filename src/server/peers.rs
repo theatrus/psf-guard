@@ -91,9 +91,10 @@ pub struct RemoteSyncRequest {
     pub reviewed_only: bool,
     #[serde(default = "default_true")]
     pub with_image_data: bool,
-    /// For a pull that writes: the project GUIDs its preview listed for
-    /// deletion (`deleted_projects` of the dry run). An apply reads the
-    /// peer again, so it deletes only these; absent means none.
+    /// For a pull that writes: the project and exposure template GUIDs its
+    /// preview listed for deletion (`deleted_projects` and
+    /// `deleted_templates` of the dry run). An apply reads the peer again,
+    /// so it deletes only these; absent means none.
     #[serde(default)]
     pub previewed_deletions: Vec<String>,
 }
@@ -112,6 +113,8 @@ pub struct RemoteSyncResult {
     /// preview would delete, because the peer's catalog deleted them. The
     /// page sends a preview's list back with the apply.
     pub deleted_projects: Vec<String>,
+    /// The same for exposure templates the peer's catalog deleted.
+    pub deleted_templates: Vec<String>,
 }
 
 pub async fn list_peers(
@@ -446,6 +449,7 @@ pub async fn sync_with_peer(
         peer_catalog: outcome.peer_catalog,
         summary: outcome.summary,
         deleted_projects: outcome.deleted_project_guids,
+        deleted_templates: outcome.deleted_template_guids,
     })))
 }
 

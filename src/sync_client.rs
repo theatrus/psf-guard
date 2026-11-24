@@ -172,6 +172,7 @@ impl SyncClient {
                     "reviewed_only": reviewed_only,
                     "include_frame_derivatives": true,
                     "include_project_tombstones": true,
+                    "include_template_tombstones": true,
                 }),
             )
             .await

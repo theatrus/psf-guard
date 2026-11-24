@@ -6,7 +6,7 @@ import * as path from 'node:path';
 import { applyRealSchema } from '../e2e/fixtures/sync';
 import { openSettings } from '../e2e/helpers';
 
-test("a rig's exposure template takes new gain, twilight and Moon settings from Rig setup", async ({ page, request }) => {
+test("a rig's exposure template takes new gain, twilight and Moon settings from Rig setup, and an unused one can be deleted", async ({ page, request }) => {
   const run = process.env.PSF_GUARD_DIRECTOR_E2E_TMP!;
   const dir = fs.mkdtempSync(path.join(run, 'rig-templates-'));
   const slug = `rig-templates-${randomUUID()}`;
@@ -14,10 +14,14 @@ test("a rig's exposure template takes new gain, twilight and Moon settings from 
   const database = new Database(file);
   applyRealSchema(database);
   // A template made in N.I.N.A. with the camera's defaults and no Moon avoidance.
-  database.prepare(`INSERT INTO exposuretemplate (profileId, name, filtername, gain, offset, bin, readoutmode, twilightlevel,
+  const seed = database.prepare(`INSERT INTO exposuretemplate (profileId, name, filtername, gain, offset, bin, readoutmode, twilightlevel,
     moonavoidanceenabled, moonavoidanceseparation, moonavoidancewidth, maximumhumidity, defaultexposure, moonrelaxscale,
     moonrelaxmaxaltitude, moonrelaxminaltitude, moondownenabled, ditherevery, minutesOffset, guid)
-    VALUES ('profile', 'Ha 300', 'Ha', -1, -1, 1, -1, 0, 0, 60, 7, 0, 300, 0, 5, -15, 0, -1, 0, ?)`).run(randomUUID());
+    VALUES ('profile', ?, ?, -1, -1, 1, -1, 0, 0, 60, 7, 0, 300, 0, 5, -15, 0, -1, 0, ?)`);
+  seed.run('Ha 300', 'Ha', randomUUID());
+  // One no plan uses, to delete.
+  const spare = randomUUID();
+  seed.run('OIII 300', 'OIII', spare);
   const post = async (route: string, data: unknown) => {
     const response = await request.post(`/api${route}`, { data, timeout: 5000 });
     expect(response.ok(), await response.text()).toBe(true);
@@ -51,8 +55,16 @@ test("a rig's exposure template takes new gain, twilight and Moon settings from 
     await expect(templates.getByRole('button', { name: 'Save Ha 300', exact: true })).toHaveCount(0);
 
     const row = database.prepare(`SELECT filtername, gain, offset, twilightlevel, moonavoidanceenabled, moonavoidanceseparation
-      FROM exposuretemplate`).get();
+      FROM exposuretemplate WHERE name = 'Ha 300'`).get();
     expect(row).toEqual({ filtername: 'Ha', gain: 139, offset: -1, twilightlevel: 1, moonavoidanceenabled: 1, moonavoidanceseparation: 110 });
+
+    // Delete the unused template; PSF Guard records it for the next sync.
+    page.once('dialog', dialog => dialog.accept());
+    await templates.getByRole('button', { name: 'Delete OIII 300', exact: true }).click();
+    await expect(templates.getByText('OIII 300 deleted')).toBeVisible();
+    await expect(templates.getByRole('textbox', { name: 'Name of OIII 300' })).toHaveCount(0);
+    expect(database.prepare(`SELECT name FROM exposuretemplate`).all()).toEqual([{ name: 'Ha 300' }]);
+    expect(database.prepare(`SELECT template_guid FROM psf_guard_removed_template`).all()).toEqual([{ template_guid: spare }]);
 
     await page.setViewportSize({ width: 390, height: 844 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);

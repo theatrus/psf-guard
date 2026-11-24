@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { server } from '../../test/msw-server';
 import RigExposureTemplates from '../director/RigExposureTemplates';
 import type { ExposureTemplateDetails } from '../../api/types';
@@ -66,6 +66,7 @@ describe('Rig exposure templates', () => {
     mount(false);
     expect(await screen.findByLabelText('Gain of Ha 300')).toBeDisabled();
     expect(screen.getByText(/View only/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Delete Ha 300' })).not.toBeInTheDocument();
   });
 
   it('drops edits with Undo', async () => {
@@ -91,6 +92,53 @@ describe('Rig exposure templates', () => {
     fireEvent.change(await screen.findByLabelText('Gain of Ha 300'), { target: { value: '1.5' } });
     expect(screen.getByRole('button', { name: 'Save Ha 300' })).toBeDisabled();
     expect(screen.getByRole('alert')).toHaveTextContent('Ha 300: Gain, offset and readout mode must be whole numbers');
+  });
+
+  it('deletes a template no exposure plan uses, after asking', async () => {
+    const spare = { ...ha, id: 8, name: 'OIII 300', filter_name: 'OIII', plan_count: 0 };
+    let rows = [ha, spare];
+    const deleted: string[] = [];
+    server.use(
+      http.get('/api/db/rig/exposure-templates', () => HttpResponse.json(ok(rows))),
+      http.delete('/api/db/rig/exposure-templates/:id', ({ params }) => {
+        deleted.push(String(params.id));
+        rows = rows.filter(row => String(row.id) !== params.id);
+        return HttpResponse.json(ok({ id: 8, name: 'OIII 300', synced: true }));
+      }),
+    );
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);
+    mount();
+    expect(await screen.findByRole('button', { name: 'Delete Ha 300' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Delete Ha 300' })).toHaveAttribute('title', expect.stringMatching(/^3 exposure plans use this template/));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete OIII 300' }));
+    expect(deleted).toEqual([]);
+    fireEvent.click(screen.getByRole('button', { name: 'Delete OIII 300' }));
+    expect(confirm).toHaveBeenLastCalledWith(expect.stringMatching(/^Delete OIII 300\? The next sync also deletes it in N\.I\.N\.A\./));
+    expect(await screen.findByText('OIII 300 deleted')).toBeInTheDocument();
+    expect(deleted).toEqual(['8']);
+    expect(screen.queryByLabelText('Name of OIII 300')).not.toBeInTheDocument();
+    confirm.mockRestore();
+  });
+
+  it('says when a deleted template had no GUID to sync', async () => {
+    fixture({ ...ha, plan_count: 0 });
+    server.use(http.delete('/api/db/rig/exposure-templates/:id', () => HttpResponse.json(ok({ id: 7, name: 'Ha 300', synced: false }))));
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    mount();
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete Ha 300' }));
+    expect(await screen.findByText(/Ha 300 deleted here only\. It has no GUID/)).toBeInTheDocument();
+    confirm.mockRestore();
+  });
+
+  it('shows the refusal when plans started using the template', async () => {
+    fixture({ ...ha, plan_count: 0 });
+    server.use(http.delete('/api/db/rig/exposure-templates/:id', () => HttpResponse.json(
+      { success: false, data: null, error: 'Ha 300 is used by 1 exposure plan; change or delete that plan first' }, { status: 409 })));
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    mount();
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete Ha 300' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Ha 300 is used by 1 exposure plan');
+    confirm.mockRestore();
   });
 
   it('keeps an edit typed while the save runs', async () => {

@@ -79,13 +79,18 @@ const MERGE_TABLES: &[&str] = &[
 /// PSF Guard tables a merge carries only when both ends know them. An
 /// older peer rejects a bundle naming a table it does not know, so a sender
 /// includes each only for a receiver that advertises its capability
-/// ([`FRAME_DERIVATIVES_CAPABILITY`], [`PROJECT_TOMBSTONES_CAPABILITY`]),
+/// ([`FRAME_DERIVATIVES_CAPABILITY`], [`PROJECT_TOMBSTONES_CAPABILITY`],
+/// [`TEMPLATE_TOMBSTONES_CAPABILITY`]),
 /// and an export includes each only when the client asks for it. A
 /// receiver that gets none leaves its own records alone.
-const OPTIONAL_MERGE_TABLES: &[&str] = &[FRAME_DERIVATIVES_TABLE, PROJECT_TOMBSTONES_TABLE];
+const OPTIONAL_MERGE_TABLES: &[&str] = &[
+    FRAME_DERIVATIVES_TABLE,
+    PROJECT_TOMBSTONES_TABLE,
+    TEMPLATE_TOMBSTONES_TABLE,
+];
 /// PSF Guard tables a planning push carries only when both ends know them,
 /// on the same terms as [`OPTIONAL_MERGE_TABLES`].
-const OPTIONAL_PLANNING_TABLES: &[&str] = &[PROJECT_TOMBSTONES_TABLE];
+const OPTIONAL_PLANNING_TABLES: &[&str] = &[PROJECT_TOMBSTONES_TABLE, TEMPLATE_TOMBSTONES_TABLE];
 
 const FRAME_DERIVATIVES_TABLE: &str = "psf_guard_frame_derivative";
 /// Projects the sending catalog deleted, standing or allowed back. A
@@ -95,6 +100,11 @@ const PROJECT_TOMBSTONES_TABLE: &str = "psf_guard_removed_project";
 /// The columns of [`PROJECT_TOMBSTONES_TABLE`] a bundle carries.
 const PROJECT_TOMBSTONE_COLUMNS: &[&str] =
     &["project_guid", "name", "removed_at", "allowed_back_at"];
+/// Exposure templates the sending catalog deleted. A bundle carries only
+/// the `template_guid` (a UUID), `name` and `removed_at` columns.
+const TEMPLATE_TOMBSTONES_TABLE: &str = crate::commands::template_removal::TABLE;
+/// The columns of [`TEMPLATE_TOMBSTONES_TABLE`] a bundle carries.
+const TEMPLATE_TOMBSTONE_COLUMNS: &[&str] = &["template_guid", "name", "removed_at"];
 
 /// The capability that says a peer reads and writes pairing records.
 pub const FRAME_DERIVATIVES_CAPABILITY: &str = "frame_derivatives_v1";
@@ -102,6 +112,10 @@ pub const FRAME_DERIVATIVES_CAPABILITY: &str = "frame_derivatives_v1";
 /// from merge and planning bundles, and deletes them in its own catalog
 /// when nothing was captured for them there.
 pub const PROJECT_TOMBSTONES_CAPABILITY: &str = "project_tombstones_v1";
+/// The capability that says a peer reads the exposure templates a catalog
+/// deleted from merge and planning bundles, and deletes them in its own
+/// catalog when no exposure plan there uses them.
+pub const TEMPLATE_TOMBSTONES_CAPABILITY: &str = "template_tombstones_v1";
 
 /// Which optional PSF Guard tables a bundle may carry: the ones the
 /// receiver can read.
@@ -111,6 +125,8 @@ pub struct OptionalTables {
     pub frame_derivatives: bool,
     /// Projects the catalog deleted (merge and planning).
     pub project_tombstones: bool,
+    /// Exposure templates the catalog deleted (merge and planning).
+    pub template_tombstones: bool,
 }
 
 impl OptionalTables {
@@ -120,6 +136,7 @@ impl OptionalTables {
         Self {
             frame_derivatives: has(FRAME_DERIVATIVES_CAPABILITY),
             project_tombstones: has(PROJECT_TOMBSTONES_CAPABILITY),
+            template_tombstones: has(TEMPLATE_TOMBSTONES_CAPABILITY),
         }
     }
 
@@ -127,6 +144,7 @@ impl OptionalTables {
         match table {
             FRAME_DERIVATIVES_TABLE => self.frame_derivatives,
             PROJECT_TOMBSTONES_TABLE => self.project_tombstones,
+            TEMPLATE_TOMBSTONES_TABLE => self.template_tombstones,
             _ => false,
         }
     }
@@ -232,6 +250,12 @@ pub struct CreateExportRequest {
     /// read the table.
     #[serde(default)]
     pub include_project_tombstones: bool,
+    /// Merge and planning exports: include the exposure templates this
+    /// catalog deleted (`psf_guard_removed_template`, its `template_guid`,
+    /// `name` and `removed_at` columns). Off unless the client asks, since
+    /// an older client cannot read the table.
+    #[serde(default)]
+    pub include_template_tombstones: bool,
 }
 
 fn default_true() -> bool {
@@ -506,6 +530,7 @@ pub async fn capabilities(
         "star_detection_profile_v1",
         FRAME_DERIVATIVES_CAPABILITY,
         PROJECT_TOMBSTONES_CAPABILITY,
+        TEMPLATE_TOMBSTONES_CAPABILITY,
         // Planning and merge exports may carry rows on PSF Guard's waiting
         // profile. A plugin that lists the same capability in
         // `X-PSF-Guard-Plugin-Capabilities` gets them as they are; any other
@@ -1011,6 +1036,7 @@ pub async fn create_export(
     let optional = OptionalTables {
         frame_derivatives: request.include_frame_derivatives,
         project_tombstones: request.include_project_tombstones,
+        template_tombstones: request.include_template_tombstones,
     };
     let waiting = WaitingRows::for_export(&headers, operation, &catalog.id);
     let audit = |outcome, detail: Option<&str>, summary| {
@@ -1587,6 +1613,29 @@ pub(crate) fn export_bundle(
                 .columns
                 .iter()
                 .position(|column| column.name.eq_ignore_ascii_case("project_guid"));
+            table.rows.retain(|row| {
+                guid.and_then(|guid| row.values[guid].value.as_deref())
+                    .is_some_and(|value| Uuid::parse_str(value.trim()).is_ok())
+            });
+            table
+        } else if *name == TEMPLATE_TOMBSTONES_TABLE {
+            // A receiver matches templates by GUID, and the table stores
+            // only UUIDs; the filter guards a hand-edited row. A template
+            // made again with the GUID (activation can) is not deleted.
+            let standing = format!(
+                "template_guid IS NOT NULL AND {}",
+                crate::commands::template_removal::STANDING
+            );
+            let mut table = read_bundle_columns(
+                &connection,
+                name,
+                Some(TEMPLATE_TOMBSTONE_COLUMNS),
+                Some(&standing),
+            )?;
+            let guid = table
+                .columns
+                .iter()
+                .position(|column| column.name.eq_ignore_ascii_case("template_guid"));
             table.rows.retain(|row| {
                 guid.and_then(|guid| row.values[guid].value.as_deref())
                     .is_some_and(|value| Uuid::parse_str(value.trim()).is_ok())
@@ -2249,6 +2298,7 @@ mod tests {
         const DERIVATIVES: OptionalTables = OptionalTables {
             frame_derivatives: true,
             project_tombstones: false,
+            template_tombstones: false,
         };
         let path = temp_snapshot("export-src");
         let connection = Connection::open(&path).unwrap();
@@ -2357,6 +2407,110 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// A planning export carries the templates the catalog deleted, and a
+    /// rig that reads it deletes its unused copy. A template made again
+    /// with a deleted GUID, or a record without a UUID, does not travel.
+    #[test]
+    fn deleted_templates_travel_in_a_planning_export_to_a_rig() {
+        const L: &str = "11111111-1111-4111-8111-111111111111";
+        const HA: &str = "22222222-2222-4222-8222-222222222222";
+        const SII: &str = "44444444-4444-4444-8444-444444444444";
+        let scheduler = |path: &FsPath| {
+            let connection = Connection::open(path).unwrap();
+            crate::ts_schema::apply_schema(&connection).unwrap();
+            connection
+                .execute_batch(&format!(
+                    "INSERT INTO project (Id, profileId, name, state, guid) VALUES (1, 'p', 'M31', 1, 'pg');
+                     INSERT INTO target (Id, name, active, epochcode, projectid, guid) VALUES (10, 'M31', 1, 0, 1, 'tg');
+                     INSERT INTO exposuretemplate (Id, profileId, name, filtername, guid) VALUES
+                       (1, 'p', 'L', 'L', '{L}'), (2, 'p', 'Ha', 'Ha', '{HA}'), (3, 'p', 'SII', 'SII', '{SII}');
+                     INSERT INTO exposureplan (Id, profileId, exposure, desired, acquired, accepted, targetid, exposureTemplateId, guid)
+                       VALUES (100, 'p', 300, 10, 0, 0, 10, 1, 'eg');"
+                ))
+                .unwrap();
+            connection
+        };
+        let path = temp_snapshot("deleted-templates");
+        let mut connection = scheduler(&path);
+        for id in [2, 3] {
+            crate::commands::template_removal::remove(&mut connection, id)
+                .unwrap()
+                .unwrap();
+        }
+        connection
+            .execute_batch(&format!(
+                "INSERT INTO exposuretemplate (Id, profileId, name, filtername, guid) VALUES (4, 'p', 'SII', 'SII', '{SII}');
+                 INSERT INTO psf_guard_removed_template (template_guid, name, removed_at) VALUES ('hand-edited', 'X', 1);"
+            ))
+            .unwrap();
+        drop(connection);
+
+        let lean = export_bundle(
+            &path,
+            "cat",
+            SyncOperation::PushPlanning,
+            false,
+            false,
+            OptionalTables::default(),
+        )
+        .unwrap();
+        assert!(!lean.tables.contains_key(TEMPLATE_TOMBSTONES_TABLE));
+        let bundle = export_bundle(
+            &path,
+            "cat",
+            SyncOperation::PushPlanning,
+            false,
+            false,
+            OptionalTables {
+                template_tombstones: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let table = &bundle.tables[TEMPLATE_TOMBSTONES_TABLE];
+        assert_eq!(
+            table
+                .columns
+                .iter()
+                .map(|c| c.name.as_str())
+                .collect::<Vec<_>>(),
+            TEMPLATE_TOMBSTONE_COLUMNS
+        );
+        assert_eq!(table.rows.len(), 1, "only Ha's deletion stands");
+        validate_bundle(&bundle).unwrap();
+
+        let staged = path.with_extension("staged.sqlite");
+        materialize_bundle(&staged, &path, &bundle).unwrap();
+        let rig_path = temp_snapshot("deleted-templates-rig");
+        drop(scheduler(&rig_path));
+        let source = Connection::open(&staged).unwrap();
+        let rig = Connection::open(&rig_path).unwrap();
+        let summary = crate::commands::sync::sync_planning(
+            &source,
+            &rig,
+            &crate::commands::sync::PlanningOptions {
+                dry_run: false,
+                project_filter: None,
+                destination: crate::commands::sync::SyncDestination::Scheduler,
+                deletions: Default::default(),
+            },
+        )
+        .unwrap();
+        assert_eq!(summary.exposuretemplate.deleted, 1, "{:?}", summary.changes);
+        let names: Vec<String> = rig
+            .prepare("SELECT name FROM exposuretemplate ORDER BY name")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(names, ["L", "SII"]);
+        drop((source, rig));
+        for file in [&staged, &path, &rig_path] {
+            let _ = std::fs::remove_file(file);
+        }
+    }
+
     #[test]
     fn a_planning_export_carries_only_the_templates_its_plans_use() {
         let path = temp_snapshot("export-templates");
@@ -2423,6 +2577,11 @@ mod tests {
         assert!(optional_tables(SyncOperation::Merge).contains(&PROJECT_TOMBSTONES_TABLE));
         assert!(optional_tables(SyncOperation::PushPlanning).contains(&PROJECT_TOMBSTONES_TABLE));
         assert!(optional_tables(SyncOperation::PushGrades).is_empty());
+        // Deleted templates travel on the same terms, under their own name.
+        assert!(capabilities(&[TEMPLATE_TOMBSTONES_CAPABILITY]).template_tombstones);
+        assert!(!capabilities(&[PROJECT_TOMBSTONES_CAPABILITY]).template_tombstones);
+        assert!(optional_tables(SyncOperation::Merge).contains(&TEMPLATE_TOMBSTONES_TABLE));
+        assert!(optional_tables(SyncOperation::PushPlanning).contains(&TEMPLATE_TOMBSTONES_TABLE));
     }
 
     #[test]

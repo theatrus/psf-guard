@@ -84,7 +84,7 @@ pub(crate) fn unix_now() -> i64 {
         .unwrap_or_default()
 }
 
-fn table_exists(conn: &Connection, table: &str) -> bool {
+pub(crate) fn table_exists(conn: &Connection, table: &str) -> bool {
     conn.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
         [table],
@@ -93,7 +93,7 @@ fn table_exists(conn: &Connection, table: &str) -> bool {
     .unwrap_or(false)
 }
 
-fn has_column(conn: &Connection, table: &str, column: &str) -> bool {
+pub(crate) fn has_column(conn: &Connection, table: &str, column: &str) -> bool {
     conn.prepare(&format!("PRAGMA table_info(\"{table}\")"))
         .and_then(|mut statement| {
             let names = statement

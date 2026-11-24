@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
-import { Check, Moon, Undo2 } from 'lucide-react';
+import { Check, Moon, Trash2, Undo2 } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import type { DirectorMoonPolicy } from '../../api/directorTypes';
 import type { ExposureTemplateDetails, UpdateExposureTemplateRequest } from '../../api/types';
@@ -115,6 +115,21 @@ export default function RigExposureTemplates({ slug, canEdit }: { slug: string; 
       ]);
     },
   });
+  const remove = useMutation({
+    mutationFn: (template: ExposureTemplateDetails) => apiClient.deleteExposureTemplate(slug, template.id),
+    onSuccess: removed => {
+      client.setQueryData<ExposureTemplateDetails[]>(queryKey, current => current?.filter(row => row.id !== removed.id));
+      setDrafts(current => without(current, removed.id));
+      setExpanded(current => current === removed.id ? null : current);
+      setNotice(removed.synced
+        ? `${removed.name} deleted`
+        : `${removed.name} deleted here only. It has no GUID, so other catalogs and the rig keep their copy.`);
+      return Promise.all([
+        client.invalidateQueries({ queryKey: ['db', slug, 'project-scheduler'] }),
+        client.invalidateQueries({ queryKey: ['directorTemplates', slug] }),
+      ]);
+    },
+  });
 
   const rows = templates.data ?? [];
   const profiles = new Set(rows.map(row => row.profile_id));
@@ -131,7 +146,16 @@ export default function RigExposureTemplates({ slug, canEdit }: { slug: string; 
   };
   const actions = (template: ExposureTemplateDetails) => {
     const { draft, dirty, trouble, label } = stateOf(template);
-    if (!canEdit || !dirty) return null;
+    if (!canEdit) return null;
+    if (!dirty) {
+      const used = template.plan_count > 0;
+      return <button type="button" aria-label={`Delete ${label}`}
+        title={used ? `${template.plan_count === 1 ? '1 exposure plan uses' : `${template.plan_count} exposure plans use`} this template. Change or delete ${template.plan_count === 1 ? 'that plan' : 'those plans'} first.` : 'Delete'}
+        disabled={used || remove.isPending}
+        onClick={() => { if (window.confirm(`Delete ${label}? The next sync also deletes it in N.I.N.A. and in other catalogs, unless a plan there uses it.`)) remove.mutate(template); }}>
+        <Trash2 size={16} />
+      </button>;
+    }
     return <>
       <button type="button" aria-label={`Save ${label}`} title={trouble ?? 'Save'} disabled={!!trouble || save.isPending} onClick={() => save.mutate({ id: template.id, draft })}><Check size={16} /></button>
       <button type="button" aria-label={`Drop changes to ${label}`} title="Drop changes" onClick={() => undo(template.id)}><Undo2 size={16} /></button>
@@ -144,7 +168,7 @@ export default function RigExposureTemplates({ slug, canEdit }: { slug: string; 
   useUnsavedChanges('Target Scheduler templates', rows.some(row => stateOf(row).dirty));
 
   return <section className="template-library rig-templates" aria-label="Target Scheduler templates">
-    <p className="director-muted">The exposure templates in this rig's Target Scheduler database. A change applies to every exposure plan that uses the template. An empty gain, offset or readout mode uses the camera's default. A plan that uses a template from the template library keeps the library's Moon settings when it is activated.</p>
+    <p className="director-muted">The exposure templates in this rig's Target Scheduler database. A change applies to every exposure plan that uses the template. An empty gain, offset or readout mode uses the camera's default. A plan that uses a template from the template library keeps the library's Moon settings when it is activated. You can delete a template that no exposure plan uses.</p>
     {!canEdit && <p className="director-muted">View only. Sign in with an editor's account to change templates.</p>}
     {templates.isPending && <p role="status">Loading exposure templates...</p>}
     {templates.isError && <p className="director-error" role="alert">{message(templates.error)}</p>}
@@ -201,5 +225,6 @@ export default function RigExposureTemplates({ slug, canEdit }: { slug: string; 
     {problems.map(({ row, label, trouble }) => <p key={row.id} className="director-error" role="alert">{label}: {trouble}</p>)}
     {notice && <p role="status">{notice}</p>}
     {save.isError && <p className="director-error" role="alert">{message(save.error)}</p>}
+    {remove.isError && <p className="director-error" role="alert">{message(remove.error)}</p>}
   </section>;
 }

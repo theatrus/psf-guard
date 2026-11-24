@@ -64,9 +64,11 @@ The remaining pieces are:
 
 **Merge**
 : A one-way copy into a destination. It inserts and updates rows under the
-  rules below. Version 1 deletes destination rows in one case only: a
+  rules below. Version 1 deletes destination rows in two cases only: a
   project the source catalog deleted, when nothing was captured for it in
-  the destination (see [Deleted projects](#deleted-projects)).
+  the destination (see [Deleted projects](#deleted-projects)), and an
+  exposure template the source catalog deleted, when no exposure plan in
+  the destination uses it (see [Deleted templates](#deleted-templates)).
 
 **Preview**
 : A frozen source snapshot, selected options, destination preconditions, and
@@ -150,6 +152,8 @@ filters remain available.
 | Explicit grade push | Image GUID | Source grade and reason win |
 | Destination-only row | None | Keep, except a project the source catalog deleted (its GUID in the source's `psf_guard_removed_project`, not allowed back) with no frames and no restorable removed rejects in the destination: delete it, with its targets and exposure plans |
 | Destination project the source deleted, with frames in the destination | Project GUID | Keep and report how many exposures it has |
+| Destination template the source deleted (its GUID in the source's `psf_guard_removed_template`, and no source template has it) | Template GUID | Delete it when no destination exposure plan uses it, after the sync writes the plans; otherwise keep it and report how many plans use it. A PSF Guard catalog records the deletion |
+| Source template this catalog deleted | Template GUID | Leave it out, unless a plan the sync sends uses it: then insert it and drop the deletion record |
 | Duplicate or empty GUID | None | Skip and report |
 | Non-null parent that cannot map | Parent GUID | Skip and report |
 | Same-looking object with another GUID | Name and coordinates | Warn; never auto-merge |
@@ -468,6 +472,47 @@ dry run returns `deleted_projects`, the GUIDs it would delete, and the
 apply request sends them back as `previewed_deletions`. The apply deletes
 only those; a project the peer deleted after the preview stays, with a
 change line, until the next preview lists it.
+
+### Deleted templates
+
+`template_tombstones_v1` advertises that a peer reads the exposure
+templates a catalog deleted. A person deletes a template that no exposure
+plan uses in **Rig setup › Target Scheduler templates**
+(`DELETE /api/db/{db_id}/exposure-templates/{id}`). PSF Guard records the
+deletion in `psf_guard_removed_template` when the template has a UUID
+GUID; a template without one is deleted only in that catalog. Merge and
+planning bundles may carry the table with these columns, one row for each
+deletion:
+
+| Column | Type | Meaning |
+| --- | --- | --- |
+| `template_guid` | TEXT | The template's GUID, a UUID |
+| `name` | TEXT | The template's name, for change lines |
+| `removed_at` | INTEGER | When the catalog deleted it, Unix seconds |
+
+A reader must tolerate more columns.
+
+- **Exports.** `POST /api/sync/v1/exports` takes
+  `include_template_tombstones` (bool, default false), on the same terms
+  as `include_project_tombstones`.
+- **Pushes.** A PSF Guard client sends the table on a merge or planning
+  push only to a server that advertises the capability.
+- **Receiving.** After the bundle's exposure plans are written, the
+  receiver deletes its template with each GUID, unless the bundle has a
+  live template with that GUID or an exposure plan in the receiver uses
+  it. Two templates with one GUID are left alone. A PSF Guard catalog
+  records each deletion, dated with the sender's `removed_at`; a Target
+  Scheduler database only loses the row. A peer pull's dry run lists the
+  GUIDs in `deleted_templates`, and the apply sends them back in
+  `previewed_deletions` with the projects.
+- **Leaving out.** A catalog leaves out a source template it deleted, so
+  the rig's next push does not bring it back. When a plan the sync sends
+  uses that template, the template comes back and the deletion record
+  goes, since the plan cannot arrive without it.
+
+The N.I.N.A. Sync plugin asks for the table when the server advertises
+the capability, and applies it to Target Scheduler at **Pull planning**
+under the receiving rules.
 
 ### Star detection settings
 
