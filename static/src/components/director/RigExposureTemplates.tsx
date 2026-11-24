@@ -83,6 +83,13 @@ const message = (error: unknown) => isAxiosError(error)
   ? error.response?.data?.error || error.message
   : error instanceof Error ? error.message : String(error);
 
+/** The confirmation before Delete: what the deletion reaches. */
+function deleteQuestion(template: ExposureTemplateDetails, label: string) {
+  return template.syncable === false
+    ? `Delete ${label}? It has no GUID, so only this catalog loses it. N.I.N.A. and other catalogs keep their copy.`
+    : `Delete ${label}? The next sync also deletes it in other PSF Guard catalogs, and in N.I.N.A. when its Sync plugin supports deleted templates. A copy that a plan uses stays.`;
+}
+
 function moonSummary(moon: DirectorMoonPolicy) {
   if (!moon.enabled) return 'Off';
   return moon.moon_down ? 'Moon down' : `${moon.separation_degrees}°`;
@@ -129,6 +136,8 @@ export default function RigExposureTemplates({ slug, canEdit }: { slug: string; 
         client.invalidateQueries({ queryKey: ['directorTemplates', slug] }),
       ]);
     },
+    // A refusal means the list is out of date: a plan may use the template now.
+    onError: () => client.invalidateQueries({ queryKey }),
   });
 
   const rows = templates.data ?? [];
@@ -152,7 +161,7 @@ export default function RigExposureTemplates({ slug, canEdit }: { slug: string; 
       return <button type="button" aria-label={`Delete ${label}`}
         title={used ? `${template.plan_count === 1 ? '1 exposure plan uses' : `${template.plan_count} exposure plans use`} this template. Change or delete ${template.plan_count === 1 ? 'that plan' : 'those plans'} first.` : 'Delete'}
         disabled={used || remove.isPending}
-        onClick={() => { if (window.confirm(`Delete ${label}? The next sync also deletes it in N.I.N.A. and in other catalogs, unless a plan there uses it.`)) remove.mutate(template); }}>
+        onClick={() => { if (window.confirm(deleteQuestion(template, label))) remove.mutate(template); }}>
         <Trash2 size={16} />
       </button>;
     }

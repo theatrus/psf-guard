@@ -506,9 +506,17 @@ A reader must tolerate more columns.
   GUIDs in `deleted_templates`, and the apply sends them back in
   `previewed_deletions` with the projects.
 - **Leaving out.** A catalog leaves out a source template it deleted, so
-  the rig's next push does not bring it back. When a plan the sync sends
-  uses that template, the template comes back and the deletion record
-  goes, since the plan cannot arrive without it.
+  the rig's next push does not bring it back. A copy under another GUID
+  whose settings match the deleted template
+  (`template_repeats::identical_template_key`, stored as the record's
+  `settings_key`) is left out too, and the record takes that GUID, so the
+  next export reaches the copy. When a plan the sync sends uses that
+  template, the template comes back and the deletion record goes, since
+  the plan cannot arrive without it.
+- **Project filters.** Templates belong to no project, so a sync limited
+  to some projects applies no template deletions. A full sync applies
+  them.
+- **Dates.** A record without `removed_at` is dated when it arrives.
 
 The N.I.N.A. Sync plugin asks for the table when the server advertises
 the capability, and applies it to Target Scheduler at **Pull planning**

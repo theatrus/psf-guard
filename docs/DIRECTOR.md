@@ -1945,13 +1945,13 @@ not bring the template back. Syncs carry the deletion:
   template support; an older plugin leaves the template there.
 - A PSF Guard catalog that syncs with this one deletes its copy.
 
-Where an exposure plan still uses the template, a sync keeps it and its
-log says why. When a plan from the rig starts using a template deleted
+Where an exposure plan still uses the template, a sync keeps it, and the
+sync log shows how many plans use it. When a plan from the rig starts using a template deleted
 here, the next sync brings the template back here, since the plan needs it.
 
 A template without a GUID, which an older Target Scheduler can leave, is
-deleted only here, because other catalogs cannot match it; the page says
-so.
+deleted only here, because other catalogs cannot match it. The
+confirmation warns you before you delete it.
 
 Saving and deleting need an editor's account. A read-only viewer sees the
 templates without edits. Over the API,

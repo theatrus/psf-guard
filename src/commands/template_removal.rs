@@ -4,9 +4,12 @@
 //! other catalogs and rigs, which delete their copy when no plan there uses
 //! it. See docs/design/data-transfer.md#deleted-templates.
 
+use crate::commands::sync::table_has_column;
+use crate::renamed_lights::table_exists;
 use anyhow::{Context, Result};
+use rusqlite::types::Value;
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Templates this catalog deleted, one row for each GUID.
 pub const TABLE: &str = "psf_guard_removed_template";
@@ -17,7 +20,8 @@ const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS psf_guard_removed_template (
     name TEXT NOT NULL,
     profile_id TEXT,
     removed_at INTEGER NOT NULL,
-    origin TEXT NOT NULL DEFAULT 'local'
+    origin TEXT NOT NULL DEFAULT 'local',
+    settings_key TEXT
 )";
 
 /// Create the table. Safe to call repeatedly.
@@ -40,19 +44,99 @@ pub(crate) fn sync_guid(guid: Option<&str>) -> Option<String> {
 pub(crate) const STANDING: &str = "lower(trim(template_guid)) NOT IN
     (SELECT lower(trim(guid)) FROM exposuretemplate WHERE guid IS NOT NULL)";
 
+/// The columns of the database's `exposuretemplate` table.
+pub(crate) fn template_columns(conn: &Connection) -> Result<Vec<String>> {
+    let mut statement = conn.prepare("PRAGMA table_info(exposuretemplate)")?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(columns)
+}
+
+/// `SELECT` list for `columns`, quoted.
+pub(crate) fn select_list(columns: &[String]) -> String {
+    columns
+        .iter()
+        .map(|column| format!("\"{column}\""))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The settings that identify a template whatever its GUID
+/// ([`crate::template_repeats::identical_template_key`]) over `columns`.
+pub(crate) fn settings_key(columns: &[String], values: &[Value]) -> String {
+    let columns: Vec<&str> = columns.iter().map(String::as_str).collect();
+    crate::template_repeats::identical_template_key(&columns, values)
+}
+
+fn settings_key_of(conn: &Connection, id: i64) -> Result<Option<String>> {
+    let columns = template_columns(conn)?;
+    let values = conn
+        .query_row(
+            &format!(
+                "SELECT {} FROM exposuretemplate WHERE Id = ?1",
+                select_list(&columns)
+            ),
+            [id],
+            |row| {
+                (0..columns.len())
+                    .map(|index| row.get::<_, Value>(index))
+                    .collect::<rusqlite::Result<Vec<_>>>()
+            },
+        )
+        .optional()?;
+    Ok(values.map(|values| settings_key(&columns, &values)))
+}
+
+/// The templates this catalog deleted and does not have again.
+#[derive(Debug, Default)]
+pub(crate) struct Removed {
+    /// Their GUIDs, lower case.
+    pub guids: HashSet<String>,
+    /// Their settings keys, to the record's GUID, for deletions no live
+    /// template repeats. Two copies of one Target Scheduler database can
+    /// give one template different GUIDs; this finds the other copy's.
+    pub keys: HashMap<String, String>,
+}
+
+pub(crate) fn removed_templates(conn: &Connection) -> Result<Removed> {
+    if !table_exists(conn, TABLE) {
+        return Ok(Removed::default());
+    }
+    let mut statement = conn.prepare(&format!(
+        "SELECT lower(template_guid), settings_key FROM {TABLE} WHERE {STANDING}"
+    ))?;
+    let mut removed = Removed::default();
+    for row in statement.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+    })? {
+        let (guid, key) = row?;
+        if let Some(key) = key {
+            removed.keys.insert(key, guid.clone());
+        }
+        removed.guids.insert(guid);
+    }
+    if !removed.keys.is_empty() {
+        let columns = template_columns(conn)?;
+        let mut live = conn.prepare(&format!(
+            "SELECT {} FROM exposuretemplate",
+            select_list(&columns)
+        ))?;
+        let mut rows = live.query([])?;
+        while let Some(row) = rows.next()? {
+            let values = (0..columns.len())
+                .map(|index| row.get::<_, Value>(index))
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            removed.keys.remove(&settings_key(&columns, &values));
+        }
+    }
+    Ok(removed)
+}
+
 /// GUIDs of the templates this catalog deleted and does not have again,
 /// lower case. Empty when none was ever deleted.
 pub fn removed_template_guids(conn: &Connection) -> Result<HashSet<String>> {
-    if !crate::commands::project_removal::table_exists(conn, TABLE) {
-        return Ok(HashSet::new());
-    }
-    let mut statement = conn.prepare(&format!(
-        "SELECT lower(template_guid) FROM {TABLE} WHERE {STANDING}"
-    ))?;
-    let guids = statement
-        .query_map([], |row| row.get::<_, String>(0))?
-        .collect::<rusqlite::Result<_>>()?;
-    Ok(guids)
+    Ok(removed_templates(conn)?.guids)
 }
 
 fn record(
@@ -62,25 +146,40 @@ fn record(
     profile_id: Option<&str>,
     removed_at: i64,
     origin: &str,
+    settings_key: Option<&str>,
 ) -> Result<()> {
     ensure_schema(tx)?;
     tx.execute(
         &format!(
-            "INSERT INTO {TABLE} (template_guid, name, profile_id, removed_at, origin)
-             VALUES (?1, ?2, ?3, ?4, ?5)
+            "INSERT INTO {TABLE} (template_guid, name, profile_id, removed_at, origin, settings_key)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT(template_guid) DO UPDATE SET name = excluded.name,
                  profile_id = excluded.profile_id,
                  removed_at = max(removed_at, excluded.removed_at),
-                 origin = excluded.origin"
+                 origin = excluded.origin,
+                 settings_key = excluded.settings_key"
         ),
-        params![guid, name, profile_id, removed_at, origin],
+        params![guid, name, profile_id, removed_at, origin, settings_key],
+    )?;
+    Ok(())
+}
+
+/// Move a deletion record to the GUID another copy of the template has, so
+/// it reaches that copy too. Nothing changes when a record already has it.
+pub(crate) fn adopt(tx: &Transaction, guid: &str, other: &str) -> Result<()> {
+    tx.execute(
+        &format!(
+            "UPDATE {TABLE} SET template_guid = ?2 WHERE lower(template_guid) = ?1
+             AND NOT EXISTS (SELECT 1 FROM {TABLE} WHERE lower(template_guid) = ?2)"
+        ),
+        [guid, other],
     )?;
     Ok(())
 }
 
 /// Drop the deletion record of a template that came back.
 pub(crate) fn forget(tx: &Transaction, guid: &str) -> Result<()> {
-    if crate::commands::project_removal::table_exists(tx, TABLE) {
+    if table_exists(tx, TABLE) {
         tx.execute(
             &format!("DELETE FROM {TABLE} WHERE lower(template_guid) = ?1"),
             [guid],
@@ -136,6 +235,7 @@ pub fn remove(conn: &mut Connection, id: i64) -> Result<Result<RemovedTemplate, 
     if plans > 0 {
         return Ok(Err(Refusal::InUse { name, plans }));
     }
+    let key = settings_key_of(&tx, id)?;
     tx.execute("DELETE FROM exposuretemplate WHERE Id = ?1", [id])?;
     let guid = sync_guid(guid.as_deref());
     if let Some(guid) = &guid {
@@ -146,6 +246,7 @@ pub fn remove(conn: &mut Connection, id: i64) -> Result<Result<RemovedTemplate, 
             profile_id.as_deref(),
             crate::commands::project_removal::unix_now(),
             "local",
+            key.as_deref(),
         )?;
     }
     tx.commit()?;
@@ -165,13 +266,13 @@ struct SourceDeletion {
 
 /// The deletions a sync's source catalog recorded, by GUID. A bundle may
 /// carry only some columns, and a source without the table deleted none.
-fn source_deletions(src: &Connection) -> Result<BTreeMap<String, SourceDeletion>> {
-    use crate::commands::project_removal::{has_column, table_exists};
-    if !table_exists(src, TABLE) || !has_column(src, TABLE, "template_guid") {
+/// A deletion without a date is dated `now`.
+fn source_deletions(src: &Connection, now: i64) -> Result<BTreeMap<String, SourceDeletion>> {
+    if !table_exists(src, TABLE) || !table_has_column(src, TABLE, "template_guid") {
         return Ok(BTreeMap::new());
     }
     let column = |name: &'static str| {
-        if has_column(src, TABLE, name) {
+        if table_has_column(src, TABLE, name) {
             name
         } else {
             "NULL"
@@ -194,7 +295,7 @@ fn source_deletions(src: &Connection) -> Result<BTreeMap<String, SourceDeletion>
         let Some(guid) = sync_guid(guid.as_deref()) else {
             continue;
         };
-        let removed_at = removed_at.unwrap_or_default();
+        let removed_at = removed_at.unwrap_or(now);
         let entry = deletions.entry(guid).or_insert(SourceDeletion {
             name: name.clone().unwrap_or_default(),
             removed_at,
@@ -228,7 +329,8 @@ pub(crate) fn apply_source_deletions(
     previewed: Option<&HashSet<String>>,
     changes: &mut Vec<String>,
 ) -> Result<Vec<String>> {
-    let deletions = source_deletions(src)?;
+    let now = crate::commands::project_removal::unix_now();
+    let deletions = source_deletions(src, now)?;
     if deletions.is_empty() {
         return Ok(Vec::new());
     }
@@ -285,6 +387,7 @@ pub(crate) fn apply_source_deletions(
             changes.push(keep("it was not in the preview; preview again".into()));
             continue;
         }
+        let key = settings_key_of(tx, id)?;
         tx.execute("DELETE FROM exposuretemplate WHERE Id = ?1", [id])?;
         if record_deletions {
             // Dated when the person deleted it, on that catalog's clock.
@@ -295,6 +398,7 @@ pub(crate) fn apply_source_deletions(
                 profile_id.as_deref(),
                 deletion.removed_at,
                 "sync",
+                key.as_deref(),
             )?;
         }
         changes.push(format!(
@@ -579,7 +683,79 @@ mod tests {
         .unwrap();
         assert_eq!(summary.exposuretemplate.deleted, 1);
         assert_eq!(templates(&rig), ["L"]);
-        assert!(!crate::commands::project_removal::table_exists(&rig, TABLE));
+        assert!(!table_exists(&rig, TABLE));
+    }
+
+    /// The rig's copy of a template can have another GUID (two copies of
+    /// one Target Scheduler database fill GUIDs in apart). A pull finds it
+    /// by its settings and leaves it out, and the record takes its GUID so
+    /// the next export deletes it on the rig.
+    #[test]
+    fn a_copy_under_another_guid_stays_out_and_the_record_takes_its_guid() {
+        use crate::commands::sync::sync_pull;
+        const RIG_HA: &str = "55555555-5555-4555-8555-555555555555";
+        let mut local = scheduler();
+        remove(&mut local, 2).unwrap().unwrap();
+        let rig = scheduler();
+        rig.execute(
+            &format!("UPDATE exposuretemplate SET guid = '{RIG_HA}' WHERE Id = 2"),
+            [],
+        )
+        .unwrap();
+        let summary = sync_pull(&rig, &local, &pull(false)).unwrap();
+        assert_eq!(templates(&local), ["L"], "{:?}", summary.changes);
+        assert_eq!(
+            removed_template_guids(&local).unwrap(),
+            HashSet::from([RIG_HA.to_string()])
+        );
+        // A template with other settings and its own GUID is another
+        // template, and arrives.
+        rig.execute(
+            "INSERT INTO exposuretemplate (Id, profileId, name, filtername, gain, guid)
+             VALUES (3, 'p', 'Ha', 'Ha', 120, '66666666-6666-4666-8666-666666666666')",
+            [],
+        )
+        .unwrap();
+        sync_pull(&rig, &local, &pull(false)).unwrap();
+        assert_eq!(templates(&local), ["Ha", "L"]);
+    }
+
+    /// Templates belong to no project: a sync limited to some projects
+    /// leaves the source's template deletions for a full one.
+    #[test]
+    fn a_sync_limited_to_some_projects_deletes_no_template() {
+        use crate::commands::sync::sync_pull;
+        let mut source = scheduler();
+        remove(&mut source, 2).unwrap().unwrap();
+        let local = scheduler();
+        let mut options = pull(false);
+        options.project_filter = Some("M31".into());
+        let summary = sync_pull(&source, &local, &options).unwrap();
+        assert_eq!(summary.exposuretemplate.deleted, 0);
+        assert_eq!(templates(&local), ["Ha", "L"]);
+    }
+
+    /// A deletion record sent without a date is dated when it arrives, not
+    /// 1970.
+    #[test]
+    fn a_record_without_a_date_is_dated_on_arrival() {
+        use crate::commands::sync::sync_pull;
+        let source = scheduler();
+        source
+            .execute_batch(&format!(
+                "DELETE FROM exposuretemplate WHERE Id = 2;
+                 CREATE TABLE {TABLE} (template_guid TEXT, name TEXT);
+                 INSERT INTO {TABLE} VALUES ('{HA}', 'Ha');"
+            ))
+            .unwrap();
+        let local = scheduler();
+        sync_pull(&source, &local, &pull(false)).unwrap();
+        let removed_at: i64 = local
+            .query_row(&format!("SELECT removed_at FROM {TABLE}"), [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert!(removed_at > 1_700_000_000, "{removed_at}");
     }
 
     /// Activation can make a template again with the deleted one's GUID

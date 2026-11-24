@@ -4261,9 +4261,11 @@ export interface ExposureTemplateDetails {
   dither_every: number;
   minutes_offset: number;
   plan_count: number;
+  /** Whether syncs can match the template elsewhere (it has a UUID GUID),
+   *  and so carry its deletion. Absent on older servers. */
+  syncable?: boolean;
 }
 
-/** The settings of an exposure template a person may change; the filter stays. */
 /** A template the server deleted. `synced` is false for a template without
  *  a GUID: syncs cannot carry its deletion to other catalogs or the rig. */
 export interface DeletedExposureTemplate {
@@ -4272,6 +4274,7 @@ export interface DeletedExposureTemplate {
   synced: boolean;
 }
 
+/** The settings of an exposure template a person may change; the filter stays. */
 export interface UpdateExposureTemplateRequest {
   name: string;
   /** null uses the camera's default. */

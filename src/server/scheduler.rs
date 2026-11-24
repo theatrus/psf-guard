@@ -69,6 +69,9 @@ pub struct ExposureTemplateResponse {
     pub dither_every: i32,
     pub minutes_offset: i32,
     pub plan_count: i32,
+    /// Whether the template has a UUID GUID, so syncs can match it in
+    /// other catalogs and on the rig, and carry its deletion there.
+    pub syncable: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -303,11 +306,17 @@ fn read_templates(
         })
         .collect::<Vec<_>>()
         .join(",\n                ");
+    let guid = if columns.contains("guid") {
+        "et.guid"
+    } else {
+        "NULL"
+    };
     let mut stmt = conn.prepare(&format!(
         "SELECT et.Id, et.profileId, et.name, et.filtername,
                 et.gain, et.offset, et.bin, et.readoutmode,
                 {optional},
-                COUNT(ep.Id)
+                COUNT(ep.Id),
+                {guid}
          FROM exposuretemplate et
          LEFT JOIN exposureplan ep ON ep.exposureTemplateId = et.Id
          {filter}
@@ -337,6 +346,10 @@ fn read_templates(
             dither_every: row.get(18)?,
             minutes_offset: row.get(19)?,
             plan_count: row.get(20)?,
+            syncable: crate::commands::template_removal::sync_guid(
+                row.get::<_, Option<String>>(21)?.as_deref(),
+            )
+            .is_some(),
         })
     })?
     .collect()
@@ -1347,5 +1360,7 @@ mod template_http_tests {
         assert_eq!(status, 404);
         let (_, body) = send(&app, "GET", "/api/db/rig/exposure-templates", Value::Null).await;
         assert_eq!(body["data"].as_array().unwrap().len(), 1);
+        // Its GUID is not a UUID: no sync can match it elsewhere.
+        assert_eq!(body["data"][0]["syncable"], false);
     }
 }

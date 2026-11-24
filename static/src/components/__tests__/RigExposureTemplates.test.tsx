@@ -113,31 +113,40 @@ describe('Rig exposure templates', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Delete OIII 300' }));
     expect(deleted).toEqual([]);
     fireEvent.click(screen.getByRole('button', { name: 'Delete OIII 300' }));
-    expect(confirm).toHaveBeenLastCalledWith(expect.stringMatching(/^Delete OIII 300\? The next sync also deletes it in N\.I\.N\.A\./));
+    expect(confirm).toHaveBeenLastCalledWith(expect.stringMatching(/^Delete OIII 300\? The next sync also deletes it in other PSF Guard catalogs, and in N\.I\.N\.A\./));
     expect(await screen.findByText('OIII 300 deleted')).toBeInTheDocument();
     expect(deleted).toEqual(['8']);
     expect(screen.queryByLabelText('Name of OIII 300')).not.toBeInTheDocument();
     confirm.mockRestore();
   });
 
-  it('says when a deleted template had no GUID to sync', async () => {
-    fixture({ ...ha, plan_count: 0 });
+  it('warns before deleting a template without a GUID that only this catalog loses it', async () => {
+    fixture({ ...ha, plan_count: 0, syncable: false });
     server.use(http.delete('/api/db/rig/exposure-templates/:id', () => HttpResponse.json(ok({ id: 7, name: 'Ha 300', synced: false }))));
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
     mount();
     fireEvent.click(await screen.findByRole('button', { name: 'Delete Ha 300' }));
+    expect(confirm).toHaveBeenCalledWith('Delete Ha 300? It has no GUID, so only this catalog loses it. N.I.N.A. and other catalogs keep their copy.');
     expect(await screen.findByText(/Ha 300 deleted here only\. It has no GUID/)).toBeInTheDocument();
     confirm.mockRestore();
   });
 
-  it('shows the refusal when plans started using the template', async () => {
-    fixture({ ...ha, plan_count: 0 });
-    server.use(http.delete('/api/db/rig/exposure-templates/:id', () => HttpResponse.json(
-      { success: false, data: null, error: 'Ha 300 is used by 1 exposure plan; change or delete that plan first' }, { status: 409 })));
+  it('shows the refusal when plans started using the template, and reloads the list', async () => {
+    let planCount = 0;
+    server.use(
+      http.get('/api/db/rig/exposure-templates', () => HttpResponse.json(ok([{ ...ha, plan_count: planCount }]))),
+      http.delete('/api/db/rig/exposure-templates/:id', () => {
+        planCount = 1;
+        return HttpResponse.json(
+          { success: false, data: null, error: 'Ha 300 is used by 1 exposure plan; change or delete that plan first' }, { status: 409 });
+      }),
+    );
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
     mount();
     fireEvent.click(await screen.findByRole('button', { name: 'Delete Ha 300' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Ha 300 is used by 1 exposure plan');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Delete Ha 300' })).toBeDisabled());
+    expect(screen.getByText('1 plan')).toBeInTheDocument();
     confirm.mockRestore();
   });
 
