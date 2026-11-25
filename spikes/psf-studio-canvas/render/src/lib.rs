@@ -9,7 +9,8 @@ pub mod synth;
 mod tiles;
 
 pub use renderer::{
-    pane_rect, Adjustment, Blend, FinishKind, FinishStep, Frame, FrameStats, Layer, Output, Pane,
-    Renderer, Segment, View, MAX_FINISH_STEPS, MAX_LAYERS, MAX_MASKS, STRETCH_TABLE_WIDTH,
+    pane_rect, Adjustment, Blend, FinishKind, FinishStep, Frame, FrameStats, Layer, LayerHeal,
+    Output, Pane, Renderer, Segment, View, MAX_FINISH_STEPS, MAX_HEALED_LAYERS, MAX_HEALS,
+    MAX_LAYERS, MAX_MASKS, STRETCH_TABLE_WIDTH,
 };
 pub use source::{Pyramid, TileSource};

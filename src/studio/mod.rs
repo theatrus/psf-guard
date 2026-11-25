@@ -65,6 +65,6 @@ pub use step::{Applied, LevelForm, MaskSource, Masked, Step};
 pub use store::{SampleFormat, StoreLevel, StoreOptions, TileStore};
 pub use stroke::{Heal, PaintedMask, Stroke, StrokeMode};
 pub use view::{
-    own_step_for_channel, plan, step_shown_for, ChannelPlan, DisplayStretch, PlannedStretch,
-    StackEntry, Subject, UpTo, View, ViewPlan,
+    own_step_for_channel, plan, step_shown_for, ChannelPlan, DisplayStretch, OwnUntil,
+    PlannedStretch, StackEntry, Subject, UpTo, View, ViewPlan,
 };

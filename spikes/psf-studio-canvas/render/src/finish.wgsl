@@ -19,6 +19,11 @@ fn coverage(pixel: vec2i, mask_layer: f32) -> f32 {
     return textureLoad(masks, pixel, i32(mask_layer), 0).r;
 }
 
+// How much of a step applies at a pixel: its opacity, within its mask.
+fn applies(pixel: vec2i, step: FinishStep) -> f32 {
+    return coverage(pixel, step.kind.z) * step.kind.w;
+}
+
 // A step that maps each pixel alone.
 fn adjust(color: vec3f, step: FinishStep) -> vec3f {
     if step.kind.x < 1.5 {
@@ -39,7 +44,7 @@ fn before(pixel: vec2i, upto: i32) -> vec3f {
     for (var index = 0; index < upto; index++) {
         let step = globals.finish[index];
         if step.kind.x < 2.5 {
-            color = mix(color, adjust(color, step), coverage(pixel, step.kind.z));
+            color = mix(color, adjust(color, step), applies(pixel, step));
         }
     }
     return color;
@@ -53,7 +58,7 @@ fn finish_fragment(@builtin(position) position: vec4f) -> @location(0) vec4f {
     let count = i32(globals.counts.y);
     for (var index = 0; index < count; index++) {
         let step = globals.finish[index];
-        let covered = coverage(pixel, step.kind.z);
+        let covered = applies(pixel, step);
         if step.kind.x < 2.5 {
             color = mix(color, adjust(color, step), covered);
         } else {

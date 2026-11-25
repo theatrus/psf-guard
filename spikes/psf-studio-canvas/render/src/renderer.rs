@@ -8,11 +8,16 @@ use std::sync::Arc;
 use std::time::Instant;
 
 /// The most layers one frame combines.
-pub const MAX_LAYERS: usize = 12;
+pub const MAX_LAYERS: usize = 24;
 /// The most Finish steps one frame applies.
 pub const MAX_FINISH_STEPS: usize = 8;
 /// The most masks one frame draws, besides the stroke overlay.
-pub const MAX_MASKS: usize = 7;
+pub const MAX_MASKS: usize = 15;
+/// The most heals of single layers one frame draws.
+pub const MAX_HEALS: usize = 16;
+/// The most layers with heals of their own one frame draws. Each needs the
+/// layer's samples as a surface-sized image, to copy from.
+pub const MAX_HEALED_LAYERS: usize = 4;
 /// The mask layer that holds the stroke overlay.
 const OVERLAY_LAYER: u32 = MAX_MASKS as u32;
 
@@ -97,9 +102,27 @@ pub enum FinishKind {
 pub struct FinishStep {
     pub kind: FinishKind,
     pub amount: f32,
-    /// The mask that limits the step, as an index into [`Frame::masks`].
+    /// How strongly the step applies, from 0 to 1.
+    pub opacity: f32,
+    /// The mask that limits the step, as an index into [`Pane::masks`].
     /// `None` is everywhere. A heal's mask is its stroke.
     pub mask: Option<usize>,
+}
+
+/// A heal of one layer: the masked area takes the layer's own samples from
+/// `offset` document pixels away.
+#[derive(Clone, Copy, Debug)]
+pub struct LayerHeal {
+    /// The layer healed, as an index into [`Pane::layers`].
+    pub layer: usize,
+    /// Whether the heal changes the band's samples before the stretch, as
+    /// a heal of an input does. Otherwise it changes the stretched layer.
+    pub before_stretch: bool,
+    pub offset: [f32; 2],
+    /// The brightness added to the copied samples.
+    pub shift: f32,
+    /// The heal's stroke, as an index into [`Pane::masks`].
+    pub mask: usize,
 }
 
 /// One segment of a brush stroke, in document pixels.
@@ -128,13 +151,22 @@ pub struct Pane<'a> {
     /// The masks the layers and the Finish steps refer to. At most
     /// [`MAX_MASKS`].
     pub masks: &'a [Vec<Segment>],
+    /// Heals of single layers, in order. At most [`MAX_HEALS`], on at most
+    /// [`MAX_HEALED_LAYERS`] layers.
+    pub heals: &'a [LayerHeal],
+    /// Where the pane's image is laid out in the surface: x, y, width and
+    /// height in pixels. The view's center is at its middle.
+    pub viewport: [u32; 4],
+    /// The part of the surface the pane draws to. It is the viewport for a
+    /// pane of its own, and a part of it for one side of a wipe.
+    pub scissor: [u32; 4],
 }
 
 pub struct Frame<'a> {
     /// Where the document sits in each pane. The panes share it, so they
     /// pan and zoom together.
     pub view: View,
-    /// The panes, left to right, each the same size. At least one.
+    /// The panes, each with a viewport of the same size. At least one.
     pub panes: &'a [Pane<'a>],
     /// Changes whenever a pane's stretches do, so a single pane's unchanged
     /// tables are not uploaded again.
@@ -151,13 +183,32 @@ pub struct Frame<'a> {
 /// The pixels between two panes.
 const PANE_GAP: u32 = 2;
 
-/// Where pane `index` of `count` is in a surface: x, y, width and height in
-/// pixels. The panes are columns of one size.
+/// Where pane `index` of `count` is in a surface when the panes are a grid
+/// of one size: x, y, width and height in pixels. Up to three panes are one
+/// row; more are two rows.
 pub fn pane_rect(index: usize, count: usize, surface: (u32, u32)) -> [u32; 4] {
-    let count = count.max(1) as u32;
-    let width = (surface.0.saturating_sub(PANE_GAP * (count - 1)) / count).max(1);
-    let x = (index as u32 * (width + PANE_GAP)).min(surface.0.saturating_sub(1));
-    [x, 0, width.min(surface.0 - x), surface.1.max(1)]
+    let count = count.max(1);
+    let rows = if count > 3 { 2 } else { 1 };
+    let columns = count.div_ceil(rows) as u32;
+    let rows = rows as u32;
+    let width = (surface.0.saturating_sub(PANE_GAP * (columns - 1)) / columns).max(1);
+    let height = (surface.1.saturating_sub(PANE_GAP * (rows - 1)) / rows).max(1);
+    let (column, row) = (index as u32 % columns, index as u32 / columns);
+    let x = (column * (width + PANE_GAP)).min(surface.0.saturating_sub(1));
+    let y = (row * (height + PANE_GAP)).min(surface.1.saturating_sub(1));
+    [x, y, width.min(surface.0 - x), height.min(surface.1 - y)]
+}
+
+/// A rectangle kept inside a surface, so it is a valid viewport or scissor.
+fn within_surface(rect: [u32; 4], surface: (u32, u32)) -> [u32; 4] {
+    let x = rect[0].min(surface.0.saturating_sub(1));
+    let y = rect[1].min(surface.1.saturating_sub(1));
+    [
+        x,
+        y,
+        rect[2].clamp(1, surface.0 - x),
+        rect[3].clamp(1, surface.1 - y),
+    ]
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -189,6 +240,8 @@ struct Globals {
     counts: [f32; 4],
     layers: [[f32; 16]; MAX_LAYERS],
     finish: [[f32; 12]; MAX_FINISH_STEPS],
+    healed: [[f32; 4]; MAX_HEALED_LAYERS],
+    heals: [[f32; 8]; MAX_HEALS],
     display_matrix: [f32; 12],
     display: [f32; 4],
 }
@@ -229,6 +282,8 @@ const MASK_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R8Unorm;
 /// The combined image, before the Finish steps. Float, so a layer's sum is
 /// not clipped before a step that would bring it back into range.
 const COMBINED_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+/// A healed layer's samples, as they are in a tile.
+const HEALED_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
 
 /// The textures that are the size of the surface.
 struct Targets {
@@ -238,8 +293,10 @@ struct Targets {
     /// The combined image, the masks and the display curves, for the finish
     /// pass.
     finish_inputs: wgpu::BindGroup,
-    /// The masks, for the layers pass.
+    /// The masks and the healed layers' samples, for the layers pass.
     layer_masks: wgpu::BindGroup,
+    /// One view per healed layer, to draw its samples into.
+    healed_layers: Vec<wgpu::TextureView>,
 }
 
 /// A growable buffer of stroke segments.
@@ -287,6 +344,10 @@ pub struct Renderer {
     surface_offers: String,
     tile_layout: wgpu::BindGroupLayout,
     tile_pipeline: wgpu::RenderPipeline,
+    /// Draws the samples of the layers that have heals of their own.
+    healed_pipeline: wgpu::RenderPipeline,
+    /// The healed layers the pane being drawn has.
+    healed_count: usize,
     stroke_pipeline: wgpu::RenderPipeline,
     finish_pipeline: wgpu::RenderPipeline,
     tile_instances: wgpu::Buffer,
@@ -450,7 +511,10 @@ impl Renderer {
         });
         let masks_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("layer masks"),
-            entries: &[texture_entry(0, wgpu::TextureViewDimension::D2Array)],
+            entries: &[
+                texture_entry(0, wgpu::TextureViewDimension::D2Array),
+                texture_entry(1, wgpu::TextureViewDimension::D2Array),
+            ],
         });
         let finish_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("finish inputs"),
@@ -469,7 +533,7 @@ impl Renderer {
                         third: Option<&wgpu::BindGroupLayout>,
                         entries: (&str, &str),
                         instanced: bool,
-                        target: wgpu::ColorTargetState| {
+                        targets: &[Option<wgpu::ColorTargetState>]| {
             let groups = [Some(&common_layout), second, third];
             let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some(label),
@@ -493,7 +557,7 @@ impl Renderer {
                 fragment: Some(wgpu::FragmentState {
                     module: shader,
                     entry_point: Some(entries.1),
-                    targets: &[Some(target)],
+                    targets,
                     compilation_options: Default::default(),
                 }),
                 primitive: wgpu::PrimitiveState {
@@ -513,7 +577,16 @@ impl Renderer {
             Some(&masks_layout),
             ("tile_vertex", "tile_fragment"),
             true,
-            COMBINED_FORMAT.into(),
+            &[Some(COMBINED_FORMAT.into())],
+        );
+        let healed_pipeline = pipeline(
+            "healed layers",
+            &layers_shader,
+            Some(&tile_layout),
+            None,
+            ("tile_vertex", "healed_fragment"),
+            true,
+            &std::array::from_fn::<_, MAX_HEALED_LAYERS, _>(|_| Some(HEALED_FORMAT.into())),
         );
         let stroke_pipeline = pipeline(
             "strokes",
@@ -522,11 +595,11 @@ impl Renderer {
             None,
             ("stroke_vertex", "stroke_fragment"),
             true,
-            wgpu::ColorTargetState {
+            &[Some(wgpu::ColorTargetState {
                 format: MASK_FORMAT,
                 blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                 write_mask: wgpu::ColorWrites::RED,
-            },
+            })],
         );
         let finish_pipeline = pipeline(
             "finish",
@@ -535,7 +608,7 @@ impl Renderer {
             None,
             ("finish_vertex", "finish_fragment"),
             false,
-            format.into(),
+            &[Some(format.into())],
         );
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -658,6 +731,8 @@ impl Renderer {
             surface_offers,
             tile_layout,
             tile_pipeline,
+            healed_pipeline,
+            healed_count: 0,
             stroke_pipeline,
             finish_pipeline,
             tile_instances,
@@ -735,8 +810,13 @@ impl Renderer {
 
         let surface = (self.config.width, self.config.height);
         let pane_count = frame.panes.len().max(1);
-        // Every pane is the size of the first.
-        let first_rect = pane_rect(0, pane_count, surface);
+        // Every pane's viewport is the size of the first.
+        let first_rect = frame
+            .panes
+            .first()
+            .map_or([0, 0, surface.0, surface.1], |pane| {
+                within_surface(pane.viewport, surface)
+            });
         let (width, height) = (first_rect[2] as f64, first_rect[3] as f64);
         let view = frame.view;
 
@@ -851,7 +931,8 @@ impl Renderer {
             self.masks_version = None;
         }
         for (index, pane) in frame.panes.iter().enumerate() {
-            let rect = pane_rect(index, pane_count, surface);
+            let rect = within_surface(pane.viewport, surface);
+            let scissor = within_surface(pane.scissor, surface);
             self.write_globals(frame, pane, rect);
             self.upload_stretches(pane, alone.then_some(frame.stretches_version));
             self.upload_masks(pane, alone.then_some(frame.masks_version));
@@ -865,11 +946,11 @@ impl Renderer {
                 &sources,
                 overlay,
                 timed.is_some(),
-                rect,
+                (rect, scissor),
                 index == 0,
             );
             if let Some(view) = &capture_view {
-                self.finish_pass(&mut encoder, view, false, rect, index == 0);
+                self.finish_pass(&mut encoder, view, false, (rect, scissor), index == 0);
             }
             if let (Some(slot), Some(timing)) = (timed, &self.timing) {
                 timing.resolve(&mut encoder, slot);
@@ -932,7 +1013,7 @@ impl Renderer {
 
     /// Writes what the shaders read for one pane. `rect` is the pane's place
     /// in the surface.
-    fn write_globals(&self, frame: &Frame, pane: &Pane, rect: [u32; 4]) {
+    fn write_globals(&mut self, frame: &Frame, pane: &Pane, rect: [u32; 4]) {
         let (width, height) = (rect[2] as f64, rect[3] as f64);
         let view = frame.view;
         let scale = [2.0 * view.zoom / width, -2.0 * view.zoom / height];
@@ -956,6 +1037,8 @@ impl Renderer {
             counts: [layers.len() as f32, finish.len() as f32, 0.0, 0.0],
             layers: [[0.0; 16]; MAX_LAYERS],
             finish: [[0.0; 12]; MAX_FINISH_STEPS],
+            healed: [[-1.0, -1.0, 0.0, 0.0]; MAX_HEALED_LAYERS],
+            heals: [[0.0; 8]; MAX_HEALS],
             display_matrix: self.display_uniform.map_or([0.0; 12], |display| display.0),
             display: self.display_uniform.map_or([0.0; 4], |display| display.1),
         };
@@ -977,7 +1060,8 @@ impl Renderer {
                 layer.color[2],
                 layer.opacity.clamp(0.0, 1.0),
                 row as f32,
-                0.0,
+                // The layer's place among the healed layers; none yet.
+                -1.0,
                 0.0,
                 layer.curve.clamp(-1.0, 1.0),
                 layer.band.min(self.bands - 1) as f32,
@@ -997,6 +1081,54 @@ impl Renderer {
                 row += 1;
             }
         }
+        // Each layer with heals of its own gets a place among the healed
+        // layers. A heal on a layer with no place left is not drawn.
+        let mut healed: Vec<usize> = Vec::new();
+        let mut heal_count = 0;
+        for heal in pane.heals {
+            let known = healed.iter().position(|layer| *layer == heal.layer);
+            let Some(layer) = layers
+                .get(heal.layer)
+                .filter(|layer| layer.adjustment.is_none())
+            else {
+                continue;
+            };
+            if heal_count == MAX_HEALS
+                || heal.mask >= pane.masks.len().min(MAX_MASKS)
+                || (known.is_none() && healed.len() == MAX_HEALED_LAYERS)
+            {
+                continue;
+            }
+            let place = known.unwrap_or_else(|| {
+                healed.push(heal.layer);
+                healed.len() - 1
+            });
+            globals.layers[heal.layer][5] = place as f32;
+            globals.healed[place] = [
+                layer.band.min(self.bands - 1) as f32,
+                layer
+                    .blended
+                    .map_or(-1.0, |(band, _)| band.min(self.bands - 1) as f32),
+                layer
+                    .blended
+                    .map_or(0.0, |(_, amount)| amount.clamp(0.0, 1.0)),
+                0.0,
+            ];
+            globals.heals[heal_count] = [
+                heal.layer as f32,
+                if heal.before_stretch { 0.0 } else { 1.0 },
+                heal.mask as f32,
+                heal.shift,
+                // The offset in whole surface pixels.
+                (heal.offset[0] as f64 * view.zoom).round() as f32,
+                (heal.offset[1] as f64 * view.zoom).round() as f32,
+                0.0,
+                0.0,
+            ];
+            heal_count += 1;
+        }
+        globals.counts[2] = heal_count as f32;
+        self.healed_count = healed.len();
         for (slot, step) in globals.finish.iter_mut().zip(finish) {
             // A mask the frame does not hold limits nothing.
             let mask = step
@@ -1012,7 +1144,7 @@ impl Renderer {
                 kind,
                 step.amount,
                 mask,
-                0.0,
+                step.opacity.clamp(0.0, 1.0),
                 // The offset in whole surface pixels.
                 (offset[0] as f64 * view.zoom).round() as f32,
                 (offset[1] as f64 * view.zoom).round() as f32,
@@ -1123,7 +1255,7 @@ impl Renderer {
         sources: &[TileKey],
         overlay: u32,
         timed: bool,
-        rect: [u32; 4],
+        (rect, scissor): ([u32; 4], [u32; 4]),
         first: bool,
     ) {
         let within = |pass: &mut wgpu::RenderPass| {
@@ -1135,7 +1267,7 @@ impl Renderer {
                 0.0,
                 1.0,
             );
-            pass.set_scissor_rect(rect[0], rect[1], rect[2], rect[3]);
+            pass.set_scissor_rect(scissor[0], scissor[1], scissor[2], scissor[3]);
         };
         let timestamps = |begin: Option<u32>, end: Option<u32>| {
             timed.then(|| wgpu::RenderPassTimestampWrites {
@@ -1180,6 +1312,41 @@ impl Renderer {
             }
         }
 
+        // The samples of each layer with heals of its own, so a heal can
+        // copy them from another place.
+        if self.healed_count > 0 {
+            let attachments: Vec<_> = self
+                .targets
+                .healed_layers
+                .iter()
+                .map(|view| {
+                    Some(wgpu::RenderPassColorAttachment {
+                        view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })
+                })
+                .collect();
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("healed layers"),
+                color_attachments: &attachments,
+                ..Default::default()
+            });
+            within(&mut pass);
+            pass.set_pipeline(&self.healed_pipeline);
+            pass.set_bind_group(0, &self.common, &[]);
+            pass.set_vertex_buffer(0, self.tile_instances.slice(..));
+            for (index, source) in sources.iter().enumerate() {
+                let tile = self.cache.get(*source).expect("a chosen tile");
+                pass.set_bind_group(1, &tile.bind_group, &[]);
+                pass.draw(0..4, index as u32..index as u32 + 1);
+            }
+        }
+
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("layers"),
@@ -1210,7 +1377,7 @@ impl Renderer {
                 pass.draw(0..4, index as u32..index as u32 + 1);
             }
         }
-        self.finish_pass(encoder, target, timed, rect, first);
+        self.finish_pass(encoder, target, timed, (rect, scissor), first);
     }
 
     fn finish_pass(
@@ -1218,7 +1385,7 @@ impl Renderer {
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         timed: bool,
-        rect: [u32; 4],
+        (rect, scissor): ([u32; 4], [u32; 4]),
         first: bool,
     ) {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1251,7 +1418,7 @@ impl Renderer {
             0.0,
             1.0,
         );
-        pass.set_scissor_rect(rect[0], rect[1], rect[2], rect[3]);
+        pass.set_scissor_rect(scissor[0], scissor[1], scissor[2], scissor[3]);
         pass.set_pipeline(&self.finish_pipeline);
         pass.set_bind_group(0, &self.common, &[]);
         pass.set_bind_group(1, &self.targets.finish_inputs, &[]);
@@ -1281,7 +1448,10 @@ impl Renderer {
                     &self.last_sources,
                     self.last_overlay,
                     false,
-                    [0, 0, self.config.width, self.config.height],
+                    (
+                        [0, 0, self.config.width, self.config.height],
+                        [0, 0, self.config.width, self.config.height],
+                    ),
                     true,
                 );
                 self.queue.submit([encoder.finish()]);
@@ -1390,19 +1560,41 @@ fn create_targets(
             },
         ],
     });
+    let healed = texture("healed layers", HEALED_FORMAT, MAX_HEALED_LAYERS as u32);
+    let healed_layers = (0..MAX_HEALED_LAYERS as u32)
+        .map(|layer| {
+            healed.create_view(&wgpu::TextureViewDescriptor {
+                dimension: Some(wgpu::TextureViewDimension::D2),
+                base_array_layer: layer,
+                array_layer_count: Some(1),
+                ..Default::default()
+            })
+        })
+        .collect();
+    let all_healed = healed.create_view(&wgpu::TextureViewDescriptor {
+        dimension: Some(wgpu::TextureViewDimension::D2Array),
+        ..Default::default()
+    });
     let layer_masks = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("layer masks"),
         layout: masks_layout,
-        entries: &[wgpu::BindGroupEntry {
-            binding: 0,
-            resource: wgpu::BindingResource::TextureView(&all_masks),
-        }],
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&all_masks),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(&all_healed),
+            },
+        ],
     });
     Targets {
         combined,
         mask_layers,
         finish_inputs,
         layer_masks,
+        healed_layers,
     }
 }
 

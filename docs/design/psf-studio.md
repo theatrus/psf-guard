@@ -1655,14 +1655,18 @@ starts with the row's name and one line that says what the row applies to.
   (`LayerSource::Adjustment`). It changes the blend of the layers under it.
 
 `Document::attach_adjustment` and `detach_adjustment` turn one into the
-other, keeping the settings and the mask. Dragging does the same: an
+other, keeping the settings, the mask and the opacity. A step has an
+opacity of its own for this. Dragging does the same: an
 adjustment dropped on a layer becomes that layer's own; dropped between
 layers, it changes every layer beneath. Any layer dropped between layers
 moves there.
 
 A heal belongs to where the selection is: the selected input, the selected
-layer, or the whole picture. The document records all three. The canvas
-draws only the heal of the whole picture; the other two need the engine.
+layer, or the whole picture. A heal of an input changes the input's samples
+before its stretch, wherever that input is shown. A heal of a layer changes
+the stretched layer before the layer's adjustments. On the canvas a layer
+with heals of its own is first drawn into a surface-sized image of its
+samples, so a heal can copy them from another place.
 
 ### A pane shows a place
 
@@ -1673,6 +1677,10 @@ to make, not one for what to edit and another for what to look at.
 - An input row shows the input as stacked; a step row shows the input
   after that step.
 - A layer row shows the stack up to that layer, or that layer alone.
+- A row for one layer's own edit shows that layer alone, with its own
+  edits up to and including that one (`Place::LayerEdit`). The row before
+  it is the same layer without the edit, so a before and after of one edit
+  compares like with like.
 - A place before an input's stretch is drawn with a preview stretch, and
   the pane's label says so: “Ha · as stacked · preview stretch, not saved.”
   There is no separate stretch choice.
@@ -1692,39 +1700,57 @@ selection:
 |---|---|
 | One | The selected row. |
 | Before and after | The row before the selected one, and the selected row. |
+| Wipe | The same two, in one pane, with a divider a person drags: before on its left, after on its right. |
 | Input and picture | One input, and the picture. With an input selected, that input and the final picture; with a layer selected, the layer's input and the stack up to that layer. |
 | All inputs | Every input after its steps. The selected input stays where the selection put it. |
 
-The panes are columns of one size and share one pan and zoom. Each pane has
-a label over it and a Pin button that keeps its place while the selection
-moves.
+The panes are one size and share one pan and zoom: up to three in a row,
+more in two rows. Each pane has a label in its corner and a Pin button that
+keeps its place while the selection moves. The label also lists what the
+pane leaves out when one frame has no room for more.
 
 On the canvas, the panes share the uniform buffer, the stretch table and
 the mask textures, so the renderer writes and submits each pane in turn
-with a viewport and scissor for its column. Each pane keeps its own stretch
+with a viewport and a scissor. The two are the same rectangle for a pane of
+its own; for a wipe both scenes are laid out over the whole canvas and each
+is cut at the divider. Each pane keeps its own stretch
 analyses, because a pane before the background step and a pane after it
 stretch different samples.
+
+### The mask overlay
+
+The selected row's mask, or a heal's stroke, can be drawn over the image
+in red. **Mask overlay** in the Tools block switches it on and off;
+picking the mask brush switches it on. Hiding the overlay does not change
+the mask. A stroke shows while it is being drawn either way.
 
 ### What is built, and what is not
 
 Built in the spike and tried on the Sh2-157 stacks, as RGB and with the
 same stacks renamed SII, Ha and OIII: named inputs, the palettes, hue and
 saturation per layer, layers that share an input, adjustments for one
-layer and for the stack with painted masks, dragging between the two, the
-tree, the row controls, the four splits and pinning.
+layer and for the stack with painted masks and opacity, dragging between
+the two, heals of one input, of one layer and of the whole picture, the
+tree, the row controls, the five splits, pinning and the mask overlay.
+
+One frame draws at most 24 layers, counting each adjustment, 15 masks,
+16 heals of single layers on at most 4 layers, and 8 Finish steps. What
+does not fit is listed in the pane's label and is not drawn; nothing is
+drawn without its mask. The engine has no such limits, because it renders
+a layer at a time.
 
 Not built:
 
-- Before and after for an edit of one layer compares with the layer
-  beneath, not with the layer before the edit.
-- Heals of one input or one layer are recorded and not drawn.
-- Layer groups, and clipping one pixel layer to another.
-- Palettes that mix inputs per pixel, such as Foraxx.
-- More than one row of panes; a wipe divider inside one pane.
-- The limits of one frame stay: 12 layers, counting each adjustment, and
-  7 masks.
-- The adjustment math is still the spike's shader code, standing in for
-  Seiza's.
+- Layer groups, and clipping one pixel layer to another. A group needs
+  layers that hold layers, which changes how every layer is found, moved
+  and drawn.
+- Palettes that mix inputs per pixel, such as Foraxx. They need a layer
+  whose color depends on the samples, not one color per layer.
+- A heal copies samples as they were before any heal of the same layer, so
+  one heal cannot copy what another healed.
+- The adjustment math and the heal are still the spike's shader code,
+  standing in for Seiza's. Seiza has no exposure, curves or saturation
+  step for display samples yet.
 
 ## Suggested order of work
 

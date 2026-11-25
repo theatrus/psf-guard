@@ -5,7 +5,8 @@ struct Layer {
     // rgb: the layer's color. a: its opacity, 0 when the layer is hidden.
     color: vec4f,
     // x: the row of the stretch table that holds this layer's stretch.
-    // w: the layer's own curve amount.
+    // y: the layer's place among the healed layers, or -1 when it has no
+    // heals of its own. w: the layer's own curve amount.
     stretch: vec4f,
     // x: the band the layer shows, y: the blend mode. z: a second band
     // blended into the first before the stretch, or -1. w: how much of it.
@@ -20,12 +21,22 @@ struct Layer {
 // One step of the Finish stage.
 struct FinishStep {
     // x: 1 curves, 2 saturation, 3 heal. y: amount. z: the mask layer that
-    // limits the step, or -1 for everywhere.
+    // limits the step, or -1 for everywhere. w: the step's opacity.
     kind: vec4f,
     // xy: for a heal, where the replacement comes from, in surface pixels.
     heal: vec4f,
     // rgb: for a heal, the brightness added to the copied color.
     shift: vec4f,
+}
+
+// A heal of one layer.
+struct LayerHeal {
+    // x: the layer healed. y: 0 for a heal of the band's samples before the
+    // stretch, 1 for a heal of the stretched layer. z: the mask layer that
+    // holds the heal's stroke. w: the brightness added to the copy.
+    what: vec4f,
+    // xy: where the copy comes from, in surface pixels.
+    offset: vec4f,
 }
 
 struct Globals {
@@ -34,10 +45,15 @@ struct Globals {
     // x, y: surface size in pixels. z: strength of the stroke overlay.
     // w: the mask layer that holds the overlay.
     screen: vec4f,
-    // x: number of layers. y: number of finish steps.
+    // x: number of layers. y: number of finish steps. z: number of heals
+    // of single layers.
     counts: vec4f,
-    layers: array<Layer, 12>,
+    layers: array<Layer, 24>,
     finish: array<FinishStep, 8>,
+    // Per healed layer: x: its band, y: a second band blended into the
+    // first, or -1, z: how much of the second. A place not in use has -1.
+    healed: array<vec4f, 4>,
+    heals: array<LayerHeal, 16>,
     // Linear working-space RGB to linear target RGB.
     display_matrix: mat3x3f,
     // x: samples per display curve, or 0 when there is no display transform.

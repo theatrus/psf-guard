@@ -40,6 +40,7 @@ fn view(subject: Subject, up_to: UpTo, stretch: DisplayStretch) -> View {
         subject,
         up_to,
         stretch,
+        own_until: None,
     }
 }
 

@@ -4,6 +4,8 @@
 @group(1) @binding(0) var tile: texture_2d_array<f32>;
 // The masks, one per layer of the array, in surface pixels.
 @group(2) @binding(0) var layer_masks: texture_2d_array<f32>;
+// The samples of each layer that has heals of its own, in surface pixels.
+@group(2) @binding(1) var healed_layers: texture_2d_array<f32>;
 
 struct TileVertex {
     @builtin(position) position: vec4f,
@@ -71,6 +73,89 @@ fn adjusted(color: vec3f, adjust: vec4f) -> vec3f {
     return max(mix(vec3f(luminance), color, adjust.y), vec3f(0.0));
 }
 
+// A band's sample in a tile, blended with its second band.
+fn band_sample(uv: vec2f, band: f32, second: f32, amount: f32) -> f32 {
+    var sample = textureSampleLevel(tile, linear_sampler, uv, i32(band), 0.0).r;
+    if second >= 0.0 {
+        let other = textureSampleLevel(tile, linear_sampler, uv, i32(second), 0.0).r;
+        sample = mix(sample, other, amount);
+    }
+    return sample;
+}
+
+struct HealedLayers {
+    @location(0) first: vec4f,
+    @location(1) second: vec4f,
+    @location(2) third: vec4f,
+    @location(3) fourth: vec4f,
+}
+
+// The samples of each layer that has heals of its own, one per target.
+@fragment
+fn healed_fragment(in: TileVertex) -> HealedLayers {
+    var samples = array<f32, 4>(0.0, 0.0, 0.0, 0.0);
+    for (var place = 0; place < 4; place++) {
+        let healed = globals.healed[place];
+        if healed.x >= 0.0 {
+            samples[place] = band_sample(in.uv, healed.x, healed.y, healed.z);
+        }
+    }
+    var out: HealedLayers;
+    out.first = vec4f(samples[0]);
+    out.second = vec4f(samples[1]);
+    out.third = vec4f(samples[2]);
+    out.fourth = vec4f(samples[3]);
+    return out;
+}
+
+// A healed layer's sample at a surface pixel, with the heals of its band
+// applied. A heal copies the sample as it was before any heal.
+fn healed_sample(index: i32, place: i32, pixel: vec2i) -> f32 {
+    let size = vec2i(globals.screen.xy);
+    var sample = textureLoad(healed_layers, pixel, place, 0).r;
+    let count = i32(globals.counts.z);
+    for (var at = 0; at < count; at++) {
+        let heal = globals.heals[at];
+        if i32(heal.what.x) != index || heal.what.y > 0.5 {
+            continue;
+        }
+        let source = pixel + vec2i(heal.offset.xy);
+        if all(source >= vec2i(0)) && all(source < size) {
+            let copy = textureLoad(healed_layers, source, place, 0).r + heal.what.w;
+            sample = mix(sample, copy, textureLoad(layer_masks, pixel, i32(heal.what.z), 0).r);
+        }
+    }
+    return sample;
+}
+
+// A healed layer's stretched value at a surface pixel, with the heals of
+// the layer applied. A heal copies the value as it was before those heals.
+fn healed_value(index: i32, pixel: vec2i) -> f32 {
+    let layer = globals.layers[index];
+    let place = i32(layer.stretch.y);
+    let size = vec2i(globals.screen.xy);
+    var value = contrast_curve(
+        stretched(healed_sample(index, place, pixel), layer.stretch.x),
+        layer.stretch.w,
+    );
+    let count = i32(globals.counts.z);
+    for (var at = 0; at < count; at++) {
+        let heal = globals.heals[at];
+        if i32(heal.what.x) != index || heal.what.y < 0.5 {
+            continue;
+        }
+        let source = pixel + vec2i(heal.offset.xy);
+        if all(source >= vec2i(0)) && all(source < size) {
+            let copy = contrast_curve(
+                stretched(healed_sample(index, place, source), layer.stretch.x),
+                layer.stretch.w,
+            ) + heal.what.w;
+            value = mix(value, copy, textureLoad(layer_masks, pixel, i32(heal.what.z), 0).r);
+        }
+    }
+    return value;
+}
+
 @fragment
 fn tile_fragment(in: TileVertex) -> @location(0) vec4f {
     // The layers blended so far.
@@ -105,12 +190,13 @@ fn tile_fragment(in: TileVertex) -> @location(0) vec4f {
             color = mix(color, adjusted(color, layer.adjust), cover);
             continue;
         }
-        var sample = textureSampleLevel(tile, linear_sampler, in.uv, i32(layer.select.x), 0.0).r;
-        if layer.select.z >= 0.0 {
-            let other = textureSampleLevel(tile, linear_sampler, in.uv, i32(layer.select.z), 0.0).r;
-            sample = mix(sample, other, layer.select.w);
+        var value = 0.0;
+        if layer.stretch.y >= 0.0 {
+            value = healed_value(index, pixel);
+        } else {
+            let sample = band_sample(in.uv, layer.select.x, layer.select.z, layer.select.w);
+            value = contrast_curve(stretched(sample, layer.stretch.x), layer.stretch.w);
         }
-        let value = contrast_curve(stretched(sample, layer.stretch.x), layer.stretch.w);
         own = layer.color.rgb * value;
         own_cover = cover;
         own_mode = layer.select.y;

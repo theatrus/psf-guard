@@ -169,6 +169,19 @@ impl Studio {
                 },
             ))
             .children(slider)
+            // A step of a layer or of the picture has an opacity. A step of
+            // an input is applied in full.
+            .when(
+                matches!(stage, StageKind::Combine | StageKind::Finish),
+                |pane| {
+                    pane.child(self.labelled_slider(
+                        format!("Opacity {:.0}%", step.opacity * 100.0),
+                        SliderId::Opacity,
+                        step.opacity,
+                        cx,
+                    ))
+                },
+            )
             .when(!is_drawn(stage, step, &self.band_info), |pane| {
                 pane.child(Self::note(
                     "The document records this step. The canvas does not draw it yet.",
@@ -768,7 +781,11 @@ impl Studio {
     fn tools(&self, cx: &mut Context<Self>) -> gpui::Div {
         let tool = |tool: Tool, label: &'static str, cx: &mut Context<Self>| {
             Self::act(label, label, self.tool == tool, cx, move |this| {
-                this.tool = tool
+                this.tool = tool;
+                // A person who picks the mask brush wants to see the mask.
+                if tool == Tool::Brush {
+                    this.mask_shown = true;
+                }
             })
         };
         let can_mask = self.can_mask();
@@ -791,6 +808,23 @@ impl Studio {
                     .child(tool(Tool::Heal, "Heal", cx)),
             )
             .child(Self::note(help))
+            .when(can_mask || self.has_strokes(), |pane| {
+                let shown = self.mask_shown;
+                pane.child(Self::act(
+                    if shown {
+                        "Mask overlay: shown"
+                    } else {
+                        "Mask overlay: hidden"
+                    },
+                    "mask-shown",
+                    shown,
+                    cx,
+                    move |this| this.mask_shown = !shown,
+                ))
+                .child(Self::note(
+                    "The overlay marks where the selected row's mask is painted. Hiding it does not change the mask.",
+                ))
+            })
             .when(!can_mask, |pane| {
                 pane.child(Self::note(
                     "Mask brush: select a layer, a layer's adjustment or a Finish step.",

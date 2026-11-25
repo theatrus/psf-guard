@@ -131,9 +131,12 @@ fn an_adjustment_belongs_to_one_layer_or_to_the_stack() {
     document.move_layer(red, 2);
     assert_eq!(document.layers()[2].steps.len(), 1);
 
+    // What was set on the layer's own adjustment comes back with it.
+    assert!(document.set_step_opacity(step, 0.4));
     let layer = document.detach_adjustment(step).unwrap();
     let layers = document.layers();
     assert_eq!(layers.len(), 4);
+    assert_eq!(layers[3].opacity, 0.4);
     assert_eq!(layers[3].id, layer);
     assert!(layers[2].steps.is_empty());
     assert_eq!(
@@ -275,4 +278,45 @@ fn a_step_of_one_layer_is_found_changed_and_removed_like_any_step() {
     let removed = document.remove_step(step).unwrap();
     assert!(!removed.enabled);
     assert!(document.layers()[0].steps.is_empty());
+}
+
+#[test]
+fn before_a_layers_own_edit_is_the_layer_without_it() {
+    let mut document = document(&["red", "green", "blue"]);
+    let red = document.layers()[0].id;
+    let mut steps = Vec::new();
+    for name in ["Exposure", "Curves"] {
+        let layer = adjustment(name);
+        let id = layer.id;
+        document.insert_layer(usize::MAX, layer).unwrap();
+        steps.push(document.attach_adjustment(id, red).unwrap());
+    }
+    let own = |document: &Document, place: &Place| plan(document, &place.view()).own_steps;
+
+    let second = Row::LayerStep {
+        layer: red,
+        step: steps[1],
+    }
+    .place(false);
+    assert_eq!(own(&document, &second), steps);
+    assert_eq!(second.label(&document), "R as red · alone · after Curves");
+
+    let first = second.before(&document);
+    assert_eq!(own(&document, &first), [steps[0]]);
+
+    let none = first.before(&document);
+    assert!(own(&document, &none).is_empty());
+    assert_eq!(
+        none.label(&document),
+        "R as red · alone · before its own edits"
+    );
+    assert_eq!(none.before(&document), none);
+
+    // A view of the whole stack applies every own edit that is on.
+    document.set_step_enabled(steps[0], false);
+    assert_eq!(own(&document, &Place::Combined), [steps[1]]);
+    assert_eq!(
+        panes(Split::Wipe, &second, &document),
+        [second.before(&document), second.clone()]
+    );
 }

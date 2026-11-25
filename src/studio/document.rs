@@ -165,6 +165,17 @@ pub struct StepRecord {
     /// The band the step applies to. `None` is every band.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub band: Option<String>,
+    /// How strongly the step applies, from 0 to 1.
+    #[serde(default = "full", skip_serializing_if = "is_full")]
+    pub opacity: f32,
+}
+
+fn full() -> f32 {
+    1.0
+}
+
+fn is_full(opacity: &f32) -> bool {
+    *opacity == 1.0
 }
 
 impl StepRecord {
@@ -176,6 +187,7 @@ impl StepRecord {
             kind,
             mask: None,
             band: None,
+            opacity: 1.0,
         }
     }
 
@@ -513,8 +525,7 @@ impl Document {
     /// changes that layer alone, and moves with it. Returns the id of the
     /// layer's new step.
     ///
-    /// The adjustment keeps its settings and its mask. Its opacity is not
-    /// kept: a layer's own step has none.
+    /// The adjustment keeps its settings, its mask and its opacity.
     ///
     /// Refuses a layer that is not an adjustment, and a target that is one.
     pub fn attach_adjustment(&mut self, adjustment: Uuid, to: Uuid) -> Result<Uuid, StudioError> {
@@ -548,6 +559,7 @@ impl Document {
         });
         step.enabled = layer.visible;
         step.mask = layer.mask;
+        step.opacity = layer.opacity;
         let id = step.id;
         self.insert_layer_step(to, step)?;
         Ok(id)
@@ -591,6 +603,7 @@ impl Document {
         );
         layer.visible = own.enabled;
         layer.mask = own.mask;
+        layer.opacity = own.opacity.clamp(0.0, 1.0);
         let id = layer.id;
         layers.insert(at + 1, layer);
         Ok(id)
@@ -643,6 +656,14 @@ impl Document {
             }
         }
         Ok(())
+    }
+
+    /// Sets how strongly a step applies, from 0 to 1. Returns whether the
+    /// document has the step.
+    pub fn set_step_opacity(&mut self, id: Uuid, opacity: f32) -> bool {
+        self.step_mut(id)
+            .map(|(_, step)| step.opacity = opacity.clamp(0.0, 1.0))
+            .is_some()
     }
 
     /// Removes a step's mask, so the step applies everywhere. Returns

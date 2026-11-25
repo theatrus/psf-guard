@@ -26,8 +26,8 @@ use gpui::{
 };
 use std::sync::Arc;
 use studio_render_spike::{
-    Adjustment, Blend, FinishKind, FinishStep, Layer, Segment, MAX_FINISH_STEPS, MAX_LAYERS,
-    MAX_MASKS,
+    Adjustment, Blend, FinishKind, FinishStep, Layer, LayerHeal, Segment, MAX_FINISH_STEPS,
+    MAX_HEALED_LAYERS, MAX_HEALS, MAX_LAYERS, MAX_MASKS,
 };
 use uuid::Uuid;
 
@@ -211,7 +211,9 @@ pub(super) fn is_drawn(stage: StageKind, step: &StepRecord, bands: &Bands) -> bo
         (StepKind::Operation { operation, .. }, StageKind::Combine) => {
             adjustment_kind(operation).is_some()
         }
-        (StepKind::Heal { .. }, StageKind::Finish) => true,
+        // A heal of one input, of one layer, or of the whole picture.
+        (StepKind::Heal { .. }, StageKind::Linear) => step.band.is_some(),
+        (StepKind::Heal { .. }, StageKind::Combine | StageKind::Finish) => true,
         (StepKind::Operation { operation, .. }, StageKind::Finish) => {
             operation == "Curves" || operation == "Saturation"
         }
@@ -270,8 +272,42 @@ pub(super) fn mask_words(mask: &Option<MaskRecord>) -> Option<String> {
     }
 }
 
+/// Adds a heal of one layer to a scene, or records that it is left out
+/// because the frame has no room for it.
+fn push_heal(
+    heals: &mut Vec<LayerHeal>,
+    omitted: &mut Vec<String>,
+    layer: usize,
+    before_stretch: bool,
+    step: &StepRecord,
+    mask: Result<Option<usize>, ()>,
+) {
+    let StepKind::Heal { offset, shift, .. } = &step.kind else {
+        return;
+    };
+    let mut healed: Vec<usize> = heals.iter().map(|heal| heal.layer).collect();
+    healed.sort_unstable();
+    healed.dedup();
+    let fits =
+        heals.len() < MAX_HEALS && (healed.contains(&layer) || healed.len() < MAX_HEALED_LAYERS);
+    match mask {
+        Ok(Some(mask)) if fits => heals.push(LayerHeal {
+            layer,
+            before_stretch,
+            offset: [offset[0] as f32, offset[1] as f32],
+            shift: shift.first().copied().unwrap_or(0.0),
+            mask,
+        }),
+        // A heal with no stroke heals nothing.
+        Ok(None) => {}
+        _ => omitted.push("a heal".to_string()),
+    }
+}
+
 /// What the document asks the canvas to draw for a view. Returns the scene,
 /// without its stretch analyses, and each band's background strength in it.
+/// What one frame has no room for is listed in the scene, never drawn
+/// without its mask.
 fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scene, Vec<f32>) {
     let planned = plan(document, view);
     let mut strengths = vec![0.0; bands.len()];
@@ -279,6 +315,8 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
     let mut layer_bands = Vec::new();
     let mut layer_targets = Vec::new();
     let mut masks: Vec<Vec<Segment>> = Vec::new();
+    let mut heals: Vec<LayerHeal> = Vec::new();
+    let mut omitted: Vec<String> = Vec::new();
     // Strokes as a place in `masks`. `Err` when the masks are full: what the
     // mask limits is then left out, so it is never drawn over the whole
     // image by mistake.
@@ -321,7 +359,8 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
     };
     for (at, layer) in entries {
         if layers.len() >= MAX_LAYERS {
-            break;
+            omitted.push(layer.map_or("a layer".to_string(), |layer| layer.name.clone()));
+            continue;
         }
         let Some(channel) = at.and_then(|at| planned.channels.get(at)) else {
             // An adjustment of the layers beneath it.
@@ -333,10 +372,11 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
             else {
                 continue;
             };
-            let (Some(kind), Ok(mask)) = (
-                adjustment_kind(operation),
-                mask_for(mask_strokes(&layer.mask)),
-            ) else {
+            let Some(kind) = adjustment_kind(operation) else {
+                continue;
+            };
+            let Ok(mask) = mask_for(mask_strokes(&layer.mask)) else {
+                omitted.push(layer.name.clone());
                 continue;
             };
             let opacity = if layer.visible { layer.opacity } else { 0.0 };
@@ -375,14 +415,27 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
             adjustment: None,
             own: false,
         };
+        // The heals of the input alone change its samples before the
+        // stretch, wherever the input is shown.
+        let input_heals: Vec<&StepRecord> = channel
+            .heals
+            .iter()
+            .filter_map(|id| document.step(*id))
+            .map(|(_, step)| step)
+            .collect();
         let Some(layer) = layer else {
             // A channel on its own is drawn in gray.
             layers.push(shown([1.0; 3], 1.0, Blend::Normal, None));
             layer_bands.push(band);
             layer_targets.push(target);
+            for step in input_heals {
+                let mask = mask_for(step_strokes(step));
+                push_heal(&mut heals, &mut omitted, layers.len() - 1, true, step, mask);
+            }
             continue;
         };
         let Ok(mask) = mask_for(mask_strokes(&layer.mask)) else {
+            omitted.push(layer.name.clone());
             continue;
         };
         layers.push(shown(
@@ -401,33 +454,47 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
         ));
         layer_bands.push(band);
         layer_targets.push(target);
-        // The layer's own adjustments change it before it is blended.
-        for step in layer.steps.iter().filter(|step| step.enabled) {
-            // A heal on one layer needs the engine.
+        let shown_at = layers.len() - 1;
+        for step in input_heals {
+            let mask = mask_for(step_strokes(step));
+            push_heal(&mut heals, &mut omitted, shown_at, true, step, mask);
+        }
+        // The layer's own edits change it before it is blended. Its heals
+        // change the stretched layer; its adjustments follow.
+        let own = layer
+            .steps
+            .iter()
+            .filter(|step| planned.own_steps.contains(&step.id));
+        for step in own {
             let StepKind::Operation { operation, .. } = &step.kind else {
+                let mask = mask_for(step_strokes(step));
+                push_heal(&mut heals, &mut omitted, shown_at, false, step, mask);
                 continue;
             };
-            let (Some(kind), Ok(mask)) = (
-                adjustment_kind(operation),
-                mask_for(mask_strokes(&step.mask)),
-            ) else {
+            let Some(kind) = adjustment_kind(operation) else {
                 continue;
             };
-            if layers.len() < MAX_LAYERS {
-                layers.push(adjustment(kind, amount(step), 1.0, mask, true));
+            let mask = mask_for(mask_strokes(&step.mask));
+            match mask {
+                Ok(mask) if layers.len() < MAX_LAYERS => {
+                    layers.push(adjustment(kind, amount(step), step.opacity, mask, true));
+                }
+                _ => omitted.push(format!("{} of {}", operation, layer.name)),
             }
         }
     }
 
     let mut finish = Vec::new();
     for step in &document.stage(StageKind::Finish).steps {
-        if !planned.finish.contains(&step.id)
-            || !is_drawn(StageKind::Finish, step, bands)
-            || finish.len() == MAX_FINISH_STEPS
-        {
+        if !planned.finish.contains(&step.id) || !is_drawn(StageKind::Finish, step, bands) {
+            continue;
+        }
+        if finish.len() == MAX_FINISH_STEPS {
+            omitted.push(step.kind.name().to_string());
             continue;
         }
         let Ok(mask) = mask_for(step_strokes(step)) else {
+            omitted.push(step.kind.name().to_string());
             continue;
         };
         let kind = match &step.kind {
@@ -447,6 +514,7 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
         finish.push(FinishStep {
             kind,
             amount: amount(step),
+            opacity: step.opacity,
             mask,
         });
     }
@@ -455,7 +523,9 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
         layer_bands,
         layer_targets,
         finish,
+        heals,
         masks,
+        omitted,
         stretches: Arc::default(),
         version,
     };
@@ -511,6 +581,12 @@ impl Studio {
             .unwrap_or_default()
     }
 
+    /// Whether the selected row has strokes to show: a painted mask, or a
+    /// heal's stroke.
+    pub(super) fn has_strokes(&self) -> bool {
+        !self.selected_strokes().is_empty()
+    }
+
     /// Selects a row of the tree. A pane that is not pinned follows.
     pub(super) fn select(&mut self, row: Row) {
         self.selected = row;
@@ -523,6 +599,7 @@ impl Studio {
     /// Divides the canvas another way. No pane stays pinned.
     pub(super) fn set_split(&mut self, split: Split) {
         self.split = split;
+        self.drag = None;
         self.pins.clear();
         self.refresh_canvas();
         // The panes changed size, so the document is fitted to one again.
@@ -573,16 +650,18 @@ impl Studio {
             .collect();
         self.places = places;
         let scenes = Arc::new(scenes);
-        // While a brush is in hand, the selected row's mask shows over the
-        // image, so a person sees what they have painted.
-        let overlay = if self.tool == Tool::Pan {
-            Vec::new()
-        } else {
+        // The selected row's mask shows over the image while a person has
+        // it switched on, so they see what they have painted.
+        let overlay = if self.mask_shown {
             self.selected_strokes()
+        } else {
+            Vec::new()
         };
+        let wipe = (self.split == Split::Wipe).then_some(self.wipe);
         self.canvas.edit(|canvas| {
             canvas.scenes = scenes;
             canvas.strokes = overlay;
+            canvas.wipe = wipe;
         });
     }
 
@@ -700,6 +779,11 @@ impl Studio {
                 }
             }
             SliderId::Opacity | SliderId::Hue | SliderId::Saturation => {
+                // A step's opacity, when a step is selected.
+                if let (SliderId::Opacity, Some(step)) = (slider, self.selected_step()) {
+                    self.document.set_step_opacity(step, position);
+                    return;
+                }
                 let Row::Layer(id) = &self.selected else {
                     return;
                 };
@@ -856,53 +940,77 @@ impl Studio {
             .children(splits)
     }
 
-    /// One label per pane, over the pane: what it shows, and a button that
-    /// keeps it there while the selection moves.
-    fn pane_labels(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let labels = self.places.iter().enumerate().map(|(index, place)| {
-            let pinned = self.pins.get(index).is_some_and(Option::is_some);
-            let place = place.clone();
-            div()
-                .flex_1()
-                .flex()
-                .items_center()
-                .gap_2()
-                .px_2()
-                .overflow_hidden()
-                .child(
-                    div()
-                        .flex_1()
-                        .text_xs()
-                        .overflow_hidden()
-                        .child(place.label(&self.document)),
-                )
-                .child(
-                    Self::act(
-                        if pinned { "Pinned" } else { "Pin" },
-                        ("pin", index),
-                        pinned,
-                        cx,
-                        move |this| {
-                            if let Some(pin) = this.pins.get_mut(index) {
-                                *pin = if pin.is_some() {
-                                    None
-                                } else {
-                                    Some(place.clone())
-                                };
-                            }
-                        },
+    /// One label per pane, drawn in the pane's top left corner: what the
+    /// pane shows, what it leaves out, and a button that keeps it there
+    /// while the selection moves.
+    fn pane_labels(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let scale = self.scale_factor.max(1.0);
+        let (rects, omitted): (Vec<[u32; 4]>, Vec<Vec<String>>) = self.canvas.read(|shared| {
+            let canvas = &shared.canvas;
+            (0..canvas.scenes.len())
+                .map(|index| {
+                    (
+                        canvas.pane_rects(index).1,
+                        canvas.scenes[index].omitted.clone(),
                     )
-                    .text_xs(),
-                )
+                })
+                .unzip()
         });
-        div()
-            .flex_none()
-            .h(px(28.0))
-            .w_full()
-            .flex()
-            .items_center()
-            .bg(rgb(BACKGROUND))
-            .children(labels)
+        self.places
+            .iter()
+            .zip(rects)
+            .zip(omitted)
+            .enumerate()
+            .map(|(index, ((place, rect), omitted))| {
+                let pinned = self.pins.get(index).is_some_and(Option::is_some);
+                let place = place.clone();
+                let left_out = (!omitted.is_empty()).then(|| {
+                    format!(
+                        "Not drawn, because one frame has no room for more: {}.",
+                        omitted.join(", ")
+                    )
+                });
+                div()
+                    .absolute()
+                    .left(px(rect[0] as f32 / scale + 6.0))
+                    .top(px(rect[1] as f32 / scale + 6.0))
+                    .max_w(px((rect[2] as f32 / scale - 12.0).max(40.0)))
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .px_2()
+                    .py_1()
+                    .rounded_sm()
+                    .bg(gpui::rgba(0x16181cd0))
+                    .text_xs()
+                    // A press on a label is not a press on the canvas.
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(place.label(&self.document))
+                            .child(Self::act(
+                                if pinned { "Pinned" } else { "Pin" },
+                                ("pin", index),
+                                pinned,
+                                cx,
+                                move |this| {
+                                    if let Some(pin) = this.pins.get_mut(index) {
+                                        *pin = if pin.is_some() {
+                                            None
+                                        } else {
+                                            Some(place.clone())
+                                        };
+                                    }
+                                },
+                            )),
+                    )
+                    .children(left_out.map(Self::note))
+                    .into_any_element()
+            })
+            .collect()
     }
 }
 
@@ -931,66 +1039,57 @@ impl Render for Studio {
                     .overflow_hidden()
                     .child(self.tree(cx))
                     .child(
-                        div()
-                            .flex_1()
-                            .h_full()
-                            .flex()
-                            .flex_col()
-                            .child(self.pane_labels(cx))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .w_full()
-                                    .relative()
-                                    .child(self.native_view.clone())
-                                    .child(
-                                        // In front of the native view, so
-                                        // GPUI receives the mouse there. It
-                                        // also reports the canvas's size.
-                                        div()
-                                            .absolute()
-                                            .size_full()
-                                            .top_0()
-                                            .left_0()
-                                            .on_mouse_down(
-                                                MouseButton::Left,
-                                                cx.listener(Self::canvas_down),
-                                            )
-                                            .on_mouse_move(cx.listener(Self::mouse_move))
-                                            .on_mouse_up(
-                                                MouseButton::Left,
-                                                cx.listener(Self::mouse_up),
-                                            )
-                                            .on_scroll(cx.listener(Self::scroll))
-                                            .child(
-                                                canvas(
-                                                    move |bounds, _, _| {
-                                                        canvas_bounds.set(bounds);
-                                                        let size = (
-                                                            (f32::from(bounds.size.width)
-                                                                * scale_factor)
-                                                                .round()
-                                                                as u32,
-                                                            (f32::from(bounds.size.height)
-                                                                * scale_factor)
-                                                                .round()
-                                                                as u32,
-                                                        );
-                                                        let known = handle.read(|shared| {
-                                                            shared.canvas.surface_size
+                        div().flex_1().h_full().flex().flex_col().child(
+                            div()
+                                .flex_1()
+                                .w_full()
+                                .relative()
+                                .child(self.native_view.clone())
+                                .child(
+                                    // In front of the native view, so
+                                    // GPUI receives the mouse there. It
+                                    // also reports the canvas's size.
+                                    div()
+                                        .absolute()
+                                        .size_full()
+                                        .top_0()
+                                        .left_0()
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(Self::canvas_down),
+                                        )
+                                        .on_mouse_move(cx.listener(Self::mouse_move))
+                                        .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
+                                        .on_scroll(cx.listener(Self::scroll))
+                                        .child(
+                                            canvas(
+                                                move |bounds, _, _| {
+                                                    canvas_bounds.set(bounds);
+                                                    let size = (
+                                                        (f32::from(bounds.size.width)
+                                                            * scale_factor)
+                                                            .round()
+                                                            as u32,
+                                                        (f32::from(bounds.size.height)
+                                                            * scale_factor)
+                                                            .round()
+                                                            as u32,
+                                                    );
+                                                    let known = handle
+                                                        .read(|shared| shared.canvas.surface_size);
+                                                    if known != size {
+                                                        handle.edit(|canvas| {
+                                                            canvas.surface_size = size
                                                         });
-                                                        if known != size {
-                                                            handle.edit(|canvas| {
-                                                                canvas.surface_size = size
-                                                            });
-                                                        }
-                                                    },
-                                                    |_, _, _, _| {},
-                                                )
-                                                .size_full(),
-                                            ),
-                                    ),
-                            ),
+                                                    }
+                                                },
+                                                |_, _, _, _| {},
+                                            )
+                                            .size_full(),
+                                        )
+                                        .children(self.pane_labels(cx)),
+                                ),
+                        ),
                     )
                     .child(self.inspector(cx)),
             )

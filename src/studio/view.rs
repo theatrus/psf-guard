@@ -63,12 +63,26 @@ pub enum DisplayStretch {
     Preview,
 }
 
+/// How many of one layer's own edits a view applies.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OwnUntil {
+    /// The layer whose own edits are limited.
+    pub layer: Uuid,
+    /// The last of the layer's own edits the view applies. `None` applies
+    /// none of them.
+    pub after: Option<Uuid>,
+}
+
 /// A person's choice of view.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct View {
     pub subject: Subject,
     pub up_to: UpTo,
     pub stretch: DisplayStretch,
+    /// A limit on one layer's own edits, for a before and after of one of
+    /// them. `None` applies every layer's own edits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub own_until: Option<OwnUntil>,
 }
 
 /// The stretch one channel is drawn with.
@@ -88,6 +102,9 @@ pub struct ChannelPlan {
     /// reached one that is on.
     pub background: Option<Uuid>,
     pub stretch: PlannedStretch,
+    /// The heals of this channel alone that the view applies, in order.
+    /// They change the channel's samples before its stretch.
+    pub heals: Vec<Uuid>,
 }
 
 /// One layer of a blended view.
@@ -111,6 +128,9 @@ pub struct ViewPlan {
     pub combined: bool,
     /// The layers drawn, bottom first, when the layers are blended.
     pub stack: Vec<StackEntry>,
+    /// The drawn layers' own edits that the view applies: those that are
+    /// on, up to the view's limit for a layer that has one.
+    pub own_steps: Vec<Uuid>,
     /// The Finish steps the view applies, in order. They act on the
     /// combined image, so a channel view applies none.
     pub finish: Vec<Uuid>,
@@ -217,6 +237,16 @@ pub fn plan(document: &Document, view: &View) -> ViewPlan {
             } else {
                 PlannedStretch::Preview
             },
+            heals: steps
+                .iter()
+                .filter(|(stage, step)| {
+                    *stage == StageKind::Linear
+                        && step.enabled
+                        && matches!(step.kind, StepKind::Heal { .. })
+                        && step.band.as_deref() == Some(channel)
+                })
+                .map(|(_, step)| step.id)
+                .collect(),
         }
     };
 
@@ -258,6 +288,27 @@ pub fn plan(document: &Document, view: &View) -> ViewPlan {
             LayerSource::Step { .. } => {}
         }
     }
+    let own_steps: Vec<Uuid> = drawn
+        .iter()
+        .flat_map(|layer| {
+            let limit = view.own_until.filter(|limit| limit.layer == layer.id);
+            let count = match limit {
+                None => layer.steps.len(),
+                Some(OwnUntil { after: None, .. }) => 0,
+                Some(OwnUntil {
+                    after: Some(last), ..
+                }) => layer
+                    .steps
+                    .iter()
+                    .position(|step| step.id == last)
+                    .map_or(layer.steps.len(), |at| at + 1),
+            };
+            layer.steps[..count]
+                .iter()
+                .filter(|step| step.enabled)
+                .map(|step| step.id)
+        })
+        .collect();
     // The Finish steps act on the whole combined image.
     let finish: Vec<Uuid> = if view.subject == Subject::Combined {
         steps
@@ -311,6 +362,7 @@ pub fn plan(document: &Document, view: &View) -> ViewPlan {
         channels,
         combined,
         stack,
+        own_steps,
         finish,
         description: format!("{what}, {reached}, drawn with {stretch}."),
     }

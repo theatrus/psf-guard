@@ -18,7 +18,7 @@
 //! Nothing here knows of a toolkit or a GPU.
 
 use super::palette::channel_label;
-use super::view::{plan, DisplayStretch, PlannedStretch, Subject, UpTo, View};
+use super::view::{plan, DisplayStretch, OwnUntil, PlannedStretch, Subject, UpTo, View};
 use super::{Document, LayerSource, StageKind};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -56,6 +56,9 @@ pub enum Place {
     },
     /// The stack up to and including a layer, or that layer alone.
     Layer { layer: Uuid, alone: bool },
+    /// One layer alone, with its own edits up to and including `after`.
+    /// `None` is the layer before any of its own edits.
+    LayerEdit { layer: Uuid, after: Option<Uuid> },
     /// Every layer, blended, before the Finish steps.
     Combined,
     /// The combined picture after this Finish step.
@@ -119,9 +122,9 @@ impl Row {
                 alone,
             },
             // An edit of one layer is judged on that layer.
-            Row::LayerStep { layer, .. } => Place::Layer {
+            Row::LayerStep { layer, step } => Place::LayerEdit {
                 layer: *layer,
-                alone: true,
+                after: Some(*step),
             },
             Row::Combined => Place::Combined,
             Row::Finish(step) => Place::Finish(*step),
@@ -134,6 +137,13 @@ impl Place {
     /// The view a canvas draws for this place. A place before an input's
     /// stretch is drawn with a preview stretch, which is not saved.
     pub fn view(&self) -> View {
+        let own_until = match self {
+            Place::LayerEdit { layer, after } => Some(OwnUntil {
+                layer: *layer,
+                after: *after,
+            }),
+            _ => None,
+        };
         let (subject, up_to) = match self {
             Place::Input {
                 channel,
@@ -146,7 +156,7 @@ impl Place {
                 channel,
                 after: Some(step),
             } => (Subject::Channel(channel.clone()), UpTo::Step(*step)),
-            Place::Layer { layer, alone: true } => {
+            Place::Layer { layer, alone: true } | Place::LayerEdit { layer, .. } => {
                 (Subject::Layer(*layer), UpTo::EndOf(StageKind::Combine))
             }
             Place::Layer {
@@ -161,6 +171,7 @@ impl Place {
             subject,
             up_to,
             stretch: DisplayStretch::Document,
+            own_until,
         }
     }
 
@@ -197,6 +208,24 @@ impl Place {
                         alone: false,
                     },
                 ),
+            Place::LayerEdit { after: None, .. } => self.clone(),
+            Place::LayerEdit {
+                layer,
+                after: Some(step),
+            } => {
+                let own = layers
+                    .iter()
+                    .find(|other| other.id == *layer)
+                    .map_or(&[][..], |layer| &layer.steps);
+                Place::LayerEdit {
+                    layer: *layer,
+                    after: own
+                        .iter()
+                        .position(|other| other.id == *step)
+                        .and_then(|at| at.checked_sub(1))
+                        .map(|before| own[before].id),
+                }
+            }
             Place::Combined => Place::Combined,
             Place::Finish(step) => finish
                 .iter()
@@ -239,6 +268,13 @@ impl Place {
                 layer,
                 alone: false,
             } => format!("Layers up to {}", layer_name(layer)),
+            Place::LayerEdit { layer, after: None } => {
+                format!("{} · alone · before its own edits", layer_name(layer))
+            }
+            Place::LayerEdit {
+                layer,
+                after: Some(step),
+            } => format!("{} · alone · after {}", layer_name(layer), step_name(step)),
             Place::Combined => "Combined · before Finish".to_string(),
             Place::Finish(step) => format!("Combined · after {}", step_name(step)),
             Place::Final => "Final picture".to_string(),
@@ -265,6 +301,10 @@ pub enum Split {
     One,
     /// The row before the selected one, and the selected row.
     BeforeAndAfter,
+    /// Before and after in one pane, with a divider a person moves: the
+    /// row before the selected one on its left, the selected row on its
+    /// right.
+    Wipe,
     /// One input, and the picture.
     InputAndPicture,
     /// Every input, side by side.
@@ -273,9 +313,10 @@ pub enum Split {
 
 impl Split {
     /// Every split, in the order a person is offered them.
-    pub const ALL: [Split; 4] = [
+    pub const ALL: [Split; 5] = [
         Split::One,
         Split::BeforeAndAfter,
+        Split::Wipe,
         Split::InputAndPicture,
         Split::AllInputs,
     ];
@@ -285,6 +326,7 @@ impl Split {
         match self {
             Split::One => "One",
             Split::BeforeAndAfter => "Before and after",
+            Split::Wipe => "Wipe",
             Split::InputAndPicture => "Input and picture",
             Split::AllInputs => "All inputs",
         }
@@ -305,12 +347,14 @@ pub fn panes(split: Split, selected: &Place, document: &Document) -> Vec<Place> 
     let channels = document.channels();
     match split {
         Split::One => vec![selected.clone()],
-        Split::BeforeAndAfter => vec![selected.before(document), selected.clone()],
+        Split::BeforeAndAfter | Split::Wipe => {
+            vec![selected.before(document), selected.clone()]
+        }
         Split::InputAndPicture => {
             let input = match selected {
                 Place::Input { .. } => Some(selected.clone()),
                 // A layer's input, as the layer receives it.
-                Place::Layer { layer, .. } => document
+                Place::Layer { layer, .. } | Place::LayerEdit { layer, .. } => document
                     .layers()
                     .iter()
                     .find(|other| other.id == *layer)

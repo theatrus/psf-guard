@@ -23,7 +23,8 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 use studio_render_spike::MAX_LAYERS;
 use studio_render_spike::{
-    pane_rect, FinishStep, Frame, FrameStats, Layer, Output, Pane, Renderer, Segment, View,
+    pane_rect, FinishStep, Frame, FrameStats, Layer, LayerHeal, Output, Pane, Renderer, Segment,
+    View,
 };
 
 pub struct Options {
@@ -98,6 +99,8 @@ impl SliderId {
 enum Drag {
     Slider(SliderId),
     Canvas(Point<Pixels>),
+    /// The divider of a wipe.
+    Divider,
 }
 
 /// What the canvas draws: the view, the band settings and the strokes.
@@ -116,6 +119,9 @@ pub struct CanvasState {
     /// What the document asks the canvas to draw: one scene per pane, left
     /// to right.
     scenes: Arc<Vec<Scene>>,
+    /// For a wipe: where the divider is, as a fraction of the surface's
+    /// width. The two scenes then share one pane, the first on its left.
+    pub wipe: Option<f32>,
     /// Strokes shown over the image: a stroke being drawn, or the selected
     /// step's mask.
     pub strokes: Vec<Segment>,
@@ -140,6 +146,7 @@ impl CanvasState {
             document_size: (1, 1),
             band_count: 0,
             scenes: Arc::new(vec![Scene::default()]),
+            wipe: None,
             strokes: Vec::new(),
             surface_size: (1, 1),
             fitted: false,
@@ -149,9 +156,37 @@ impl CanvasState {
         }
     }
 
-    /// One pane's place in the surface: x, y, width and height in pixels.
+    /// A wipe's divider, in surface pixels from the left.
+    pub fn divider(&self) -> Option<u32> {
+        let fraction = self.wipe.filter(|_| self.scenes.len() == 2)?;
+        Some((fraction.clamp(0.02, 0.98) * self.surface_size.0 as f32) as u32)
+    }
+
+    /// Where pane `index` is in the surface, each as x, y, width and height
+    /// in pixels: where its image is laid out, and the part it draws to.
+    /// The two differ for a wipe, whose scenes share one layout.
+    pub fn pane_rects(&self, index: usize) -> ([u32; 4], [u32; 4]) {
+        let (width, height) = self.surface_size;
+        match self.divider() {
+            Some(divider) => {
+                let whole = [0, 0, width, height];
+                let part = if index == 0 {
+                    [0, 0, divider.saturating_sub(1), height]
+                } else {
+                    [divider + 1, 0, width.saturating_sub(divider + 1), height]
+                };
+                (whole, part)
+            }
+            None => {
+                let rect = pane_rect(index, self.scenes.len(), self.surface_size);
+                (rect, rect)
+            }
+        }
+    }
+
+    /// Where pane `index`'s image is laid out in the surface.
     pub fn pane(&self, index: usize) -> [u32; 4] {
-        pane_rect(index, self.scenes.len(), self.surface_size)
+        self.pane_rects(index).0
     }
 
     pub fn fit_zoom(&self) -> f64 {
@@ -206,7 +241,11 @@ pub struct Scene {
     /// Where each layer's stretch places the background, from 0 to 1.
     layer_targets: Vec<f64>,
     finish: Vec<FinishStep>,
+    /// Heals of single layers and inputs.
+    heals: Vec<LayerHeal>,
     masks: Vec<Vec<Segment>>,
+    /// What the scene leaves out because one frame cannot draw more.
+    omitted: Vec<String>,
     /// Each band's stretch analysis, at the background strength this scene
     /// draws the band with.
     stretches: Arc<Vec<BandStretch>>,
@@ -281,6 +320,7 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
             canvas.document_size = shared.canvas.document_size;
             canvas.band_count = shared.canvas.band_count;
             canvas.scenes = shared.canvas.scenes.clone();
+            canvas.wipe = shared.canvas.wipe;
             if !shared.canvas.fitted && canvas.surface_size.0 > 1 {
                 canvas.fit();
                 shared.canvas.view = canvas.view;
@@ -323,11 +363,18 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
             .scenes
             .iter()
             .zip(&stretch_tables)
-            .map(|(scene, stretches)| Pane {
-                layers: &scene.layers,
-                stretches,
-                finish: &scene.finish,
-                masks: &scene.masks,
+            .enumerate()
+            .map(|(index, (scene, stretches))| {
+                let (viewport, scissor) = canvas.pane_rects(index);
+                Pane {
+                    layers: &scene.layers,
+                    stretches,
+                    finish: &scene.finish,
+                    masks: &scene.masks,
+                    heals: &scene.heals,
+                    viewport,
+                    scissor,
+                }
             })
             .collect();
         let frame = Frame {
@@ -430,6 +477,10 @@ pub struct Studio {
     selected: Row,
     /// Whether a selected layer is shown without the layers beneath it.
     alone: bool,
+    /// Whether the selected row's mask is drawn over the image.
+    mask_shown: bool,
+    /// Where a wipe's divider is, as a fraction of the canvas's width.
+    wipe: f32,
     /// How the canvas is divided.
     split: Split,
     /// Per pane: the place a pinned pane keeps while the selection moves.
@@ -558,6 +609,8 @@ impl Studio {
             document,
             selected: Row::Combined,
             alone: false,
+            mask_shown: false,
+            wipe: 0.5,
             split: Split::One,
             pins: Vec::new(),
             places: Vec::new(),
@@ -585,12 +638,13 @@ impl Studio {
             let pane = (0..count)
                 .rev()
                 .map(|index| canvas.pane(index))
-                .find(|pane| x >= pane[0] as f64)
+                .find(|pane| x >= pane[0] as f64 && y >= pane[1] as f64)
                 .unwrap_or_else(|| canvas.pane(0));
             [
                 canvas.view.center[0]
                     + (x - pane[0] as f64 - pane[2] as f64 / 2.0) / canvas.view.zoom,
-                canvas.view.center[1] + (y - pane[3] as f64 / 2.0) / canvas.view.zoom,
+                canvas.view.center[1]
+                    + (y - pane[1] as f64 - pane[3] as f64 / 2.0) / canvas.view.zoom,
             ]
         })
     }
@@ -609,7 +663,22 @@ impl Studio {
         (24.0 * self.scale_factor as f64 / zoom) as f32
     }
 
+    /// A window position as a fraction of the canvas's width.
+    fn across_canvas(&self, position: Point<Pixels>) -> f32 {
+        let bounds = self.canvas_bounds.get();
+        f32::from(position.x - bounds.origin.x) / f32::from(bounds.size.width).max(1.0)
+    }
+
     fn canvas_down(&mut self, event: &MouseDownEvent, _: &mut Window, _: &mut Context<Self>) {
+        // A press on a wipe's divider moves the divider.
+        let on_divider = self.split == Split::Wipe && {
+            let reach = 8.0 / f32::from(self.canvas_bounds.get().size.width).max(1.0);
+            (self.across_canvas(event.position) - self.wipe).abs() < reach
+        };
+        if on_divider {
+            self.drag = Some(Drag::Divider);
+            return;
+        }
         self.drag = Some(Drag::Canvas(event.position));
         if self.tool != Tool::Pan {
             let at = self.to_document(event.position);
@@ -630,6 +699,12 @@ impl Studio {
         match self.drag {
             Some(Drag::Slider(id)) => {
                 self.set_slider(id, event.position.x);
+                cx.notify();
+            }
+            Some(Drag::Divider) => {
+                self.wipe = self.across_canvas(event.position).clamp(0.02, 0.98);
+                let wipe = self.wipe;
+                self.canvas.edit(|canvas| canvas.wipe = Some(wipe));
                 cx.notify();
             }
             Some(Drag::Canvas(last)) if last != event.position => {
