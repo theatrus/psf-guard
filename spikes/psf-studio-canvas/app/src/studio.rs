@@ -87,6 +87,8 @@ enum SliderId {
     Opacity(usize),
     /// The selected step's amount.
     Amount,
+    /// The selected adjustment layer's amount, in the Combine stage.
+    LayerAmount,
 }
 
 #[derive(Clone, Copy)]
@@ -525,7 +527,7 @@ impl Studio {
             canvas_bounds: Rc::default(),
             slider_bounds: (0..MAX_LAYERS)
                 .flat_map(|band| [SliderId::Midtone(band), SliderId::Opacity(band)])
-                .chain([SliderId::Amount])
+                .chain([SliderId::Amount, SliderId::LayerAmount])
                 .map(|id| (id, Rc::default()))
                 .collect(),
             tool: Tool::Pan,
@@ -594,6 +596,10 @@ impl Studio {
                     self.document.set_step_settings(id, settings);
                     self.refresh_canvas();
                 }
+            }
+            SliderId::LayerAmount => {
+                self.set_layer_amount(value);
+                self.refresh_canvas();
             }
             SliderId::Opacity(band) => {
                 if let Some(id) = self.document.layers().get(band).map(|layer| layer.id)

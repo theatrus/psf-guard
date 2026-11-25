@@ -1506,6 +1506,38 @@ saturation and heal with painted masks; it moves into the layer loop.
 Clarity needs a blurred copy of the image so far, which is one more
 target at a reduced size.
 
+#### What is built of this (2026-11-25)
+
+- **Model.** `LayerSource::Adjustment { operation, settings }` is a layer
+  with no pixels. Its mask and opacity limit where and how strongly it
+  applies. `Document::paint_layer_mask` adds a stroke to a layer's mask.
+  Adjustment layers are Studio's and stay out of PSF Guard's settings.
+- **View.** Two more subjects beside a channel and Combined: one layer on
+  its own, and the layers up to a layer. An adjustment layer alone has
+  nothing to show, so it is shown over the layers beneath it.
+  `ViewPlan::stack` lists the layers a blended view draws, bottom first.
+- **Canvas.** The layer pass is one loop over the stack, per pixel. A band
+  layer is stretched, colored and blended; an adjustment layer changes the
+  color so far. Both are limited by opacity and by a mask read at the
+  pixel. Exposure, curves and saturation are drawn. The masks are bound to
+  the layer pass as a third group, and the mask pass runs first.
+- **Panes.** In Combine: add Exposure, Curves or Saturation above the
+  selected layer; an amount slider; **This layer**, **Up to this layer**
+  and **All layers** to pick what the canvas shows; the mask brush paints
+  the selected layer's mask; **Remove mask** and **Remove this
+  adjustment**.
+
+Tried on the Sh2-157 stacks: an Exposure layer above the three channels,
+a painted stroke as its mask, and the amount at +1.96 stops. Only the
+stroke brightened.
+
+Not built: clarity, which needs a blurred copy of the image so far;
+computed masks on layers; moving a layer by dragging; Finish steps as
+adjustment layers, so there are still two ways to adjust; heal inside the
+stack. The exposure, curves and saturation math is the spike's own shader
+code, standing in for Seiza's as before. A frame draws at most 12 layers
+and 7 masks.
+
 ### What it changes in the model
 
 1. **A layer is a chain, not a band with a color.** Source, linear steps, its

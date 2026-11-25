@@ -246,7 +246,7 @@ impl FromStr for BlendMode {
 }
 
 /// Where a layer's pixels come from.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "from", rename_all = "kebab-case")]
 pub enum LayerSource {
     /// A band's stretched result.
@@ -262,6 +262,15 @@ pub enum LayerSource {
         /// Whether the layer keeps the pixels as they were when it was made.
         /// A layer that is not frozen follows later changes to that step.
         frozen: bool,
+    },
+    /// No pixels of its own: an adjustment of the layers beneath it, such
+    /// as exposure or curves. The layer's mask and opacity limit where and
+    /// how strongly it applies.
+    Adjustment {
+        /// The adjustment's name, as a person reads it.
+        operation: String,
+        /// The adjustment's settings.
+        settings: serde_json::Value,
     },
 }
 
@@ -519,6 +528,29 @@ impl Document {
         match &mut step.mask {
             Some(MaskRecord::Painted(mask)) => mask.strokes.push(stroke),
             mask => {
+                *mask = Some(MaskRecord::Painted(PaintedMask {
+                    strokes: vec![stroke],
+                }));
+            }
+        }
+        Ok(())
+    }
+
+    /// Adds a stroke to a layer's painted mask. A layer with no mask gets a
+    /// painted one. A layer with a computed mask is refused: painting over it
+    /// would discard it.
+    pub fn paint_layer_mask(&mut self, id: Uuid, stroke: Stroke) -> Result<(), StudioError> {
+        let layer = self
+            .layer_mut(id)
+            .ok_or_else(|| StudioError::Document("the layer is not in the document".to_string()))?;
+        match &mut layer.mask {
+            Some(MaskRecord::Painted(mask)) => mask.strokes.push(stroke),
+            Some(_) => {
+                return Err(StudioError::Document(
+                    "the layer has a computed mask; remove it before painting one".to_string(),
+                ));
+            }
+            mask @ None => {
                 *mask = Some(MaskRecord::Painted(PaintedMask {
                     strokes: vec![stroke],
                 }));

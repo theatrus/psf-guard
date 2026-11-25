@@ -2,6 +2,8 @@
 // onto the layers beneath. Also the brush strokes that become masks.
 
 @group(1) @binding(0) var tile: texture_2d_array<f32>;
+// The masks, one per layer of the array, in surface pixels.
+@group(2) @binding(0) var layer_masks: texture_2d_array<f32>;
 
 struct TileVertex {
     @builtin(position) position: vec4f,
@@ -50,12 +52,37 @@ fn blend(mode: f32, below: vec3f, layer: vec3f) -> vec3f {
     return min(below, layer);
 }
 
+// What an adjustment layer makes of the color beneath it.
+fn adjusted(color: vec3f, adjust: vec4f) -> vec3f {
+    if adjust.x < 1.5 {
+        return color * exp2(adjust.y);
+    } else if adjust.x < 2.5 {
+        return vec3f(
+            contrast_curve(color.r, adjust.y),
+            contrast_curve(color.g, adjust.y),
+            contrast_curve(color.b, adjust.y),
+        );
+    }
+    let luminance = dot(color, vec3f(0.2126, 0.7152, 0.0722));
+    return max(mix(vec3f(luminance), color, adjust.y), vec3f(0.0));
+}
+
 @fragment
 fn tile_fragment(in: TileVertex) -> @location(0) vec4f {
     var color = vec3f(0.0);
+    let pixel = vec2i(in.position.xy);
     let count = i32(globals.counts.x);
     for (var index = 0; index < count; index++) {
         let layer = globals.layers[index];
+        // How much of the layer applies here: its opacity, within its mask.
+        var cover = layer.color.a;
+        if layer.adjust.z >= 0.0 {
+            cover *= textureLoad(layer_masks, pixel, i32(layer.adjust.z), 0).r;
+        }
+        if layer.adjust.x > 0.5 {
+            color = mix(color, adjusted(color, layer.adjust), cover);
+            continue;
+        }
         var sample = textureSampleLevel(tile, linear_sampler, in.uv, i32(layer.select.x), 0.0).r;
         if layer.select.z >= 0.0 {
             let other = textureSampleLevel(tile, linear_sampler, in.uv, i32(layer.select.z), 0.0).r;
@@ -63,7 +90,7 @@ fn tile_fragment(in: TileVertex) -> @location(0) vec4f {
         }
         let value = contrast_curve(stretched(sample, layer.stretch.x), layer.stretch.w);
         let blended = blend(layer.select.y, color, layer.color.rgb * value);
-        color = mix(color, blended, layer.color.a);
+        color = mix(color, blended, cover);
     }
     return vec4f(color, 1.0);
 }

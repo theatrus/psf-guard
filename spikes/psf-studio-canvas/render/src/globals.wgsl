@@ -10,6 +10,10 @@ struct Layer {
     // x: the band the layer shows, y: the blend mode. z: a second band
     // blended into the first before the stretch, or -1. w: how much of it.
     select: vec4f,
+    // x: 0 for a layer that shows a band; 1 exposure, 2 curves, 3 saturation
+    // for an adjustment of the layers beneath. y: the adjustment's amount.
+    // z: the mask layer that limits the layer, or -1 for everywhere.
+    adjust: vec4f,
 }
 
 // One step of the Finish stage.
@@ -31,7 +35,7 @@ struct Globals {
     screen: vec4f,
     // x: number of layers. y: number of finish steps.
     counts: vec4f,
-    layers: array<Layer, 8>,
+    layers: array<Layer, 12>,
     finish: array<FinishStep, 8>,
     // Linear working-space RGB to linear target RGB.
     display_matrix: mat3x3f,

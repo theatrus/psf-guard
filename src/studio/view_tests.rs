@@ -244,3 +244,147 @@ fn a_channels_own_step_stays_out_of_psf_guards_settings() {
     // PSF Guard's settings hold one background for every channel.
     assert_eq!(color_setup_from_document(&document).unwrap(), before);
 }
+
+fn adjustment(name: &str) -> LayerRecord {
+    LayerRecord::new(
+        name,
+        LayerSource::Adjustment {
+            operation: name.to_string(),
+            settings: serde_json::json!({ "amount": 0.5 }),
+        },
+    )
+}
+
+#[test]
+fn a_blended_view_draws_band_layers_and_adjustments_in_order() {
+    let mut document = document();
+    // red, Exposure, green, blue, Curves: an adjustment in the middle
+    // changes only what is beneath it.
+    let exposure = adjustment("Exposure");
+    let curves = adjustment("Curves");
+    let (exposure_id, curves_id) = (exposure.id, curves.id);
+    document.insert_layer(1, exposure).unwrap();
+    document.insert_layer(usize::MAX, curves).unwrap();
+    let ids: Vec<Uuid> = document.layers().iter().map(|layer| layer.id).collect();
+
+    let combined = plan(
+        &document,
+        &view(Subject::Combined, UpTo::Final, DisplayStretch::Document),
+    );
+    assert_eq!(
+        combined.stack,
+        [
+            StackEntry::Band {
+                layer: ids[0],
+                channel: 0
+            },
+            StackEntry::Adjustment { layer: exposure_id },
+            StackEntry::Band {
+                layer: ids[2],
+                channel: 1
+            },
+            StackEntry::Band {
+                layer: ids[3],
+                channel: 2
+            },
+            StackEntry::Adjustment { layer: curves_id },
+        ]
+    );
+    let drawn: Vec<&str> = combined
+        .channels
+        .iter()
+        .map(|c| c.channel.as_str())
+        .collect();
+    assert_eq!(drawn, RGB);
+
+    // Up to a layer: that layer and those beneath it.
+    let up_to = plan(
+        &document,
+        &view(
+            Subject::LayersUpTo(ids[2]),
+            UpTo::Final,
+            DisplayStretch::Document,
+        ),
+    );
+    assert_eq!(up_to.stack.len(), 3);
+    assert_eq!(
+        up_to.description,
+        "The layers up to green, with every step, drawn with the document's stretch."
+    );
+
+    // A band layer alone.
+    let alone = plan(
+        &document,
+        &view(
+            Subject::Layer(ids[3]),
+            UpTo::Final,
+            DisplayStretch::Document,
+        ),
+    );
+    assert_eq!(
+        alone.stack,
+        [StackEntry::Band {
+            layer: ids[3],
+            channel: 0
+        }]
+    );
+    assert!(alone.description.starts_with("The layer blue on its own"));
+
+    // An adjustment alone has nothing to show, so it comes with the layers
+    // beneath it.
+    let adjusted = plan(
+        &document,
+        &view(
+            Subject::Layer(exposure_id),
+            UpTo::Final,
+            DisplayStretch::Document,
+        ),
+    );
+    assert_eq!(adjusted.stack.len(), 2);
+    assert!(adjusted
+        .description
+        .starts_with("Exposure over the layers beneath it"));
+
+    // A channel view blends nothing.
+    let channel = plan(
+        &document,
+        &view(
+            Subject::Channel("red".into()),
+            UpTo::Final,
+            DisplayStretch::Document,
+        ),
+    );
+    assert!(channel.stack.is_empty());
+}
+
+#[test]
+fn a_layers_mask_is_painted_and_a_document_with_adjustments_round_trips() {
+    let mut document = document();
+    let exposure = adjustment("Exposure");
+    let id = exposure.id;
+    document.insert_layer(usize::MAX, exposure).unwrap();
+    let stroke = Stroke {
+        points: vec![[10.0, 10.0], [40.0, 30.0]],
+        radius: 12.0,
+        hardness: 0.6,
+        mode: StrokeMode::Add,
+    };
+    document.paint_layer_mask(id, stroke.clone()).unwrap();
+    document.paint_layer_mask(id, stroke).unwrap();
+    let layer = document.layers().last().unwrap();
+    let Some(MaskRecord::Painted(mask)) = &layer.mask else {
+        panic!("the layer has a painted mask");
+    };
+    assert_eq!(mask.strokes.len(), 2);
+    assert!(document
+        .paint_layer_mask(Uuid::new_v4(), mask.strokes[0].clone())
+        .is_err());
+
+    let loaded = Document::from_json(&document.to_json()).unwrap();
+    assert_eq!(loaded, document);
+    // Adjustment layers are Studio's: PSF Guard's settings do not change.
+    assert_eq!(
+        color_setup_from_document(&loaded).unwrap(),
+        color_setup_from_document(&super::view_tests::document()).unwrap()
+    );
+}

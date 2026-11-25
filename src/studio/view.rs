@@ -29,6 +29,11 @@ pub enum Subject {
     Channel(String),
     /// The layers blended, as the Combine stage does.
     Combined,
+    /// One layer on its own, with its color. An adjustment layer has no
+    /// pixels, so it is shown with the layers beneath it.
+    Layer(Uuid),
+    /// The layers from the bottom up to and including this one, blended.
+    LayersUpTo(Uuid),
 }
 
 /// The last step the view applies.
@@ -85,6 +90,16 @@ pub struct ChannelPlan {
     pub stretch: PlannedStretch,
 }
 
+/// One layer of a blended view.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StackEntry {
+    /// A layer that shows a band: the layer, and its place in
+    /// [`ViewPlan::channels`].
+    Band { layer: Uuid, channel: usize },
+    /// A layer that adjusts the layers beneath it.
+    Adjustment { layer: Uuid },
+}
+
 /// What a canvas draws for a view.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ViewPlan {
@@ -94,6 +109,8 @@ pub struct ViewPlan {
     /// Whether the channels are blended with the layers' colors and blend
     /// modes. A channel on its own is drawn in gray.
     pub combined: bool,
+    /// The layers drawn, bottom first, when the layers are blended.
+    pub stack: Vec<StackEntry>,
     /// The Finish steps the view applies, in order. They act on the
     /// combined image, so a channel view applies none.
     pub finish: Vec<Uuid>,
@@ -203,21 +220,46 @@ pub fn plan(document: &Document, view: &View) -> ViewPlan {
         }
     };
 
-    let (channels, combined): (Vec<ChannelPlan>, bool) = match &view.subject {
-        Subject::Channel(channel) => (vec![channel_plan(channel)], false),
-        Subject::Combined => (
-            document
-                .layers()
-                .iter()
-                .filter_map(|layer| match &layer.source {
-                    LayerSource::Band { band } => Some(channel_plan(band)),
-                    LayerSource::Step { .. } => None,
-                })
-                .collect(),
-            true,
-        ),
+    // The layers a blended view draws, bottom first.
+    let layers = document.layers();
+    let place = |id: &Uuid| layers.iter().position(|layer| layer.id == *id);
+    let drawn: &[super::LayerRecord] = match &view.subject {
+        Subject::Channel(_) => &[],
+        Subject::Combined => layers,
+        Subject::LayersUpTo(id) => place(id).map_or(&[], |at| &layers[..=at]),
+        Subject::Layer(id) => match place(id) {
+            // An adjustment has nothing to show alone.
+            Some(at) if matches!(layers[at].source, LayerSource::Adjustment { .. }) => {
+                &layers[..=at]
+            }
+            Some(at) => &layers[at..=at],
+            None => &[],
+        },
     };
-    let finish: Vec<Uuid> = if combined {
+    let combined = !matches!(view.subject, Subject::Channel(_));
+    let mut channels = Vec::new();
+    let mut stack = Vec::new();
+    if let Subject::Channel(channel) = &view.subject {
+        channels.push(channel_plan(channel));
+    }
+    for layer in drawn {
+        match &layer.source {
+            LayerSource::Band { band } => {
+                stack.push(StackEntry::Band {
+                    layer: layer.id,
+                    channel: channels.len(),
+                });
+                channels.push(channel_plan(band));
+            }
+            LayerSource::Adjustment { .. } => {
+                stack.push(StackEntry::Adjustment { layer: layer.id })
+            }
+            // A layer made from a step's result needs the engine.
+            LayerSource::Step { .. } => {}
+        }
+    }
+    // The Finish steps act on the whole combined image.
+    let finish: Vec<Uuid> = if view.subject == Subject::Combined {
         steps
             .iter()
             .filter(|(stage, step)| *stage == StageKind::Finish && step.enabled)
@@ -227,9 +269,22 @@ pub fn plan(document: &Document, view: &View) -> ViewPlan {
         Vec::new()
     };
 
+    let layer_name = |id: &Uuid| {
+        place(id).map_or_else(
+            || "a layer that is gone".to_string(),
+            |at| layers[at].name.clone(),
+        )
+    };
     let what = match &view.subject {
         Subject::Channel(channel) => format!("{channel} on its own"),
         Subject::Combined => "The combined image".to_string(),
+        Subject::Layer(id) => match place(id) {
+            Some(at) if matches!(layers[at].source, LayerSource::Adjustment { .. }) => {
+                format!("{} over the layers beneath it", layer_name(id))
+            }
+            _ => format!("The layer {} on its own", layer_name(id)),
+        },
+        Subject::LayersUpTo(id) => format!("The layers up to {}", layer_name(id)),
     };
     let reached = match view.up_to {
         UpTo::Final => "with every step".to_string(),
@@ -255,6 +310,7 @@ pub fn plan(document: &Document, view: &View) -> ViewPlan {
     ViewPlan {
         channels,
         combined,
+        stack,
         finish,
         description: format!("{what}, {reached}, drawn with {stretch}."),
     }
@@ -265,8 +321,8 @@ pub fn plan(document: &Document, view: &View) -> ViewPlan {
 /// steps and the steps for every channel.
 pub fn step_shown_for(step: &StepRecord, subject: &Subject) -> bool {
     match (subject, &step.band) {
-        (Subject::Combined, _) | (_, None) => true,
         (Subject::Channel(channel), Some(band)) => band == channel,
+        _ => true,
     }
 }
 

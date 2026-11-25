@@ -8,8 +8,9 @@ use super::{
 use crate::image_steps::Accepts;
 use crate::studio_model::{
     document_from_color_setup, flow_operations, level_for_zoom, own_step_for_channel, plan,
-    step_shown_for, BlendMode, DisplayStretch, Document, JunctionStatus, LayerSource, MaskRecord,
-    PlannedStretch, StageKind, StepKind, StepRecord, Stroke, StrokeMode, Subject, UpTo, View,
+    step_shown_for, BlendMode, DisplayStretch, Document, JunctionStatus, LayerRecord, LayerSource,
+    MaskRecord, PlannedStretch, StackEntry, StageKind, StepKind, StepRecord, Stroke, StrokeMode,
+    Subject, UpTo, View,
 };
 use gpui::{
     canvas, div, prelude::*, px, relative, rgb, AnyElement, Context, MouseButton, MouseDownEvent,
@@ -17,7 +18,8 @@ use gpui::{
 };
 use std::sync::Arc;
 use studio_render_spike::{
-    Blend, FinishKind, FinishStep, Layer, Segment, MAX_FINISH_STEPS, MAX_LAYERS, MAX_MASKS,
+    Adjustment, Blend, FinishKind, FinishStep, Layer, Segment, MAX_FINISH_STEPS, MAX_LAYERS,
+    MAX_MASKS,
 };
 
 const BACKGROUND: u32 = 0x16181c;
@@ -312,6 +314,41 @@ fn step_strokes(step: &StepRecord) -> Vec<Segment> {
     }
 }
 
+/// The adjustments a layer can make to the layers beneath it: the name,
+/// what the canvas does, the range of the amount and where it starts.
+const ADJUSTMENTS: [(&str, Adjustment, f32, f32, f32); 3] = [
+    ("Exposure", Adjustment::Exposure, -2.0, 2.0, 0.5),
+    ("Curves", Adjustment::Curves, -1.0, 1.0, 0.5),
+    ("Saturation", Adjustment::Saturation, 0.0, 2.0, 1.4),
+];
+
+/// An adjustment layer's kind, amount and the amount's range. `None` for a
+/// layer that shows pixels, and for an adjustment the canvas does not draw.
+fn adjustment_of(layer: &LayerRecord) -> Option<(Adjustment, f32, (f32, f32))> {
+    let LayerSource::Adjustment {
+        operation,
+        settings,
+    } = &layer.source
+    else {
+        return None;
+    };
+    let (_, kind, low, high, start) = ADJUSTMENTS
+        .iter()
+        .find(|(name, ..)| *name == operation.as_str())?;
+    let amount = settings["amount"]
+        .as_f64()
+        .map_or(*start, |amount| amount as f32);
+    Some((*kind, amount, (*low, *high)))
+}
+
+/// A layer's painted mask as the segments the canvas draws.
+fn layer_strokes(layer: &LayerRecord) -> Vec<Segment> {
+    match &layer.mask {
+        Some(MaskRecord::Painted(mask)) => mask.strokes.iter().flat_map(segments).collect(),
+        _ => Vec::new(),
+    }
+}
+
 /// What the document asks the canvas to draw for a view. Returns the scene
 /// and each band's background strength in it.
 fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scene, Vec<f32>) {
@@ -321,7 +358,53 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
     let mut layers = Vec::new();
     let mut layer_bands = Vec::new();
     let mut layer_targets = Vec::new();
-    for channel in planned.channels.iter().take(MAX_LAYERS) {
+    let mut masks: Vec<Vec<Segment>> = Vec::new();
+    // A layer's mask, as a place in `masks`. A layer whose mask does not fit
+    // is left out, so it is never drawn over the whole image by mistake.
+    let mut mask_of = |layer: &LayerRecord| -> Result<Option<usize>, ()> {
+        let strokes = layer_strokes(layer);
+        if strokes.is_empty() {
+            return Ok(None);
+        }
+        if masks.len() == MAX_MASKS {
+            return Err(());
+        }
+        masks.push(strokes);
+        Ok(Some(masks.len() - 1))
+    };
+    let find = |id: &uuid::Uuid| document.layers().iter().find(|layer| layer.id == *id);
+    // A channel view draws its channel alone; a blended view draws the stack.
+    let entries: Vec<(usize, Option<&LayerRecord>)> = if planned.stack.is_empty() {
+        (0..planned.channels.len()).map(|at| (at, None)).collect()
+    } else {
+        planned
+            .stack
+            .iter()
+            .map(|entry| match entry {
+                StackEntry::Band { layer, channel } => (*channel, find(layer)),
+                StackEntry::Adjustment { layer } => (usize::MAX, find(layer)),
+            })
+            .collect()
+    };
+    for (at, layer) in entries.into_iter().take(MAX_LAYERS) {
+        let Some(channel) = planned.channels.get(at) else {
+            // An adjustment of the layers beneath it.
+            let Some(layer) = layer else { continue };
+            let (Some((kind, amount, _)), Ok(mask)) = (adjustment_of(layer), mask_of(layer)) else {
+                continue;
+            };
+            layers.push(Layer {
+                band: 0,
+                blended: None,
+                color: [1.0; 3],
+                opacity: if layer.visible { layer.opacity } else { 0.0 },
+                blend: Blend::Normal,
+                curve: 0.0,
+                mask,
+                adjustment: Some((kind, amount)),
+            });
+            continue;
+        };
         let Some(band) = channels
             .iter()
             .position(|name| *name == channel.channel)
@@ -341,36 +424,33 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
                 .map_or(DEFAULT_STRETCH_TARGET, |(_, step)| stretch_target(step)),
             PlannedStretch::Preview => DEFAULT_STRETCH_TARGET,
         };
-        // The channel's layer, when the view blends the layers.
-        let layer = document
-            .layers()
-            .iter()
-            .find(|layer| {
-                matches!(&layer.source, LayerSource::Band { band } if *band == channel.channel)
-            })
-            .filter(|_| planned.combined);
         let shown = match layer {
-            Some(layer) => Layer {
-                band: bands.tile_band[band],
-                blended: bands.corrected[band].map(|corrected| (corrected, strength)),
-                color: layer.color.unwrap_or([1.0; 3]),
-                opacity: if layer.visible { layer.opacity } else { 0.0 },
-                blend: match layer.blend {
-                    BlendMode::Normal => Blend::Normal,
-                    BlendMode::Screen => Blend::Screen,
-                    BlendMode::Add => Blend::Add,
-                    BlendMode::Multiply => Blend::Multiply,
-                    BlendMode::Lighten => Blend::Lighten,
-                    BlendMode::Darken => Blend::Darken,
-                },
-                // A layer's own Curves steps add up to one curve.
-                curve: layer
-                    .steps
-                    .iter()
-                    .filter(|step| step.enabled && step.kind.name() == "Curves")
-                    .map(amount)
-                    .sum(),
-            },
+            Some(layer) => {
+                let Ok(mask) = mask_of(layer) else { continue };
+                Layer {
+                    band: bands.tile_band[band],
+                    blended: bands.corrected[band].map(|corrected| (corrected, strength)),
+                    color: layer.color.unwrap_or([1.0; 3]),
+                    opacity: if layer.visible { layer.opacity } else { 0.0 },
+                    blend: match layer.blend {
+                        BlendMode::Normal => Blend::Normal,
+                        BlendMode::Screen => Blend::Screen,
+                        BlendMode::Add => Blend::Add,
+                        BlendMode::Multiply => Blend::Multiply,
+                        BlendMode::Lighten => Blend::Lighten,
+                        BlendMode::Darken => Blend::Darken,
+                    },
+                    // A layer's own Curves steps add up to one curve.
+                    curve: layer
+                        .steps
+                        .iter()
+                        .filter(|step| step.enabled && step.kind.name() == "Curves")
+                        .map(amount)
+                        .sum(),
+                    mask,
+                    adjustment: None,
+                }
+            }
             // A channel on its own is drawn in gray.
             None => Layer {
                 band: bands.tile_band[band],
@@ -379,6 +459,8 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
                 opacity: 1.0,
                 blend: Blend::Normal,
                 curve: 0.0,
+                mask: None,
+                adjustment: None,
             },
         };
         layers.push(shown);
@@ -386,7 +468,6 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
         layer_targets.push(target);
     }
 
-    let mut masks: Vec<Vec<Segment>> = Vec::new();
     let mut finish = Vec::new();
     for step in &document.stage(StageKind::Finish).steps {
         if !planned.finish.contains(&step.id)
@@ -441,11 +522,20 @@ impl Studio {
     pub(super) fn commit_stroke(&mut self, stroke: Stroke) {
         match self.tool {
             Tool::Pan => {}
+            // In the Combine stage the brush paints the selected layer's
+            // mask; elsewhere, the selected step's.
+            Tool::Brush if self.stage == StageKind::Combine => {
+                if let Some(id) = self.selected_layer_id() {
+                    let _ = self.document.paint_layer_mask(id, stroke);
+                }
+            }
             Tool::Brush => {
                 if let Some(id) = self.selected_step {
                     let _ = self.document.paint_step_mask(id, stroke);
                 }
             }
+            // A heal is a step of the Finish stage.
+            Tool::Heal if self.stage != StageKind::Finish => {}
             Tool::Heal => {
                 // Copy from three radii to the right until a person can
                 // choose the source. The brightness shift is measured by the
@@ -494,10 +584,18 @@ impl Studio {
         let overlay = if self.tool == Tool::Pan {
             Vec::new()
         } else {
-            self.selected_step
-                .and_then(|id| self.document.step(id))
-                .map(|(_, step)| step_strokes(step))
-                .unwrap_or_default()
+            if self.stage == StageKind::Combine {
+                self.document
+                    .layers()
+                    .get(self.selected_layer)
+                    .map(layer_strokes)
+                    .unwrap_or_default()
+            } else {
+                self.selected_step
+                    .and_then(|id| self.document.step(id))
+                    .map(|(_, step)| step_strokes(step))
+                    .unwrap_or_default()
+            }
         };
         self.canvas.edit(|canvas| {
             canvas.scene = scene;
@@ -510,7 +608,7 @@ impl Studio {
     fn viewed_channel(&self) -> Option<&str> {
         match &self.view.subject {
             Subject::Channel(channel) => Some(channel),
-            Subject::Combined => None,
+            _ => None,
         }
     }
 
@@ -571,6 +669,45 @@ impl Studio {
                 },
             )),
         )
+    }
+
+    fn selected_layer_id(&self) -> Option<uuid::Uuid> {
+        self.document
+            .layers()
+            .get(self.selected_layer)
+            .map(|layer| layer.id)
+    }
+
+    /// Writes the selected adjustment layer's amount from a slider position.
+    pub(super) fn set_layer_amount(&mut self, position: f32) {
+        let Some(layer) = self.document.layers().get(self.selected_layer) else {
+            return;
+        };
+        let Some((_, _, (low, high))) = adjustment_of(layer) else {
+            return;
+        };
+        let amount = low + (high - low) * position;
+        let id = layer.id;
+        if let Some(layer) = self.document.layer_mut(id)
+            && let LayerSource::Adjustment { settings, .. } = &mut layer.source
+        {
+            *settings = serde_json::json!({ "amount": amount });
+        }
+    }
+
+    /// Puts a new adjustment layer above the selected layer and selects it.
+    fn add_adjustment(&mut self, name: &str) {
+        let above = (self.selected_layer + 1).min(self.document.layers().len());
+        let layer = LayerRecord::new(
+            name,
+            LayerSource::Adjustment {
+                operation: name.to_string(),
+                settings: serde_json::Value::Null,
+            },
+        );
+        if self.document.insert_layer(above, layer).is_ok() {
+            self.selected_layer = above;
+        }
     }
 
     /// Changes what the canvas shows.
@@ -694,7 +831,7 @@ impl Studio {
         // The view follows the stage a person works in.
         self.view.up_to = UpTo::EndOf(stage);
         self.selected_step = self.document.stage(stage).steps.first().map(|step| step.id);
-        if stage != StageKind::Finish {
+        if !matches!(stage, StageKind::Finish | StageKind::Combine) {
             self.tool = Tool::Pan;
         }
         self.refresh_canvas();
@@ -897,13 +1034,22 @@ impl Studio {
                     )
                     .child(div().flex_1().child(layer.name.clone()))
                     .child(div().text_xs().text_color(rgb(QUIET)).child(format!(
-                        "{} · {:.0}%{}",
-                        layer.blend,
+                        "{} · {:.0}%{}{}",
+                        match &layer.source {
+                            LayerSource::Adjustment { .. } => "adjusts beneath".to_string(),
+                            _ => layer.blend.to_string(),
+                        },
                         layer.opacity * 100.0,
+                        if layer.mask.is_some() {
+                            " · masked"
+                        } else {
+                            ""
+                        },
                         if layer.visible { "" } else { " · hidden" }
                     )))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.selected_layer = index;
+                        this.refresh_canvas();
                         cx.notify();
                     }))
                     .into_any_element()
@@ -1037,6 +1183,21 @@ impl Studio {
             })
             .children(amount_control)
             .child(div().flex().flex_wrap().gap_1().pt_1().children(add))
+            .when(stage == StageKind::Combine, |pane| {
+                pane.child(Self::heading("Add an adjustment above the selected layer"))
+                    .child(div().flex().flex_wrap().gap_1().children(
+                        ADJUSTMENTS.iter().enumerate().map(|(index, (name, ..))| {
+                            let name = *name;
+                            Self::button(name, ("add-adjustment", index), false).on_click(
+                                cx.listener(move |this, _, _, cx| {
+                                    this.add_adjustment(name);
+                                    this.refresh_canvas();
+                                    cx.notify();
+                                }),
+                            )
+                        }),
+                    ))
+            })
             .child(div().flex_1())
             .child(self.junction_block())
     }
@@ -1072,7 +1233,7 @@ impl Studio {
                     .text_color(rgb(QUIET))
                     .child(match self.tool {
                         Tool::Pan => "Drag to move the view.",
-                        Tool::Brush => "Drag to paint the selected step's mask.",
+                        Tool::Brush => "Drag to paint the mask of the selected step or layer.",
                         Tool::Heal => "Drag over a blemish. Each stroke becomes a Heal step.",
                     }),
             )
@@ -1166,6 +1327,35 @@ impl Studio {
         };
         let id = layer.id;
         let (visible, blend, opacity) = (layer.visible, layer.blend, layer.opacity);
+        let adjustment = adjustment_of(layer);
+        let is_adjustment = matches!(layer.source, LayerSource::Adjustment { .. });
+        let mask = match &layer.mask {
+            Some(MaskRecord::Painted(mask)) => {
+                format!("Painted mask, {}.", counted(mask.strokes.len(), "stroke"))
+            }
+            Some(MaskRecord::Range { .. }) => "Range mask.".to_string(),
+            None => "No mask: the layer applies everywhere.".to_string(),
+        };
+        let masked = layer.mask.is_some();
+        let name = layer.name.clone();
+        // What the canvas shows of the stack, picked from here.
+        let shows = [
+            ("This layer", Subject::Layer(id)),
+            ("Up to this layer", Subject::LayersUpTo(id)),
+            ("All layers", Subject::Combined),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(at, (label, subject))| {
+            Self::button(label, ("layer-show", at), self.view.subject == subject).on_click(
+                cx.listener(move |this, _, _, cx| {
+                    let subject = subject.clone();
+                    this.set_view(|view| view.subject = subject);
+                    cx.notify();
+                }),
+            )
+        })
+        .collect::<Vec<_>>();
         let steps: Vec<String> = layer
             .steps
             .iter()
@@ -1203,6 +1393,7 @@ impl Studio {
                                         .unwrap_or(0);
                                     layer.blend = BlendMode::ALL[(at + 1) % BlendMode::ALL.len()];
                                 }
+                                this.refresh_canvas();
                                 cx.notify();
                             }),
                         ),
@@ -1221,24 +1412,80 @@ impl Studio {
                     )
                     .child(self.slider(SliderId::Opacity(index), opacity, cx)),
             )
+            .when_some(adjustment, |pane, (_, amount, (low, high))| {
+                pane.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .w(px(70.0))
+                                .text_xs()
+                                .child(format!("{name} {amount:.2}")),
+                        )
+                        .child(self.slider(
+                            SliderId::LayerAmount,
+                            (amount - low) / (high - low),
+                            cx,
+                        )),
+                )
+            })
+            .child(Self::heading("Show on the canvas"))
+            .child(div().flex().flex_wrap().gap_1().children(shows))
+            .child(Self::heading("Mask"))
+            .child(div().text_xs().child(mask))
             .child(
                 div()
                     .text_xs()
                     .text_color(rgb(QUIET))
-                    .child("Layers blend in the order of the list, bottom first."),
+                    .child("Paint with the mask brush to limit where this layer applies."),
             )
-            .child(Self::heading("This layer's adjustments"))
-            .children(steps.into_iter().map(|name| div().text_xs().child(name)))
-            .child(
-                Self::button("Add Curves to this layer", "layer-curves", false).on_click(
+            .when(masked, |pane| {
+                pane.child(Self::button("Remove mask", "layer-unmask", false).on_click(
                     cx.listener(move |this, _, _, cx| {
-                        let _ = this
-                            .document
-                            .insert_layer_step(id, operation("Curves", Accepts::Display));
+                        if let Some(layer) = this.document.layer_mut(id) {
+                            layer.mask = None;
+                        }
+                        this.refresh_canvas();
                         cx.notify();
                     }),
-                ),
+                ))
+            })
+            .when(is_adjustment, |pane| {
+                pane.child(
+                    Self::button("Remove this adjustment", "layer-remove", false).on_click(
+                        cx.listener(move |this, _, _, cx| {
+                            this.document.remove_layer(id);
+                            this.selected_layer = this.selected_layer.saturating_sub(1);
+                            this.set_view(|view| view.subject = Subject::Combined);
+                            cx.notify();
+                        }),
+                    ),
+                )
+            })
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(QUIET))
+                    .child("Layers apply in the order of the list, bottom first."),
             )
+            // A layer that shows pixels can carry adjustments of its own.
+            .when(!is_adjustment, |pane| {
+                pane.child(Self::heading("This layer's adjustments"))
+                    .children(steps.into_iter().map(|name| div().text_xs().child(name)))
+                    .child(
+                        Self::button("Add Curves to this layer", "layer-curves", false).on_click(
+                            cx.listener(move |this, _, _, cx| {
+                                let _ = this
+                                    .document
+                                    .insert_layer_step(id, operation("Curves", Accepts::Display));
+                                this.refresh_canvas();
+                                cx.notify();
+                            }),
+                        ),
+                    )
+            })
             .into_any_element()
     }
 
@@ -1280,11 +1527,12 @@ impl Studio {
             .p_3()
             .bg(rgb(PANE))
             .child(controls)
-            // The canvas draws masks and heals for Finish steps only, so
-            // the brushes are offered there and nowhere else yet.
-            .when(stage == StageKind::Finish, |pane| {
-                pane.child(self.tools(cx))
-            })
+            // The canvas draws masks for Finish steps and for layers, so the
+            // brushes are offered in those two stages and nowhere else yet.
+            .when(
+                matches!(stage, StageKind::Finish | StageKind::Combine),
+                |pane| pane.child(self.tools(cx)),
+            )
             .child(div().flex_1())
             .child(Self::heading("Canvas"))
             .children(

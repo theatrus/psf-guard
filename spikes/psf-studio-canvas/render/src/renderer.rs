@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 /// The most layers one frame combines.
-pub const MAX_LAYERS: usize = 8;
+pub const MAX_LAYERS: usize = 12;
 /// The most Finish steps one frame applies.
 pub const MAX_FINISH_STEPS: usize = 8;
 /// The most masks one frame draws, besides the stroke overlay.
@@ -52,6 +52,24 @@ pub struct Layer {
     /// much of it, from 0 to 1. A document uses it for a correction whose
     /// strength a person moves: the band uncorrected and corrected in full.
     pub blended: Option<(usize, f32)>,
+    /// The mask that limits where the layer applies. `None` is everywhere.
+    pub mask: Option<usize>,
+    /// For an adjustment layer: what it does to the layers beneath it, and
+    /// by how much. Such a layer has no pixels: `band`, `color`, `blend`,
+    /// `curve` and `blended` are not used. `None` is a layer that shows a
+    /// band.
+    pub adjustment: Option<(Adjustment, f32)>,
+}
+
+/// What an adjustment layer does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Adjustment {
+    /// Brightens or darkens by the amount in stops.
+    Exposure = 1,
+    /// A contrast curve. The amount runs from -1 to 1.
+    Curves = 2,
+    /// Saturation. 1 leaves the color unchanged.
+    Saturation = 3,
 }
 
 /// The entries in one layer's stretch table.
@@ -143,7 +161,7 @@ struct Globals {
     view: [f32; 4],
     screen: [f32; 4],
     counts: [f32; 4],
-    layers: [[f32; 12]; MAX_LAYERS],
+    layers: [[f32; 16]; MAX_LAYERS],
     finish: [[f32; 12]; MAX_FINISH_STEPS],
     display_matrix: [f32; 12],
     display: [f32; 4],
@@ -194,6 +212,8 @@ struct Targets {
     /// The combined image, the masks and the display curves, for the finish
     /// pass.
     finish_inputs: wgpu::BindGroup,
+    /// The masks, for the layers pass.
+    layer_masks: wgpu::BindGroup,
 }
 
 /// A growable buffer of stroke segments.
@@ -234,6 +254,7 @@ pub struct Renderer {
     stretch_table: wgpu::Texture,
     stretches_version: Option<u64>,
     finish_layout: wgpu::BindGroupLayout,
+    masks_layout: wgpu::BindGroupLayout,
     targets: Targets,
     display_curves: wgpu::TextureView,
     display_uniform: Option<([f32; 12], [f32; 4])>,
@@ -401,6 +422,10 @@ impl Renderer {
             label: Some("tile"),
             entries: &[texture_entry(0, wgpu::TextureViewDimension::D2Array)],
         });
+        let masks_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("layer masks"),
+            entries: &[texture_entry(0, wgpu::TextureViewDimension::D2Array)],
+        });
         let finish_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("finish inputs"),
             entries: &[
@@ -415,12 +440,14 @@ impl Renderer {
         let pipeline = |label: &str,
                         shader: &wgpu::ShaderModule,
                         second: Option<&wgpu::BindGroupLayout>,
+                        third: Option<&wgpu::BindGroupLayout>,
                         entries: (&str, &str),
                         instanced: bool,
                         target: wgpu::ColorTargetState| {
+            let groups = [Some(&common_layout), second, third];
             let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some(label),
-                bind_group_layouts: &[Some(&common_layout), second],
+                bind_group_layouts: &groups[..if third.is_some() { 3 } else { 2 }],
                 ..Default::default()
             });
             let instances = [Some(wgpu::VertexBufferLayout {
@@ -457,6 +484,7 @@ impl Renderer {
             "layers",
             &layers_shader,
             Some(&tile_layout),
+            Some(&masks_layout),
             ("tile_vertex", "tile_fragment"),
             true,
             COMBINED_FORMAT.into(),
@@ -464,6 +492,7 @@ impl Renderer {
         let stroke_pipeline = pipeline(
             "strokes",
             &layers_shader,
+            None,
             None,
             ("stroke_vertex", "stroke_fragment"),
             true,
@@ -477,6 +506,7 @@ impl Renderer {
             "finish",
             &finish_shader,
             Some(&finish_layout),
+            None,
             ("finish_vertex", "finish_fragment"),
             false,
             format.into(),
@@ -552,6 +582,7 @@ impl Renderer {
         let targets = create_targets(
             &device,
             &finish_layout,
+            &masks_layout,
             &display_curves,
             config.width,
             config.height,
@@ -594,6 +625,7 @@ impl Renderer {
             stretch_table,
             stretches_version: None,
             finish_layout,
+            masks_layout,
             targets,
             display_curves,
             display_uniform,
@@ -647,6 +679,7 @@ impl Renderer {
         self.targets = create_targets(
             &self.device,
             &self.finish_layout,
+            &self.masks_layout,
             &self.display_curves,
             width,
             height,
@@ -865,12 +898,23 @@ impl Renderer {
                 OVERLAY_LAYER as f32,
             ],
             counts: [layers.len() as f32, finish.len() as f32, 0.0, 0.0],
-            layers: [[0.0; 12]; MAX_LAYERS],
+            layers: [[0.0; 16]; MAX_LAYERS],
             finish: [[0.0; 12]; MAX_FINISH_STEPS],
             display_matrix: self.display_uniform.map_or([0.0; 12], |display| display.0),
             display: self.display_uniform.map_or([0.0; 4], |display| display.1),
         };
-        for (row, (slot, layer)) in globals.layers.iter_mut().zip(layers).enumerate() {
+        // A band layer's stretch is the next row of the stretch table; an
+        // adjustment layer has none.
+        let mut row = 0;
+        for (slot, layer) in globals.layers.iter_mut().zip(layers) {
+            // A mask the frame does not hold limits nothing.
+            let mask = layer
+                .mask
+                .filter(|mask| *mask < frame.masks.len().min(MAX_MASKS))
+                .map_or(-1.0, |mask| mask as f32);
+            let (kind, amount) = layer
+                .adjustment
+                .map_or((0.0, 0.0), |(kind, amount)| (kind as u32 as f32, amount));
             *slot = [
                 layer.color[0],
                 layer.color[1],
@@ -888,7 +932,14 @@ impl Renderer {
                 layer
                     .blended
                     .map_or(0.0, |(_, amount)| amount.clamp(0.0, 1.0)),
+                kind,
+                amount,
+                mask,
+                0.0,
             ];
+            if layer.adjustment.is_none() {
+                row += 1;
+            }
         }
         for (slot, step) in globals.finish.iter_mut().zip(finish) {
             // A mask the frame does not hold limits nothing.
@@ -1072,6 +1123,7 @@ impl Renderer {
             });
             pass.set_pipeline(&self.tile_pipeline);
             pass.set_bind_group(0, &self.common, &[]);
+            pass.set_bind_group(2, &self.targets.layer_masks, &[]);
             pass.set_vertex_buffer(0, self.tile_instances.slice(..));
             for (index, source) in sources.iter().enumerate() {
                 let tile = self.cache.get(*source).expect("a chosen tile");
@@ -1186,6 +1238,7 @@ fn center_distance(pyramid: &Pyramid, key: TileKey, center: [f64; 2]) -> f64 {
 fn create_targets(
     device: &wgpu::Device,
     finish_layout: &wgpu::BindGroupLayout,
+    masks_layout: &wgpu::BindGroupLayout,
     display_curves: &wgpu::TextureView,
     width: u32,
     height: u32,
@@ -1241,10 +1294,19 @@ fn create_targets(
             },
         ],
     });
+    let layer_masks = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("layer masks"),
+        layout: masks_layout,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: wgpu::BindingResource::TextureView(&all_masks),
+        }],
+    });
     Targets {
         combined,
         mask_layers,
         finish_inputs,
+        layer_masks,
     }
 }
 
