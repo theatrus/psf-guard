@@ -1268,6 +1268,15 @@ Two directions from the owner settle how the flow runs:
   For now only Studio gives interactive feedback; PSF Guard runs the same
   steps inside its jobs.
 
+- **The existing PSF Guard flow does not change.** A routine is
+  generalized so Studio can call it interactively; what PSF Guard's color
+  previews do with it stays the same: the same results, progress lines and
+  cache keys. Each move is checked with the existing tests and against a
+  job PSF Guard recorded before the move.
+- **Later, PSF Guard renders a Studio document with the same engine,**
+  with no interface: the document's steps run headless in a job, so what a
+  person adjusted in Studio can be reprocessed when the stacks change.
+
 What is built:
 
 | Piece | Where | State |
