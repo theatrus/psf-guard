@@ -1283,7 +1283,8 @@ What is built:
 |---|---|---|
 | List and download a target's channel stacks | `studio_sources::Server` | Built. One current stack per channel; a channel with several is refused until a person can choose |
 | Background step: fit each channel in its own frame, choose one model for all, refit, correct | `color_steps::correct_channel_backgrounds` | Built, and `compose_color` now calls it. PSF Guard's progress lines, stop check and recorded fits come from the events |
-| Register channels and place them on the reference grid | `studio_sources::RegisteredChannels::prepare` | Built in Studio with the same Seiza calls. `compose_color` still has its own copy of this order; it moves to `color_steps` next |
+| Register channels and place them on the reference grid | `color_steps::register_channels`, `place_on_reference` | Built, and `compose_color` calls `register_channels`. Its progress lines, stop check, log line and recorded transforms come from the events. `compose_color` still resamples with its own call |
+| Prepare a document's channels | `studio_sources::RegisteredChannels::prepare` | Calls the shared steps in PSF Guard's order |
 | The channels as one linear image, read by region | `RegisteredChannels` as a `RegionReader` | Built. Channels stay as planes and a region is interleaved when read |
 | `studio-sources` command | `commands::studio_sources` | Fetches, prepares, writes a tile store and the document |
 
@@ -1304,9 +1305,42 @@ stacked by a test server on a scratch copy of the database:
 - The store opens on the canvas with the default flow: stars are white and
   the background is neutral.
 
+#### Live background strength
+
+A person moves the strength of Background extraction and the canvas
+follows at once, with no refit:
+
+- Preparation keeps two planes per channel on the reference grid: the
+  channel uncorrected, and corrected in full. The tile store names them,
+  such as `red` and `red@background`.
+- Seiza's correction changes each sample in proportion to the strength,
+  in Subtract and in Divide, and resampling keeps proportions. So the
+  channel at any strength is a blend of its two planes. A test compares
+  the blend with correcting at that strength and placing the result:
+  they agree to 2e-6 on samples near 0.2.
+- The canvas blends the two planes in the layer shader, before the
+  stretch. The slider writes `strength` into the step's settings, which
+  are PSF Guard's, so the document still reads back as a setup.
+- The stretch is analysed again from the blended samples when the
+  strength changes, because the stretch is applied to corrected data.
+
+On the Sh2-157 stacks the gradient is plain at strength 0, weaker at 0.5
+and gone at 1. Moving the slider reached the GPU in about 1 ms. The store
+is twice the size, 6 channels for 3, and preparation peaked at 811 MB.
+
+The cost is memory and disk, and it covers one setting. A step whose
+result is not in proportion to its setting cannot be made live this way.
+
+#### PSF Guard's flow after the moves
+
+The existing flow must not change. After both moves, a color preview
+built fresh by the refactored server gave the same registration
+transforms and the same background fits, field for field, as the job the
+server recorded before any code moved. The 159 color and Studio tests
+pass.
+
 The order to move the rest of `compose_color` into `color_steps`, each
-with the same check against a recorded job: registration and resampling;
-deconvolution and RC-Astro tools on the channels; continuum subtraction;
+with the same check against a recorded job: resampling; deconvolution and RC-Astro tools on the channels; continuum subtraction;
 color calibration; stretch; narrowband balance and stars; composition;
 output stretch. `color_steps` still takes its settings types from
 `server::stack_preview::color`; they move with the steps.
@@ -1316,11 +1350,12 @@ Not done:
 - **Catalog protection.** PSF Guard keeps solved catalog emission out of
   the background samples. Studio reads no plate solve yet, so it protects
   nothing. The test stacks had no solve, so the fits still matched.
-- **Interactive background.** A change to the background settings reruns
-  the whole preparation. Correcting only the tiles in view needs
-  theatrus/seiza#509, which is open and not used here yet. It applies when
-  the fit and the view share a grid: the reference channel, a one-shot
-  color image, a mosaic.
+- **Interactive background beyond strength.** The strength is live; see
+  “Live background strength.” A change to the model, the samples or the
+  mode still reruns the preparation, which takes 0.3 s for these frames.
+  Correcting only the tiles in view needs theatrus/seiza#509, which is
+  open and not used here yet. It applies when the fit and the view share a
+  grid: the reference channel, a one-shot color image, a mosaic.
 - **Memory for a mosaic.** Every stack is held while the channels are
   prepared. Seiza registers and resamples whole images.
 - **The stretch on the canvas** is still the spike's Auto-MTF at its own
@@ -1341,7 +1376,8 @@ Each is a change to an existing crate.
    its own.
 4. `seiza-background`: correct one rectangle of a fitted image, with the
    values the whole-image correction gives. Open as theatrus/seiza#509,
-   reviewed; PSF Guard does not depend on it yet.
+   reviewed, with the C export and the Python method; PSF Guard does not
+   depend on it yet.
 
 A real frame was the test: one 6248 × 4176 H-alpha sub of Sh2-157, read by
 `FrameSource`, written to a store in 0.2 s, and shown on the canvas with

@@ -110,6 +110,7 @@ fn main() {
             sample,
             budget: MemoryBudget::new(256 << 20),
             key: "bench".to_string(),
+            channels: Vec::new(),
         };
         let started = Instant::now();
         let store = TileStore::create(&path, &source, &options).expect("writing the store");

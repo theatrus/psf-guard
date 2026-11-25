@@ -3,7 +3,8 @@
 
 use crate::image_steps::{Domain, ImageShape, Region};
 use crate::studio_model::{
-    MemoryBudget, RegionReader, SampleFormat, StoreLevel, StoreOptions, StudioError, TileStore,
+    background_corrected_channel, MemoryBudget, RegionReader, SampleFormat, StoreLevel,
+    StoreOptions, StudioError, TileStore,
 };
 use seiza_stretch::{
     ResolvedSampleDomain, SampleDomain, SampleNormalization, StretchAnalysis, StretchConfig,
@@ -21,6 +22,8 @@ pub struct StoreTiles {
     bands: usize,
     /// What each band's samples are divided by on the way to the canvas.
     scales: Vec<f32>,
+    /// The channels' names, when the store has them.
+    names: Vec<String>,
 }
 
 /// What a band's stretch is resolved from: Seiza's analysis of a sample of
@@ -39,8 +42,10 @@ pub struct BandStretch {
 const ANALYSIS_SAMPLES: usize = 300_000;
 
 impl BandStretch {
-    /// Analyses one band's samples, as they are in the image.
-    fn analyse(samples: &[f32]) -> Result<Self, String> {
+    /// Analyses one band's samples, as they are in the image. `scale` is
+    /// the value a canvas sample of 1 stands for; without one it is the
+    /// largest sample.
+    fn analyse(samples: &[f32], scale: Option<f32>) -> Result<Self, String> {
         let finite: Vec<f32> = samples
             .iter()
             .copied()
@@ -49,7 +54,8 @@ impl BandStretch {
         if finite.is_empty() {
             return Err("a band has no finite samples".to_string());
         }
-        let scale = finite.iter().copied().fold(f32::MIN_POSITIVE, f32::max);
+        let scale =
+            scale.unwrap_or_else(|| finite.iter().copied().fold(f32::MIN_POSITIVE, f32::max));
         let domain = SampleDomain::PhysicalLinear {
             normalization: SampleNormalization::default(),
         }
@@ -102,6 +108,53 @@ impl BandStretch {
     }
 }
 
+/// The bands of a document, as the canvas needs them: where each is in a
+/// tile, samples to analyse for its stretch, and the tile channel that
+/// holds it with its background corrected in full, when the store has one.
+#[derive(Default)]
+pub struct Bands {
+    /// Per band: the tile channel that holds it.
+    pub tile_band: Vec<usize>,
+    /// Per band: the tile channel that holds it corrected, if any.
+    pub corrected: Vec<Option<usize>>,
+    /// Per band: samples of the band, and of the corrected band.
+    samples: Vec<(Vec<f32>, Option<Vec<f32>>)>,
+    /// Per band: the value a canvas sample of 1 stands for.
+    scales: Vec<f32>,
+}
+
+impl Bands {
+    pub fn len(&self) -> usize {
+        self.tile_band.len()
+    }
+
+    /// Whether any band has a corrected twin to blend with.
+    pub fn has_correction(&self) -> bool {
+        self.corrected.iter().any(Option::is_some)
+    }
+
+    /// Each band's stretch analysis with the correction at `strength`: the
+    /// analysis of the blended samples, which are what the stretch is
+    /// applied to.
+    pub fn stretches(&self, strength: f32) -> Result<Vec<BandStretch>, String> {
+        self.samples
+            .iter()
+            .zip(&self.scales)
+            .map(|((before, after), scale)| match after {
+                Some(after) if strength > 0.0 => {
+                    let blended: Vec<f32> = before
+                        .iter()
+                        .zip(after)
+                        .map(|(a, b)| a + (b - a) * strength)
+                        .collect();
+                    BandStretch::analyse(&blended, Some(*scale))
+                }
+                _ => BandStretch::analyse(before, Some(*scale)),
+            })
+            .collect()
+    }
+}
+
 impl StoreTiles {
     pub fn open(path: &Path) -> Result<Self, StudioError> {
         let store = TileStore::open(path)?;
@@ -116,23 +169,28 @@ impl StoreTiles {
                 levels: store.levels(),
             },
             bands: shape.channels,
+            names: store.channel_names().to_vec(),
             levels,
             scales: vec![1.0; shape.channels],
         })
     }
 
-    /// Analyses each band for its stretch, from patches of the image at
-    /// full resolution spread across it, and sets the scale the canvas's
-    /// samples are divided by.
+    /// Reads samples of each band for its stretch, from patches of the
+    /// image at full resolution spread across it, and sets the scale the
+    /// canvas's samples are divided by.
     ///
     /// Patches, not a reduced level: a reduced level's samples are means, so
     /// its noise is lower than the image's and a stretch resolved from it
     /// would clip the shadows in the wrong place.
-    pub fn analyse(&mut self) -> Result<Vec<BandStretch>, String> {
+    ///
+    /// A channel named as another's background-corrected twin is not a band
+    /// of its own. It and its twin get one scale, so the canvas can blend
+    /// their samples.
+    pub fn analyse(&mut self) -> Result<Bands, String> {
         let level = &self.levels[0];
         let shape = level.shape();
-        let patch = 256.min(shape.width).min(shape.height);
-        let mut bands = vec![Vec::new(); self.bands];
+        let patch = 128.min(shape.width).min(shape.height);
+        let mut channels = vec![Vec::new(); self.bands];
         for row in 0..8 {
             for column in 0..8 {
                 let x = (shape.width - patch) * column / 7;
@@ -141,16 +199,41 @@ impl StoreTiles {
                     .read(Region::new(x, y, patch, patch))
                     .map_err(|error| error.to_string())?;
                 for (index, sample) in samples.iter().enumerate() {
-                    bands[index % self.bands].push(*sample);
+                    channels[index % self.bands].push(*sample);
                 }
             }
         }
-        let stretches = bands
-            .iter()
-            .map(|samples| BandStretch::analyse(samples))
-            .collect::<Result<Vec<_>, _>>()?;
-        self.scales = stretches.iter().map(|stretch| stretch.scale).collect();
-        Ok(stretches)
+        let largest = |samples: &[f32]| {
+            samples
+                .iter()
+                .copied()
+                .filter(|sample| sample.is_finite())
+                .fold(f32::MIN_POSITIVE, f32::max)
+        };
+        let twin_of = |channel: usize| {
+            let name = self.names.get(channel)?;
+            let twin = background_corrected_channel(name);
+            self.names.iter().position(|other| *other == twin)
+        };
+        let twins: Vec<usize> = (0..self.bands).filter_map(twin_of).collect();
+        let mut bands = Bands::default();
+        for channel in (0..self.bands).filter(|channel| !twins.contains(channel)) {
+            let corrected = twin_of(channel);
+            let mut scale = largest(&channels[channel]);
+            if let Some(twin) = corrected {
+                scale = scale.max(largest(&channels[twin]));
+                self.scales[twin] = scale;
+            }
+            self.scales[channel] = scale;
+            bands.tile_band.push(channel);
+            bands.corrected.push(corrected);
+            bands.scales.push(scale);
+            bands.samples.push((
+                std::mem::take(&mut channels[channel]),
+                corrected.map(|twin| channels[twin].clone()),
+            ));
+        }
+        Ok(bands)
     }
 }
 
@@ -271,12 +354,13 @@ pub fn write_synthetic_store(path: &Path, width: usize, height: usize) -> Result
         sample: SampleFormat::F32,
         budget: MemoryBudget::new(256 << 20),
         key: "synthetic".to_string(),
+        channels: Vec::new(),
     };
     TileStore::create(path, &source, &options).map(|_| ())
 }
 
 /// Each band of the synthetic document, analysed from a few of its tiles.
-fn analyse_synthetic() -> Result<Vec<BandStretch>, String> {
+fn analyse_synthetic() -> Bands {
     let plane = (TILE * TILE) as usize;
     let mut bands = vec![Vec::new(); BANDS];
     for (x, y) in [(5, 4), (20, 12), (33, 9), (45, 30), (12, 28), (50, 18)] {
@@ -289,29 +373,26 @@ fn analyse_synthetic() -> Result<Vec<BandStretch>, String> {
             );
         }
     }
-    bands
-        .iter()
-        .map(|samples| {
-            // The synthetic tiles go to the canvas as they are.
-            BandStretch::analyse(samples).map(|stretch| BandStretch {
-                scale: 1.0,
-                ..stretch
-            })
-        })
-        .collect()
+    Bands {
+        tile_band: (0..BANDS).collect(),
+        corrected: vec![None; BANDS],
+        samples: bands.into_iter().map(|samples| (samples, None)).collect(),
+        // The synthetic tiles go to the canvas as they are.
+        scales: vec![1.0; BANDS],
+    }
 }
 
-/// The tile source the options ask for, with each band's stretch analysis.
-pub fn source(open: Option<&Path>) -> Result<(Arc<dyn TileSource>, Vec<BandStretch>), String> {
+/// The tile source the options ask for, with its bands.
+pub fn source(open: Option<&Path>) -> Result<(Arc<dyn TileSource>, Bands), String> {
     match open {
         Some(path) => {
             let mut store = StoreTiles::open(path).map_err(|error| error.to_string())?;
-            let stretches = store.analyse()?;
-            Ok((Arc::new(store), stretches))
+            let bands = store.analyse()?;
+            Ok((Arc::new(store), bands))
         }
         None => Ok((
             Arc::new(studio_render_spike::synth::Synthetic),
-            analyse_synthetic()?,
+            analyse_synthetic(),
         )),
     }
 }

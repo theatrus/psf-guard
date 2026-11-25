@@ -7,7 +7,8 @@ struct Layer {
     // x: the row of the stretch table that holds this layer's stretch.
     // w: the layer's own curve amount.
     stretch: vec4f,
-    // x: the band the layer shows, y: the blend mode.
+    // x: the band the layer shows, y: the blend mode. z: a second band
+    // blended into the first before the stretch, or -1. w: how much of it.
     select: vec4f,
 }
 

@@ -56,7 +56,11 @@ fn tile_fragment(in: TileVertex) -> @location(0) vec4f {
     let count = i32(globals.counts.x);
     for (var index = 0; index < count; index++) {
         let layer = globals.layers[index];
-        let sample = textureSampleLevel(tile, linear_sampler, in.uv, i32(layer.select.x), 0.0).r;
+        var sample = textureSampleLevel(tile, linear_sampler, in.uv, i32(layer.select.x), 0.0).r;
+        if layer.select.z >= 0.0 {
+            let other = textureSampleLevel(tile, linear_sampler, in.uv, i32(layer.select.z), 0.0).r;
+            sample = mix(sample, other, layer.select.w);
+        }
         let value = contrast_curve(stretched(sample, layer.stretch.x), layer.stretch.w);
         let blended = blend(layer.select.y, color, layer.color.rgb * value);
         color = mix(color, blended, layer.color.a);

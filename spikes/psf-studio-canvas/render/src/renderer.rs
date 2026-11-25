@@ -48,6 +48,10 @@ pub struct Layer {
     pub blend: Blend,
     /// The layer's own contrast curve, from -1 to 1. 0 is none.
     pub curve: f32,
+    /// A second band to blend into the first before the stretch, and how
+    /// much of it, from 0 to 1. A document uses it for a correction whose
+    /// strength a person moves: the band uncorrected and corrected in full.
+    pub blended: Option<(usize, f32)>,
 }
 
 /// The entries in one layer's stretch table.
@@ -878,8 +882,12 @@ impl Renderer {
                 layer.curve.clamp(-1.0, 1.0),
                 layer.band.min(self.bands - 1) as f32,
                 layer.blend as u32 as f32,
-                0.0,
-                0.0,
+                layer
+                    .blended
+                    .map_or(-1.0, |(band, _)| band.min(self.bands - 1) as f32),
+                layer
+                    .blended
+                    .map_or(0.0, |(_, amount)| amount.clamp(0.0, 1.0)),
             ];
         }
         for (slot, step) in globals.finish.iter_mut().zip(finish) {

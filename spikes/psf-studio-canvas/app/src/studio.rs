@@ -1,5 +1,5 @@
 use crate::bench::Bench;
-use crate::store_tiles::BandStretch;
+use crate::store_tiles::{BandStretch, Bands};
 use crate::studio_model::{Document, StageKind, Stroke, StrokeMode};
 use gpui::{
     prelude::*, px, rgb, size, App, Bounds, Context, MouseButton, MouseDownEvent, MouseMoveEvent,
@@ -163,13 +163,13 @@ impl CanvasState {
     /// with the background placed where the band's slider says.
     fn stretch_tables(&self) -> Vec<Vec<f32>> {
         self.scene
-            .layers
+            .layer_bands
             .iter()
-            .filter_map(|layer| {
-                let slider = self.sliders[layer.band.min(MAX_LAYERS - 1)];
+            .filter_map(|band| {
+                let slider = self.sliders[(*band).min(MAX_LAYERS - 1)];
                 // The slider covers background targets from 0.05 to 0.5.
                 let target = 0.05 + 0.45 * f64::from(slider);
-                Some(self.stretches.get(layer.band)?.table(target))
+                Some(self.stretches.get(*band)?.table(target))
             })
             .collect()
     }
@@ -180,6 +180,8 @@ impl CanvasState {
 #[derive(Default)]
 pub struct Scene {
     layers: Vec<Layer>,
+    /// The document band each layer shows, for its stretch and slider.
+    layer_bands: Vec<usize>,
     finish: Vec<FinishStep>,
     masks: Vec<Vec<Segment>>,
     /// Different for every scene, so the renderer uploads masks once.
@@ -401,6 +403,10 @@ pub struct Studio {
     scene_version: u64,
     /// The number of bands in the document.
     bands: usize,
+    /// Where each band is in a tile, and its samples for the stretch.
+    band_info: Arc<Bands>,
+    /// The background strength the canvas's stretches were analysed at.
+    stretched_strength: Option<f32>,
     /// The levels in the document's pyramid.
     levels: u8,
 }
@@ -443,11 +449,13 @@ impl Studio {
             .map(|count| count.get().saturating_sub(4).max(2))
             .unwrap_or(4);
         let source = crate::store_tiles::source(options.open.as_deref());
-        let (source, stretches) = match source {
-            Ok((source, stretches)) => (Ok(source), Arc::new(stretches)),
-            Err(error) => (Err(error), Arc::default()),
+        let (source, band_info) = match source {
+            Ok((source, bands)) => (Ok(source), Arc::new(bands)),
+            Err(error) => (Err(error), Arc::<Bands>::default()),
         };
-        let bands = stretches.len();
+        let bands = band_info.len();
+        // The first scene sets the stretches for the document's strength.
+        let stretches: Arc<Vec<BandStretch>> = Arc::default();
         let mut levels = 1;
         let renderer = surface
             .map_err(|error| error.to_string())
@@ -523,6 +531,8 @@ impl Studio {
             stroke: None,
             scene_version: 0,
             bands,
+            band_info,
+            stretched_strength: None,
             levels,
         };
         studio.refresh_canvas();
@@ -557,8 +567,8 @@ impl Studio {
                 {
                     let amount = panes::amount_range(step.kind.name())
                         .map_or(value, |(low, high)| low + (high - low) * value);
-                    self.document
-                        .set_step_settings(id, serde_json::json!({ "amount": amount }));
+                    let settings = panes::with_amount(step, amount);
+                    self.document.set_step_settings(id, settings);
                     self.refresh_canvas();
                 }
             }

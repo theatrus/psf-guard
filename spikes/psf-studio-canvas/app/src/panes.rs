@@ -3,12 +3,12 @@
 //! stage's own controls on the right.
 
 use super::{
-    Drag, Scene, SliderId, Studio, Tool, BAND_COLORS, BAND_NAMES, PANEL_WIDTH, STEPS_WIDTH,
+    Bands, Drag, Scene, SliderId, Studio, Tool, BAND_COLORS, BAND_NAMES, PANEL_WIDTH, STEPS_WIDTH,
 };
 use crate::image_steps::Accepts;
 use crate::studio_model::{
-    document_from_color_setup, level_for_zoom, BlendMode, Document, JunctionStatus, LayerSource,
-    MaskRecord, StageKind, StepKind, StepRecord, Stroke, StrokeMode,
+    document_from_color_setup, flow_operations, level_for_zoom, BlendMode, Document,
+    JunctionStatus, LayerSource, MaskRecord, StageKind, StepKind, StepRecord, Stroke, StrokeMode,
 };
 use gpui::{
     canvas, div, prelude::*, px, relative, rgb, AnyElement, Context, MouseButton, MouseDownEvent,
@@ -181,7 +181,18 @@ pub(super) fn amount_range(operation: &str) -> Option<(f32, f32)> {
     match operation {
         "Curves" => Some((-1.0, 1.0)),
         "Saturation" => Some((0.0, 2.0)),
+        flow_operations::BACKGROUND => Some((0.0, 1.0)),
         _ => None,
+    }
+}
+
+/// The setting that holds an operation's amount. Background extraction
+/// keeps PSF Guard's settings, where the amount is `strength`.
+fn amount_key(operation: &str) -> &'static str {
+    if operation == flow_operations::BACKGROUND {
+        "strength"
+    } else {
+        "amount"
     }
 }
 
@@ -195,18 +206,55 @@ fn amount(step: &StepRecord) -> f32 {
     else {
         return 0.0;
     };
+    let start = match operation.as_str() {
+        "Saturation" => 1.4,
+        flow_operations::BACKGROUND => 1.0,
+        _ => 0.5,
+    };
     settings
-        .get("amount")
+        .get(amount_key(operation))
         .and_then(serde_json::Value::as_f64)
-        .map_or(
-            if operation == "Saturation" { 1.4 } else { 0.5 },
-            |amount| amount as f32,
-        )
+        .map_or(start, |amount| amount as f32)
+}
+
+/// A step's settings with its amount changed and the rest kept.
+pub(super) fn with_amount(step: &StepRecord, amount: f32) -> serde_json::Value {
+    let StepKind::Operation {
+        operation,
+        settings,
+        ..
+    } = &step.kind
+    else {
+        return serde_json::Value::Null;
+    };
+    let mut settings = match settings {
+        serde_json::Value::Object(settings) => settings.clone(),
+        _ => serde_json::Map::new(),
+    };
+    settings.insert(amount_key(operation).to_string(), amount.into());
+    serde_json::Value::Object(settings)
+}
+
+/// How much of the background correction the document asks for: the
+/// strength of its Background extraction step, or 0 when the step is off
+/// or absent.
+fn background_strength(document: &Document) -> f32 {
+    document
+        .stage(StageKind::Linear)
+        .steps
+        .iter()
+        .find(|step| step.kind.name() == flow_operations::BACKGROUND)
+        .filter(|step| step.enabled)
+        .map_or(0.0, amount)
 }
 
 /// Whether the canvas draws a step, or only keeps it in the document.
-fn is_drawn(stage: StageKind, step: &StepRecord) -> bool {
+fn is_drawn(stage: StageKind, step: &StepRecord, bands: &Bands) -> bool {
     match (&step.kind, stage) {
+        // Drawn when the store holds each band corrected as well.
+        (StepKind::Operation { operation, .. }, StageKind::Linear) => {
+            operation == flow_operations::BACKGROUND && bands.has_correction()
+        }
         (StepKind::Heal { .. }, StageKind::Finish) => true,
         (StepKind::Operation { operation, .. }, StageKind::Finish) => {
             amount_range(operation).is_some()
@@ -250,9 +298,10 @@ fn step_strokes(step: &StepRecord) -> Vec<Segment> {
 }
 
 /// What the document asks the canvas to draw.
-fn scene(document: &Document, bands: usize, version: u64) -> Scene {
-    let labels = band_labels(bands);
-    let layers = document
+fn scene(document: &Document, bands: &Bands, version: u64) -> Scene {
+    let labels = band_labels(bands.len());
+    let strength = background_strength(document);
+    let (layers, layer_bands) = document
         .layers()
         .iter()
         .take(MAX_LAYERS)
@@ -271,8 +320,9 @@ fn scene(document: &Document, bands: usize, version: u64) -> Scene {
                 .filter(|step| step.enabled && step.kind.name() == "Curves")
                 .map(amount)
                 .sum();
-            Some(Layer {
-                band,
+            let shown = Layer {
+                band: bands.tile_band[band],
+                blended: bands.corrected[band].map(|corrected| (corrected, strength)),
                 color: layer.color.unwrap_or([1.0; 3]),
                 opacity: if layer.visible { layer.opacity } else { 0.0 },
                 blend: match layer.blend {
@@ -284,14 +334,18 @@ fn scene(document: &Document, bands: usize, version: u64) -> Scene {
                     BlendMode::Darken => Blend::Darken,
                 },
                 curve,
-            })
+            };
+            Some((shown, band))
         })
-        .collect();
+        .unzip();
 
     let mut masks: Vec<Vec<Segment>> = Vec::new();
     let mut finish = Vec::new();
     for step in &document.stage(StageKind::Finish).steps {
-        if !step.enabled || !is_drawn(StageKind::Finish, step) || finish.len() == MAX_FINISH_STEPS {
+        if !step.enabled
+            || !is_drawn(StageKind::Finish, step, bands)
+            || finish.len() == MAX_FINISH_STEPS
+        {
             continue;
         }
         let strokes = step_strokes(step);
@@ -325,6 +379,7 @@ fn scene(document: &Document, bands: usize, version: u64) -> Scene {
     }
     Scene {
         layers,
+        layer_bands,
         finish,
         masks,
         version,
@@ -369,7 +424,17 @@ impl Studio {
     /// Sends the canvas what the document now asks it to draw.
     pub(super) fn refresh_canvas(&mut self) {
         self.scene_version += 1;
-        let scene = Arc::new(scene(&self.document, self.bands, self.scene_version));
+        let scene = Arc::new(scene(&self.document, &self.band_info, self.scene_version));
+        // The stretch is applied to the corrected samples, so its analysis
+        // follows the background strength.
+        let strength = background_strength(&self.document);
+        if self.stretched_strength != Some(strength) {
+            self.stretched_strength = Some(strength);
+            if let Ok(stretches) = self.band_info.stretches(strength) {
+                let stretches = Arc::new(stretches);
+                self.canvas.edit(|canvas| canvas.stretches = stretches);
+            }
+        }
         // While a brush is in hand, the selected step's mask shows over the
         // image, so a person sees what they have painted.
         let overlay = if self.tool == Tool::Pan {
@@ -513,7 +578,7 @@ impl Studio {
                     Some(MaskRecord::Range { .. }) => "range mask".to_string(),
                     None => "everywhere".to_string(),
                 };
-                let drawn = if is_drawn(stage, step) {
+                let drawn = if is_drawn(stage, step, &self.band_info) {
                     "drawn"
                 } else {
                     "recorded, not drawn yet"
