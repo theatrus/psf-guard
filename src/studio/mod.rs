@@ -42,7 +42,10 @@ pub use document::{
     StepRecord, DOCUMENT_VERSION,
 };
 pub use error::StudioError;
-pub use flow::{color_setup_from_document, document_from_color_setup, flow_operations};
+pub use flow::{
+    background_corrected_channel, color_setup_from_document, document_from_color_setup,
+    flow_operations,
+};
 pub use junction::{open_in_editor_command, FileStamp, Junction, JunctionState, JunctionStatus};
 pub use pipeline::{level_for_zoom, Pipeline, PreviewChain};
 pub use source::{MemoryImage, RegionReader};

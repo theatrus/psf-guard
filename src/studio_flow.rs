@@ -14,7 +14,7 @@ fn refuse(reason: impl std::fmt::Display) -> StudioError {
 }
 
 /// The name a role has in saved settings, such as `ha`.
-fn role_name(role: StackColorRole) -> Result<String, StudioError> {
+pub fn role_name(role: StackColorRole) -> Result<String, StudioError> {
     match serde_json::to_value(role).map_err(refuse)? {
         serde_json::Value::String(name) => Ok(name),
         other => Err(refuse(format!(

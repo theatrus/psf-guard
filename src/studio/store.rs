@@ -99,6 +99,9 @@ pub struct StoreOptions {
     /// every setting and algorithm version that shaped it. A reader compares
     /// it to know whether the store is still current.
     pub key: String,
+    /// A name for each channel, in order, such as `red` or `ha`. Empty
+    /// when the channels have no names.
+    pub channels: Vec<String>,
 }
 
 impl StoreOptions {
@@ -109,6 +112,7 @@ impl StoreOptions {
             sample: SampleFormat::F32,
             budget: MemoryBudget::new(1 << 30),
             key: key.to_string(),
+            channels: Vec::new(),
         }
     }
 }
@@ -129,6 +133,9 @@ struct Header {
     tile: usize,
     sample: SampleFormat,
     key: String,
+    /// Absent in a store written before channels had names.
+    #[serde(default)]
+    channels: Vec<String>,
     levels: Vec<LevelRecord>,
 }
 
@@ -300,6 +307,11 @@ impl TileStore {
         &self.header.key
     }
 
+    /// The channels' names, in order. Empty when they have none.
+    pub fn channel_names(&self) -> &[String] {
+        &self.header.channels
+    }
+
     /// How the store keeps each sample.
     pub fn sample(&self) -> SampleFormat {
         self.header.sample
@@ -442,6 +454,9 @@ fn write_store(
     if options.tile == 0 {
         return Err(refuse("a tile needs at least one pixel a side"));
     }
+    if !options.channels.is_empty() && options.channels.len() != shape.channels {
+        return Err(refuse("the store needs a name for every channel, or none"));
+    }
 
     // The header's length does not depend on the offsets' values only if
     // they are written at a fixed width, so the levels are placed after a
@@ -453,6 +468,7 @@ fn write_store(
         tile: options.tile,
         sample: options.sample,
         key: options.key.clone(),
+        channels: options.channels.clone(),
         levels: pyramid(shape, options.tile)
             .into_iter()
             .map(|(width, height)| LevelRecord {

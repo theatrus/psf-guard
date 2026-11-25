@@ -45,6 +45,13 @@ pub mod flow_operations {
 }
 use flow_operations as op;
 
+/// The name of the channel that holds `channel` with its background
+/// corrected in full, in a store that keeps both. The channel under its own
+/// name is then uncorrected, and any strength between is a blend of the two.
+pub fn background_corrected_channel(channel: &str) -> String {
+    format!("{channel}@background")
+}
+
 /// The settings keys this module turns into steps.
 const KNOWN_KEYS: [&str; 11] = [
     "input_processing",

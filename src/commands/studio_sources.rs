@@ -103,10 +103,7 @@ pub async fn studio_sources(options: StudioSourcesOptions) -> Result<()> {
     let backgrounds = folder.join("backgrounds.json");
     std::fs::write(&backgrounds, serde_json::to_string(&prepared.backgrounds)?)
         .with_context(|| format!("writing {}", backgrounds.display()))?;
-    println!(
-        "Registered and corrected in {:.1} s",
-        started.elapsed().as_secs_f64()
-    );
+    println!("Prepared in {:.1} s", started.elapsed().as_secs_f64());
     let registered = prepared;
 
     // The key changes when any channel's stack is rebuilt.
@@ -124,7 +121,10 @@ pub async fn studio_sources(options: StudioSourcesOptions) -> Result<()> {
     let store = TileStore::create(
         &options.output,
         &registered,
-        &StoreOptions::new(&format!("channels:{key}")),
+        &StoreOptions {
+            channels: registered.names.clone(),
+            ..StoreOptions::new(&format!("channels:{key}"))
+        },
     )?;
     let shape = registered.shape();
     println!(

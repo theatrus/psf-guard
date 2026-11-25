@@ -31,6 +31,7 @@ fn options(sample: SampleFormat) -> StoreOptions {
         sample,
         budget: MemoryBudget::new(1 << 30),
         key: "source-1/settings-7".to_string(),
+        channels: Vec::new(),
     }
 }
 
@@ -311,4 +312,28 @@ fn a_file_that_is_not_a_whole_store_is_refused() {
 
     let missing = TileStore::open(&folder.path().join("none.pgtiles"));
     assert!(matches!(missing, Err(StudioError::File { .. })));
+}
+
+#[test]
+fn a_store_keeps_its_channels_names() {
+    let folder = tempfile::tempdir().unwrap();
+    let path = folder.path().join("named.pgtiles");
+    let named = StoreOptions {
+        channels: vec!["red".into(), "green".into(), "blue".into()],
+        ..options(SampleFormat::F32)
+    };
+    TileStore::create(&path, image(3).as_ref(), &named).unwrap();
+    assert_eq!(
+        TileStore::open(&path).unwrap().channel_names(),
+        ["red", "green", "blue"]
+    );
+    // A store written without names has none.
+    TileStore::create(&path, image(3).as_ref(), &options(SampleFormat::F32)).unwrap();
+    assert!(TileStore::open(&path).unwrap().channel_names().is_empty());
+    // A name for some channels and not others is refused.
+    let short = StoreOptions {
+        channels: vec!["red".into()],
+        ..options(SampleFormat::F32)
+    };
+    assert!(TileStore::create(&path, image(3).as_ref(), &short).is_err());
 }

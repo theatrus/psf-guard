@@ -5,23 +5,20 @@
 //! on a server, downloads them, and registers them onto one grid with
 //! Seiza, which is the first thing every later step needs.
 
-use crate::color_steps::{correct_channel_backgrounds, BackgroundEvent};
+use crate::color_steps::{
+    correct_channel_backgrounds, place_on_reference, register_channels, BackgroundEvent,
+};
 use crate::image_steps::{Domain, ImageShape, Region};
 use crate::server::stack_preview::color::{
     StackBackgroundExtraction, StackColorRole, StackColorSource,
 };
-use crate::studio::{RegionReader, StudioError};
+use crate::studio::{background_corrected_channel, RegionReader, StudioError};
+use crate::studio_flow::role_name;
 use anyhow::{anyhow, bail, Context, Result};
 use seiza_background::BackgroundFit;
-use seiza_stacking::{
-    resample_to_reference_with_gpu, GpuOptions, LinearImage, Registrar, RegistrationOptions,
-};
+use seiza_stacking::{GpuOptions, LinearImage};
 use serde::de::DeserializeOwned;
 use std::path::Path;
-
-/// The largest registration residual a channel may have, in pixels. The
-/// same limit PSF Guard's color previews use.
-const MAX_REGISTRATION_RMS_PIXELS: f64 = 2.0;
 
 /// One database on a PSF Guard server.
 pub struct Server {
@@ -145,14 +142,24 @@ pub struct ChannelRegistration {
     pub matched_stars: usize,
 }
 
-/// Channel stacks on one grid: a linear image with one channel per stack,
-/// in the order they were given.
+/// Channel stacks on one grid: a linear image with one channel per plane.
+///
+/// Without background correction there is one plane per stack, in the order
+/// the stacks were given. With it there are two per stack: first every
+/// channel uncorrected, then every channel corrected in full. A strength
+/// between is a blend of the two, because Seiza's correction changes each
+/// sample in proportion to the strength and resampling keeps proportions.
+/// So a person can move the strength and see the result at once, with no
+/// refit.
 ///
 /// The channels stay as separate planes, as Seiza gave them. A region is
 /// interleaved when it is read, so the channels are never copied whole.
 pub struct RegisteredChannels {
     shape: ImageShape,
     planes: Vec<Vec<f32>>,
+    /// A name for each plane: the channel's role, and for a corrected
+    /// plane [`background_corrected_channel`] of it.
+    pub names: Vec<String>,
     pub placements: Vec<ChannelPlacement>,
     /// Each channel's fitted background, when the channels were corrected.
     pub backgrounds: Vec<(StackColorRole, BackgroundFit)>,
@@ -162,16 +169,15 @@ impl RegisteredChannels {
     /// Reads each channel stack, corrects its background when `background`
     /// is given, and places it on the first stack's grid.
     ///
-    /// The order is the one PSF Guard's color previews use, and the
-    /// background step is the same code: `color_steps`. Registration is measured on the stacks as they came, so
-    /// it does not depend on the background settings. Each background is
-    /// fitted and corrected in the channel's own frame, before resampling,
-    /// so the empty border a resample leaves is never fitted. When channels
-    /// choose different models, every channel is refitted with the one
-    /// Seiza selects for all of them.
+    /// The steps and their order are the ones PSF Guard's color previews
+    /// run: the code in `color_steps`. Registration is measured on the
+    /// stacks as they came. Each background is fitted and corrected in the
+    /// channel's own frame, before resampling, so the empty border a
+    /// resample leaves is never fitted.
     ///
-    /// Every stack is held in memory while this runs. A mosaic too large
-    /// for that needs these steps by tile, which Seiza does not have yet.
+    /// Every stack is held in memory while this runs, twice when the
+    /// background is corrected. A mosaic too large for that needs these
+    /// steps by tile.
     pub fn prepare(
         stacks: &[(StackColorRole, &Path)],
         background: Option<&StackBackgroundExtraction>,
@@ -180,81 +186,95 @@ impl RegisteredChannels {
         if stacks.is_empty() {
             bail!("a document needs at least one channel stack");
         }
-        let mut images = stacks
+        let images = stacks
             .iter()
             .map(|(_, path)| open_mono(path))
             .collect::<Result<Vec<_>>>()?;
-        let reference_role = stacks[0].0;
-        let (width, height) = (images[0].width, images[0].height);
+        let roles: Vec<StackColorRole> = stacks.iter().map(|(role, _)| *role).collect();
+        let reference = (roles[0], images[0].width, images[0].height);
 
+        let others: Vec<(StackColorRole, &LinearImage)> =
+            roles.iter().copied().zip(&images).skip(1).collect();
+        let registrations = register_channels((roles[0], &images[0]), &others, gpu, |_, _| Ok(()))
+            .map_err(anyhow::Error::msg)?;
         let mut placements = vec![ChannelPlacement {
-            role: reference_role,
+            role: roles[0],
             registration: None,
         }];
-        let mut transforms = Vec::new();
-        if images.len() > 1 {
-            let registrar =
-                Registrar::new_with_gpu(&images[0], RegistrationOptions::default(), gpu)
-                    .context("preparing the reference channel for registration")?;
-            for ((role, _), image) in stacks.iter().zip(&images).skip(1) {
-                let registration = registrar
-                    .register(image)
-                    .with_context(|| format!("registering {role:?} to {reference_role:?}"))?;
-                if registration.rms_error_pixels > MAX_REGISTRATION_RMS_PIXELS {
-                    bail!(
-                        "{role:?} registration RMS {:.3} px exceeds {MAX_REGISTRATION_RMS_PIXELS} px",
-                        registration.rms_error_pixels
-                    );
-                }
-                transforms.push(registration.transform);
-                placements.push(ChannelPlacement {
+        placements.extend(
+            registrations
+                .iter()
+                .map(|(role, registration)| ChannelPlacement {
                     role: *role,
                     registration: Some(ChannelRegistration {
                         rms_error_pixels: registration.rms_error_pixels,
                         drift_pixels: registration.drift_pixels,
                         matched_stars: registration.matched_stars,
                     }),
-                });
+                }),
+        );
+
+        // Places every channel of `images` on the reference grid.
+        let place = |images: Vec<LinearImage>| -> Result<Vec<Vec<f32>>> {
+            let mut images = images.into_iter();
+            let mut planes = vec![images.next().expect("checked above").data];
+            for (image, (role, registration)) in images.zip(&registrations) {
+                let placed = place_on_reference(*role, &image, reference, registration, gpu)
+                    .map_err(anyhow::Error::msg)?;
+                planes.push(placed.data);
             }
-        }
+            Ok(planes)
+        };
 
+        let mut names = roles
+            .iter()
+            .map(|role| role_name(*role))
+            .collect::<Result<Vec<_>, _>>()?;
         let mut backgrounds = Vec::new();
-        if let Some(extraction) = background {
-            let mut channels: Vec<(StackColorRole, &mut LinearImage)> = stacks
-                .iter()
-                .map(|(role, _)| *role)
-                .zip(images.iter_mut())
-                .collect();
-            // Catalog protection needs a plate solve of the stack, which
-            // Studio does not read yet, so no region is protected.
-            correct_channel_backgrounds(
-                &mut channels,
-                extraction,
-                |_| Vec::new(),
-                |role, event| {
-                    if let BackgroundEvent::Corrected { fit, .. } = event {
-                        backgrounds.push((role, fit.clone()));
-                    }
-                    Ok(())
-                },
-            )
-            .map_err(anyhow::Error::msg)?;
-        }
-
-        let mut images = images.into_iter();
-        let mut planes = vec![images.next().expect("checked above").data];
-        for (((role, _), image), transform) in stacks.iter().skip(1).zip(images).zip(transforms) {
-            let aligned = resample_to_reference_with_gpu(&image, width, height, transform, gpu)
-                .with_context(|| format!("resampling {role:?} onto {reference_role:?}"))?;
-            planes.push(aligned.data);
-        }
+        let planes = match background {
+            None => place(images)?,
+            Some(extraction) => {
+                // Corrected in full: the strength is applied when the two
+                // planes are blended.
+                let full = StackBackgroundExtraction {
+                    strength: 1.0,
+                    ..extraction.clone()
+                };
+                let mut corrected = images.clone();
+                let mut channels: Vec<(StackColorRole, &mut LinearImage)> =
+                    roles.iter().copied().zip(corrected.iter_mut()).collect();
+                // Catalog protection needs a plate solve of the stack, which
+                // Studio does not read yet, so no region is protected.
+                correct_channel_backgrounds(
+                    &mut channels,
+                    &full,
+                    |_| Vec::new(),
+                    |role, event| {
+                        if let BackgroundEvent::Corrected { fit, .. } = event {
+                            backgrounds.push((role, fit.clone()));
+                        }
+                        Ok(())
+                    },
+                )
+                .map_err(anyhow::Error::msg)?;
+                let corrected_names: Vec<String> = names
+                    .iter()
+                    .map(|name| background_corrected_channel(name))
+                    .collect();
+                names.extend(corrected_names);
+                let mut planes = place(images)?;
+                planes.extend(place(corrected)?);
+                planes
+            }
+        };
         Ok(Self {
             shape: ImageShape {
-                width,
-                height,
-                channels: stacks.len(),
+                width: reference.1,
+                height: reference.2,
+                channels: planes.len(),
             },
             planes,
+            names,
             placements,
             backgrounds,
         })
@@ -320,6 +340,7 @@ mod tests {
                 channels: planes.len(),
             },
             planes,
+            names: Vec::new(),
             placements: Vec::new(),
             backgrounds: Vec::new(),
         }

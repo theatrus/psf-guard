@@ -5,13 +5,95 @@
 //! them. It knows nothing of jobs, caches or progress bars: a caller passes
 //! a function that hears what the step is doing, and may stop it.
 //!
-//! The background step is the first to move here. The rest of the color
+//! Registration and the background step are here. The rest of the color
 //! pipeline still lives in `server::stack_preview::color` and moves here
 //! step by step.
 
 use crate::server::stack_preview::color::{StackBackgroundExtraction, StackColorRole};
 use seiza_background::{BackgroundFit, FittedModel, ModelConfig, ProtectedRegion};
-use seiza_stacking::LinearImage;
+use seiza_stacking::{
+    resample_to_reference_with_gpu, GpuOptions, LinearImage, Registrar, RegistrationOptions,
+    RegistrationResult,
+};
+
+/// The largest registration residual a channel may have, in pixels.
+pub const MAX_REGISTRATION_RMS_PIXELS: f64 = 2.0;
+
+/// What the registration step is doing to one channel.
+pub enum RegistrationEvent<'a> {
+    /// About to find the reference channel's stars.
+    PreparingReference,
+    /// The reference channel is ready.
+    ReferenceReady,
+    /// About to register the channel to the reference.
+    Registering,
+    /// The channel is registered, within the residual limit.
+    Registered(&'a RegistrationResult),
+}
+
+/// Measures how each channel maps onto the reference channel's grid.
+///
+/// Registration is measured on the channels as they are given. A caller
+/// registers the stacks as they came, before any tool changes them, so the
+/// result does not depend on a tool's settings. A channel whose residual
+/// passes [`MAX_REGISTRATION_RMS_PIXELS`] is refused.
+///
+/// `observe` hears each event; an error from it stops the step.
+pub fn register_channels(
+    reference: (StackColorRole, &LinearImage),
+    others: &[(StackColorRole, &LinearImage)],
+    gpu: &GpuOptions,
+    mut observe: impl FnMut(StackColorRole, RegistrationEvent<'_>) -> Result<(), String>,
+) -> Result<Vec<(StackColorRole, RegistrationResult)>, String> {
+    let (reference_role, reference) = reference;
+    observe(reference_role, RegistrationEvent::PreparingReference)?;
+    let registrar = Registrar::new_with_gpu(reference, RegistrationOptions::default(), gpu)
+        .map_err(|error| error.to_string())?;
+    observe(reference_role, RegistrationEvent::ReferenceReady)?;
+    let mut registered = Vec::with_capacity(others.len());
+    for (role, image) in others {
+        let role = *role;
+        observe(role, RegistrationEvent::Registering)?;
+        let registration = registrar.register(image).map_err(|error| {
+            format!(
+                "Failed to register {} to {}: {error}",
+                role.label(),
+                reference_role.label()
+            )
+        })?;
+        if registration.rms_error_pixels > MAX_REGISTRATION_RMS_PIXELS {
+            return Err(format!(
+                "{} registration RMS {:.3}px exceeds {:.3}px",
+                role.label(),
+                registration.rms_error_pixels,
+                MAX_REGISTRATION_RMS_PIXELS
+            ));
+        }
+        observe(role, RegistrationEvent::Registered(&registration))?;
+        registered.push((role, registration));
+    }
+    Ok(registered)
+}
+
+/// Places a registered channel on the reference channel's grid.
+pub fn place_on_reference(
+    role: StackColorRole,
+    image: &LinearImage,
+    reference: (StackColorRole, usize, usize),
+    registration: &RegistrationResult,
+    gpu: &GpuOptions,
+) -> Result<LinearImage, String> {
+    let (reference_role, width, height) = reference;
+    resample_to_reference_with_gpu(image, width, height, registration.transform, gpu).map_err(
+        |error| {
+            format!(
+                "Failed to resample {} onto the {} reference: {error}",
+                role.label(),
+                reference_role.label()
+            )
+        },
+    )
+}
 
 /// What the background step is doing to one channel.
 pub enum BackgroundEvent<'a> {
@@ -182,4 +264,138 @@ pub(crate) fn refit_channel_background(
         fit.diagnostics.model_selection = Some(selection);
     }
     Ok(fit)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use seiza_background::{BackgroundConfig, CorrectionMode};
+    use seiza_stacking::SimilarityTransform;
+
+    const WIDTH: usize = 96;
+    const HEIGHT: usize = 64;
+
+    /// A channel with a curved background and a deterministic ripple that
+    /// stands in for sky noise.
+    fn channel(curve: f32) -> LinearImage {
+        let data = (0..WIDTH * HEIGHT)
+            .map(|index| {
+                let (x, y) = (index % WIDTH, index / WIDTH);
+                let nx = x as f32 / (WIDTH - 1) as f32 * 2.0 - 1.0;
+                let ny = y as f32 / (HEIGHT - 1) as f32 * 2.0 - 1.0;
+                0.2 - curve * (nx * nx + ny * ny) + ((x * 7 + y * 13) % 11) as f32 * 2.0e-4
+            })
+            .collect();
+        LinearImage::new(WIDTH, HEIGHT, 1, data).unwrap()
+    }
+
+    fn extraction(mode: CorrectionMode, strength: f64) -> StackBackgroundExtraction {
+        StackBackgroundExtraction {
+            config: BackgroundConfig {
+                model: ModelConfig::Automatic {
+                    max_degree: 2,
+                    ridge: 1.0e-8,
+                    rbf_smoothing: 0.01,
+                    max_control_points: 192,
+                    allow_radial_basis: false,
+                    minimum_improvement: 0.08,
+                },
+                samples_per_axis: 12,
+                sample_radius: Some(1),
+                search_steps: 0,
+                ..BackgroundConfig::default()
+            },
+            correction_mode: mode,
+            strength,
+            protect_catalog_emission: false,
+        }
+    }
+
+    /// Two channels corrected at `strength` and placed on another grid.
+    fn corrected_and_placed(mode: CorrectionMode, strength: f64) -> Vec<Vec<f32>> {
+        let mut images = [channel(0.05), channel(0.02)];
+        let [first, second] = &mut images;
+        let mut channels = [
+            (StackColorRole::Red, first),
+            (StackColorRole::Green, second),
+        ];
+        correct_channel_backgrounds(
+            &mut channels,
+            &extraction(mode, strength),
+            |_| Vec::new(),
+            |_, _| Ok(()),
+        )
+        .unwrap();
+        let transform = SimilarityTransform {
+            scale: 1.0,
+            rotation_radians: 0.01,
+            translation_x: 3.4,
+            translation_y: -2.2,
+        };
+        images
+            .iter()
+            .map(|image| {
+                resample_to_reference_with_gpu(image, WIDTH, HEIGHT, transform, &GpuOptions::cpu())
+                    .unwrap()
+                    .data
+            })
+            .collect()
+    }
+
+    /// Studio moves the strength by blending the uncorrected channel with
+    /// the fully corrected one. That equals correcting at the strength,
+    /// because the correction changes each sample in proportion to the
+    /// strength and resampling keeps proportions.
+    #[test]
+    fn a_strength_between_is_a_blend_of_uncorrected_and_fully_corrected() {
+        for mode in [CorrectionMode::Subtract, CorrectionMode::Divide] {
+            let before = corrected_and_placed(mode, 0.0);
+            let after = corrected_and_placed(mode, 1.0);
+            // The correction did something to blend.
+            let moved = before[0]
+                .iter()
+                .zip(&after[0])
+                .any(|(a, b)| a.is_finite() && b.is_finite() && (a - b).abs() > 1.0e-3);
+            assert!(moved, "{mode:?}");
+            for strength in [0.25_f32, 0.7] {
+                let direct = corrected_and_placed(mode, f64::from(strength));
+                for channel in 0..2 {
+                    let mut compared = 0;
+                    for ((a, b), d) in before[channel]
+                        .iter()
+                        .zip(&after[channel])
+                        .zip(&direct[channel])
+                    {
+                        if !(a.is_finite() && b.is_finite() && d.is_finite()) {
+                            continue;
+                        }
+                        let blended = a + (b - a) * strength;
+                        assert!(
+                            (blended - d).abs() < 2.0e-6,
+                            "{mode:?} at {strength}: blended {blended}, corrected {d}"
+                        );
+                        compared += 1;
+                    }
+                    assert!(compared > WIDTH * HEIGHT / 2);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn an_observer_can_stop_a_step() {
+        let mut image = channel(0.05);
+        let untouched = image.clone();
+        let stopped = correct_channel_backgrounds(
+            &mut [(StackColorRole::Red, &mut image)],
+            &extraction(CorrectionMode::Subtract, 1.0),
+            |_| Vec::new(),
+            |_, event| match event {
+                BackgroundEvent::Correcting => Err("stopped".to_string()),
+                _ => Ok(()),
+            },
+        );
+        assert_eq!(stopped, Err("stopped".to_string()));
+        assert_eq!(image.data, untouched.data);
+    }
 }

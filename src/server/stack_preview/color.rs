@@ -38,7 +38,7 @@ use seiza_stacking::{
     combine_lrgb, combine_narrowband, combine_rgb, resample_to_reference_with_gpu,
     write_color_fits_f32, write_processed_image_fits_f32, ColorComposition, ColorCrop,
     ColorNormalization, ColorOptions, ColorTransfer, CropReport, FitsFrame, ForaxxOptions,
-    LinearImage, NarrowbandPalette, ReferenceRegion, Registrar, RegistrationOptions,
+    LinearImage, NarrowbandPalette, ReferenceRegion,
 };
 use seiza_stretch::{ImageShape, StretchStack, StretchStackOutput, StretchStageProgress};
 use serde::{Deserialize, Serialize};
@@ -63,7 +63,6 @@ const COLOR_INPUT_CACHE_VERSION: u32 = 4;
 /// tools keep their ids.
 const COLOR_CHANNEL_TOOLS_VERSION: u32 = 2;
 const SEIZA_BACKGROUND_VERSION: &str = env!("PSF_GUARD_SEIZA_BACKGROUND_VERSION");
-const MAX_REGISTRATION_RMS_PIXELS: f64 = 2.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -3916,74 +3915,75 @@ fn compose_color(
             "Reused registered input channels",
         );
     } else {
-        progress.begin(
-            StackColorProgressPhase::RegisteringSources,
-            format!("Using {} as registration reference", reference_role.label()),
-            Some(reference_role),
-            None,
-        );
-        let registrar = pool
-            .install(|| {
-                Registrar::new_with_gpu(&reference.image, RegistrationOptions::default(), &gpu)
-            })
-            .map_err(|error| error.to_string())?;
-        progress.advance(StackColorProgressPhase::RegisteringSources, 1);
-        state.stack_previews.update_color(&job.job_id, |current| {
-            current.processed_channels = 1;
-        });
+        let mut others = Vec::with_capacity(job.sources.len());
         for source in job
             .sources
             .iter()
             .filter(|source| source.role != reference_role)
         {
-            stop.check()?;
-            progress.begin(
-                StackColorProgressPhase::RegisteringSources,
-                format!("Registering {}", source.role.label()),
-                Some(source.role),
-                None,
-            );
             let frame = frames
                 .get(&source.role)
                 .ok_or_else(|| format!("{} source was not loaded", source.role.label()))?;
-            let registration =
-                pool.install(|| registrar.register(&frame.image))
-                    .map_err(|error| {
-                        format!(
-                            "Failed to register {} to {}: {error}",
-                            source.role.label(),
-                            reference_role.label()
-                        )
-                    })?;
-            if registration.rms_error_pixels > MAX_REGISTRATION_RMS_PIXELS {
-                return Err(format!(
-                    "{} registration RMS {:.3}px exceeds {:.3}px",
-                    source.role.label(),
-                    registration.rms_error_pixels,
-                    MAX_REGISTRATION_RMS_PIXELS
-                ));
-            }
-            tracing::info!(
-                "Stack color {} registered {}: {:.3}px RMS, {:.1}px drift, {} stars",
-                job.job_id,
-                source.role.label(),
-                registration.rms_error_pixels,
-                registration.drift_pixels,
-                registration.matched_stars
-            );
-            registered_transforms.insert(source.role, registration.transform);
-            state.stack_previews.update_color(&job.job_id, |current| {
-                if let Some(current_source) = current
-                    .sources
-                    .iter_mut()
-                    .find(|current_source| current_source.role == source.role)
-                {
-                    current_source.registration_transform = Some(registration.transform);
-                }
-                current.processed_channels += 1;
-            });
-            progress.advance(StackColorProgressPhase::RegisteringSources, 1);
+            others.push((source.role, &frame.image));
         }
+        let phase = StackColorProgressPhase::RegisteringSources;
+        pool.install(|| {
+            crate::color_steps::register_channels(
+                (reference_role, &reference.image),
+                &others,
+                &gpu,
+                |role, event| {
+                    use crate::color_steps::RegistrationEvent as Event;
+                    match event {
+                        Event::PreparingReference => progress.begin(
+                            phase,
+                            format!("Using {} as registration reference", role.label()),
+                            Some(role),
+                            None,
+                        ),
+                        Event::ReferenceReady => {
+                            progress.advance(phase, 1);
+                            state.stack_previews.update_color(&job.job_id, |current| {
+                                current.processed_channels = 1;
+                            });
+                        }
+                        Event::Registering => {
+                            stop.check()?;
+                            progress.begin(
+                                phase,
+                                format!("Registering {}", role.label()),
+                                Some(role),
+                                None,
+                            );
+                        }
+                        Event::Registered(registration) => {
+                            tracing::info!(
+                                "Stack color {} registered {}: {:.3}px RMS, {:.1}px drift, {} stars",
+                                job.job_id,
+                                role.label(),
+                                registration.rms_error_pixels,
+                                registration.drift_pixels,
+                                registration.matched_stars
+                            );
+                            registered_transforms.insert(role, registration.transform);
+                            state.stack_previews.update_color(&job.job_id, |current| {
+                                if let Some(current_source) = current
+                                    .sources
+                                    .iter_mut()
+                                    .find(|current_source| current_source.role == role)
+                                {
+                                    current_source.registration_transform =
+                                        Some(registration.transform);
+                                }
+                                current.processed_channels += 1;
+                            });
+                            progress.advance(phase, 1);
+                        }
+                    }
+                    Ok(())
+                },
+            )
+        })?;
         progress.finish(StackColorProgressPhase::RegisteringSources);
     }
 
