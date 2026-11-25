@@ -1,0 +1,586 @@
+{
+  "metal_layer": "MTLPixelFormat 80, color space kCGColorSpaceSRGB, extended range false",
+  "mean_tile_compute_ms": 13.190723419189453,
+  "document": {
+    "width": 30000,
+    "height": 20000,
+    "megapixels": 600.0,
+    "bands": 8
+  },
+  "surface": {
+    "width": 3840,
+    "height": 2160,
+    "renderer": "Bgra8Unorm in Auto, 3840x2160; surface offers formats [Bgra8UnormSrgb, Bgra8Unorm, Rgba16Float, Rgb10a2Unorm]; color spaces for Bgra8Unorm: SurfaceColorSpaces(SRGB | DISPLAY_P3)",
+    "vsync": true
+  },
+  "frames_per_phase": 200,
+  "phases": [
+    {
+      "phase": "Settle(\"fit\")",
+      "frames": 28,
+      "wall_ms": 515.496917,
+      "level": 3,
+      "zoom": 0.108,
+      "tiles_drawn_max": 40,
+      "frames_with_coarse_tiles": 8,
+      "coarse_tiles_max": 40,
+      "blank_tiles_max": 0,
+      "frames_over_20_ms": 2,
+      "gpu_offscreen_ms_per_frame": null,
+      "tiles_uploaded": 41,
+      "strokes": 0,
+      "cache_mb": 164,
+      "frame_interval_ms": {
+        "p50": 16.65,
+        "p95": 28.92,
+        "p99": 31.73,
+        "max": 31.73
+      },
+      "encode_ms": {
+        "p50": 0.35,
+        "p95": 4.37,
+        "p99": 4.65,
+        "max": 4.65
+      },
+      "acquire_ms": {
+        "p50": 16.21,
+        "p95": 27.08,
+        "p99": 28.6,
+        "max": 28.6
+      },
+      "gpu_ms": {
+        "p50": 0.0,
+        "p95": 1.72,
+        "p99": 1.97,
+        "max": 1.97
+      },
+      "sharp_after_ms": 187.073958
+    },
+    {
+      "phase": "StretchFit",
+      "frames": 200,
+      "wall_ms": 3448.438875,
+      "level": 3,
+      "zoom": 0.108,
+      "tiles_drawn_max": 40,
+      "frames_with_coarse_tiles": 0,
+      "coarse_tiles_max": 0,
+      "blank_tiles_max": 0,
+      "frames_over_20_ms": 0,
+      "gpu_offscreen_ms_per_frame": 0.43443021178245544,
+      "tiles_uploaded": 0,
+      "strokes": 0,
+      "cache_mb": 164,
+      "frame_interval_ms": {
+        "p50": 16.68,
+        "p95": 17.27,
+        "p99": 17.57,
+        "max": 18.07
+      },
+      "encode_ms": {
+        "p50": 0.83,
+        "p95": 1.25,
+        "p99": 1.47,
+        "max": 1.77
+      },
+      "acquire_ms": {
+        "p50": 15.81,
+        "p95": 16.39,
+        "p99": 16.48,
+        "max": 16.67
+      },
+      "gpu_ms": {
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 2.23,
+        "max": 3.27
+      }
+    },
+    {
+      "phase": "Settle(\"1:1\")",
+      "frames": 29,
+      "wall_ms": 452.272333,
+      "level": 0,
+      "zoom": 1.0,
+      "tiles_drawn_max": 45,
+      "frames_with_coarse_tiles": 9,
+      "coarse_tiles_max": 45,
+      "blank_tiles_max": 0,
+      "frames_over_20_ms": 1,
+      "gpu_offscreen_ms_per_frame": null,
+      "tiles_uploaded": 88,
+      "strokes": 0,
+      "cache_mb": 472,
+      "frame_interval_ms": {
+        "p50": 16.67,
+        "p95": 17.93,
+        "p99": 21.85,
+        "max": 21.85
+      },
+      "encode_ms": {
+        "p50": 2.33,
+        "p95": 4.47,
+        "p99": 4.57,
+        "max": 4.57
+      },
+      "acquire_ms": {
+        "p50": 14.27,
+        "p95": 16.65,
+        "p99": 17.38,
+        "max": 17.38
+      },
+      "gpu_ms": {
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "sharp_after_ms": 136.967583
+    },
+    {
+      "phase": "Stretch1to1",
+      "frames": 200,
+      "wall_ms": 3470.092167,
+      "level": 0,
+      "zoom": 1.0,
+      "tiles_drawn_max": 45,
+      "frames_with_coarse_tiles": 0,
+      "coarse_tiles_max": 0,
+      "blank_tiles_max": 0,
+      "frames_over_20_ms": 0,
+      "gpu_offscreen_ms_per_frame": 0.5517874956130981,
+      "tiles_uploaded": 0,
+      "strokes": 0,
+      "cache_mb": 472,
+      "frame_interval_ms": {
+        "p50": 16.68,
+        "p95": 17.35,
+        "p99": 18.07,
+        "max": 18.92
+      },
+      "encode_ms": {
+        "p50": 0.88,
+        "p95": 1.43,
+        "p99": 2.05,
+        "max": 2.52
+      },
+      "acquire_ms": {
+        "p50": 15.75,
+        "p95": 16.34,
+        "p99": 16.43,
+        "max": 16.49
+      },
+      "gpu_ms": {
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 1.47
+      }
+    },
+    {
+      "phase": "Brush",
+      "frames": 200,
+      "wall_ms": 3466.964375,
+      "level": 0,
+      "zoom": 1.0,
+      "tiles_drawn_max": 45,
+      "frames_with_coarse_tiles": 0,
+      "coarse_tiles_max": 0,
+      "blank_tiles_max": 0,
+      "frames_over_20_ms": 1,
+      "gpu_offscreen_ms_per_frame": 0.5506479144096375,
+      "tiles_uploaded": 0,
+      "strokes": 200,
+      "cache_mb": 472,
+      "frame_interval_ms": {
+        "p50": 16.67,
+        "p95": 17.37,
+        "p99": 18.94,
+        "max": 46.24
+      },
+      "encode_ms": {
+        "p50": 0.83,
+        "p95": 1.17,
+        "p99": 1.91,
+        "max": 3.02
+      },
+      "acquire_ms": {
+        "p50": 15.8,
+        "p95": 16.33,
+        "p99": 17.56,
+        "max": 45.26
+      },
+      "gpu_ms": {
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 1.06,
+        "max": 1.51
+      }
+    },
+    {
+      "phase": "BrushManyStrokes",
+      "frames": 200,
+      "wall_ms": 3465.864542,
+      "level": 0,
+      "zoom": 1.0,
+      "tiles_drawn_max": 45,
+      "frames_with_coarse_tiles": 0,
+      "coarse_tiles_max": 0,
+      "blank_tiles_max": 0,
+      "frames_over_20_ms": 1,
+      "gpu_offscreen_ms_per_frame": 0.6231291890144348,
+      "tiles_uploaded": 0,
+      "strokes": 20200,
+      "cache_mb": 472,
+      "frame_interval_ms": {
+        "p50": 16.68,
+        "p95": 17.32,
+        "p99": 18.53,
+        "max": 32.83
+      },
+      "encode_ms": {
+        "p50": 0.88,
+        "p95": 1.18,
+        "p99": 1.63,
+        "max": 3.3
+      },
+      "acquire_ms": {
+        "p50": 15.75,
+        "p95": 16.3,
+        "p99": 16.37,
+        "max": 32.15
+      },
+      "gpu_ms": {
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 1.26
+      }
+    },
+    {
+      "phase": "Settle(\"pan_start\")",
+      "frames": 29,
+      "wall_ms": 446.903875,
+      "level": 0,
+      "zoom": 1.0,
+      "tiles_drawn_max": 40,
+      "frames_with_coarse_tiles": 9,
+      "coarse_tiles_max": 40,
+      "blank_tiles_max": 0,
+      "frames_over_20_ms": 0,
+      "gpu_offscreen_ms_per_frame": null,
+      "tiles_uploaded": 76,
+      "strokes": 0,
+      "cache_mb": 752,
+      "frame_interval_ms": {
+        "p50": 16.7,
+        "p95": 17.53,
+        "p99": 19.71,
+        "max": 19.71
+      },
+      "encode_ms": {
+        "p50": 0.86,
+        "p95": 3.34,
+        "p99": 4.21,
+        "max": 4.21
+      },
+      "acquire_ms": {
+        "p50": 14.18,
+        "p95": 16.5,
+        "p99": 16.58,
+        "max": 16.58
+      },
+      "gpu_ms": {
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "sharp_after_ms": 132.44825
+    },
+    {
+      "phase": "Pan(1500.0)",
+      "frames": 200,
+      "wall_ms": 3468.757792,
+      "level": 0,
+      "zoom": 1.0,
+      "tiles_drawn_max": 54,
+      "frames_with_coarse_tiles": 0,
+      "coarse_tiles_max": 0,
+      "blank_tiles_max": 0,
+      "frames_over_20_ms": 0,
+      "gpu_offscreen_ms_per_frame": 0.5398645997047424,
+      "tiles_uploaded": 102,
+      "strokes": 0,
+      "cache_mb": 1160,
+      "frame_interval_ms": {
+        "p50": 16.66,
+        "p95": 18.5,
+        "p99": 19.48,
+        "max": 19.83
+      },
+      "encode_ms": {
+        "p50": 0.76,
+        "p95": 2.42,
+        "p99": 3.07,
+        "max": 3.52
+      },
+      "acquire_ms": {
+        "p50": 15.95,
+        "p95": 16.53,
+        "p99": 16.7,
+        "max": 16.75
+      },
+      "gpu_ms": {
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 2.02,
+        "max": 2.37
+      }
+    },
+    {
+      "phase": "Settle(\"after_pan_1500\")",
+      "frames": 20,
+      "wall_ms": 297.806917,
+      "level": 0,
+      "zoom": 1.0,
+      "tiles_drawn_max": 45,
+      "frames_with_coarse_tiles": 0,
+      "coarse_tiles_max": 0,
+      "blank_tiles_max": 0,
+      "frames_over_20_ms": 0,
+      "gpu_offscreen_ms_per_frame": null,
+      "tiles_uploaded": 0,
+      "strokes": 0,
+      "cache_mb": 1160,
+      "frame_interval_ms": {
+        "p50": 16.59,
+        "p95": 17.14,
+        "p99": 17.22,
+        "max": 17.22
+      },
+      "encode_ms": {
+        "p50": 0.79,
+        "p95": 0.91,
+        "p99": 1.27,
+        "max": 1.27
+      },
+      "acquire_ms": {
+        "p50": 15.74,
+        "p95": 16.29,
+        "p99": 16.42,
+        "max": 16.42
+      },
+      "gpu_ms": {
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "sharp_after_ms": 0.578667
+    },
+    {
+      "phase": "Settle(\"pan_start\")",
+      "frames": 20,
+      "wall_ms": 332.919084,
+      "level": 0,
+      "zoom": 1.0,
+      "tiles_drawn_max": 40,
+      "frames_with_coarse_tiles": 0,
+      "coarse_tiles_max": 0,
+      "blank_tiles_max": 0,
+      "frames_over_20_ms": 0,
+      "gpu_offscreen_ms_per_frame": null,
+      "tiles_uploaded": 0,
+      "strokes": 0,
+      "cache_mb": 1160,
+      "frame_interval_ms": {
+        "p50": 16.68,
+        "p95": 16.97,
+        "p99": 17.08,
+        "max": 17.08
+      },
+      "encode_ms": {
+        "p50": 0.8,
+        "p95": 1.02,
+        "p99": 1.04,
+        "max": 1.04
+      },
+      "acquire_ms": {
+        "p50": 15.86,
+        "p95": 16.13,
+        "p99": 16.3,
+        "max": 16.3
+      },
+      "gpu_ms": {
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "sharp_after_ms": 16.448959
+    },
+    {
+      "phase": "Pan(6000.0)",
+      "frames": 200,
+      "wall_ms": 3466.831958,
+      "level": 0,
+      "zoom": 1.0,
+      "tiles_drawn_max": 54,
+      "frames_with_coarse_tiles": 0,
+      "coarse_tiles_max": 0,
+      "blank_tiles_max": 0,
+      "frames_over_20_ms": 1,
+      "gpu_offscreen_ms_per_frame": 0.5324646234512329,
+      "tiles_uploaded": 329,
+      "strokes": 0,
+      "cache_mb": 2048,
+      "frame_interval_ms": {
+        "p50": 16.59,
+        "p95": 19.29,
+        "p99": 19.63,
+        "max": 20.02
+      },
+      "encode_ms": {
+        "p50": 0.77,
+        "p95": 2.92,
+        "p99": 3.18,
+        "max": 3.46
+      },
+      "acquire_ms": {
+        "p50": 15.93,
+        "p95": 16.51,
+        "p99": 16.6,
+        "max": 16.65
+      },
+      "gpu_ms": {
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 1.23,
+        "max": 1.44
+      }
+    },
+    {
+      "phase": "Settle(\"after_pan_6000\")",
+      "frames": 20,
+      "wall_ms": 300.38775,
+      "level": 0,
+      "zoom": 1.0,
+      "tiles_drawn_max": 45,
+      "frames_with_coarse_tiles": 0,
+      "coarse_tiles_max": 0,
+      "blank_tiles_max": 0,
+      "frames_over_20_ms": 0,
+      "gpu_offscreen_ms_per_frame": null,
+      "tiles_uploaded": 1,
+      "strokes": 0,
+      "cache_mb": 2048,
+      "frame_interval_ms": {
+        "p50": 16.68,
+        "p95": 17.13,
+        "p99": 17.47,
+        "max": 17.47
+      },
+      "encode_ms": {
+        "p50": 0.82,
+        "p95": 1.35,
+        "p99": 1.52,
+        "max": 1.52
+      },
+      "acquire_ms": {
+        "p50": 15.77,
+        "p95": 16.56,
+        "p99": 16.68,
+        "max": 16.68
+      },
+      "gpu_ms": {
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "sharp_after_ms": 0.7016249999999999
+    },
+    {
+      "phase": "ZoomSweep",
+      "frames": 200,
+      "wall_ms": 3467.598167,
+      "level": 0,
+      "zoom": 0.9889335682332661,
+      "tiles_drawn_max": 150,
+      "frames_with_coarse_tiles": 79,
+      "coarse_tiles_max": 150,
+      "blank_tiles_max": 0,
+      "frames_over_20_ms": 2,
+      "gpu_offscreen_ms_per_frame": 0.5375364422798157,
+      "tiles_uploaded": 610,
+      "strokes": 0,
+      "cache_mb": 2048,
+      "frame_interval_ms": {
+        "p50": 16.69,
+        "p95": 17.93,
+        "p99": 19.84,
+        "max": 22.84
+      },
+      "encode_ms": {
+        "p50": 2.46,
+        "p95": 3.93,
+        "p99": 4.81,
+        "max": 6.43
+      },
+      "acquire_ms": {
+        "p50": 14.21,
+        "p95": 16.44,
+        "p99": 16.67,
+        "max": 17.83
+      },
+      "gpu_ms": {
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 1.04,
+        "max": 1.23
+      }
+    },
+    {
+      "phase": "Settle(\"after_zoom_sweep\")",
+      "frames": 20,
+      "wall_ms": 298.905375,
+      "level": 0,
+      "zoom": 0.9889335682332661,
+      "tiles_drawn_max": 45,
+      "frames_with_coarse_tiles": 0,
+      "coarse_tiles_max": 0,
+      "blank_tiles_max": 0,
+      "frames_over_20_ms": 0,
+      "gpu_offscreen_ms_per_frame": null,
+      "tiles_uploaded": 0,
+      "strokes": 0,
+      "cache_mb": 2048,
+      "frame_interval_ms": {
+        "p50": 16.65,
+        "p95": 16.99,
+        "p99": 17.3,
+        "max": 17.3
+      },
+      "encode_ms": {
+        "p50": 0.85,
+        "p95": 0.98,
+        "p99": 1.0,
+        "max": 1.0
+      },
+      "acquire_ms": {
+        "p50": 15.74,
+        "p95": 16.44,
+        "p99": 16.45,
+        "max": 16.45
+      },
+      "gpu_ms": {
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.52,
+        "max": 0.52
+      },
+      "sharp_after_ms": 0.47150000000000003
+    }
+  ]
+}

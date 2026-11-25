@@ -1,0 +1,12 @@
+[package]
+name = "studio-render-spike"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+description = "Tiled wgpu canvas for the PSF-Studio spike. No dependency on a UI toolkit."
+
+[dependencies]
+wgpu.workspace = true
+bytemuck.workspace = true
+half = "2"

@@ -1,0 +1,53 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>PSF-Studio crop preview spike: web baseline</title>
+<style>body { background: #16181c; color: #d8dee6; font: 13px system-ui; } pre { white-space: pre-wrap; }</style>
+<pre id="status">Starting…</pre>
+<script type="module">
+// The web side of investigation 3. A server computes each crop preview; this
+// page fetches the result and uploads it to a GPU texture, as a web editor
+// would. It measures the whole trip and what the server spent computing.
+// Serve it with `studio-crop-preview-spike serve`.
+const status = document.getElementById('status');
+const name = new URLSearchParams(location.search).get('name') ?? 'crop';
+const adapter = await navigator.gpu.requestAdapter();
+const device = await adapter.requestDevice();
+
+async function trip(size, iterations) {
+  const texture = device.createTexture({ size: [size, size], format: 'r16float', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+  const started = performance.now();
+  const response = await fetch(`/preview?size=${size}&iterations=${iterations}&fwhm=3`);
+  const bytes = await response.arrayBuffer();
+  const received = performance.now();
+  device.queue.writeTexture({ texture }, bytes, { bytesPerRow: size * 2 }, [size, size]);
+  await device.queue.onSubmittedWorkDone();
+  const done = performance.now();
+  texture.destroy();
+  const compute = Number(response.headers.get('X-Compute-Ms'));
+  return { total: done - started, compute, transfer: received - started - compute, upload: done - received, bytes: bytes.byteLength };
+}
+const summary = (values) => {
+  values.sort((a, b) => a - b);
+  const round = (value) => Math.round(value * 100) / 100;
+  return { p50: round(values[values.length >> 1]), max: round(values.at(-1)) };
+};
+
+const results = [];
+for (const size of [512, 1024, 2048]) {
+  await trip(size, 4);
+  const trips = [];
+  for (let iterations = 1; iterations <= 40; iterations++) {
+    trips.push(await trip(size, iterations));
+    status.textContent = `${size} px, ${iterations} iterations`;
+  }
+  results.push({
+    crop: size, bytes: trips[0].bytes,
+    total_ms: summary(trips.map((t) => t.total)), compute_ms: summary(trips.map((t) => t.compute)),
+    transfer_ms: summary(trips.map((t) => t.transfer)), upload_ms: summary(trips.map((t) => t.upload)),
+    overhead_ms: summary(trips.map((t) => t.total - t.compute)),
+  });
+}
+const report = { user_agent: navigator.userAgent, slider_drag_iterations_1_to_40: results };
+status.textContent = JSON.stringify(report, null, 1);
+fetch(`/result/${name}`, { method: 'POST', body: JSON.stringify(report, null, 1) }).catch(() => {});
+</script>

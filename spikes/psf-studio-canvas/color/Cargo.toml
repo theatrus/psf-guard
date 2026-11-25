@@ -1,0 +1,16 @@
+[package]
+name = "studio-color-spike"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+description = "Investigation 9: the display transform as a shader step, checked against two color engines."
+
+[dependencies]
+studio-render-spike = { path = "../render" }
+wgpu.workspace = true
+bytemuck.workspace = true
+lcms2 = "6"
+pollster = "0.4"
+png = "0.17"
+serde_json = "1"

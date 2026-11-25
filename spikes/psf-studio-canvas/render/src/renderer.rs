@@ -1,0 +1,1278 @@
+use crate::display::{DisplayCurves, TableFormat};
+use crate::synth::{
+    generate_tile, tiles_across, TileKey, BANDS, DOC_HEIGHT, DOC_WIDTH, MAX_LEVEL, TILE,
+};
+use crate::tiles::{TileCache, TileProducer};
+use bytemuck::{Pod, Zeroable};
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::Arc;
+use std::time::Instant;
+
+/// The most layers one frame combines.
+pub const MAX_LAYERS: usize = 8;
+/// The most Finish steps one frame applies.
+pub const MAX_FINISH_STEPS: usize = 8;
+/// The most masks one frame draws, besides the stroke overlay.
+pub const MAX_MASKS: usize = 7;
+/// The mask layer that holds the stroke overlay.
+const OVERLAY_LAYER: u32 = MAX_MASKS as u32;
+
+/// Where the document sits in the surface.
+#[derive(Clone, Copy, Debug)]
+pub struct View {
+    /// The document pixel at the center of the surface.
+    pub center: [f64; 2],
+    /// Surface pixels per document pixel.
+    pub zoom: f64,
+}
+
+/// How a layer combines with the layers beneath it. The order matches the
+/// shader's `blend`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Blend {
+    Normal,
+    Screen,
+    Add,
+    Multiply,
+    Lighten,
+    Darken,
+}
+
+/// One layer of the Combine stage: a band, stretched, colored and blended.
+#[derive(Clone, Copy, Debug)]
+pub struct Layer {
+    /// The band the layer shows.
+    pub band: usize,
+    pub color: [f32; 3],
+    /// From 0 to 1. A hidden layer has 0.
+    pub opacity: f32,
+    pub blend: Blend,
+    pub black: f32,
+    pub white: f32,
+    pub midtone: f32,
+    /// The layer's own contrast curve, from -1 to 1. 0 is none.
+    pub curve: f32,
+}
+
+/// What a Finish step does.
+#[derive(Clone, Copy, Debug)]
+pub enum FinishKind {
+    /// A contrast curve. The amount runs from -1 to 1.
+    Curves,
+    /// Saturation. An amount of 1 leaves the image as it is.
+    Saturation,
+    /// A heal: the masked area is replaced by the area `offset` document
+    /// pixels away, with `shift` added.
+    Heal { offset: [f32; 2], shift: [f32; 3] },
+}
+
+/// One step of the Finish stage, applied to the combined image.
+#[derive(Clone, Copy, Debug)]
+pub struct FinishStep {
+    pub kind: FinishKind,
+    pub amount: f32,
+    /// The mask that limits the step, as an index into [`Frame::masks`].
+    /// `None` is everywhere. A heal's mask is its stroke.
+    pub mask: Option<usize>,
+}
+
+/// One segment of a brush stroke, in document pixels.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+pub struct Segment {
+    pub from: [f32; 2],
+    pub to: [f32; 2],
+    pub radius: f32,
+    pub hardness: f32,
+    /// 1 adds to the mask, 0 subtracts from it.
+    pub value: f32,
+    pub _pad: f32,
+}
+
+pub struct Frame<'a> {
+    pub view: View,
+    /// The layers, bottom first. At most [`MAX_LAYERS`].
+    pub layers: &'a [Layer],
+    /// The Finish steps, in order. At most [`MAX_FINISH_STEPS`].
+    pub finish: &'a [FinishStep],
+    /// The masks the Finish steps refer to. At most [`MAX_MASKS`].
+    pub masks: &'a [Vec<Segment>],
+    /// Changes whenever `masks` does, so unchanged masks are not uploaded
+    /// again.
+    pub masks_version: u64,
+    /// Strokes shown over the image: a stroke being drawn.
+    pub overlay: &'a [Segment],
+    /// How strongly the overlay shows, from 0 to 1.
+    pub overlay_strength: f32,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FrameStats {
+    /// Time spent waiting for the surface's next texture.
+    pub acquire_ms: f32,
+    /// Time spent choosing tiles, uploading, encoding and submitting.
+    pub encode_ms: f32,
+    /// GPU time of the frame's passes, from the most recent frame whose
+    /// timestamps have come back.
+    pub gpu_ms: Option<f32>,
+    pub level: u8,
+    pub tiles_drawn: u32,
+    /// Visible tiles drawn from a coarser level because theirs is not loaded.
+    pub tiles_coarse: u32,
+    /// Visible tiles with nothing to draw at any level.
+    pub tiles_blank: u32,
+    pub tiles_uploaded: u32,
+    pub tiles_in_flight: u32,
+    pub cache_tiles: u32,
+    pub cache_bytes: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct Globals {
+    view: [f32; 4],
+    screen: [f32; 4],
+    counts: [f32; 4],
+    layers: [[f32; 12]; MAX_LAYERS],
+    finish: [[f32; 12]; MAX_FINISH_STEPS],
+    display_matrix: [f32; 12],
+    display: [f32; 4],
+}
+
+/// What the canvas presents to: the surface's format and color space, and
+/// the transform from the document's working space to that target.
+pub struct Output {
+    /// The surface format to use when the surface offers it.
+    pub format: Option<wgpu::TextureFormat>,
+    /// The color space to set on the surface when the surface offers it.
+    pub color_space: wgpu::SurfaceColorSpace,
+    /// The display transform. `None` presents the working space unchanged.
+    pub curves: Option<DisplayCurves>,
+    /// Whether presenting waits for the display's refresh.
+    pub vsync: bool,
+}
+
+impl Default for Output {
+    fn default() -> Self {
+        Self {
+            format: None,
+            color_space: wgpu::SurfaceColorSpace::Auto,
+            curves: None,
+            vsync: true,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct TileInstance {
+    rect: [f32; 4],
+    uv_rect: [f32; 4],
+}
+
+const MAX_TILE_INSTANCES: u64 = 4096;
+const MASK_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R8Unorm;
+/// The combined image, before the Finish steps. Float, so a layer's sum is
+/// not clipped before a step that would bring it back into range.
+const COMBINED_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+
+/// The textures that are the size of the surface.
+struct Targets {
+    combined: wgpu::TextureView,
+    /// One view per mask layer, to draw strokes into.
+    mask_layers: Vec<wgpu::TextureView>,
+    /// The combined image, the masks and the display curves, for the finish
+    /// pass.
+    finish_inputs: wgpu::BindGroup,
+}
+
+/// A growable buffer of stroke segments.
+struct StrokeBuffer {
+    buffer: wgpu::Buffer,
+    capacity: usize,
+}
+
+impl StrokeBuffer {
+    fn new(device: &wgpu::Device, capacity: usize) -> Self {
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("stroke instances"),
+            size: (capacity * size_of::<Segment>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        Self { buffer, capacity }
+    }
+
+    /// Makes room for `count` segments. Returns whether the buffer was
+    /// replaced, which loses what it held.
+    fn reserve(&mut self, device: &wgpu::Device, count: usize) -> bool {
+        if count <= self.capacity {
+            return false;
+        }
+        *self = Self::new(device, count.next_power_of_two());
+        true
+    }
+}
+
+pub struct Renderer {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    surface: wgpu::Surface<'static>,
+    config: wgpu::SurfaceConfiguration,
+    globals: wgpu::Buffer,
+    common: wgpu::BindGroup,
+    finish_layout: wgpu::BindGroupLayout,
+    targets: Targets,
+    display_curves: wgpu::TextureView,
+    display_uniform: Option<([f32; 12], [f32; 4])>,
+    surface_offers: String,
+    tile_layout: wgpu::BindGroupLayout,
+    tile_pipeline: wgpu::RenderPipeline,
+    stroke_pipeline: wgpu::RenderPipeline,
+    finish_pipeline: wgpu::RenderPipeline,
+    tile_instances: wgpu::Buffer,
+    /// The stroke being drawn. It only grows or resets, so only its new tail
+    /// is uploaded.
+    overlay: StrokeBuffer,
+    overlay_uploaded: usize,
+    /// Every mask's segments, one mask after another.
+    masks: StrokeBuffer,
+    /// Where each mask's segments are in `masks`: first index and count.
+    mask_ranges: Vec<(u32, u32)>,
+    masks_version: Option<u64>,
+    cache: TileCache,
+    producer: TileProducer,
+    timing: Option<GpuTiming>,
+    frame: u64,
+    /// The most tiles uploaded in one frame. Each is 4 MB.
+    pub uploads_per_frame: u32,
+    /// What the last frame drew, for [`Self::offscreen_frame_ms`].
+    last_sources: Vec<TileKey>,
+    last_overlay: u32,
+    /// Set to copy the next frame into [`Self::captured`].
+    pub capture_next: bool,
+    /// The last captured frame: width, height, and BGRA bytes.
+    pub captured: Option<(u32, u32, Vec<u8>)>,
+}
+
+impl Renderer {
+    pub async fn new(
+        instance: &wgpu::Instance,
+        surface: wgpu::Surface<'static>,
+        width: u32,
+        height: u32,
+        cache_budget_bytes: u64,
+        workers: usize,
+        output: Output,
+    ) -> Result<Self, String> {
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                compatible_surface: Some(&surface),
+                force_fallback_adapter: false,
+                ..Default::default()
+            })
+            .await
+            .map_err(|error| format!("no GPU adapter: {error}"))?;
+        let timestamps = adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY);
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("studio canvas"),
+                required_features: adapter.features()
+                    & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::FLOAT32_FILTERABLE),
+                ..Default::default()
+            })
+            .await
+            .map_err(|error| format!("no GPU device: {error}"))?;
+
+        let capabilities = surface.get_capabilities(&adapter);
+        // The shader writes display-referred values, so the surface must not
+        // apply the sRGB curve a second time.
+        let format = output
+            .format
+            .filter(|format| capabilities.formats.contains(format))
+            .or_else(|| {
+                capabilities
+                    .formats
+                    .iter()
+                    .copied()
+                    .find(|format| !format.is_srgb())
+            })
+            .unwrap_or(capabilities.formats[0]);
+        let color_space = output
+            .color_space
+            .to_color_spaces()
+            .filter(|wanted| capabilities.color_spaces(format).contains(*wanted))
+            .map_or(wgpu::SurfaceColorSpace::Auto, |_| output.color_space);
+        let surface_offers = format!(
+            "formats {:?}; color spaces for {format:?}: {:?}",
+            capabilities.formats,
+            capabilities.color_spaces(format)
+        );
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format,
+            width: width.max(1),
+            height: height.max(1),
+            present_mode: if output.vsync {
+                wgpu::PresentMode::AutoVsync
+            } else {
+                wgpu::PresentMode::AutoNoVsync
+            },
+            desired_maximum_frame_latency: 2,
+            alpha_mode: wgpu::CompositeAlphaMode::Opaque,
+            view_formats: vec![],
+            color_space,
+        };
+        surface.configure(&device, &config);
+
+        let module = |label: &str, body: &str| {
+            device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some(label),
+                source: wgpu::ShaderSource::Wgsl(
+                    format!(
+                        "{}\n{}\n{body}",
+                        crate::display::SHADER,
+                        include_str!("globals.wgsl")
+                    )
+                    .into(),
+                ),
+            })
+        };
+        let layers_shader = module("layers", include_str!("layers.wgsl"));
+        let finish_shader = module("finish", include_str!("finish.wgsl"));
+
+        let globals = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("globals"),
+            size: size_of::<Globals>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let texture_entry =
+            |binding: u32, view_dimension: wgpu::TextureViewDimension| wgpu::BindGroupLayoutEntry {
+                binding,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension,
+                    multisampled: false,
+                },
+                count: None,
+            };
+        let common_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("globals and sampler"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let tile_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("tile"),
+            entries: &[texture_entry(0, wgpu::TextureViewDimension::D2Array)],
+        });
+        let finish_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("finish inputs"),
+            entries: &[
+                texture_entry(0, wgpu::TextureViewDimension::D2),
+                texture_entry(1, wgpu::TextureViewDimension::D2Array),
+                texture_entry(2, wgpu::TextureViewDimension::D2),
+            ],
+        });
+
+        const INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 2] =
+            wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4];
+        let pipeline = |label: &str,
+                        shader: &wgpu::ShaderModule,
+                        second: Option<&wgpu::BindGroupLayout>,
+                        entries: (&str, &str),
+                        instanced: bool,
+                        target: wgpu::ColorTargetState| {
+            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some(label),
+                bind_group_layouts: &[Some(&common_layout), second],
+                ..Default::default()
+            });
+            let instances = [Some(wgpu::VertexBufferLayout {
+                array_stride: 32,
+                step_mode: wgpu::VertexStepMode::Instance,
+                attributes: &INSTANCE_ATTRIBUTES,
+            })];
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: shader,
+                    entry_point: Some(entries.0),
+                    buffers: if instanced { &instances } else { &[] },
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: shader,
+                    entry_point: Some(entries.1),
+                    targets: &[Some(target)],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleStrip,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: Default::default(),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let tile_pipeline = pipeline(
+            "layers",
+            &layers_shader,
+            Some(&tile_layout),
+            ("tile_vertex", "tile_fragment"),
+            true,
+            COMBINED_FORMAT.into(),
+        );
+        let stroke_pipeline = pipeline(
+            "strokes",
+            &layers_shader,
+            None,
+            ("stroke_vertex", "stroke_fragment"),
+            true,
+            wgpu::ColorTargetState {
+                format: MASK_FORMAT,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::RED,
+            },
+        );
+        let finish_pipeline = pipeline(
+            "finish",
+            &finish_shader,
+            Some(&finish_layout),
+            ("finish_vertex", "finish_fragment"),
+            false,
+            format.into(),
+        );
+
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("linear"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let common = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("globals and sampler"),
+            layout: &common_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: globals.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+            ],
+        });
+        // With no transform the shader skips the lookup, and this table is
+        // only there to fill the binding.
+        let identity = DisplayCurves {
+            width: 2,
+            decode: vec![[0.0; 3], [1.0; 3]],
+            encode: vec![[0.0; 3], [1.0; 3]],
+            to_target: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        };
+        let table_format = if device
+            .features()
+            .contains(wgpu::Features::FLOAT32_FILTERABLE)
+        {
+            TableFormat::Full
+        } else {
+            TableFormat::Half
+        };
+        let display_curves =
+            output
+                .curves
+                .as_ref()
+                .unwrap_or(&identity)
+                .upload(&device, &queue, table_format);
+        let display_uniform = output.curves.as_ref().map(|curves| {
+            (
+                curves.matrix_uniform(),
+                [curves.width as f32, 0.0, 0.0, 0.0],
+            )
+        });
+        let targets = create_targets(
+            &device,
+            &finish_layout,
+            &display_curves,
+            config.width,
+            config.height,
+        );
+
+        let tile_instances = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("tile instances"),
+            size: MAX_TILE_INSTANCES * size_of::<TileInstance>() as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // The coarsest level is always loaded, so a view never shows a hole.
+        let mut cache = TileCache::new(cache_budget_bytes);
+        let (across, down) = tiles_across(MAX_LEVEL);
+        for y in 0..down as u16 {
+            for x in 0..across as u16 {
+                let key = TileKey {
+                    level: MAX_LEVEL,
+                    x,
+                    y,
+                };
+                cache.insert(&device, &queue, &tile_layout, key, &generate_tile(key), 0);
+                cache.pin(key);
+            }
+        }
+
+        let timing = timestamps.then(|| GpuTiming::new(&device, queue.get_timestamp_period()));
+        Ok(Self {
+            overlay: StrokeBuffer::new(&device, 4096),
+            masks: StrokeBuffer::new(&device, 4096),
+            device,
+            queue,
+            surface,
+            config,
+            globals,
+            common,
+            finish_layout,
+            targets,
+            display_curves,
+            display_uniform,
+            surface_offers,
+            tile_layout,
+            tile_pipeline,
+            stroke_pipeline,
+            finish_pipeline,
+            tile_instances,
+            overlay_uploaded: 0,
+            mask_ranges: Vec::new(),
+            masks_version: None,
+            cache,
+            producer: TileProducer::new(workers),
+            timing,
+            frame: 0,
+            uploads_per_frame: 6,
+            last_sources: Vec::new(),
+            last_overlay: 0,
+            capture_next: false,
+            captured: None,
+        })
+    }
+
+    pub fn size(&self) -> (u32, u32) {
+        (self.config.width, self.config.height)
+    }
+
+    pub fn adapter_summary(&self) -> String {
+        format!(
+            "{:?} in {:?}, {}x{}",
+            self.config.format, self.config.color_space, self.config.width, self.config.height
+        )
+    }
+
+    /// The formats and color spaces the surface offered.
+    pub fn surface_offers(&self) -> &str {
+        &self.surface_offers
+    }
+
+    pub fn resize(&mut self, width: u32, height: u32) {
+        let (width, height) = (width.max(1), height.max(1));
+        if (width, height) == self.size() {
+            return;
+        }
+        self.config.width = width;
+        self.config.height = height;
+        self.surface.configure(&self.device, &self.config);
+        self.targets = create_targets(
+            &self.device,
+            &self.finish_layout,
+            &self.display_curves,
+            width,
+            height,
+        );
+    }
+
+    /// Draws one frame and presents it.
+    pub fn render(&mut self, frame: &Frame) -> Result<FrameStats, String> {
+        self.frame += 1;
+        let mut stats = FrameStats::default();
+        let _ = self.device.poll(wgpu::PollType::Poll);
+        if let Some(timing) = &mut self.timing {
+            timing.collect();
+        }
+
+        let acquire_started = Instant::now();
+        let target = match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(texture)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
+            other => {
+                self.surface.configure(&self.device, &self.config);
+                return Err(format!("the surface had no texture: {other:?}"));
+            }
+        };
+        stats.acquire_ms = acquire_started.elapsed().as_secs_f32() * 1000.0;
+        let encode_started = Instant::now();
+
+        let (width, height) = (self.config.width as f64, self.config.height as f64);
+        let view = frame.view;
+        self.write_globals(frame);
+
+        // Tiles: upload what the workers finished, then choose what to draw.
+        while stats.tiles_uploaded < self.uploads_per_frame {
+            let Some((key, samples)) = self.producer.take_finished() else {
+                break;
+            };
+            self.cache.insert(
+                &self.device,
+                &self.queue,
+                &self.tile_layout,
+                key,
+                &samples,
+                self.frame,
+            );
+            self.producer.uploaded(key);
+            stats.tiles_uploaded += 1;
+        }
+
+        let level = ((1.0 / view.zoom)
+            .log2()
+            .floor()
+            .clamp(0.0, MAX_LEVEL as f64)) as u8;
+        stats.level = level;
+        let half = [width / (2.0 * view.zoom), height / (2.0 * view.zoom)];
+        let visible = [
+            view.center[0] - half[0],
+            view.center[1] - half[1],
+            view.center[0] + half[0],
+            view.center[1] + half[1],
+        ];
+        let visible_keys = keys_in(level, visible, 0);
+        let mut wanted: Vec<TileKey> = Vec::new();
+        let fallback_level = (level + 3).min(MAX_LEVEL);
+        if fallback_level != level {
+            wanted.extend(keys_in(fallback_level, visible, 0));
+        }
+        let mut by_distance = visible_keys.clone();
+        by_distance.sort_by(|a, b| {
+            center_distance(*a, view.center).total_cmp(&center_distance(*b, view.center))
+        });
+        wanted.extend(by_distance);
+        // One ring of tiles past the edge, so a pan finds them loaded.
+        wanted.extend(
+            keys_in(level, visible, 1)
+                .into_iter()
+                .filter(|key| !visible_keys.contains(key)),
+        );
+        wanted.retain(|key| !self.cache.contains(*key));
+        self.producer.set_wanted(wanted);
+
+        let mut instances: Vec<TileInstance> = Vec::with_capacity(visible_keys.len());
+        let mut sources: Vec<TileKey> = Vec::with_capacity(visible_keys.len());
+        for key in visible_keys.iter().take(MAX_TILE_INSTANCES as usize) {
+            let mut source = *key;
+            while !self.cache.contains(source) {
+                match source.parent() {
+                    Some(parent) => source = parent,
+                    None => break,
+                }
+            }
+            if self.cache.touch(source, self.frame).is_none() {
+                stats.tiles_blank += 1;
+                continue;
+            }
+            if source != *key {
+                stats.tiles_coarse += 1;
+            }
+            let rect = key.doc_rect();
+            let span = (TILE << source.level) as f32;
+            let origin = [source.x as f32 * span, source.y as f32 * span];
+            instances.push(TileInstance {
+                rect,
+                uv_rect: [
+                    (rect[0] - origin[0]) / span,
+                    (rect[1] - origin[1]) / span,
+                    (rect[2] - origin[0]) / span,
+                    (rect[3] - origin[1]) / span,
+                ],
+            });
+            sources.push(source);
+        }
+        stats.tiles_drawn = instances.len() as u32;
+        self.queue
+            .write_buffer(&self.tile_instances, 0, bytemuck::cast_slice(&instances));
+
+        self.upload_strokes(frame);
+
+        let target_view = target
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        let timed = self.timing.as_mut().and_then(GpuTiming::begin);
+        let overlay = frame.overlay.len() as u32;
+        self.passes(
+            &mut encoder,
+            &target_view,
+            &sources,
+            overlay,
+            timed.is_some(),
+        );
+
+        // Captures are written as 8-bit PNG files, so only an 8-bit surface
+        // is captured.
+        let eight_bit = self.config.format == wgpu::TextureFormat::Bgra8Unorm;
+        let capture = (std::mem::take(&mut self.capture_next) && eight_bit).then(|| {
+            let texture = self.surface_sized("capture", wgpu::TextureUsages::COPY_SRC);
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            self.finish_pass(&mut encoder, &view, false);
+            let row_bytes = (self.config.width * 4).next_multiple_of(256);
+            let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("capture"),
+                size: row_bytes as u64 * self.config.height as u64,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            encoder.copy_texture_to_buffer(
+                texture.as_image_copy(),
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &buffer,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(row_bytes),
+                        rows_per_image: None,
+                    },
+                },
+                texture.size(),
+            );
+            (buffer, row_bytes as usize)
+        });
+        if let (Some(slot), Some(timing)) = (timed, &self.timing) {
+            timing.resolve(&mut encoder, slot);
+        }
+        self.queue.submit([encoder.finish()]);
+        if let (Some(slot), Some(timing)) = (timed, &self.timing) {
+            timing.read_back(slot);
+        }
+        self.queue.present(target);
+        if let Some((buffer, row_bytes)) = capture {
+            buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+            let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+            if let Ok(mapped) = buffer.slice(..).get_mapped_range() {
+                let width = self.config.width as usize;
+                let mut pixels = Vec::with_capacity(width * 4 * self.config.height as usize);
+                for row in mapped.chunks(row_bytes) {
+                    pixels.extend_from_slice(&row[..width * 4]);
+                }
+                self.captured = Some((self.config.width, self.config.height, pixels));
+            }
+        }
+
+        self.last_sources = sources;
+        self.last_overlay = overlay;
+        self.cache.evict(self.frame);
+        stats.encode_ms = encode_started.elapsed().as_secs_f32() * 1000.0;
+        stats.gpu_ms = self.timing.as_ref().and_then(|timing| timing.latest_ms);
+        stats.tiles_in_flight = self.producer.in_flight() as u32;
+        stats.cache_tiles = self.cache.len() as u32;
+        stats.cache_bytes = self.cache.bytes();
+        Ok(stats)
+    }
+
+    fn write_globals(&self, frame: &Frame) {
+        let (width, height) = (self.config.width as f64, self.config.height as f64);
+        let view = frame.view;
+        let scale = [2.0 * view.zoom / width, -2.0 * view.zoom / height];
+        let layers = &frame.layers[..frame.layers.len().min(MAX_LAYERS)];
+        let finish = &frame.finish[..frame.finish.len().min(MAX_FINISH_STEPS)];
+        let mut globals = Globals {
+            view: [
+                scale[0] as f32,
+                scale[1] as f32,
+                (-view.center[0] * scale[0]) as f32,
+                (-view.center[1] * scale[1]) as f32,
+            ],
+            screen: [
+                width as f32,
+                height as f32,
+                frame.overlay_strength,
+                OVERLAY_LAYER as f32,
+            ],
+            counts: [layers.len() as f32, finish.len() as f32, 0.0, 0.0],
+            layers: [[0.0; 12]; MAX_LAYERS],
+            finish: [[0.0; 12]; MAX_FINISH_STEPS],
+            display_matrix: self.display_uniform.map_or([0.0; 12], |display| display.0),
+            display: self.display_uniform.map_or([0.0; 4], |display| display.1),
+        };
+        for (slot, layer) in globals.layers.iter_mut().zip(layers) {
+            *slot = [
+                layer.color[0],
+                layer.color[1],
+                layer.color[2],
+                layer.opacity.clamp(0.0, 1.0),
+                layer.black,
+                1.0 / (layer.white - layer.black).max(1e-6),
+                layer.midtone.clamp(0.001, 0.999),
+                layer.curve.clamp(-1.0, 1.0),
+                layer.band.min(BANDS - 1) as f32,
+                layer.blend as u32 as f32,
+                0.0,
+                0.0,
+            ];
+        }
+        for (slot, step) in globals.finish.iter_mut().zip(finish) {
+            // A mask the frame does not hold limits nothing.
+            let mask = step
+                .mask
+                .filter(|mask| *mask < frame.masks.len().min(MAX_MASKS))
+                .map_or(-1.0, |mask| mask as f32);
+            let (kind, offset, shift) = match step.kind {
+                FinishKind::Curves => (1.0, [0.0; 2], [0.0; 3]),
+                FinishKind::Saturation => (2.0, [0.0; 2], [0.0; 3]),
+                FinishKind::Heal { offset, shift } => (3.0, offset, shift),
+            };
+            *slot = [
+                kind,
+                step.amount,
+                mask,
+                0.0,
+                // The offset in whole surface pixels.
+                (offset[0] as f64 * view.zoom).round() as f32,
+                (offset[1] as f64 * view.zoom).round() as f32,
+                0.0,
+                0.0,
+                shift[0],
+                shift[1],
+                shift[2],
+                0.0,
+            ];
+        }
+        self.queue
+            .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
+    }
+
+    fn upload_strokes(&mut self, frame: &Frame) {
+        // The overlay only grows or resets, so upload its new tail.
+        if frame.overlay.len() < self.overlay_uploaded
+            || self.overlay.reserve(&self.device, frame.overlay.len())
+        {
+            self.overlay_uploaded = 0;
+        }
+        if frame.overlay.len() > self.overlay_uploaded {
+            self.queue.write_buffer(
+                &self.overlay.buffer,
+                (self.overlay_uploaded * size_of::<Segment>()) as u64,
+                bytemuck::cast_slice(&frame.overlay[self.overlay_uploaded..]),
+            );
+            self.overlay_uploaded = frame.overlay.len();
+        }
+
+        if self.masks_version == Some(frame.masks_version) {
+            return;
+        }
+        let masks = &frame.masks[..frame.masks.len().min(MAX_MASKS)];
+        let all: Vec<Segment> = masks.iter().flatten().copied().collect();
+        self.masks.reserve(&self.device, all.len());
+        self.queue
+            .write_buffer(&self.masks.buffer, 0, bytemuck::cast_slice(&all));
+        let mut first = 0;
+        self.mask_ranges = masks
+            .iter()
+            .map(|mask| {
+                let range = (first, mask.len() as u32);
+                first += mask.len() as u32;
+                range
+            })
+            .collect();
+        self.masks_version = Some(frame.masks_version);
+    }
+
+    /// A texture of the surface's size and format that can be drawn to.
+    fn surface_sized(&self, label: &str, also: wgpu::TextureUsages) -> wgpu::Texture {
+        self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d {
+                width: self.config.width,
+                height: self.config.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.config.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | also,
+            view_formats: &[],
+        })
+    }
+
+    /// Every pass of a frame: the masks, the layers, then the finish steps
+    /// into `target`.
+    fn passes(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        sources: &[TileKey],
+        overlay: u32,
+        timed: bool,
+    ) {
+        let timestamps = |begin: Option<u32>, end: Option<u32>| {
+            timed.then(|| wgpu::RenderPassTimestampWrites {
+                query_set: &self.timing.as_ref().expect("timing").set,
+                beginning_of_pass_write_index: begin,
+                end_of_pass_write_index: end,
+            })
+        };
+
+        // Each mask into its own layer, and the overlay into the last one.
+        let strokes = self
+            .mask_ranges
+            .iter()
+            .enumerate()
+            .map(|(layer, range)| (layer, &self.masks.buffer, *range))
+            .chain([(OVERLAY_LAYER as usize, &self.overlay.buffer, (0, overlay))]);
+        for (index, (layer, buffer, (first, count))) in strokes.enumerate() {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("mask"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.targets.mask_layers[layer],
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                timestamp_writes: if index == 0 {
+                    timestamps(Some(0), None)
+                } else {
+                    None
+                },
+                ..Default::default()
+            });
+            if count > 0 {
+                pass.set_pipeline(&self.stroke_pipeline);
+                pass.set_bind_group(0, &self.common, &[]);
+                pass.set_vertex_buffer(0, buffer.slice(..));
+                pass.draw(0..4, first..first + count);
+            }
+        }
+
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("layers"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.targets.combined,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.03,
+                            g: 0.03,
+                            b: 0.035,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+            pass.set_pipeline(&self.tile_pipeline);
+            pass.set_bind_group(0, &self.common, &[]);
+            pass.set_vertex_buffer(0, self.tile_instances.slice(..));
+            for (index, source) in sources.iter().enumerate() {
+                let tile = self.cache.get(*source).expect("a chosen tile");
+                pass.set_bind_group(1, &tile.bind_group, &[]);
+                pass.draw(0..4, index as u32..index as u32 + 1);
+            }
+        }
+        self.finish_pass(encoder, target, timed);
+    }
+
+    fn finish_pass(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        timed: bool,
+    ) {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("finish"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            timestamp_writes: timed.then(|| wgpu::RenderPassTimestampWrites {
+                query_set: &self.timing.as_ref().expect("timing").set,
+                beginning_of_pass_write_index: None,
+                end_of_pass_write_index: Some(1),
+            }),
+            ..Default::default()
+        });
+        pass.set_pipeline(&self.finish_pipeline);
+        pass.set_bind_group(0, &self.common, &[]);
+        pass.set_bind_group(1, &self.targets.finish_inputs, &[]);
+        pass.draw(0..3, 0..1);
+    }
+
+    /// Draws the last frame again `frames` times into a texture of the
+    /// surface's size and waits for the GPU to finish, five times over.
+    /// Returns the time per frame of the fastest batch, which is the GPU's
+    /// cost with no display to wait for.
+    pub fn offscreen_frame_ms(&self, frames: u32) -> f32 {
+        let texture = self.surface_sized("offscreen", wgpu::TextureUsages::empty());
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        // Other programs use the GPU too. The fastest of several batches is
+        // the one they disturbed least.
+        let mut best = f32::INFINITY;
+        for _ in 0..5 {
+            let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+            let started = Instant::now();
+            for _ in 0..frames {
+                let mut encoder = self
+                    .device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+                self.passes(
+                    &mut encoder,
+                    &view,
+                    &self.last_sources,
+                    self.last_overlay,
+                    false,
+                );
+                self.queue.submit([encoder.finish()]);
+            }
+            let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+            best = best.min(started.elapsed().as_secs_f32() * 1000.0 / frames.max(1) as f32);
+        }
+        best
+    }
+
+    /// The mean time a worker took to compute one tile.
+    pub fn mean_tile_ms(&self) -> f32 {
+        self.producer.mean_tile_ms()
+    }
+}
+
+/// The tiles of `level` that touch `rect`, grown by `ring` tiles on each side.
+fn keys_in(level: u8, rect: [f64; 4], ring: i64) -> Vec<TileKey> {
+    let span = (TILE << level) as f64;
+    let (across, down) = tiles_across(level);
+    let x0 = ((rect[0] / span).floor() as i64 - ring).max(0);
+    let y0 = ((rect[1] / span).floor() as i64 - ring).max(0);
+    let x1 = ((rect[2] / span).ceil() as i64 + ring).min(across as i64);
+    let y1 = ((rect[3] / span).ceil() as i64 + ring).min(down as i64);
+    let mut keys = Vec::new();
+    for y in y0..y1 {
+        for x in x0..x1 {
+            keys.push(TileKey {
+                level,
+                x: x as u16,
+                y: y as u16,
+            });
+        }
+    }
+    keys
+}
+
+fn center_distance(key: TileKey, center: [f64; 2]) -> f64 {
+    let rect = key.doc_rect();
+    let dx = (rect[0] + rect[2]) as f64 / 2.0 - center[0];
+    let dy = (rect[1] + rect[3]) as f64 / 2.0 - center[1];
+    dx * dx + dy * dy
+}
+
+fn create_targets(
+    device: &wgpu::Device,
+    finish_layout: &wgpu::BindGroupLayout,
+    display_curves: &wgpu::TextureView,
+    width: u32,
+    height: u32,
+) -> Targets {
+    let texture = |label: &str, format: wgpu::TextureFormat, layers: u32| {
+        device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: layers,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        })
+    };
+    let combined = texture("combined", COMBINED_FORMAT, 1)
+        .create_view(&wgpu::TextureViewDescriptor::default());
+    let masks = texture("masks", MASK_FORMAT, MAX_MASKS as u32 + 1);
+    let mask_layers = (0..=MAX_MASKS as u32)
+        .map(|layer| {
+            masks.create_view(&wgpu::TextureViewDescriptor {
+                dimension: Some(wgpu::TextureViewDimension::D2),
+                base_array_layer: layer,
+                array_layer_count: Some(1),
+                ..Default::default()
+            })
+        })
+        .collect();
+    let all_masks = masks.create_view(&wgpu::TextureViewDescriptor {
+        dimension: Some(wgpu::TextureViewDimension::D2Array),
+        ..Default::default()
+    });
+    let finish_inputs = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("finish inputs"),
+        layout: finish_layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&combined),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(&all_masks),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(display_curves),
+            },
+        ],
+    });
+    Targets {
+        combined,
+        mask_layers,
+        finish_inputs,
+    }
+}
+
+const READBACK_FREE: u8 = 0;
+const READBACK_PENDING: u8 = 1;
+const READBACK_MAPPED: u8 = 2;
+
+struct Readback {
+    buffer: wgpu::Buffer,
+    state: Arc<AtomicU8>,
+}
+
+/// GPU pass timing from timestamp queries. A result arrives a few frames
+/// after its frame, so a small set of buffers takes turns.
+struct GpuTiming {
+    set: wgpu::QuerySet,
+    resolved: wgpu::Buffer,
+    readbacks: Vec<Readback>,
+    period_ns: f32,
+    latest_ms: Option<f32>,
+}
+
+impl GpuTiming {
+    fn new(device: &wgpu::Device, period_ns: f32) -> Self {
+        let set = device.create_query_set(&wgpu::QuerySetDescriptor {
+            label: Some("frame timing"),
+            ty: wgpu::QueryType::Timestamp,
+            count: 2,
+        });
+        let resolved = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("frame timing"),
+            size: 16,
+            usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let readbacks = (0..4)
+            .map(|_| Readback {
+                buffer: device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("frame timing readback"),
+                    size: 16,
+                    usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }),
+                state: Arc::new(AtomicU8::new(READBACK_FREE)),
+            })
+            .collect();
+        Self {
+            set,
+            resolved,
+            readbacks,
+            period_ns,
+            latest_ms: None,
+        }
+    }
+
+    fn collect(&mut self) {
+        for readback in &self.readbacks {
+            if readback.state.load(Ordering::Acquire) != READBACK_MAPPED {
+                continue;
+            }
+            {
+                let bytes = readback
+                    .buffer
+                    .slice(..)
+                    .get_mapped_range()
+                    .expect("a mapped readback");
+                let ticks: &[u64] = bytemuck::cast_slice(&bytes);
+                let elapsed = ticks[1].saturating_sub(ticks[0]) as f32 * self.period_ns;
+                self.latest_ms = Some(elapsed / 1.0e6);
+            }
+            readback.buffer.unmap();
+            readback.state.store(READBACK_FREE, Ordering::Release);
+        }
+    }
+
+    /// Claims a readback buffer for this frame, if one is free.
+    fn begin(&mut self) -> Option<usize> {
+        let slot = self
+            .readbacks
+            .iter()
+            .position(|readback| readback.state.load(Ordering::Acquire) == READBACK_FREE)?;
+        self.readbacks[slot]
+            .state
+            .store(READBACK_PENDING, Ordering::Release);
+        Some(slot)
+    }
+
+    fn resolve(&self, encoder: &mut wgpu::CommandEncoder, slot: usize) {
+        encoder.resolve_query_set(&self.set, 0..2, &self.resolved, 0);
+        encoder.copy_buffer_to_buffer(&self.resolved, 0, &self.readbacks[slot].buffer, 0, 16);
+    }
+
+    fn read_back(&self, slot: usize) {
+        let state = self.readbacks[slot].state.clone();
+        self.readbacks[slot]
+            .buffer
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| {
+                state.store(
+                    if result.is_ok() {
+                        READBACK_MAPPED
+                    } else {
+                        READBACK_FREE
+                    },
+                    Ordering::Release,
+                );
+            });
+    }
+}
+
+const _: () = assert!(DOC_WIDTH > 0 && DOC_HEIGHT > 0);

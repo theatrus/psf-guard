@@ -1,0 +1,647 @@
+{
+  "colors": 65536,
+  "full_float_tables_filterable": true,
+  "results": [
+    {
+      "colorsync_against_little_cms": {
+        "max": 0.607,
+        "mean": 0.25,
+        "p99": 0.502,
+        "p999": 0.521
+      },
+      "display": "Pro Display XDR",
+      "shader_curves_against_little_cms": {
+        "full_float": {
+          "max": 0.086,
+          "mean": 0.003,
+          "p99": 0.026,
+          "p999": 0.046
+        },
+        "half_float": {
+          "max": 0.147,
+          "mean": 0.027,
+          "p99": 0.095,
+          "p999": 0.117
+        }
+      },
+      "shader_table_against_little_cms": [
+        {
+          "full_float": {
+            "max": 3.323,
+            "mean": 0.058,
+            "p99": 0.354,
+            "p999": 0.614
+          },
+          "half_float": {
+            "max": 3.323,
+            "mean": 0.067,
+            "p99": 0.357,
+            "p999": 0.614
+          },
+          "size": 17
+        },
+        {
+          "full_float": {
+            "max": 1.671,
+            "mean": 0.018,
+            "p99": 0.104,
+            "p999": 0.204
+          },
+          "half_float": {
+            "max": 1.67,
+            "mean": 0.034,
+            "p99": 0.111,
+            "p999": 0.203
+          },
+          "size": 33
+        },
+        {
+          "full_float": {
+            "max": 0.798,
+            "mean": 0.007,
+            "p99": 0.037,
+            "p999": 0.073
+          },
+          "half_float": {
+            "max": 0.798,
+            "mean": 0.026,
+            "p99": 0.089,
+            "p999": 0.111
+          },
+          "size": 65
+        }
+      ],
+      "source": "sRGB",
+      "through_a_clipped_display_p3_surface": {
+        "differences": {
+          "max": 0.051,
+          "mean": 0.0,
+          "p99": 0.0,
+          "p999": 0.0
+        },
+        "share_of_colors_off_by_more_than_one_level": 0.0
+      }
+    },
+    {
+      "colorsync_against_little_cms": {
+        "max": 0.568,
+        "mean": 0.233,
+        "p99": 0.494,
+        "p999": 0.506
+      },
+      "display": "Pro Display XDR",
+      "shader_curves_against_little_cms": {
+        "full_float": {
+          "max": 0.067,
+          "mean": 0.003,
+          "p99": 0.028,
+          "p999": 0.041
+        },
+        "half_float": {
+          "max": 0.157,
+          "mean": 0.026,
+          "p99": 0.098,
+          "p999": 0.121
+        }
+      },
+      "shader_table_against_little_cms": [
+        {
+          "full_float": {
+            "max": 4.189,
+            "mean": 0.033,
+            "p99": 0.422,
+            "p999": 2.802
+          },
+          "half_float": {
+            "max": 4.191,
+            "mean": 0.047,
+            "p99": 0.424,
+            "p999": 2.801
+          },
+          "size": 17
+        },
+        {
+          "full_float": {
+            "max": 2.009,
+            "mean": 0.014,
+            "p99": 0.123,
+            "p999": 1.173
+          },
+          "half_float": {
+            "max": 2.008,
+            "mean": 0.031,
+            "p99": 0.13,
+            "p999": 1.173
+          },
+          "size": 33
+        },
+        {
+          "full_float": {
+            "max": 0.978,
+            "mean": 0.007,
+            "p99": 0.043,
+            "p999": 0.486
+          },
+          "half_float": {
+            "max": 0.978,
+            "mean": 0.026,
+            "p99": 0.104,
+            "p999": 0.486
+          },
+          "size": 65
+        }
+      ],
+      "source": "Display P3",
+      "through_a_clipped_display_p3_surface": {
+        "differences": {
+          "max": 0.0,
+          "mean": 0.0,
+          "p99": 0.0,
+          "p999": 0.0
+        },
+        "share_of_colors_off_by_more_than_one_level": 0.0
+      }
+    },
+    {
+      "colorsync_against_little_cms": {
+        "max": 0.872,
+        "mean": 0.229,
+        "p99": 0.514,
+        "p999": 0.533
+      },
+      "display": "Pro Display XDR",
+      "shader_curves_against_little_cms": {
+        "full_float": {
+          "max": 0.066,
+          "mean": 0.003,
+          "p99": 0.024,
+          "p999": 0.038
+        },
+        "half_float": {
+          "max": 0.288,
+          "mean": 0.026,
+          "p99": 0.099,
+          "p999": 0.125
+        }
+      },
+      "shader_table_against_little_cms": [
+        {
+          "full_float": {
+            "max": 21.506,
+            "mean": 0.193,
+            "p99": 2.886,
+            "p999": 11.339
+          },
+          "half_float": {
+            "max": 21.509,
+            "mean": 0.202,
+            "p99": 2.884,
+            "p999": 11.338
+          },
+          "size": 17
+        },
+        {
+          "full_float": {
+            "max": 14.872,
+            "mean": 0.062,
+            "p99": 0.89,
+            "p999": 6.174
+          },
+          "half_float": {
+            "max": 14.871,
+            "mean": 0.076,
+            "p99": 0.885,
+            "p999": 6.171
+          },
+          "size": 33
+        },
+        {
+          "full_float": {
+            "max": 9.267,
+            "mean": 0.02,
+            "p99": 0.204,
+            "p999": 2.375
+          },
+          "half_float": {
+            "max": 9.268,
+            "mean": 0.037,
+            "p99": 0.207,
+            "p999": 2.375
+          },
+          "size": 65
+        }
+      ],
+      "source": "Adobe RGB (1998)",
+      "through_a_clipped_display_p3_surface": {
+        "differences": {
+          "max": 0.062,
+          "mean": 0.001,
+          "p99": 0.016,
+          "p999": 0.051
+        },
+        "share_of_colors_off_by_more_than_one_level": 0.0
+      }
+    },
+    {
+      "colorsync_against_little_cms": {
+        "max": 0.864,
+        "mean": 0.184,
+        "p99": 0.502,
+        "p999": 0.529
+      },
+      "display": "Pro Display XDR",
+      "shader_curves_against_little_cms": {
+        "full_float": {
+          "max": 0.245,
+          "mean": 0.002,
+          "p99": 0.017,
+          "p999": 0.034
+        },
+        "half_float": {
+          "max": 1.008,
+          "mean": 0.025,
+          "p99": 0.112,
+          "p999": 0.182
+        }
+      },
+      "shader_table_against_little_cms": [
+        {
+          "full_float": {
+            "max": 33.561,
+            "mean": 0.571,
+            "p99": 8.835,
+            "p999": 20.765
+          },
+          "half_float": {
+            "max": 33.556,
+            "mean": 0.574,
+            "p99": 8.837,
+            "p999": 20.77
+          },
+          "size": 17
+        },
+        {
+          "full_float": {
+            "max": 23.156,
+            "mean": 0.184,
+            "p99": 3.487,
+            "p999": 11.91
+          },
+          "half_float": {
+            "max": 23.163,
+            "mean": 0.192,
+            "p99": 3.49,
+            "p999": 11.914
+          },
+          "size": 33
+        },
+        {
+          "full_float": {
+            "max": 14.475,
+            "mean": 0.056,
+            "p99": 1.06,
+            "p999": 5.728
+          },
+          "half_float": {
+            "max": 14.474,
+            "mean": 0.07,
+            "p99": 1.06,
+            "p999": 5.727
+          },
+          "size": 65
+        }
+      ],
+      "source": "ProPhoto (ROMM RGB)",
+      "through_a_clipped_display_p3_surface": {
+        "differences": {
+          "max": 4.837,
+          "mean": 0.08,
+          "p99": 2.922,
+          "p999": 4.786
+        },
+        "share_of_colors_off_by_more_than_one_level": 0.0665435791015625
+      }
+    },
+    {
+      "colorsync_against_little_cms": {
+        "max": 3.957,
+        "mean": 0.289,
+        "p99": 2.49,
+        "p999": 3.65
+      },
+      "display": "27GN950",
+      "shader_curves_against_little_cms": {
+        "full_float": {
+          "max": 0.215,
+          "mean": 0.002,
+          "p99": 0.012,
+          "p999": 0.031
+        },
+        "half_float": {
+          "max": 0.215,
+          "mean": 0.026,
+          "p99": 0.1,
+          "p999": 0.123
+        }
+      },
+      "shader_table_against_little_cms": [
+        {
+          "full_float": {
+            "max": 7.941,
+            "mean": 0.103,
+            "p99": 1.34,
+            "p999": 3.467
+          },
+          "half_float": {
+            "max": 7.942,
+            "mean": 0.108,
+            "p99": 1.341,
+            "p999": 3.469
+          },
+          "size": 17
+        },
+        {
+          "full_float": {
+            "max": 4.928,
+            "mean": 0.03,
+            "p99": 0.219,
+            "p999": 2.083
+          },
+          "half_float": {
+            "max": 4.926,
+            "mean": 0.044,
+            "p99": 0.218,
+            "p999": 2.082
+          },
+          "size": 33
+        },
+        {
+          "full_float": {
+            "max": 3.055,
+            "mean": 0.01,
+            "p99": 0.04,
+            "p999": 0.91
+          },
+          "half_float": {
+            "max": 3.054,
+            "mean": 0.028,
+            "p99": 0.095,
+            "p999": 0.912
+          },
+          "size": 65
+        }
+      ],
+      "source": "sRGB",
+      "through_a_clipped_display_p3_surface": {
+        "differences": {
+          "max": 0.016,
+          "mean": 0.0,
+          "p99": 0.0,
+          "p999": 0.0
+        },
+        "share_of_colors_off_by_more_than_one_level": 0.0
+      }
+    },
+    {
+      "colorsync_against_little_cms": {
+        "max": 3.958,
+        "mean": 0.293,
+        "p99": 3.039,
+        "p999": 3.761
+      },
+      "display": "27GN950",
+      "shader_curves_against_little_cms": {
+        "full_float": {
+          "max": 0.006,
+          "mean": 0.0,
+          "p99": 0.0,
+          "p999": 0.0
+        },
+        "half_float": {
+          "max": 0.475,
+          "mean": 0.024,
+          "p99": 0.102,
+          "p999": 0.13
+        }
+      },
+      "shader_table_against_little_cms": [
+        {
+          "full_float": {
+            "max": 9.545,
+            "mean": 0.141,
+            "p99": 3.381,
+            "p999": 6.475
+          },
+          "half_float": {
+            "max": 9.548,
+            "mean": 0.149,
+            "p99": 3.381,
+            "p999": 6.475
+          },
+          "size": 17
+        },
+        {
+          "full_float": {
+            "max": 7.121,
+            "mean": 0.049,
+            "p99": 1.525,
+            "p999": 3.696
+          },
+          "half_float": {
+            "max": 7.121,
+            "mean": 0.063,
+            "p99": 1.527,
+            "p999": 3.697
+          },
+          "size": 33
+        },
+        {
+          "full_float": {
+            "max": 5.244,
+            "mean": 0.018,
+            "p99": 0.314,
+            "p999": 2.054
+          },
+          "half_float": {
+            "max": 5.241,
+            "mean": 0.035,
+            "p99": 0.314,
+            "p999": 2.054
+          },
+          "size": 65
+        }
+      ],
+      "source": "Display P3",
+      "through_a_clipped_display_p3_surface": {
+        "differences": {
+          "max": 0.0,
+          "mean": 0.0,
+          "p99": 0.0,
+          "p999": 0.0
+        },
+        "share_of_colors_off_by_more_than_one_level": 0.0
+      }
+    },
+    {
+      "colorsync_against_little_cms": {
+        "max": 4.154,
+        "mean": 0.286,
+        "p99": 2.975,
+        "p999": 3.769
+      },
+      "display": "27GN950",
+      "shader_curves_against_little_cms": {
+        "full_float": {
+          "max": 0.012,
+          "mean": 0.0,
+          "p99": 0.0,
+          "p999": 0.001
+        },
+        "half_float": {
+          "max": 1.071,
+          "mean": 0.024,
+          "p99": 0.103,
+          "p999": 0.133
+        }
+      },
+      "shader_table_against_little_cms": [
+        {
+          "full_float": {
+            "max": 22.24,
+            "mean": 0.164,
+            "p99": 2.584,
+            "p999": 11.755
+          },
+          "half_float": {
+            "max": 22.241,
+            "mean": 0.172,
+            "p99": 2.584,
+            "p999": 11.751
+          },
+          "size": 17
+        },
+        {
+          "full_float": {
+            "max": 14.463,
+            "mean": 0.053,
+            "p99": 0.74,
+            "p999": 5.859
+          },
+          "half_float": {
+            "max": 14.467,
+            "mean": 0.066,
+            "p99": 0.742,
+            "p999": 5.86
+          },
+          "size": 33
+        },
+        {
+          "full_float": {
+            "max": 9.74,
+            "mean": 0.019,
+            "p99": 0.181,
+            "p999": 2.669
+          },
+          "half_float": {
+            "max": 9.743,
+            "mean": 0.035,
+            "p99": 0.181,
+            "p999": 2.669
+          },
+          "size": 65
+        }
+      ],
+      "source": "Adobe RGB (1998)",
+      "through_a_clipped_display_p3_surface": {
+        "differences": {
+          "max": 0.7,
+          "mean": 0.02,
+          "p99": 0.399,
+          "p999": 0.612
+        },
+        "share_of_colors_off_by_more_than_one_level": 0.0
+      }
+    },
+    {
+      "colorsync_against_little_cms": {
+        "max": 3.959,
+        "mean": 0.218,
+        "p99": 2.226,
+        "p999": 3.688
+      },
+      "display": "27GN950",
+      "shader_curves_against_little_cms": {
+        "full_float": {
+          "max": 1.299,
+          "mean": 0.0,
+          "p99": 0.0,
+          "p999": 0.001
+        },
+        "half_float": {
+          "max": 1.726,
+          "mean": 0.024,
+          "p99": 0.116,
+          "p999": 0.179
+        }
+      },
+      "shader_table_against_little_cms": [
+        {
+          "full_float": {
+            "max": 31.898,
+            "mean": 0.4,
+            "p99": 7.85,
+            "p999": 18.182
+          },
+          "half_float": {
+            "max": 31.906,
+            "mean": 0.405,
+            "p99": 7.848,
+            "p999": 18.179
+          },
+          "size": 17
+        },
+        {
+          "full_float": {
+            "max": 20.845,
+            "mean": 0.143,
+            "p99": 3.415,
+            "p999": 10.535
+          },
+          "half_float": {
+            "max": 20.84,
+            "mean": 0.153,
+            "p99": 3.418,
+            "p999": 10.537
+          },
+          "size": 33
+        },
+        {
+          "full_float": {
+            "max": 14.386,
+            "mean": 0.05,
+            "p99": 1.212,
+            "p999": 5.827
+          },
+          "half_float": {
+            "max": 14.381,
+            "mean": 0.065,
+            "p99": 1.213,
+            "p999": 5.825
+          },
+          "size": 65
+        }
+      ],
+      "source": "ProPhoto (ROMM RGB)",
+      "through_a_clipped_display_p3_surface": {
+        "differences": {
+          "max": 35.61,
+          "mean": 1.306,
+          "p99": 29.277,
+          "p999": 35.582
+        },
+        "share_of_colors_off_by_more_than_one_level": 0.2486572265625
+      }
+    }
+  ],
+  "unit": "8-bit levels (1/255)"
+}

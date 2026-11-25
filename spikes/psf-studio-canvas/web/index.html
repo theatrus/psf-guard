@@ -1,0 +1,296 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>PSF-Studio canvas spike: web baseline</title>
+<style>
+  body { margin: 0; background: #16181c; color: #d8dee6; font: 13px system-ui; }
+  canvas { display: block; width: 100vw; height: calc(100vw * 9 / 16); }
+  pre { margin: 8px; white-space: pre-wrap; }
+</style>
+<canvas id="canvas" width="3840" height="2160"></canvas>
+<pre id="status">Starting…</pre>
+<script type="module">
+// The web baseline of the canvas spike. It draws the same document with the
+// same shader file as the native spike, through WebGPU, and plays the same
+// scripted measurement. Add ?frames=600 to set the frames per phase.
+
+const DOC_W = 30000, DOC_H = 20000, BANDS = 8, TILE = 512, MAX_LEVEL = 6;
+const TILE_BYTES = TILE * TILE * BANDS * 2, CACHE_BUDGET = 2 * 2 ** 30, UPLOADS_PER_FRAME = 6;
+const BAND_COLORS = [[.30,.30,.30],[.45,.02,.02],[.02,.45,.02],[.02,.02,.45],[.55,.16,.04],[.02,.40,.42],[.50,.03,.08],[.40,.04,.38]];
+const COLOR_GAIN = 0.6;
+const status = document.getElementById('status');
+const canvasElement = document.getElementById('canvas');
+const WIDTH = canvasElement.width, HEIGHT = canvasElement.height;
+const parameters = new URLSearchParams(location.search);
+const FRAMES = Number(parameters.get('frames') ?? 600);
+
+if (!navigator.gpu) { status.textContent = 'This browser has no WebGPU.'; window.benchResult = { error: 'no WebGPU' }; throw new Error('no WebGPU'); }
+const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+const device = await adapter.requestDevice();
+const context = canvasElement.getContext('webgpu');
+const format = navigator.gpu.getPreferredCanvasFormat();
+context.configure({ device, format, alphaMode: 'opaque' });
+const fetchText = async (path) => (await fetch(path)).text();
+const shader = device.createShaderModule({ code: await fetchText('shader.wgsl') });
+
+const globals = device.createBuffer({ size: 352, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+const uniformEntry = { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: {} };
+const maskLayout = device.createBindGroupLayout({ entries: [uniformEntry] });
+const compositeLayout = device.createBindGroupLayout({ entries: [
+  uniformEntry,
+  { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
+  { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: {} },
+  { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: {} },
+] });
+const tileLayout = device.createBindGroupLayout({ entries: [
+  { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { viewDimension: '2d-array' } },
+] });
+const instanceBuffers = [{ arrayStride: 32, stepMode: 'instance', attributes: [
+  { shaderLocation: 0, offset: 0, format: 'float32x4' },
+  { shaderLocation: 1, offset: 16, format: 'float32x4' },
+] }];
+const pipeline = (layouts, vertex, fragment, target) => device.createRenderPipeline({
+  layout: device.createPipelineLayout({ bindGroupLayouts: layouts }),
+  vertex: { module: shader, entryPoint: vertex, buffers: instanceBuffers },
+  fragment: { module: shader, entryPoint: fragment, targets: [target] },
+  primitive: { topology: 'triangle-strip' },
+});
+const tilePipeline = pipeline([compositeLayout, tileLayout], 'tile_vertex', 'tile_fragment', { format });
+const strokePipeline = pipeline([maskLayout], 'stroke_vertex', 'stroke_fragment', {
+  format: 'r8unorm', writeMask: GPUColorWrite.RED,
+  blend: { color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha' }, alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' } },
+});
+const sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
+const maskView = device.createTexture({ size: [WIDTH, HEIGHT], format: 'r8unorm', usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING }).createView();
+const maskGlobals = device.createBindGroup({ layout: maskLayout, entries: [{ binding: 0, resource: { buffer: globals } }] });
+const compositeGlobals = device.createBindGroup({ layout: compositeLayout, entries: [
+  { binding: 0, resource: { buffer: globals } }, { binding: 1, resource: sampler }, { binding: 2, resource: maskView },
+  // The web baseline has no display transform; this fills the binding.
+  { binding: 3, resource: device.createTexture({ size: [2, 2], format: 'rgba16float', usage: GPUTextureUsage.TEXTURE_BINDING }).createView() },
+] });
+const tileInstances = device.createBuffer({ size: 4096 * 32, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
+let strokeCapacity = 4096, strokesUploaded = 0;
+const createStrokeBuffer = () => device.createBuffer({ size: strokeCapacity * 32, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
+let strokeInstances = createStrokeBuffer();
+const offscreenView = device.createTexture({ size: [WIDTH, HEIGHT], format, usage: GPUTextureUsage.RENDER_ATTACHMENT }).createView();
+
+// Tiles: workers compute them, the cache holds them on the GPU.
+const keyOf = (level, x, y) => `${level}/${x}/${y}`;
+const cache = new Map(), pinned = new Set(), claimed = new Set(), finished = [];
+let wanted = [], tileMs = 0, tileCount = 0;
+const workerCount = Math.max((navigator.hardwareConcurrency ?? 8) - 4, 2);
+const idleWorkers = [];
+for (let index = 0; index < workerCount; index++) {
+  const worker = new Worker('worker.js');
+  worker.onmessage = ({ data }) => { finished.push(data); tileMs += data.ms; tileCount++; idleWorkers.push(worker); dispatch(); };
+  idleWorkers.push(worker);
+}
+function dispatch() {
+  while (idleWorkers.length) {
+    const next = wanted.find((tile) => !claimed.has(tile.key));
+    if (!next) return;
+    claimed.add(next.key);
+    idleWorkers.pop().postMessage({ level: next.level, x: next.x, y: next.y });
+  }
+}
+function insertTile(tile, frame) {
+  const texture = device.createTexture({ size: [TILE, TILE, BANDS], format: 'r16float', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+  device.queue.writeTexture({ texture }, tile.samples, { bytesPerRow: TILE * 2, rowsPerImage: TILE }, [TILE, TILE, BANDS]);
+  const bindGroup = device.createBindGroup({ layout: tileLayout, entries: [{ binding: 0, resource: texture.createView({ dimension: '2d-array' }) }] });
+  cache.set(keyOf(tile.level, tile.x, tile.y), { texture, bindGroup, lastUsed: frame });
+}
+function evict(frame) {
+  let over = cache.size * TILE_BYTES - CACHE_BUDGET;
+  if (over <= 0) return;
+  const candidates = [...cache].filter(([key, tile]) => tile.lastUsed < frame && !pinned.has(key)).sort((a, b) => a[1].lastUsed - b[1].lastUsed);
+  for (const [key, tile] of candidates) {
+    if (over <= 0) break;
+    tile.texture.destroy(); cache.delete(key); over -= TILE_BYTES;
+  }
+}
+const tilesAcross = (level) => [Math.ceil(DOC_W / (TILE << level)), Math.ceil(DOC_H / (TILE << level))];
+function keysIn(level, rect, ring) {
+  const span = TILE << level, [across, down] = tilesAcross(level), keys = [];
+  const x0 = Math.max(Math.floor(rect[0] / span) - ring, 0), y0 = Math.max(Math.floor(rect[1] / span) - ring, 0);
+  const x1 = Math.min(Math.ceil(rect[2] / span) + ring, across), y1 = Math.min(Math.ceil(rect[3] / span) + ring, down);
+  for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) keys.push({ level, x, y, key: keyOf(level, x, y) });
+  return keys;
+}
+const docRect = ({ level, x, y }) => { const span = TILE << level; return [x * span, y * span, Math.min((x + 1) * span, DOC_W), Math.min((y + 1) * span, DOC_H)]; };
+
+// The coarsest level is always loaded, so a view never shows a hole.
+await new Promise((resolve) => {
+  const worker = new Worker('worker.js');
+  worker.onmessage = ({ data }) => { insertTile(data, 0); pinned.add(keyOf(MAX_LEVEL, 0, 0)); worker.terminate(); resolve(); };
+  worker.postMessage({ level: MAX_LEVEL, x: 0, y: 0 });
+});
+
+const state = { view: { center: [DOC_W / 2, DOC_H / 2], zoom: 1 }, sliders: new Array(BANDS).fill(0.5), strokes: [] };
+const fitZoom = () => Math.min(WIDTH / DOC_W, HEIGHT / DOC_H);
+let frameNumber = 0, lastSources = [], lastStrokes = 0;
+const globalsData = new Float32Array(88);
+const strokeData = (segments) => new Float32Array(segments.flatMap((s) => [...s.from, ...s.to, s.radius, s.hardness, 1, 0]));
+
+function encodePasses(encoder, target, sources, strokeCount) {
+  const mask = encoder.beginRenderPass({ colorAttachments: [{ view: maskView, loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 0] }] });
+  if (strokeCount) { mask.setPipeline(strokePipeline); mask.setBindGroup(0, maskGlobals); mask.setVertexBuffer(0, strokeInstances); mask.draw(4, strokeCount); }
+  mask.end();
+  const pass = encoder.beginRenderPass({ colorAttachments: [{ view: target, loadOp: 'clear', storeOp: 'store', clearValue: [0.03, 0.03, 0.035, 1] }] });
+  pass.setPipeline(tilePipeline); pass.setBindGroup(0, compositeGlobals); pass.setVertexBuffer(0, tileInstances);
+  sources.forEach((source, index) => { pass.setBindGroup(1, cache.get(source).bindGroup); pass.draw(4, 1, 0, index); });
+  pass.end();
+}
+
+function render() {
+  frameNumber++;
+  const started = performance.now(), stats = { tilesCoarse: 0, tilesBlank: 0, tilesUploaded: 0 };
+  const { view } = state, scale = [2 * view.zoom / WIDTH, -2 * view.zoom / HEIGHT];
+  globalsData.set([scale[0], scale[1], -view.center[0] * scale[0], -view.center[1] * scale[1], WIDTH, HEIGHT, 0.6, 1.0]);
+  for (let band = 0; band < BANDS; band++) {
+    const midtone = 10 ** (-3 + 2.7 * state.sliders[band]);
+    globalsData.set([...BAND_COLORS[band].map((c) => c * COLOR_GAIN), 1, 0.0195, 1 / (1 - 0.0195), Math.min(Math.max(midtone, 0.001), 0.999), 0], 8 + band * 8);
+  }
+  device.queue.writeBuffer(globals, 0, globalsData);
+
+  while (stats.tilesUploaded < UPLOADS_PER_FRAME && finished.length) {
+    const tile = finished.shift();
+    insertTile(tile, frameNumber); claimed.delete(keyOf(tile.level, tile.x, tile.y)); stats.tilesUploaded++;
+  }
+  const level = Math.min(Math.max(Math.floor(Math.log2(1 / view.zoom)), 0), MAX_LEVEL);
+  const half = [WIDTH / (2 * view.zoom), HEIGHT / (2 * view.zoom)];
+  const visible = [view.center[0] - half[0], view.center[1] - half[1], view.center[0] + half[0], view.center[1] + half[1]];
+  const visibleKeys = keysIn(level, visible, 0), visibleSet = new Set(visibleKeys.map((tile) => tile.key));
+  const distance = (tile) => { const r = docRect(tile); return ((r[0] + r[2]) / 2 - view.center[0]) ** 2 + ((r[1] + r[3]) / 2 - view.center[1]) ** 2; };
+  const fallbackLevel = Math.min(level + 3, MAX_LEVEL);
+  wanted = [
+    ...(fallbackLevel !== level ? keysIn(fallbackLevel, visible, 0) : []),
+    ...[...visibleKeys].sort((a, b) => distance(a) - distance(b)),
+    ...keysIn(level, visible, 1).filter((tile) => !visibleSet.has(tile.key)),
+  ].filter((tile) => !cache.has(tile.key));
+  dispatch();
+
+  const instances = new Float32Array(visibleKeys.length * 8), sources = [];
+  for (const tile of visibleKeys) {
+    let source = tile;
+    while (!cache.has(source.key) && source.level < MAX_LEVEL) {
+      source = { level: source.level + 1, x: source.x >> 1, y: source.y >> 1 };
+      source.key = keyOf(source.level, source.x, source.y);
+    }
+    const cached = cache.get(source.key);
+    if (!cached) { stats.tilesBlank++; continue; }
+    cached.lastUsed = frameNumber;
+    if (source !== tile) stats.tilesCoarse++;
+    const rect = docRect(tile), span = TILE << source.level, origin = [source.x * span, source.y * span];
+    instances.set([...rect, (rect[0] - origin[0]) / span, (rect[1] - origin[1]) / span, (rect[2] - origin[0]) / span, (rect[3] - origin[1]) / span], sources.length * 8);
+    sources.push(source.key);
+  }
+  device.queue.writeBuffer(tileInstances, 0, instances, 0, sources.length * 8);
+
+  if (state.strokes.length < strokesUploaded) strokesUploaded = 0;
+  if (state.strokes.length > strokeCapacity) {
+    strokeCapacity = 2 ** Math.ceil(Math.log2(state.strokes.length)); strokeInstances.destroy(); strokeInstances = createStrokeBuffer(); strokesUploaded = 0;
+  }
+  if (state.strokes.length > strokesUploaded) {
+    device.queue.writeBuffer(strokeInstances, strokesUploaded * 32, strokeData(state.strokes.slice(strokesUploaded)));
+    strokesUploaded = state.strokes.length;
+  }
+
+  const encoder = device.createCommandEncoder();
+  encodePasses(encoder, context.getCurrentTexture().createView(), sources, state.strokes.length);
+  device.queue.submit([encoder.finish()]);
+  lastSources = sources; lastStrokes = state.strokes.length;
+  evict(frameNumber);
+  return { ...stats, level, tilesDrawn: sources.length, tilesInFlight: claimed.size, cacheBytes: cache.size * TILE_BYTES, encodeMs: performance.now() - started };
+}
+
+async function offscreenFrameMs(frames) {
+  await device.queue.onSubmittedWorkDone();
+  const started = performance.now();
+  for (let index = 0; index < frames; index++) {
+    const encoder = device.createCommandEncoder();
+    encodePasses(encoder, offscreenView, lastSources, lastStrokes);
+    device.queue.submit([encoder.finish()]);
+  }
+  await device.queue.onSubmittedWorkDone();
+  return (performance.now() - started) / frames;
+}
+
+// The same script as app/src/bench.rs.
+const SCRIPT = [['Settle', 'fit'], ['StretchFit'], ['Settle', '1:1'], ['Stretch1to1'], ['Brush'], ['BrushManyStrokes'],
+  ['Settle', 'pan_start'], ['Pan', 1500], ['Settle', 'after_pan_1500'], ['Settle', 'pan_start'], ['Pan', 6000],
+  ['Settle', 'after_pan_6000'], ['ZoomSweep'], ['Settle', 'after_zoom_sweep']];
+const center = [DOC_W / 2, DOC_H / 2];
+const panPosition = (distance) => [center[0] + 11000 * Math.cos(distance / 9000), center[1] + 7000 * Math.sin(distance / 9000)];
+const summary = (values) => {
+  if (!values.length) return null;
+  values.sort((a, b) => a - b);
+  const at = (fraction) => Math.round(values[Math.round((values.length - 1) * fraction)] * 100) / 100;
+  return { p50: at(0.5), p95: at(0.95), p99: at(0.99), max: at(1) };
+};
+
+const results = [];
+for (const [phase, argument] of SCRIPT) {
+  const settle = phase === 'Settle', samples = { interval: [], encode: [], coarseFrames: 0, maxCoarse: 0, maxBlank: 0, uploads: 0, maxDrawn: 0 };
+  const phaseStarted = performance.now();
+  let last = null, quiet = 0, sharpSince = null, frame = 0, stats;
+  if (phase === 'BrushManyStrokes' || argument === '1:1' || argument === 'pan_start') state.strokes = [];
+  for (;;) {
+    const progress = frame / FRAMES;
+    if (argument === 'fit') state.view = { center: [...center], zoom: fitZoom() };
+    if (argument === '1:1') state.view = { center: [...center], zoom: 1 };
+    if (argument === 'pan_start') state.view = { center: panPosition(0), zoom: 1 };
+    if (phase === 'StretchFit' || phase === 'Stretch1to1') state.sliders = state.sliders.map((_, index) => 0.5 + 0.35 * Math.sin(frame * 0.05 + index));
+    if (phase === 'Brush' || phase === 'BrushManyStrokes') {
+      if (phase === 'BrushManyStrokes' && frame === 0) {
+        for (let index = 0; index < 20000; index++) {
+          const t = index * 0.37, from = [center[0] + Math.cos(t) * (200 + index * 0.4), center[1] + Math.sin(t) * (200 + index * 0.2)];
+          state.strokes.push({ from, to: [from[0] + 30, from[1] + 12], radius: 14, hardness: 0.5 });
+        }
+      }
+      const point = (t) => [center[0] + Math.sin(t * 0.021) * WIDTH * 0.4, center[1] + Math.cos(t * 0.034) * 700];
+      state.strokes.push({ from: point(frame), to: point(frame + 1), radius: 24, hardness: 0.6 });
+    }
+    if (phase === 'Pan') state.view.center = panPosition(argument * (performance.now() - phaseStarted) / 1000 / state.view.zoom);
+    if (phase === 'ZoomSweep') state.view = { center: [...center], zoom: fitZoom() * (1 / fitZoom()) ** progress };
+
+    const now = await new Promise(requestAnimationFrame);
+    stats = render();
+    if (last !== null) samples.interval.push(now - last);
+    last = now;
+    samples.encode.push(stats.encodeMs);
+    if (stats.tilesCoarse) samples.coarseFrames++;
+    samples.maxCoarse = Math.max(samples.maxCoarse, stats.tilesCoarse);
+    samples.maxBlank = Math.max(samples.maxBlank, stats.tilesBlank);
+    samples.maxDrawn = Math.max(samples.maxDrawn, stats.tilesDrawn);
+    samples.uploads += stats.tilesUploaded;
+    frame++;
+    if (frame % 30 === 0) status.textContent = `${phase} ${argument ?? ''} frame ${frame}`;
+    if (settle) {
+      if (stats.tilesCoarse === 0) { sharpSince ??= performance.now(); quiet++; } else { sharpSince = null; quiet = 0; }
+      if (quiet >= 20 || frame > 3000) break;
+    } else if (frame >= FRAMES) break;
+  }
+  const wallMs = performance.now() - phaseStarted;
+  results.push({
+    phase: settle ? `Settle("${argument}")` : argument ? `${phase}(${argument}.0)` : phase,
+    frames: frame, wall_ms: wallMs, level: stats.level, zoom: state.view.zoom,
+    tiles_drawn_max: samples.maxDrawn, frames_with_coarse_tiles: samples.coarseFrames, coarse_tiles_max: samples.maxCoarse,
+    blank_tiles_max: samples.maxBlank, frames_over_20_ms: samples.interval.filter((interval) => interval > 20).length,
+    gpu_offscreen_ms_per_frame: settle ? null : await offscreenFrameMs(120),
+    tiles_uploaded: samples.uploads, strokes: state.strokes.length, cache_mb: Math.round(stats.cacheBytes / 2 ** 20),
+    frame_interval_ms: summary(samples.interval), encode_ms: summary(samples.encode),
+    sharp_after_ms: settle && sharpSince !== null ? sharpSince - phaseStarted : undefined,
+  });
+}
+
+window.benchResult = {
+  mean_tile_compute_ms: tileMs / Math.max(tileCount, 1),
+  document: { width: DOC_W, height: DOC_H, megapixels: DOC_W * DOC_H / 1e6, bands: BANDS },
+  surface: { width: WIDTH, height: HEIGHT, renderer: `WebGPU ${format}`, user_agent: navigator.userAgent, workers: workerCount, visibility: document.visibilityState },
+  frames_per_phase: FRAMES,
+  phases: results,
+};
+status.textContent = JSON.stringify(window.benchResult, null, 1);
+// web/serve.py stores the result; a plain file server answers with an error.
+const name = parameters.get('name') ?? 'result';
+fetch(`/result/${name}`, { method: 'POST', body: JSON.stringify(window.benchResult, null, 1) }).catch(() => {});
+</script>
