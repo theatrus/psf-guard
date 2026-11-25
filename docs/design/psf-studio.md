@@ -2019,9 +2019,9 @@ On the Sh2-157 stacks on this Mac:
   own.
 - The app saves the document only when the tools are run.
 
-## Setup and workspace: one flow for every kind of picture (2026-11-25, proposed)
+## Setup and workspace: one flow for every kind of picture (2026-11-25)
 
-Proposed, not built. The tree, palettes, groups, masks and tools above
+Partly built in the spike; “What is built” lists which parts. The tree, palettes, groups, masks and tools above
 serve one narrowband picture well. They do not yet make these easy to set
 up or to change:
 
@@ -2051,6 +2051,33 @@ blend onto the parts beneath:
 A part is nothing new in the document: it is a group, its layers and its
 shared masks. A person who never opens Setup can build the same thing by
 hand.
+
+### Nothing locks
+
+A recipe and a part are ways to start, not a flow a document must stay in.
+The rules that keep it so:
+
+- **Setup is a view of the layers.** The routing table is read from the
+  layers as they are (`Document::routes`), however they were made. Setup
+  stores no plan of its own, so there is no state in which a document has
+  “left” its recipe.
+- **Any input goes into any part.** “Add to” on an input's row, or “Add
+  layer” on a part, adds one layer that shows the input, in the input's
+  usual hue, on top of that part's layers. Nothing else changes. Ha joins
+  the Color part of an LRGB picture this way, and NII joins a narrowband
+  nebula.
+- **A palette replaces only the layers it made.** Each of those layers
+  records its slot. A layer a person added beside them stays when the
+  palette, or the input of one of its slots, changes.
+- **Each part has its own palette and masks.** Two parts may use the same
+  palette with different inputs; a Foraxx mask belongs to the part whose
+  palette made it.
+- **A recipe replaces only when asked.** “Recipe” in Setup replaces the
+  layers that show inputs, and the groups; adjustment layers stay. It is
+  never applied again on its own.
+- **No kind is checked later.** A part's kind decides what it starts
+  with. After that it is a group: its blend, layers, palette and order
+  are free, and a part may hold layers no recipe would put there.
 
 ### Setup: what goes where
 
@@ -2150,6 +2177,34 @@ needs the image and cannot be one curve per input. It is offered with the
 other stretches. The canvas draws it from a result computed when the
 store is prepared, as it does for a tool, and shows the input with a
 preview stretch until then.
+
+### What is built
+
+In `src/studio/recipe.rs` and `src/studio/palette.rs`, with tests in
+`src/studio/recipe_tests.rs`:
+
+- parts of seven kinds (Nebula, Color, Luminance, Stars, RGB stars,
+  Emission lines, Empty) and seven recipes made of them;
+- palettes per part, slots recorded on layers, masks per part;
+- `routes`, `add_layer_showing`, `add_part`, `use_recipe`.
+
+In the spike app (`setup.rs`, `widgets.rs`):
+
+- a Setup page beside the Workspace, with the Recipe menu, the Inputs
+  table with “Add to”, one card per part (Blend, Palette, slots, Layers,
+  Add layer, Open, Remove) and “Add part”, next to the final picture;
+- the layout rules below: fields with the label on the left, menus in
+  place of rows of buttons, segmented controls for two or three choices,
+  folding sections, and help text hidden until “?” is on.
+
+Tried on the Sh2-157 Ha, OIII and SII stacks (recipe “Narrowband with its
+own stars”, then Ha added to the Nebula part) and on the RGB stacks.
+
+Not built: reordering parts in Setup (drag the group in the Workspace),
+tools per input in the routing table, continuum subtraction, the layered
+stretch, groups in groups, and a recipe's small picture of its parts. No
+luminance stack was at hand, so the Luminance part is covered by tests
+only.
 
 ### What it needs
 

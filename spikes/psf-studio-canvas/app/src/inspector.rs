@@ -11,9 +11,9 @@ use super::panes::{
 use super::{SliderId, Studio, Tool, PANEL_WIDTH};
 use crate::image_steps::Accepts;
 use crate::studio_model::{
-    balance_colors, band_layer, channel_label, flow_operations, hue_of, input_steps, layer_name,
-    level_for_zoom, own_step_for_channel, palettes_for, BlendMode, JunctionStatus, LayerRecord,
-    LayerSource, MaskRecord, MaskShape, Row, SharedMask, StageKind, StepKind, StepRecord,
+    balance_colors, channel_label, flow_operations, hue_of, input_steps, layer_name,
+    level_for_zoom, own_step_for_channel, BlendMode, JunctionStatus, LayerRecord, LayerSource,
+    MaskRecord, MaskShape, Row, SharedMask, StageKind, StepKind, StepRecord,
 };
 use gpui::{div, prelude::*, px, rgb, AnyElement, Context};
 use uuid::Uuid;
@@ -43,7 +43,7 @@ impl Studio {
         name: impl Into<gpui::SharedString>,
         applies_to: impl Into<gpui::SharedString>,
     ) -> gpui::Div {
-        column().child(name.into()).child(Self::note(applies_to))
+        column().child(name.into()).children(Self::help(applies_to))
     }
 
     /// The nearest layer beneath `layer` that shows pixels.
@@ -76,44 +76,47 @@ impl Studio {
         }
     }
 
-    /// The buttons that add an adjustment. `add` is given the adjustment's
+    /// The menu that adds an adjustment. `add` is given the adjustment's
     /// name.
-    fn adjustment_buttons(
+    fn adjustment_menu(
+        &self,
         id: &'static str,
+        label: &str,
         cx: &mut Context<Self>,
         add: impl Fn(&mut Self, &'static str) + Clone + 'static,
     ) -> gpui::Div {
-        wrap().children(ADJUSTMENTS.iter().enumerate().map(|(index, (name, _))| {
-            let (name, add) = (*name, add.clone());
-            Self::act(name, (id, index), false, cx, move |this| add(this, name))
-        }))
+        let picks = ADJUSTMENTS
+            .iter()
+            .enumerate()
+            .map(|(index, (name, _))| {
+                let (name, add) = (*name, add.clone());
+                Self::pick(name, (id, index), false, cx, move |this| add(this, name))
+            })
+            .collect();
+        self.menu(id, label, picks, cx)
     }
 
-    /// The buttons that add a step to the Finish stage.
-    fn finish_buttons(cx: &mut Context<Self>) -> gpui::Div {
-        column()
-            .child(Self::heading("Add a step on the whole picture"))
-            .child(
-                wrap().children(
-                    FINISH_STEPS
-                        .iter()
-                        .enumerate()
-                        .map(|(index, (name, accepts))| {
-                            let (name, accepts) = (*name, *accepts);
-                            Self::act(name, ("add-finish", index), false, cx, move |this| {
-                                let step = operation(name, accepts);
-                                let id = step.id;
-                                if this
-                                    .document
-                                    .insert_step(StageKind::Finish, usize::MAX, step)
-                                    .is_ok()
-                                {
-                                    this.selected = Row::Finish(id);
-                                }
-                            })
-                        }),
-                ),
-            )
+    /// The menu that adds a step to the Finish stage.
+    fn finish_menu(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let picks = FINISH_STEPS
+            .iter()
+            .enumerate()
+            .map(|(index, (name, accepts))| {
+                let (name, accepts) = (*name, *accepts);
+                Self::pick(name, ("add-finish", index), false, cx, move |this| {
+                    let step = operation(name, accepts);
+                    let id = step.id;
+                    if this
+                        .document
+                        .insert_step(StageKind::Finish, usize::MAX, step)
+                        .is_ok()
+                    {
+                        this.selected = Row::Finish(id);
+                    }
+                })
+            })
+            .collect();
+        Self::field("Finish", self.menu("add-finish", "Add step", picks, cx))
     }
 
     /// What every step's controls share: on or off, its amount, whether the
@@ -172,7 +175,7 @@ impl Studio {
                 },
             )
             .when(!is_drawn(stage, step, &self.band_info), |pane| {
-                pane.child(Self::note(
+                pane.children(Self::help(
                     "The document records this step. The canvas does not draw it yet.",
                 ))
             })
@@ -211,7 +214,7 @@ impl Studio {
             .enumerate()
             .map(|(index, (name, label))| {
                 let (name, settings) = (*name, settings.clone());
-                Self::act(
+                Self::pick(
                     *label,
                     ("stretch-kind", index),
                     name == kind,
@@ -229,8 +232,10 @@ impl Studio {
             .collect::<Vec<_>>();
         let known = STRETCHES.iter().any(|(name, _)| *name == kind);
         let mut block = column()
-            .child(Self::heading("Stretch"))
-            .child(wrap().children(kinds))
+            .child(Self::field(
+                "Stretch",
+                self.menu("stretch-kind", "Kind", kinds, cx),
+            ))
             .when(!known, |block| {
                 block.child(Self::note(format!(
                     "This step holds the stretch “{kind}”, which the canvas does not draw."
@@ -246,7 +251,7 @@ impl Studio {
             ));
         }
         block.child(Self::act(
-            "Add another stretch after this one",
+            "Add stretch",
             "stretch-add",
             false,
             cx,
@@ -284,7 +289,7 @@ impl Studio {
                 }
             },
         ))
-        .child(Self::note(
+        .children(Self::help(
             "Stretches of one input apply in order. Each is resolved from what the one before it left.",
         ))
     }
@@ -318,7 +323,7 @@ impl Studio {
         let own = (shared && is_operation).then(|| {
             let channel = channel.to_string();
             Self::act(
-                format!("Give {label} its own settings"),
+                "Own settings".to_string(),
                 "own-settings",
                 false,
                 cx,
@@ -366,13 +371,12 @@ impl Studio {
         let (hue, saturation, _) = hue_of(layer.color.unwrap_or([1.0; 3]));
         let colored = layer.blend != BlendMode::Luminance;
         let inputs = self
-            .document
-            .channels()
+            .showable()
             .into_iter()
             .enumerate()
             .map(|(index, channel)| {
                 let on = channel == *band;
-                Self::act(
+                Self::pick(
                     channel_label(&channel),
                     ("layer-input", index),
                     on,
@@ -395,8 +399,10 @@ impl Studio {
                 layer.name.clone(),
                 "A layer of the picture: one input, in one color.",
             ))
-            .child(Self::heading("Input shown"))
-            .child(wrap().children(inputs))
+            .child(Self::field(
+                "Input",
+                self.menu("layer-input", "Input", inputs, cx),
+            ))
             .when(colored, |pane| {
                 pane.child(Self::heading("Color"))
                     .child(self.labelled_slider(
@@ -418,7 +424,7 @@ impl Studio {
                 layer.opacity,
                 cx,
             ))
-            .child(Self::blend_block(layer, cx))
+            .child(self.blend_block(layer, cx))
             .child(self.shows_block("This layer alone", cx))
             .child(self.mask_block(layer, cx))
             .child(self.shared_mask_block(layer, cx))
@@ -438,12 +444,12 @@ impl Studio {
                     }
                 },
             ))
-            .child(Self::note(
+            .children(Self::help(
                 "A clipped layer shows only inside the mask of the layer beneath it, and not at all while that layer is hidden.",
             ))
-            .child(Self::heading("Add an adjustment to this layer only"))
-            .child(Self::adjustment_buttons(
+            .child(Self::field("Adjust", self.adjustment_menu(
                 "adjust-own",
+                "Add to this",
                 cx,
                 move |this, name| {
                     let step = operation(name, Accepts::Display);
@@ -455,15 +461,13 @@ impl Studio {
                         };
                     }
                 },
-            ))
-            .child(Self::heading(
-                "Add an adjustment above, for every layer beneath",
-            ))
-            .child(Self::adjustment_buttons(
+            )))
+            .child(Self::field("", self.adjustment_menu(
                 "adjust-above",
+                "Add above",
                 cx,
                 move |this, name| this.add_adjustment_above(Some(id), name),
-            ))
+            )))
             .child(Self::heading("Layer"))
             .child(
                 wrap()
@@ -492,7 +496,7 @@ impl Studio {
                     ))
                     .when(layer.group.is_none(), |row| {
                         row.child(Self::act(
-                            "Put in a new group",
+                            "Group",
                             "layer-group",
                             false,
                             cx,
@@ -518,47 +522,19 @@ impl Studio {
     }
 
     /// The blend modes, with the layer's own marked.
-    fn blend_block(layer: &LayerRecord, cx: &mut Context<Self>) -> gpui::Div {
-        let id = layer.id;
-        let blends = BlendMode::ALL
-            .into_iter()
-            .enumerate()
-            .map(|(index, mode)| {
-                Self::act(
-                    mode.to_string(),
-                    ("blend", index),
-                    layer.blend == mode,
-                    cx,
-                    move |this| {
-                        if let Some(layer) = this.document.layer_mut(id) {
-                            layer.blend = mode;
-                            if let LayerSource::Band { band } = &layer.source {
-                                layer.name =
-                                    layer_name(band, layer.color.unwrap_or([1.0; 3]), layer.blend);
-                            }
-                        }
-                    },
-                )
-            })
-            .collect::<Vec<_>>();
-        column()
-            .child(Self::heading("Blend with the layers beneath"))
-            .child(wrap().children(blends))
+    fn blend_block(&self, layer: &LayerRecord, cx: &mut Context<Self>) -> gpui::Div {
+        Self::field("Blend", self.blend_menu(layer, cx))
     }
 
     /// Whether the canvas shows the stack up to the selected layer, or the
     /// selected layer alone.
     fn shows_block(&self, alone_label: &'static str, cx: &mut Context<Self>) -> gpui::Div {
         let alone = self.alone;
-        column().child(Self::heading("Canvas shows")).child(
-            wrap()
-                .child(Self::act(
-                    "Layers up to this one",
-                    "show-stack",
-                    !alone,
-                    cx,
-                    |this| this.alone = false,
-                ))
+        column().child(Self::heading("View")).child(
+            Self::segmented()
+                .child(Self::act("Stack", "show-stack", !alone, cx, |this| {
+                    this.alone = false
+                }))
                 .child(Self::act(alone_label, "show-alone", alone, cx, |this| {
                     this.alone = true
                 })),
@@ -576,7 +552,7 @@ impl Studio {
                     super::panes::counted(members, "layer")
                 ),
             ))
-            .child(Self::note(
+            .children(Self::help(
                 "Drag a layer onto the group, or into the gap under one of its layers, to add it. Drag it out to remove it.",
             ))
             .child(self.labelled_slider(
@@ -585,13 +561,15 @@ impl Studio {
                 layer.opacity,
                 cx,
             ))
-            .child(Self::blend_block(layer, cx))
-            .child(self.shows_block("This group alone", cx))
+            .child(self.blend_block(layer, cx))
+            .child(self.palette_block(Some(id), cx))
+            .child(Self::field("Layers", self.add_layer_menu(Some(id), cx)))
+            .child(self.shows_block("Alone", cx))
             .child(self.mask_block(layer, cx))
             .child(self.shared_mask_block(layer, cx))
-            .child(Self::heading("Add an adjustment to this group only"))
-            .child(Self::adjustment_buttons(
+            .child(Self::field("Adjust", self.adjustment_menu(
                 "adjust-own",
+                "Add to this",
                 cx,
                 move |this, name| {
                     let step = operation(name, Accepts::Display);
@@ -603,19 +581,19 @@ impl Studio {
                         };
                     }
                 },
-            ))
-            .child(Self::heading("Add an adjustment above, for every layer beneath"))
-            .child(Self::adjustment_buttons(
+            )))
+            .child(Self::field("", self.adjustment_menu(
                 "adjust-above",
+                "Add above",
                 cx,
                 move |this, name| this.add_adjustment_above(Some(id), name),
-            ))
+            )))
             .child(Self::heading("Group"))
             .child(Self::act("Ungroup", "ungroup", false, cx, move |this| {
                 this.document.ungroup(id);
                 this.selected = Row::Combined;
             }))
-            .child(Self::note(
+            .children(Self::help(
                 "Ungrouping keeps the layers where they are. The group's own mask and adjustments go with it.",
             ))
             .into_any_element()
@@ -638,7 +616,7 @@ impl Studio {
             .map(|(index, mask)| {
                 let mask_id = mask.id;
                 let on = used.is_some_and(|(used, _)| used == mask_id);
-                Self::act(
+                Self::pick(
                     mask.name.clone(),
                     ("layer-mask", index),
                     on,
@@ -656,8 +634,11 @@ impl Studio {
             .collect::<Vec<_>>();
         let first_input = self.document.channels().into_iter().next();
         column()
-            .child(Self::heading("Shared mask"))
-            .child(wrap().children(masks).child(Self::act(
+            .child(Self::field(
+                "Mask",
+                self.menu("layer-mask", "None", masks, cx),
+            ))
+            .child(Self::field("", Self::act(
                 "New mask",
                 "layer-mask-new",
                 false,
@@ -676,11 +657,11 @@ impl Studio {
                     this.selected = Row::Mask(mask);
                 },
             )))
-            .child(Self::note(
+            .children(Self::help(
                 "A shared mask follows the signal of one or two inputs. Several layers can be behind the same mask, or its inverse.",
             ))
             .when(painted, |pane| {
-                pane.child(Self::note("Choosing a shared mask replaces the painted mask."))
+                pane.children(Self::help("Choosing a shared mask replaces the painted mask."))
             })
             .when_some(used, |pane, (mask, inverted)| {
                 let set = move |this: &mut Self, inverted: bool| {
@@ -689,22 +670,22 @@ impl Studio {
                     }
                 };
                 pane.child(
-                    wrap()
+                    Self::segmented()
                         .child(Self::act(
-                            "Where it is strong",
+                            "Strong",
                             "mask-strong",
                             !inverted,
                             cx,
                             move |this| set(this, false),
                         ))
                         .child(Self::act(
-                            "Where it is weak",
+                            "Weak",
                             "mask-weak",
                             inverted,
                             cx,
                             move |this| set(this, true),
                         ))
-                        .child(Self::act("Edit the mask", "mask-edit", false, cx, move |this| {
+                        .child(Self::act("Edit mask", "mask-edit", false, cx, move |this| {
                             this.selected = Row::Mask(mask)
                         })),
                 )
@@ -774,43 +755,43 @@ impl Studio {
                 format!("Mask: {}", mask.name),
                 "Computed from inputs at each pixel, smoothed, then touched up by hand. In the mask, white is where a layer behind it shows.",
             ))
-            .child(Self::heading("Canvas shows"))
+            .child(Self::heading("View"))
             .child(
-                wrap()
+                Self::segmented()
                     .child(Self::act(
-                        "The mask",
+                        "Mask",
                         "mask-view-mask",
                         !self.mask_shows_picture,
                         cx,
                         |this| this.mask_shows_picture = false,
                     ))
                     .child(Self::act(
-                        "The final picture",
+                        "Picture",
                         "mask-view-picture",
                         self.mask_shows_picture,
                         cx,
                         |this| this.mask_shows_picture = true,
                     )),
             )
-            .child(Self::note(
+            .children(Self::help(
                 "The Input and picture split shows the mask and the final picture side by side.",
             ))
-            .child(Self::heading("Layers behind this mask"))
+            .child(Self::heading("Used by"))
             .child(div().text_xs().child(if users.is_empty() {
                 "None.".to_string()
             } else {
                 users.join(", ")
             }))
-            .child(Self::heading("Inputs, multiplied"))
+            .child(Self::heading("Inputs"))
             .child(wrap().children(inputs))
-            .child(Self::note(
+            .children(Self::help(
                 "Each input is read as its own Stretch step leaves it, so the mask follows the inputs.",
             ))
             .child(Self::heading("Shape"))
             .child(
-                wrap()
+                Self::segmented()
                     .child(Self::act(
-                        "Lift faint signal",
+                        "Lift faint",
                         "mask-lift",
                         shape == MaskShape::PowerOfInverse,
                         cx,
@@ -830,7 +811,7 @@ impl Studio {
                 (reach.log2() + 2.0) / 4.0,
                 cx,
             ))
-            .child(Self::note(
+            .children(Self::help(
                 "Below 1 the mask reaches further into faint signal. Above 1 it keeps to strong signal.",
             ))
             .child(self.labelled_slider(
@@ -839,7 +820,7 @@ impl Studio {
                 smoothing / 32.0,
                 cx,
             ))
-            .child(Self::note(
+            .children(Self::help(
                 "Blurs the mask so the inputs' noise does not become speckle in the layers behind it. 0 leaves the mask as computed.",
             ))
             .child(Self::heading("Touch-ups"))
@@ -848,12 +829,12 @@ impl Studio {
                 super::panes::counted(touch_ups, "stroke")
             )))
             .child(
-                wrap()
+                Self::segmented()
                     .child(Self::act("Brush adds", "brush-adds", !removes, cx, |this| {
                         this.brush_removes = false
                     }))
                     .child(Self::act(
-                        "Brush takes away",
+                        "Brush removes",
                         "brush-removes",
                         removes,
                         cx,
@@ -877,7 +858,7 @@ impl Studio {
                 this.document.remove_mask(id);
                 this.selected = Row::Combined;
             }))
-            .child(Self::note(
+            .children(Self::help(
                 "Removing the mask leaves the layers behind it showing everywhere.",
             ))
             .into_any_element()
@@ -887,11 +868,9 @@ impl Studio {
     /// is a starting point, and each layer's hue and saturation are set
     /// here without selecting the layers one by one.
     fn tones_block(&self, cx: &mut Context<Self>) -> gpui::Div {
-        let mut block = column()
-            .child(Self::heading("Color tones"))
-            .child(Self::note(
-                "Each layer's hue and saturation. A palette sets them to start with.",
-            ));
+        let mut block = column().children(Self::help(
+            "Each layer's hue and saturation. A palette sets them to start with.",
+        ));
         // Top layer first, as the tree lists them.
         for (index, layer) in self.document.layers().iter().enumerate().rev() {
             let Some(color) = layer.color.filter(|_| layer.source.shows_pixels()) else {
@@ -934,49 +913,6 @@ impl Studio {
                 );
         }
         block
-    }
-
-    /// For the document's palette: which input each of its slots shows.
-    fn palette_inputs_block(&self, cx: &mut Context<Self>) -> Option<gpui::Div> {
-        let used = self.document.palette.clone()?;
-        let channels = self.document.channels();
-        let mut block = column()
-            .child(Self::heading(format!("Inputs of {}", used.name)))
-            .child(Self::note(
-                "Giving a slot another input remakes the layers and the masks that use it. Their colors, adjustments and mask touch-ups are kept.",
-            ));
-        for (row, (slot, shown)) in used.inputs.into_iter().enumerate() {
-            let choices = channels
-                .iter()
-                .enumerate()
-                .map(|(index, channel)| {
-                    let (slot, channel) = (slot.clone(), channel.clone());
-                    Self::act(
-                        channel_label(&channel),
-                        ("slot-input", row * 16 + index),
-                        channel == shown,
-                        cx,
-                        move |this| {
-                            this.document.set_palette_input(&slot, &channel);
-                        },
-                    )
-                })
-                .collect::<Vec<_>>();
-            block = block.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        div()
-                            .w(px(64.0))
-                            .text_xs()
-                            .child(format!("{} slot", channel_label(&slot))),
-                    )
-                    .child(wrap().children(choices)),
-            );
-        }
-        Some(block)
     }
 
     /// A layer's mask, and the button that removes it.
@@ -1043,7 +979,7 @@ impl Studio {
             .child(Self::heading("Applies to"))
             .child(
                 wrap()
-                    .child(Self::button("Every layer beneath", "scope-stack", true))
+                    .child(Self::button("Beneath", "scope-stack", true))
                     .when_some(beneath.zip(beneath_name), |row, (target, name)| {
                         row.child(Self::act(
                             format!("{name} only"),
@@ -1061,7 +997,7 @@ impl Studio {
                         ))
                     }),
             )
-            .child(Self::note(
+            .children(Self::help(
                 "Dragging does the same: onto a layer for that layer only, between layers for every layer beneath.",
             ))
             .child(self.mask_block(layer, cx))
@@ -1094,7 +1030,7 @@ impl Studio {
                                 true,
                             ))
                             .child(Self::act(
-                                "Every layer beneath",
+                                "Beneath",
                                 "scope-stack",
                                 false,
                                 cx,
@@ -1105,7 +1041,7 @@ impl Studio {
                                 },
                             )),
                     )
-                    .child(Self::note(
+                    .children(Self::help(
                         "Paint with the mask brush to limit where this adjustment applies.",
                     ))
             })
@@ -1117,82 +1053,33 @@ impl Studio {
     }
 
     fn inspect_combined(&self, cx: &mut Context<Self>) -> AnyElement {
-        let channels = self.document.channels();
-        let palettes = palettes_for(&channels)
-            .into_iter()
-            .enumerate()
-            .map(|(index, palette)| {
-                Self::act(
-                    palette.name,
-                    ("palette", index),
-                    self.document.uses_palette(palette),
-                    cx,
-                    move |this| this.document.apply_palette(palette),
-                )
-            })
-            .collect::<Vec<_>>();
-        let no_palette = palettes.is_empty();
-        let inputs = channels
-            .into_iter()
-            .enumerate()
-            .map(|(index, channel)| {
-                Self::act(
-                    channel_label(&channel),
-                    ("add-layer", index),
-                    false,
-                    cx,
-                    move |this| {
-                        let layer = band_layer(&channel, 0.0, 0.0, BlendMode::Add);
-                        let id = layer.id;
-                        if this.document.insert_layer(usize::MAX, layer).is_ok() {
-                            this.selected = Row::Layer(id);
-                        }
-                    },
-                )
-            })
-            .collect::<Vec<_>>();
         column()
             .child(Self::title(
                 "Combined",
                 "Every layer, blended bottom to top, before the Finish steps.",
             ))
-            .child(Self::heading("Palette"))
-            .child(wrap().children(palettes))
-            .when(no_palette, |pane| {
-                pane.child(Self::note("No palette fits these inputs."))
-            })
-            .child(Self::note(
-                "A palette replaces the layers that show an input. After that, each layer's color is yours to change.",
-            ))
-            .children(self.palette_inputs_block(cx))
-            .child(self.tones_block(cx))
-            .child(Self::act(
-                "Balance the layers' colors",
-                "balance",
-                false,
-                cx,
-                |this| {
-                    let mut layers = this.document.layers().to_vec();
-                    balance_colors(&mut layers);
-                    for balanced in layers {
-                        if let Some(layer) = this.document.layer_mut(balanced.id) {
-                            layer.color = balanced.color;
-                        }
+            .child(self.palette_block(None, cx))
+            .child(self.section("tones", "Tones", false, cx, |this, cx| this.tones_block(cx)))
+            .child(Self::act("Balance colors", "balance", false, cx, |this| {
+                let mut layers = this.document.layers().to_vec();
+                balance_colors(&mut layers);
+                for balanced in layers {
+                    if let Some(layer) = this.document.layer_mut(balanced.id) {
+                        layer.color = balanced.color;
                     }
-                },
-            ))
-            .child(Self::note(
+                }
+            }))
+            .children(Self::help(
                 "Scales the added layers together so their sum is full scale.",
             ))
-            .child(Self::heading("Add a layer that shows an input"))
-            .child(wrap().children(inputs))
-            .child(Self::heading("Add an adjustment on top, for every layer"))
-            .child(Self::adjustment_buttons(
-                "adjust-top",
-                cx,
-                |this, name| this.add_adjustment_above(None, name),
+            .child(Self::field("Layers", self.add_layer_menu(None, cx)))
+            .child(Self::field(
+                "Adjust",
+                self.adjustment_menu("adjust-top", "Add on top", cx, |this, name| {
+                    this.add_adjustment_above(None, name)
+                }),
             ))
-            .child(Self::finish_buttons(cx))
+            .child(self.finish_menu(cx))
             .into_any_element()
     }
 
@@ -1206,21 +1093,21 @@ impl Studio {
                 "A step on the whole picture, after the layers are combined.",
             ))
             .child(self.step_controls(stage, step, cx))
-            .child(Self::note(
+            .children(Self::help(
                 "Paint with the mask brush to limit where this step applies.",
             ))
             .child(Self::act("Remove", "step-remove", false, cx, move |this| {
                 this.document.remove_step(id);
                 this.selected = Row::Combined;
             }))
-            .child(Self::finish_buttons(cx))
+            .child(self.finish_menu(cx))
             .into_any_element()
     }
 
     fn inspect_final(&self, cx: &mut Context<Self>) -> AnyElement {
         column()
             .child(Self::title("Final picture", "Every step of the document."))
-            .child(Self::finish_buttons(cx))
+            .child(self.finish_menu(cx))
             .child(self.junction_block())
             .into_any_element()
     }
@@ -1281,7 +1168,7 @@ impl Studio {
                     .text_color(rgb(QUIET))
                     .child("Open in external editor"),
             )
-            .child(Self::note(
+            .children(Self::help(
                 "Disabled: Studio cannot write the file for an editor yet.",
             ))
     }
@@ -1327,33 +1214,33 @@ impl Studio {
         column()
             .child(Self::heading("Tools"))
             .child(
-                wrap()
+                Self::segmented()
                     .child(tool(Tool::Pan, "Pan", cx))
                     .when(can_mask, |row| {
-                        row.child(tool(Tool::Brush, "Mask brush", cx))
+                        row.child(tool(Tool::Brush, "Brush", cx))
                     })
                     .child(tool(Tool::Heal, "Heal", cx)),
             )
-            .child(Self::note(help))
+            .children(Self::help(help))
             .when(can_mask || self.has_strokes(), |pane| {
                 let shown = self.mask_shown;
                 pane.child(Self::act(
                     if shown {
-                        "Mask overlay: shown"
+                        "Overlay on"
                     } else {
-                        "Mask overlay: hidden"
+                        "Overlay off"
                     },
                     "mask-shown",
                     shown,
                     cx,
                     move |this| this.mask_shown = !shown,
                 ))
-                .child(Self::note(
+                .children(Self::help(
                     "The overlay marks where the selected row's mask is painted. Hiding it does not change the mask.",
                 ))
             })
             .when(!can_mask, |pane| {
-                pane.child(Self::note(
+                pane.children(Self::help(
                     "Mask brush: select a layer, a layer's adjustment or a Finish step.",
                 ))
             })
@@ -1393,11 +1280,12 @@ impl Studio {
             .child(controls)
             .child(self.tools(cx))
             .child(div().flex_1())
-            .child(Self::heading("Canvas"))
-            .children(
-                self.readout()
-                    .into_iter()
-                    .map(|line| div().text_xs().child(line)),
-            )
+            .child(self.section("readout", "Canvas", false, cx, |this, _| {
+                column().children(
+                    this.readout()
+                        .into_iter()
+                        .map(|line| div().text_xs().child(line)),
+                )
+            }))
     }
 }

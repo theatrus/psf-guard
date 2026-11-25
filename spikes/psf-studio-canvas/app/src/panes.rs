@@ -12,7 +12,7 @@
 //! decided in `src/studio/place.rs`, which knows of no toolkit. These files
 //! only lay that out with GPUI, and turn a place into what the canvas draws.
 
-use super::{Bands, Drag, Scene, SliderId, Studio, Tool};
+use super::{Bands, Drag, Page, Scene, SliderId, Studio, Tool};
 use crate::image_steps::Accepts;
 use crate::store_tiles::{BandState, BandStretch};
 use crate::studio_model::{
@@ -1342,6 +1342,7 @@ impl Studio {
         action: impl Fn(&mut Self) + 'static,
     ) -> gpui::Stateful<gpui::Div> {
         Self::button(label, id, on).on_click(cx.listener(move |this, _, _, cx| {
+            this.open_menu = None;
             action(this);
             this.refresh_canvas();
             cx.stop_propagation();
@@ -1507,15 +1508,19 @@ impl Studio {
 
     /// The document's name and how the canvas is divided.
     fn top_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let splits = Split::ALL.into_iter().enumerate().map(|(index, split)| {
-            Self::act(
-                split.name(),
-                ("split", index),
-                self.split == split,
-                cx,
-                move |this| this.set_split(split),
-            )
-        });
+        let splits = Split::ALL
+            .into_iter()
+            .enumerate()
+            .map(|(index, split)| {
+                Self::act(
+                    split.name(),
+                    ("split", index),
+                    self.split == split,
+                    cx,
+                    move |this| this.set_split(split),
+                )
+            })
+            .collect::<Vec<_>>();
         div()
             .flex_none()
             .h(px(44.0))
@@ -1526,8 +1531,31 @@ impl Studio {
             .px_3()
             .bg(rgb(PANE))
             .child(div().pr_3().child(self.document.name.clone()))
-            .child(Self::note("Canvas"))
-            .children(splits)
+            .child(
+                Self::segmented()
+                    .child(Self::act(
+                        "Setup",
+                        "page-setup",
+                        self.page == Page::Setup,
+                        cx,
+                        |this| this.show_page(Page::Setup),
+                    ))
+                    .child(Self::act(
+                        "Workspace",
+                        "page-workspace",
+                        self.page == Page::Workspace,
+                        cx,
+                        |this| this.show_page(Page::Workspace),
+                    )),
+            )
+            .when(self.page == Page::Workspace, |bar| {
+                bar.child(div().pl_3().child(Self::note("View")))
+                    .child(Self::segmented().children(splits))
+            })
+            .child(div().flex_1())
+            .child(Self::act("?", "help", Self::help_shown(), cx, |_| {
+                Self::toggle_help()
+            }))
     }
 
     /// One label per pane, drawn in the pane's top left corner: what the
@@ -1628,7 +1656,8 @@ impl Render for Studio {
                     .w_full()
                     .flex()
                     .overflow_hidden()
-                    .child(self.tree(cx))
+                    .when(self.page == Page::Workspace, |row| row.child(self.tree(cx)))
+                    .when(self.page == Page::Setup, |row| row.child(self.setup(cx)))
                     .child(
                         div().flex_1().h_full().flex().flex_col().child(
                             div()
@@ -1682,7 +1711,9 @@ impl Render for Studio {
                                 ),
                         ),
                     )
-                    .child(self.inspector(cx)),
+                    .when(self.page == Page::Workspace, |row| {
+                        row.child(self.inspector(cx))
+                    }),
             )
     }
 }
