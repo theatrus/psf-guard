@@ -29,9 +29,9 @@ pub(super) const MAX_TOOL_SETTINGS: usize = 24;
 /// What a tool does, in the order a chain runs them: PSF Guard's name for
 /// it, and the name a person reads.
 const CATEGORIES: [(&str, &str); 3] = [
-    ("sharpen", "Sharpening"),
-    ("denoise", "Noise reduction"),
-    ("star_removal", "Star removal"),
+    ("sharpen", "Sharpen"),
+    ("denoise", "Denoise"),
+    ("star_removal", "Stars"),
 ];
 
 /// One tool `psf-guard studio-tools` lists.

@@ -2217,6 +2217,21 @@ In the spike app (`parts.rs`, `widgets.rs`), all in the workspace:
 Tried on the Sh2-157 Ha, OIII and SII stacks (recipe “Narrowband with its
 own stars”, then Ha added to the Nebula part) and on the RGB stacks.
 
+Also tried on a store of Ha, OIII, SII, R, G and B with star removal on
+all six: the recipe “Narrowband with RGB stars” gives a starless SHO
+nebula with the stars of R, G and B screened over it.
+
+**Gaia calibration of the RGB stars is not applied yet.** The document
+records the Color calibration step, and neither the store preparation nor
+the canvas runs it, so the star colors are each channel's own stretch.
+It needs three things: the reference frame's plate solve fetched with the
+sources, PSF Guard's calibration step shared through `color_steps` and
+run on R, G and B in the preparation (gains on every plane of a channel,
+sky offsets on all but its stars), and one linked stretch for R, G, B and
+their stars, since separate stretches undo the balance. It also needs a
+Gaia photometry catalog and a solve to test against; the spike's computer
+has neither.
+
 Not built: tools per input in one table, continuum subtraction, the
 layered stretch, groups in groups, and a recipe's small picture of its
 parts. No luminance stack was at hand, so the Luminance part is covered
