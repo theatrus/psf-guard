@@ -13,7 +13,7 @@ use crate::image_steps::Accepts;
 use crate::studio_model::{
     balance_colors, band_layer, channel_label, flow_operations, hue_of, input_steps, layer_name,
     level_for_zoom, own_step_for_channel, palettes_for, BlendMode, JunctionStatus, LayerRecord,
-    LayerSource, Row, StageKind, StepKind, StepRecord,
+    LayerSource, MaskRecord, MaskShape, Row, StageKind, StepKind, StepRecord,
 };
 use gpui::{div, prelude::*, px, rgb, AnyElement, Context};
 use uuid::Uuid;
@@ -354,6 +354,7 @@ impl Studio {
             .child(Self::blend_block(layer, cx))
             .child(self.shows_block("This layer alone", cx))
             .child(self.mask_block(layer, cx))
+            .child(self.inputs_mask_block(layer, cx))
             .child(Self::heading("Clipping"))
             .child(Self::act(
                 if layer.clipped {
@@ -520,6 +521,7 @@ impl Studio {
             .child(Self::blend_block(layer, cx))
             .child(self.shows_block("This group alone", cx))
             .child(self.mask_block(layer, cx))
+            .child(self.inputs_mask_block(layer, cx))
             .child(Self::heading("Add an adjustment to this group only"))
             .child(Self::adjustment_buttons(
                 "adjust-own",
@@ -550,6 +552,113 @@ impl Studio {
                 "Ungrouping keeps the layers where they are. The group's own mask and adjustments go with it.",
             ))
             .into_any_element()
+    }
+
+    /// The controls for a mask computed from inputs: which inputs, whether
+    /// the layer shows where they are strong or weak, and how the mask is
+    /// shaped.
+    fn inputs_mask_block(&self, layer: &LayerRecord, cx: &mut Context<Self>) -> gpui::Div {
+        let id = layer.id;
+        let (chosen, shape, inverted) = match &layer.mask {
+            Some(MaskRecord::FromInputs {
+                inputs,
+                shape,
+                inverted,
+            }) => (inputs.clone(), *shape, *inverted),
+            _ => (Vec::new(), MaskShape::PowerOfInverse, false),
+        };
+        let painted = matches!(layer.mask, Some(MaskRecord::Painted(_)));
+        let computed = !chosen.is_empty();
+        // Sets the layer's mask from the inputs chosen. No input is no
+        // computed mask.
+        let set = move |this: &mut Self, inputs: Vec<String>, shape, inverted| {
+            if let Some(layer) = this.document.layer_mut(id) {
+                layer.mask = (!inputs.is_empty()).then_some(MaskRecord::FromInputs {
+                    inputs,
+                    shape,
+                    inverted,
+                });
+            }
+        };
+        let inputs = self
+            .document
+            .channels()
+            .into_iter()
+            .enumerate()
+            .map(|(index, channel)| {
+                let on = chosen.contains(&channel);
+                let chosen = chosen.clone();
+                Self::act(
+                    channel_label(&channel),
+                    ("mask-input", index),
+                    on,
+                    cx,
+                    move |this| {
+                        let mut inputs = chosen.clone();
+                        if on {
+                            inputs.retain(|input| *input != channel);
+                        } else if inputs.len() < 2 {
+                            inputs.push(channel.clone());
+                        }
+                        set(this, inputs, shape, inverted);
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        let (for_side, for_shape) = (chosen.clone(), chosen);
+        column()
+            .child(Self::heading("Mask from inputs"))
+            .child(wrap().children(inputs))
+            .child(Self::note(
+                "Shows the layer by the signal of one input, or of two multiplied, as each is stretched.",
+            ))
+            .when(painted, |pane| {
+                pane.child(Self::note("Choosing an input replaces the painted mask."))
+            })
+            .when(computed, |pane| {
+                pane.child(
+                    wrap()
+                        .child(Self::act(
+                            "Where strong",
+                            "mask-strong",
+                            !inverted,
+                            cx,
+                            {
+                                let inputs = for_side.clone();
+                                move |this| set(this, inputs.clone(), shape, false)
+                            },
+                        ))
+                        .child(Self::act("Where weak", "mask-weak", inverted, cx, {
+                            let inputs = for_side.clone();
+                            move |this| set(this, inputs.clone(), shape, true)
+                        })),
+                )
+                .child(
+                    wrap()
+                        .child(Self::act(
+                            "Lift faint signal",
+                            "mask-lift",
+                            shape == MaskShape::PowerOfInverse,
+                            cx,
+                            {
+                                let inputs = for_shape.clone();
+                                move |this| {
+                                    set(this, inputs.clone(), MaskShape::PowerOfInverse, inverted)
+                                }
+                            },
+                        ))
+                        .child(Self::act(
+                            "As stretched",
+                            "mask-plain",
+                            shape == MaskShape::Value,
+                            cx,
+                            {
+                                let inputs = for_shape.clone();
+                                move |this| set(this, inputs.clone(), MaskShape::Value, inverted)
+                            },
+                        )),
+                )
+            })
     }
 
     /// A layer's mask, and the button that removes it.
@@ -638,6 +747,7 @@ impl Studio {
                 "Dragging does the same: onto a layer for that layer only, between layers for every layer beneath.",
             ))
             .child(self.mask_block(layer, cx))
+            .child(self.inputs_mask_block(layer, cx))
             .child(Self::act("Remove", "layer-remove", false, cx, move |this| {
                 this.document.remove_layer(id);
                 this.selected = Row::Combined;

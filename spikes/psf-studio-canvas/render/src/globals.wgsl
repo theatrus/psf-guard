@@ -18,6 +18,8 @@ struct Layer {
     // z: the mask layer that limits the layer, or -1 for everywhere.
     // w: 1 for an adjustment of the band layer before it alone.
     adjust: vec4f,
+    // x: the computed mask that limits the layer, or -1 for none.
+    more: vec4f,
 }
 
 // One step of the Finish stage.
@@ -41,6 +43,18 @@ struct LayerHeal {
     offset: vec4f,
 }
 
+// A mask computed at each pixel from one or two bands.
+struct ComputedMask {
+    // x: the band, or -1 for none. y: a second band blended into it before
+    // the stretch, or -1. z: how much of the second. w: the row of the
+    // stretch table that holds the band's stretch.
+    first: vec4f,
+    second: vec4f,
+    // x: 1 to raise the product to the power of 1 minus itself. y: 1 for
+    // 1 minus the result.
+    shape: vec4f,
+}
+
 struct Globals {
     // clip = doc * view.xy + view.zw
     view: vec4f,
@@ -56,6 +70,7 @@ struct Globals {
     // first, or -1, z: how much of the second. A place not in use has -1.
     healed: array<vec4f, 4>,
     heals: array<LayerHeal, 16>,
+    computed: array<ComputedMask, 8>,
     // Linear working-space RGB to linear target RGB.
     display_matrix: mat3x3f,
     // x: samples per display curve, or 0 when there is no display transform.

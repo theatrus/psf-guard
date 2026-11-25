@@ -1628,6 +1628,38 @@ belongs to one layer is indented under it, and rows move by dragging.
 - `BlendMode::Luminance` takes the layer's brightness and keeps the color
   beneath it, which is how the L of LRGB goes on.
 
+### Palettes that follow the signal
+
+Some narrowband palettes give a color to an input only where another
+input is strong. Foraxx is the common one. Its SHO form is:
+
+- red is SII where OIII is strong, and Ha elsewhere;
+- green is Ha where both Ha and OIII are strong, and OIII elsewhere;
+- blue is OIII.
+
+"Strong" is the power of inverted pixels of the stretched samples: a
+value `x` from 0 to 1 becomes `x^(1 - x)`, which lifts faint signal.
+
+Studio builds this from what layers already are. A layer's mask may be
+**computed from inputs** (`MaskRecord::FromInputs`): the product of one or
+two inputs' stretched samples, shaped by `MaskShape`, and inverted or not.
+A Foraxx palette is then five ordinary layers: SII as red behind the mask
+of OIII, Ha as red behind that mask inverted, and so on. Two layers behind
+a mask and its inverse share one color between them, so they keep their
+full color; “Balance the layers' colors” leaves them out.
+
+- The palettes **SHO, Foraxx** and **HOO, Foraxx** are offered with the
+  others. A plain palette stays the default.
+- Any layer, group or adjustment layer can be given such a mask in its
+  controls, under **Mask from inputs**: choose one or two inputs, where
+  strong or where weak, and whether faint signal is lifted.
+- A computed mask reads each input with the stretch the view gives that
+  input, so it follows the input's own Stretch step.
+- Choosing another palette removes computed masks and keeps painted ones.
+
+These palettes are meant for stretched, starless inputs. With stars in
+the inputs, the stars take part in the masks.
+
 ### One tree
 
 The left pane is one tree, in the order the picture is made:
@@ -1764,11 +1796,13 @@ saturation per layer, layers that share an input, adjustments for one
 layer and for the stack with painted masks and opacity, dragging between
 the two, heals of one input, of one layer and of the whole picture, groups
 with their own adjustments, clipping, the tree, the row controls, the five
-splits, pinning and the mask overlay.
+splits, pinning, the mask overlay, masks computed from inputs and the two
+Foraxx palettes.
 
 One frame draws at most 24 layers, counting each adjustment and both ends
 of each group, 15 masks,
-16 heals of single layers on at most 4 layers, and 8 Finish steps. What
+16 heals of single layers on at most 4 layers, 8 masks computed from
+inputs, and 8 Finish steps. What
 does not fit is listed in the pane's label and is not drawn; nothing is
 drawn without its mask. The engine has no such limits, because it renders
 a layer at a time.
@@ -1778,8 +1812,10 @@ Not built:
 - Groups inside groups, and a group that passes its members through to
   the layers beneath one by one, as Photoshop's default group does.
 - Clipping a group to the layer beneath it, and a heal of a group.
-- Palettes that mix inputs per pixel, such as Foraxx. They need a layer
-  whose color depends on the samples, not one color per layer.
+- A computed mask on one layer's own adjustment; a layer with both a
+  painted and a computed mask; clipping to a layer's computed mask.
+- Computed masks have been tried on RGB stacks renamed as narrowband, and
+  not yet judged on real narrowband data.
 - A heal copies samples as they were before any heal of the same layer, so
   one heal cannot copy what another healed.
 - The adjustment math and the heal are still the spike's shader code,

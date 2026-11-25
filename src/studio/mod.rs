@@ -45,8 +45,8 @@ mod view_tests;
 
 pub use budget::{read_within, MemoryBudget};
 pub use document::{
-    BlendMode, Document, LayerRecord, LayerSource, MaskRecord, Stage, StageKind, StepKind,
-    StepRecord, DOCUMENT_VERSION,
+    BlendMode, Document, LayerRecord, LayerSource, MaskRecord, MaskShape, Stage, StageKind,
+    StepKind, StepRecord, DOCUMENT_VERSION,
 };
 pub use error::StudioError;
 pub use flow::{
@@ -56,7 +56,7 @@ pub use flow::{
 pub use junction::{open_in_editor_command, FileStamp, Junction, JunctionState, JunctionStatus};
 pub use palette::{
     balance_colors, band_layer, channel_label, color_from_hue, color_word, default_palette, hue_of,
-    layer_name, palettes_for, Palette, PaletteLayer, PALETTES,
+    layer_name, palettes_for, Palette, PaletteLayer, PaletteMask, PALETTES,
 };
 pub use pipeline::{level_for_zoom, Pipeline, PreviewChain};
 pub use place::{input_steps, panes, InputStep, Place, Row, Split};

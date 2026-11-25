@@ -147,6 +147,43 @@ pub enum MaskRecord {
         /// How far outside `low` and `high` the mask reaches 0.
         feather: f32,
     },
+    /// A mask computed from inputs at each pixel: the product of the named
+    /// inputs' stretched samples, shaped. A layer behind such a mask shows
+    /// where those inputs are bright, or where they are not when the mask
+    /// is inverted. This is how a palette mixes inputs by their signal.
+    FromInputs {
+        /// The inputs whose stretched samples are multiplied, by PSF
+        /// Guard's role names. One or two.
+        inputs: Vec<String>,
+        /// How the product becomes the mask.
+        shape: MaskShape,
+        /// Whether the mask is 1 minus the shaped product.
+        inverted: bool,
+    },
+}
+
+/// How the product of a computed mask's inputs becomes the mask.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MaskShape {
+    /// The product itself.
+    Value,
+    /// The product raised to the power of 1 minus itself, which lifts
+    /// faint signal: the "power of inverted pixels" of dynamic narrowband
+    /// palettes.
+    #[default]
+    PowerOfInverse,
+}
+
+impl MaskShape {
+    /// The mask for a product of stretched samples, from 0 to 1.
+    pub fn apply(self, product: f32) -> f32 {
+        let product = product.clamp(0.0, 1.0);
+        match self {
+            MaskShape::Value => product,
+            MaskShape::PowerOfInverse => product.powf(1.0 - product),
+        }
+    }
 }
 
 /// One step of a stage.

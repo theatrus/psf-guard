@@ -136,6 +136,10 @@ pub struct ViewPlan {
     /// The channels drawn: one for a channel view, each layer's for the
     /// combined view, bottom layer first.
     pub channels: Vec<ChannelPlan>,
+    /// Every input of the document, as the view applies its steps: the
+    /// background step and the stretch a computed mask reads an input
+    /// with.
+    pub inputs: Vec<ChannelPlan>,
     /// Whether the channels are blended with the layers' colors and blend
     /// modes. A channel on its own is drawn in gray.
     pub combined: bool,
@@ -419,6 +423,11 @@ pub fn plan(document: &Document, view: &View) -> ViewPlan {
         )
     };
     ViewPlan {
+        inputs: document
+            .channels()
+            .iter()
+            .map(|channel| channel_plan(channel))
+            .collect(),
         channels,
         combined,
         stack,

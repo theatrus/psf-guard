@@ -48,7 +48,10 @@ fn palettes_are_offered_for_the_inputs_a_document_has() {
         offered(&["luminance", "red", "green", "blue"]),
         ["RGB", "LRGB"]
     );
-    assert_eq!(offered(&["ha", "oiii"]), ["HOO", "HOO, red and teal"]);
+    assert_eq!(
+        offered(&["ha", "oiii"]),
+        ["HOO", "HOO, red and teal", "HOO, Foraxx"]
+    );
     assert_eq!(
         default_palette(&names(&["luminance", "red", "green", "blue"]))
             .unwrap()
@@ -472,4 +475,76 @@ fn a_clipped_layer_is_clipped_to_the_layer_beneath_it() {
     document.layer_mut(ids[1]).unwrap().clipped = false;
     let group = document.group_layer(ids[1]).unwrap();
     assert_eq!(clip_of(&document, ids[2]), Some(group));
+}
+
+#[test]
+fn a_foraxx_palette_mixes_inputs_by_their_signal() {
+    let mut document = document(&["ha", "oiii", "sii"]);
+    let foraxx = PALETTES
+        .iter()
+        .find(|palette| palette.name == "SHO, Foraxx")
+        .unwrap();
+    // A plain palette is the default; a person chooses a dynamic one.
+    assert_eq!(
+        default_palette(&names(&["ha", "oiii", "sii"]))
+            .unwrap()
+            .name,
+        "SHO"
+    );
+    assert!(palettes_for(&names(&["ha", "oiii"]))
+        .iter()
+        .any(|palette| palette.name == "HOO, Foraxx"));
+
+    document.apply_palette(foraxx);
+    assert!(document.uses_palette(foraxx));
+    assert!(!document.uses_palette(&PALETTES[2]));
+    let layers = document.layers();
+    assert_eq!(layers.len(), 5);
+    // Each layer keeps its full color: masks that sum to 1 share red and
+    // green between two inputs.
+    assert!(layers.iter().all(|layer| {
+        let color = layer.color.unwrap();
+        color.iter().copied().fold(0.0, f32::max) == 1.0
+    }));
+    assert_eq!(
+        layers[1].mask,
+        Some(MaskRecord::FromInputs {
+            inputs: vec!["oiii".to_string()],
+            shape: MaskShape::PowerOfInverse,
+            inverted: true,
+        })
+    );
+    assert_eq!(layers[4].mask, None);
+
+    // Back to a plain palette, the computed masks are gone.
+    document.apply_palette(&PALETTES[2]);
+    assert!(document.layers().iter().all(|layer| layer.mask.is_none()));
+
+    // The power of inverted pixels lifts faint signal and keeps the ends.
+    assert_eq!(MaskShape::PowerOfInverse.apply(0.0), 0.0);
+    assert_eq!(MaskShape::PowerOfInverse.apply(1.0), 1.0);
+    assert!(MaskShape::PowerOfInverse.apply(0.1) > 0.1);
+    assert_eq!(MaskShape::Value.apply(0.25), 0.25);
+}
+
+#[test]
+fn a_view_lists_every_input_for_computed_masks() {
+    let document = document(&["ha", "oiii", "sii"]);
+    let first = document.layers()[0].id;
+    let alone = Place::Layer {
+        layer: first,
+        alone: true,
+    };
+    let planned = plan(&document, &alone.view());
+    assert_eq!(planned.channels.len(), 1);
+    let inputs: Vec<&str> = planned
+        .inputs
+        .iter()
+        .map(|input| input.channel.as_str())
+        .collect();
+    assert_eq!(inputs, ["ha", "oiii", "sii"]);
+    assert!(planned
+        .inputs
+        .iter()
+        .all(|input| matches!(input.stretch, PlannedStretch::Document(_))));
 }

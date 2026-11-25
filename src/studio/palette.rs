@@ -6,7 +6,7 @@
 //! After that every layer's color is the person's to change, to any hue and
 //! saturation, not only to pure red, green or blue.
 
-use super::{BlendMode, Document, LayerRecord, LayerSource};
+use super::{BlendMode, Document, LayerRecord, LayerSource, MaskRecord, MaskShape};
 
 /// One layer a palette makes.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -18,6 +18,29 @@ pub struct PaletteLayer {
     /// From 0, gray, to 1, the pure hue.
     pub saturation: f32,
     pub blend: BlendMode,
+    /// Where the layer shows, when that follows the inputs' signal. `None`
+    /// is everywhere.
+    pub mask: Option<PaletteMask>,
+}
+
+/// A palette layer's mask, computed from inputs at each pixel: the power of
+/// inverted pixels of the product of the inputs' stretched samples.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PaletteMask {
+    /// The inputs multiplied, by PSF Guard's role names.
+    pub inputs: &'static [&'static str],
+    /// Whether the layer shows where the product is weak.
+    pub inverted: bool,
+}
+
+impl PaletteMask {
+    fn record(&self) -> MaskRecord {
+        MaskRecord::FromInputs {
+            inputs: self.inputs.iter().map(|input| input.to_string()).collect(),
+            shape: MaskShape::PowerOfInverse,
+            inverted: self.inverted,
+        }
+    }
 }
 
 /// A starting set of layers, bottom first.
@@ -34,6 +57,24 @@ const fn tint(channel: &'static str, hue: f32, saturation: f32) -> PaletteLayer 
         hue,
         saturation,
         blend: BlendMode::Add,
+        mask: None,
+    }
+}
+
+/// A tint that shows where the product of `inputs` is strong, or where it
+/// is weak when `inverted`.
+const fn where_strong(
+    channel: &'static str,
+    hue: f32,
+    inputs: &'static [&'static str],
+    inverted: bool,
+) -> PaletteLayer {
+    PaletteLayer {
+        channel,
+        hue,
+        saturation: 1.0,
+        blend: BlendMode::Add,
+        mask: Some(PaletteMask { inputs, inverted }),
     }
 }
 
@@ -42,11 +83,12 @@ const LUMINANCE: PaletteLayer = PaletteLayer {
     hue: 0.0,
     saturation: 0.0,
     blend: BlendMode::Luminance,
+    mask: None,
 };
 
 /// The palettes Studio offers. A document is offered those whose inputs it
 /// has.
-pub const PALETTES: [Palette; 7] = [
+pub const PALETTES: [Palette; 9] = [
     Palette {
         name: "RGB",
         layers: &[
@@ -96,6 +138,29 @@ pub const PALETTES: [Palette; 7] = [
         name: "HOO, red and teal",
         layers: &[tint("ha", 8.0, 1.0), tint("oiii", 190.0, 0.9)],
     },
+    // The Foraxx palettes mix inputs by their signal at each pixel. Red of
+    // SHO is SII where OIII is strong and Ha elsewhere; green is Ha where
+    // both Ha and OIII are strong and OIII elsewhere; blue is OIII. They
+    // are meant for stretched, starless inputs.
+    Palette {
+        name: "SHO, Foraxx",
+        layers: &[
+            where_strong("sii", 0.0, &["oiii"], false),
+            where_strong("ha", 0.0, &["oiii"], true),
+            where_strong("ha", 120.0, &["ha", "oiii"], false),
+            where_strong("oiii", 120.0, &["ha", "oiii"], true),
+            tint("oiii", 240.0, 1.0),
+        ],
+    },
+    Palette {
+        name: "HOO, Foraxx",
+        layers: &[
+            tint("ha", 0.0, 1.0),
+            where_strong("ha", 120.0, &["ha", "oiii"], false),
+            where_strong("oiii", 120.0, &["ha", "oiii"], true),
+            tint("oiii", 240.0, 1.0),
+        ],
+    },
 ];
 
 /// The palettes whose inputs are all among `channels`.
@@ -111,14 +176,24 @@ pub fn palettes_for(channels: &[String]) -> Vec<&'static Palette> {
         .collect()
 }
 
+impl Palette {
+    /// The inputs the palette's layers show.
+    fn inputs(&self) -> Vec<&'static str> {
+        let mut inputs: Vec<&'static str> = self.layers.iter().map(|layer| layer.channel).collect();
+        inputs.sort_unstable();
+        inputs.dedup();
+        inputs
+    }
+}
+
 /// The palette a new document starts with: the one that uses the most of
 /// its inputs, and the first of those in [`PALETTES`].
 pub fn default_palette(channels: &[String]) -> Option<&'static Palette> {
     let offered = palettes_for(channels);
-    let most = offered.iter().map(|palette| palette.layers.len()).max()?;
+    let most = offered.iter().map(|palette| palette.inputs().len()).max()?;
     offered
         .into_iter()
-        .find(|palette| palette.layers.len() == most)
+        .find(|palette| palette.inputs().len() == most)
 }
 
 /// An input's name as a person reads it: `Ha` for `ha`, `R` for `red`.
@@ -246,10 +321,17 @@ impl Document {
                 });
                 if let Some(at) = earlier {
                     let old = replaced.remove(at);
-                    layer.mask = old.mask;
+                    // A painted mask is the person's work and is kept. A
+                    // computed one belonged to the palette it came from.
+                    layer.mask = old
+                        .mask
+                        .filter(|mask| matches!(mask, MaskRecord::Painted(_)));
                     layer.steps = old.steps;
                     layer.group = old.group;
                     layer.clipped = old.clipped;
+                }
+                if let Some(mask) = &entry.mask {
+                    layer.mask = Some(mask.record());
                 }
                 layer
             })
@@ -273,7 +355,12 @@ impl Document {
             && shown.iter().zip(palette.layers).all(|(layer, entry)| {
                 let (hue, saturation, _) = hue_of(layer.color.unwrap_or([1.0; 3]));
                 let turn = (hue - entry.hue).rem_euclid(360.0);
+                let computed = match &layer.mask {
+                    Some(mask @ MaskRecord::FromInputs { .. }) => Some(mask.clone()),
+                    _ => None,
+                };
                 matches!(&layer.source, LayerSource::Band { band } if band == entry.channel)
+                    && computed == entry.mask.map(|mask| mask.record())
                     && layer.blend == entry.blend
                     && (saturation - entry.saturation).abs() < 0.02
                     && (entry.saturation == 0.0 || turn.min(360.0 - turn) < 1.0)
@@ -283,8 +370,16 @@ impl Document {
 
 /// Scales the colors of the layers that add together, so that their sum is
 /// full scale in its brightest component.
+///
+/// A layer behind a computed mask is left out and keeps its color: such
+/// layers share a color between them by their masks, so they do not add
+/// together everywhere.
 pub fn balance_colors(layers: &mut [LayerRecord]) {
-    let adds = |layer: &LayerRecord| layer.blend == BlendMode::Add && layer.color.is_some();
+    let adds = |layer: &LayerRecord| {
+        layer.blend == BlendMode::Add
+            && layer.color.is_some()
+            && !matches!(layer.mask, Some(MaskRecord::FromInputs { .. }))
+    };
     let brightest = (0..3)
         .map(|component| {
             layers

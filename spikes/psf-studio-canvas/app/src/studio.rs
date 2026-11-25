@@ -23,8 +23,8 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 use studio_render_spike::MAX_LAYERS;
 use studio_render_spike::{
-    pane_rect, FinishStep, Frame, FrameStats, Layer, LayerHeal, Output, Pane, Renderer, Segment,
-    View,
+    pane_rect, ComputedMask, FinishStep, Frame, FrameStats, Layer, LayerHeal, Output, Pane,
+    Renderer, Segment, View,
 };
 
 pub struct Options {
@@ -243,6 +243,8 @@ pub struct Scene {
     finish: Vec<FinishStep>,
     /// Heals of single layers and inputs.
     heals: Vec<LayerHeal>,
+    /// The masks computed from inputs that the layers refer to.
+    computed: Vec<ComputedMask>,
     masks: Vec<Vec<Segment>>,
     /// What the scene leaves out because one frame cannot draw more.
     omitted: Vec<String>,
@@ -372,6 +374,7 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
                     finish: &scene.finish,
                     masks: &scene.masks,
                     heals: &scene.heals,
+                    computed: &scene.computed,
                     viewport,
                     scissor,
                 }

@@ -83,6 +83,27 @@ fn band_sample(uv: vec2f, band: f32, second: f32, amount: f32) -> f32 {
     return sample;
 }
 
+// A computed mask at a place in a tile: the product of its bands'
+// stretched samples, shaped.
+fn computed_mask(index: i32, uv: vec2f) -> f32 {
+    let mask = globals.computed[index];
+    var product = 1.0;
+    if mask.first.x >= 0.0 {
+        product *= stretched(band_sample(uv, mask.first.x, mask.first.y, mask.first.z), mask.first.w);
+    }
+    if mask.second.x >= 0.0 {
+        product *= stretched(band_sample(uv, mask.second.x, mask.second.y, mask.second.z), mask.second.w);
+    }
+    product = clamp(product, 0.0, 1.0);
+    if mask.shape.x > 0.5 {
+        product = pow(product, 1.0 - product);
+    }
+    if mask.shape.y > 0.5 {
+        product = 1.0 - product;
+    }
+    return product;
+}
+
 struct HealedLayers {
     @location(0) first: vec4f,
     @location(1) second: vec4f,
@@ -181,6 +202,9 @@ fn tile_fragment(in: TileVertex) -> @location(0) vec4f {
         }
         if layer.stretch.z >= 0.0 {
             cover *= textureLoad(layer_masks, pixel, i32(layer.stretch.z), 0).r;
+        }
+        if layer.more.x >= 0.0 {
+            cover *= computed_mask(i32(layer.more.x), in.uv);
         }
         let kind = layer.adjust.x;
         if kind > 0.5 && kind < 9.5 && layer.adjust.w > 0.5 {

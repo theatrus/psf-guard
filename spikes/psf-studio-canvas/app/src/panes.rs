@@ -16,9 +16,10 @@ use super::{Bands, Drag, Scene, SliderId, Studio, Tool};
 use crate::image_steps::Accepts;
 use crate::store_tiles::BandStretch;
 use crate::studio_model::{
-    band_layer, color_from_hue, document_from_color_setup, flow_operations, hue_of, layer_name,
-    panes, plan, BlendMode, Document, LayerRecord, LayerSource, MaskRecord, PlannedStretch, Row,
-    Split, StackEntry, StageKind, StepKind, StepRecord, Stroke, StrokeMode, View,
+    band_layer, channel_label, color_from_hue, document_from_color_setup, flow_operations, hue_of,
+    layer_name, panes, plan, BlendMode, Document, LayerRecord, LayerSource, MaskRecord, MaskShape,
+    PlannedStretch, Row, Split, StackEntry, StageKind, StepKind, StepRecord, Stroke, StrokeMode,
+    View,
 };
 use gpui::{
     canvas, div, prelude::*, px, relative, rgb, AnyElement, Context, MouseButton, MouseDownEvent,
@@ -27,8 +28,9 @@ use gpui::{
 use std::collections::HashMap;
 use std::sync::Arc;
 use studio_render_spike::{
-    Adjustment, Blend, FinishKind, FinishStep, Layer, LayerHeal, Mark, Segment, MAX_FINISH_STEPS,
-    MAX_HEALED_LAYERS, MAX_HEALS, MAX_LAYERS, MAX_MASKS,
+    Adjustment, Blend, ComputedMask, FinishKind, FinishStep, Layer, LayerHeal, Mark, MaskBand,
+    Segment, MAX_COMPUTED_MASKS, MAX_FINISH_STEPS, MAX_HEALED_LAYERS, MAX_HEALS, MAX_LAYERS,
+    MAX_MASKS,
 };
 use uuid::Uuid;
 
@@ -269,6 +271,16 @@ pub(super) fn mask_words(mask: &Option<MaskRecord>) -> Option<String> {
             counted(mask.strokes.len(), "stroke")
         )),
         Some(MaskRecord::Range { .. }) => Some("range mask".to_string()),
+        Some(MaskRecord::FromInputs {
+            inputs, inverted, ..
+        }) => {
+            let inputs: Vec<String> = inputs.iter().map(|input| channel_label(input)).collect();
+            Some(format!(
+                "shows where {} is {}",
+                inputs.join(" × "),
+                if *inverted { "weak" } else { "strong" }
+            ))
+        }
         None => None,
     }
 }
@@ -278,6 +290,7 @@ fn plain_layer() -> Layer {
     Layer {
         mark: Mark::Layer,
         clip: None,
+        computed: None,
         band: 0,
         blended: None,
         color: [1.0; 3],
@@ -393,6 +406,9 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
     let find = |id: &Uuid| document.layers().iter().find(|layer| layer.id == *id);
     // The mask of each layer drawn so far, for the layers clipped to it.
     let mut mask_of: HashMap<Uuid, Option<usize>> = HashMap::new();
+    // The entries whose layer may have a mask computed from inputs: the
+    // entry's place in `layers`, and the layer.
+    let mut masked: Vec<(usize, &LayerRecord)> = Vec::new();
     // A channel view draws its channel alone; a blended view draws the stack.
     let entries: Vec<StackEntry> = if planned.stack.is_empty() {
         (0..planned.channels.len())
@@ -454,6 +470,9 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
                     ..plain_layer()
                 });
                 if let Some(group) = found {
+                    masked.push((layers.len() - 1, group));
+                }
+                if let Some(group) = found {
                     push_own_adjustments(
                         &mut layers,
                         &mut omitted,
@@ -494,6 +513,7 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
                 adjustment: Some((kind, amount_in(operation, settings))),
                 ..plain_layer()
             });
+            masked.push((layers.len() - 1, layer));
             continue;
         };
         let Some(band) = bands.band_of(&channel.channel) else {
@@ -567,6 +587,7 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
         layer_bands.push(band);
         layer_targets.push(target);
         let shown_at = layers.len() - 1;
+        masked.push((shown_at, layer));
         for step in input_heals {
             let mask = mask_for(step_strokes(step));
             push_heal(&mut heals, &mut omitted, shown_at, true, step, mask);
@@ -623,7 +644,77 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
             mask,
         });
     }
+    // The masks computed from inputs. Each input is read with the stretch
+    // the view gives it, from a row of the stretch tables: a layer's row
+    // when a layer shows the input with that stretch, or a row of its own.
+    let mut computed: Vec<ComputedMask> = Vec::new();
+    for (at, layer) in masked {
+        let Some(MaskRecord::FromInputs {
+            inputs,
+            shape,
+            inverted,
+        }) = &layer.mask
+        else {
+            continue;
+        };
+        let mut read = [None; 2];
+        let mut found = 0;
+        for (slot, input) in read.iter_mut().zip(inputs) {
+            let Some((plan, band)) = planned
+                .inputs
+                .iter()
+                .find(|plan| plan.channel == *input)
+                .zip(bands.band_of(input))
+            else {
+                continue;
+            };
+            let strength = plan
+                .background
+                .and_then(|id| document.step(id))
+                .map_or(0.0, |(_, step)| amount(step));
+            strengths[band] = strength;
+            let target = match &plan.stretch {
+                PlannedStretch::Document(steps) => steps
+                    .first()
+                    .and_then(|id| document.step(*id))
+                    .map_or(DEFAULT_STRETCH_TARGET, |(_, step)| stretch_target(step)),
+                PlannedStretch::Preview => DEFAULT_STRETCH_TARGET,
+            };
+            let known = layer_bands
+                .iter()
+                .zip(&layer_targets)
+                .position(|(row_band, row_target)| *row_band == band && *row_target == target);
+            let row = match known {
+                Some(row) => row,
+                None if layer_bands.len() < MAX_LAYERS => {
+                    layer_bands.push(band);
+                    layer_targets.push(target);
+                    layer_bands.len() - 1
+                }
+                None => continue,
+            };
+            *slot = Some(MaskBand {
+                band: bands.tile_band[band],
+                blended: bands.corrected[band].map(|corrected| (corrected, strength)),
+                stretch_row: row,
+            });
+            found += 1;
+        }
+        if found != inputs.len() || inputs.len() > 2 || computed.len() == MAX_COMPUTED_MASKS {
+            // A layer is never drawn without its mask.
+            layers[at].opacity = 0.0;
+            omitted.push(format!("{}, for its mask", layer.name));
+            continue;
+        }
+        layers[at].computed = Some(computed.len());
+        computed.push(ComputedMask {
+            bands: read,
+            power_of_inverse: *shape == MaskShape::PowerOfInverse,
+            inverted: *inverted,
+        });
+    }
     let scene = Scene {
+        computed,
         layers,
         layer_bands,
         layer_targets,

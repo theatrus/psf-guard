@@ -18,6 +18,8 @@ pub const MAX_HEALS: usize = 16;
 /// The most layers with heals of their own one frame draws. Each needs the
 /// layer's samples as a surface-sized image, to copy from.
 pub const MAX_HEALED_LAYERS: usize = 4;
+/// The most masks computed from bands one frame draws.
+pub const MAX_COMPUTED_MASKS: usize = 8;
 /// The mask layer that holds the stroke overlay.
 const OVERLAY_LAYER: u32 = MAX_MASKS as u32;
 
@@ -69,6 +71,9 @@ pub struct Layer {
     /// A second mask that limits the layer: the mask of the layer it is
     /// clipped to. `None` is not clipped.
     pub clip: Option<usize>,
+    /// A mask computed from bands that limits the layer, as an index into
+    /// [`Pane::computed`]. `None` is no such mask.
+    pub computed: Option<usize>,
     /// The band the layer shows.
     pub band: usize,
     pub color: [f32; 3],
@@ -131,6 +136,28 @@ pub struct FinishStep {
     pub mask: Option<usize>,
 }
 
+/// One band a computed mask reads, stretched.
+#[derive(Clone, Copy, Debug)]
+pub struct MaskBand {
+    pub band: usize,
+    /// A second band blended into the first before the stretch, and how
+    /// much of it, as for a layer.
+    pub blended: Option<(usize, f32)>,
+    /// The row of the pane's stretch tables that holds the band's stretch.
+    pub stretch_row: usize,
+}
+
+/// A mask computed at each pixel from the stretched samples of one or two
+/// bands: their product, shaped.
+#[derive(Clone, Copy, Debug)]
+pub struct ComputedMask {
+    pub bands: [Option<MaskBand>; 2],
+    /// Whether the product is raised to the power of 1 minus itself.
+    pub power_of_inverse: bool,
+    /// Whether the mask is 1 minus the shaped product.
+    pub inverted: bool,
+}
+
 /// A heal of one layer: the masked area takes the layer's own samples from
 /// `offset` document pixels away.
 #[derive(Clone, Copy, Debug)]
@@ -173,6 +200,9 @@ pub struct Pane<'a> {
     /// The masks the layers and the Finish steps refer to. At most
     /// [`MAX_MASKS`].
     pub masks: &'a [Vec<Segment>],
+    /// The masks computed from bands that the layers refer to. At most
+    /// [`MAX_COMPUTED_MASKS`].
+    pub computed: &'a [ComputedMask],
     /// Heals of single layers, in order. At most [`MAX_HEALS`], on at most
     /// [`MAX_HEALED_LAYERS`] layers.
     pub heals: &'a [LayerHeal],
@@ -260,10 +290,11 @@ struct Globals {
     view: [f32; 4],
     screen: [f32; 4],
     counts: [f32; 4],
-    layers: [[f32; 16]; MAX_LAYERS],
+    layers: [[f32; 20]; MAX_LAYERS],
     finish: [[f32; 12]; MAX_FINISH_STEPS],
     healed: [[f32; 4]; MAX_HEALED_LAYERS],
     heals: [[f32; 8]; MAX_HEALS],
+    computed: [[f32; 12]; MAX_COMPUTED_MASKS],
     display_matrix: [f32; 12],
     display: [f32; 4],
 }
@@ -1057,7 +1088,8 @@ impl Renderer {
                 OVERLAY_LAYER as f32,
             ],
             counts: [layers.len() as f32, finish.len() as f32, 0.0, 0.0],
-            layers: [[0.0; 16]; MAX_LAYERS],
+            layers: [[0.0; 20]; MAX_LAYERS],
+            computed: [[0.0; 12]; MAX_COMPUTED_MASKS],
             finish: [[0.0; 12]; MAX_FINISH_STEPS],
             healed: [[-1.0, -1.0, 0.0, 0.0]; MAX_HEALED_LAYERS],
             heals: [[0.0; 8]; MAX_HEALS],
@@ -1107,10 +1139,35 @@ impl Renderer {
                 amount,
                 mask,
                 if layer.own { 1.0 } else { 0.0 },
+                layer
+                    .computed
+                    .filter(|mask| *mask < pane.computed.len().min(MAX_COMPUTED_MASKS))
+                    .map_or(-1.0, |mask| mask as f32),
+                0.0,
+                0.0,
+                0.0,
             ];
             if shows_band {
                 row += 1;
             }
+        }
+        for (slot, mask) in globals.computed.iter_mut().zip(pane.computed) {
+            let band = |band: Option<MaskBand>| match band {
+                Some(band) => [
+                    band.band.min(self.bands - 1) as f32,
+                    band.blended
+                        .map_or(-1.0, |(other, _)| other.min(self.bands - 1) as f32),
+                    band.blended
+                        .map_or(0.0, |(_, amount)| amount.clamp(0.0, 1.0)),
+                    band.stretch_row.min(MAX_LAYERS - 1) as f32,
+                ],
+                None => [-1.0, -1.0, 0.0, 0.0],
+            };
+            let (first, second) = (band(mask.bands[0]), band(mask.bands[1]));
+            slot[..4].copy_from_slice(&first);
+            slot[4..8].copy_from_slice(&second);
+            slot[8] = if mask.power_of_inverse { 1.0 } else { 0.0 };
+            slot[9] = if mask.inverted { 1.0 } else { 0.0 };
         }
         // Each layer with heals of its own gets a place among the healed
         // layers. A heal on a layer with no place left is not drawn.
