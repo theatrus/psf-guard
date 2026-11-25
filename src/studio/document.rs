@@ -1,0 +1,552 @@
+use super::{Junction, PaintedMask, Stroke, StudioError};
+use crate::image_steps::{Accepts, Domain};
+use serde::{Deserialize, Serialize};
+use std::fmt;
+use std::str::FromStr;
+use uuid::Uuid;
+
+/// The version of the document format this build writes.
+pub const DOCUMENT_VERSION: u32 = 1;
+
+/// One stage of the workflow. A document has each stage once, in this order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum StageKind {
+    /// Choosing stacks or masters, naming bands, registering and cropping.
+    Sources,
+    /// Work on linear samples: background, deconvolution, noise, stars,
+    /// color calibration.
+    Linear,
+    /// From linear samples to display-referred ones.
+    Stretch,
+    /// Layers: each has its own color, mask, adjustments and blend. Editing
+    /// that is specific to one band, to the stars, or to one region of one
+    /// layer happens here.
+    Combine,
+    /// Adjustments to the combined image as a whole: curves, saturation,
+    /// local contrast and retouching. A step here may still be masked, and
+    /// it acts on every layer at once.
+    Finish,
+    /// Color space, renditions and the file written.
+    Export,
+}
+
+impl StageKind {
+    /// Every stage, in the order a document has them.
+    pub const ALL: [StageKind; 6] = [
+        StageKind::Sources,
+        StageKind::Linear,
+        StageKind::Stretch,
+        StageKind::Combine,
+        StageKind::Finish,
+        StageKind::Export,
+    ];
+
+    /// The samples the stage's steps are given.
+    pub fn works_on(self) -> Domain {
+        match self {
+            StageKind::Sources | StageKind::Linear | StageKind::Stretch => Domain::Linear,
+            StageKind::Combine | StageKind::Finish | StageKind::Export => Domain::Display,
+        }
+    }
+
+    /// Whether a person may paint masks and heal in this stage.
+    pub fn allows_manual_edits(self) -> bool {
+        !matches!(self, StageKind::Sources | StageKind::Export)
+    }
+
+    fn word(self) -> &'static str {
+        match self {
+            StageKind::Sources => "sources",
+            StageKind::Linear => "linear",
+            StageKind::Stretch => "stretch",
+            StageKind::Combine => "combine",
+            StageKind::Finish => "finish",
+            StageKind::Export => "export",
+        }
+    }
+}
+
+impl fmt::Display for StageKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.word())
+    }
+}
+
+impl FromStr for StageKind {
+    type Err = StudioError;
+
+    fn from_str(word: &str) -> Result<Self, Self::Err> {
+        StageKind::ALL
+            .into_iter()
+            .find(|stage| stage.word() == word)
+            .ok_or_else(|| StudioError::Document(format!("{word:?} is not a stage")))
+    }
+}
+
+/// What a step does.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum StepKind {
+    /// A named operation with its settings, such as a background model or a
+    /// curve.
+    Operation {
+        /// The operation's name.
+        operation: String,
+        /// The samples the operation works on.
+        accepts: Accepts,
+        /// The operation's settings, in its own format.
+        settings: serde_json::Value,
+    },
+    /// One stroke of the heal brush.
+    Heal {
+        /// The area healed.
+        stroke: Stroke,
+        /// Where the replacement comes from, relative to each healed pixel,
+        /// in document pixels.
+        offset: [i64; 2],
+        /// The brightness added to each channel of the copied samples,
+        /// measured when the stroke was made.
+        shift: Vec<f32>,
+    },
+}
+
+impl StepKind {
+    /// The step's name, as a person reads it.
+    pub fn name(&self) -> &str {
+        match self {
+            StepKind::Operation { operation, .. } => operation,
+            StepKind::Heal { .. } => "Heal",
+        }
+    }
+
+    fn accepts(&self) -> Accepts {
+        match self {
+            StepKind::Operation { accepts, .. } => *accepts,
+            StepKind::Heal { .. } => Accepts::Either,
+        }
+    }
+
+    fn is_manual_edit(&self) -> bool {
+        matches!(self, StepKind::Heal { .. })
+    }
+}
+
+/// Where a step takes effect.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum MaskRecord {
+    /// A mask painted by hand.
+    Painted(PaintedMask),
+    /// A mask that selects pixels by value.
+    Range {
+        /// The lowest fully selected value.
+        low: f32,
+        /// The highest fully selected value.
+        high: f32,
+        /// How far outside `low` and `high` the mask reaches 0.
+        feather: f32,
+    },
+}
+
+/// One step of a stage.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StepRecord {
+    /// The step's identity, which stays the same as its settings change.
+    pub id: Uuid,
+    /// Whether the step is applied. A step that is off stays in the
+    /// document.
+    pub enabled: bool,
+    /// What the step does.
+    #[serde(flatten)]
+    pub kind: StepKind,
+    /// Where the step takes effect. `None` is everywhere.
+    pub mask: Option<MaskRecord>,
+}
+
+impl StepRecord {
+    /// A new step that is on and applies everywhere.
+    pub fn new(kind: StepKind) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            enabled: true,
+            kind,
+            mask: None,
+        }
+    }
+}
+
+/// How a layer combines with the layers beneath it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BlendMode {
+    /// The layer covers what is beneath it, by its opacity.
+    #[default]
+    Normal,
+    /// Brightens, without clipping: how stars go back onto a starless image.
+    Screen,
+    /// Adds the layer's samples.
+    Add,
+    /// Multiplies by the layer's samples.
+    Multiply,
+    /// Keeps the brighter of the two at each sample.
+    Lighten,
+    /// Keeps the darker of the two at each sample.
+    Darken,
+}
+
+impl BlendMode {
+    /// Every blend mode, in the order a list shows them.
+    pub const ALL: [BlendMode; 6] = [
+        BlendMode::Normal,
+        BlendMode::Screen,
+        BlendMode::Add,
+        BlendMode::Multiply,
+        BlendMode::Lighten,
+        BlendMode::Darken,
+    ];
+
+    fn word(self) -> &'static str {
+        match self {
+            BlendMode::Normal => "normal",
+            BlendMode::Screen => "screen",
+            BlendMode::Add => "add",
+            BlendMode::Multiply => "multiply",
+            BlendMode::Lighten => "lighten",
+            BlendMode::Darken => "darken",
+        }
+    }
+}
+
+impl fmt::Display for BlendMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.word())
+    }
+}
+
+impl FromStr for BlendMode {
+    type Err = StudioError;
+
+    fn from_str(word: &str) -> Result<Self, Self::Err> {
+        BlendMode::ALL
+            .into_iter()
+            .find(|mode| mode.word() == word)
+            .ok_or_else(|| StudioError::Document(format!("{word:?} is not a blend mode")))
+    }
+}
+
+/// Where a layer's pixels come from.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "from", rename_all = "kebab-case")]
+pub enum LayerSource {
+    /// A band's stretched result.
+    Band {
+        /// The band's name, such as "Ha" or "OIII".
+        band: String,
+    },
+    /// The result of an earlier step: the starless image before noise
+    /// reduction, the stars from star separation, a band before sharpening.
+    Step {
+        /// The step whose result the layer shows.
+        step: Uuid,
+        /// Whether the layer keeps the pixels as they were when it was made.
+        /// A layer that is not frozen follows later changes to that step.
+        frozen: bool,
+    },
+}
+
+/// One layer of the Combine stage: a source with its own color, mask and
+/// adjustments, combined with the layers beneath it.
+///
+/// A layer's steps and mask apply to that layer alone. This is where very
+/// specific editing happens: one band's highlights, the stars only, one
+/// region of one layer.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LayerRecord {
+    /// The layer's identity.
+    pub id: Uuid,
+    /// The layer's name, as a person reads it.
+    pub name: String,
+    /// Where the layer's pixels come from.
+    pub source: LayerSource,
+    /// Whether the layer is shown.
+    pub visible: bool,
+    /// How strongly the layer applies, from 0 to 1.
+    pub opacity: f32,
+    /// How the layer combines with the layers beneath it.
+    pub blend: BlendMode,
+    /// The color a mono layer is given. `None` keeps the source's own color.
+    pub color: Option<[f32; 3]>,
+    /// Adjustments to this layer alone, in order.
+    pub steps: Vec<StepRecord>,
+    /// Where this layer shows. `None` is everywhere.
+    pub mask: Option<MaskRecord>,
+}
+
+impl LayerRecord {
+    /// A new visible layer at full opacity with the normal blend.
+    pub fn new(name: &str, source: LayerSource) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            name: name.to_string(),
+            source,
+            visible: true,
+            opacity: 1.0,
+            blend: BlendMode::Normal,
+            color: None,
+            steps: Vec::new(),
+            mask: None,
+        }
+    }
+}
+
+/// One stage: its steps in order, and the junction at its end.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Stage {
+    /// Which stage this is.
+    pub kind: StageKind,
+    /// The stage's steps, in the order they are applied.
+    pub steps: Vec<StepRecord>,
+    /// The Combine stage's layers, bottom first. Empty in every other stage.
+    #[serde(default)]
+    pub layers: Vec<LayerRecord>,
+    /// The end of the stage, where its result may be replaced by an edited
+    /// file.
+    #[serde(default)]
+    pub junction: Junction,
+}
+
+/// A processing attempt: six stages in a fixed order.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Document {
+    /// The format version the document was written with.
+    pub version: u32,
+    /// The document's name.
+    pub name: String,
+    stages: Vec<Stage>,
+}
+
+impl Document {
+    /// An empty document with every stage.
+    pub fn new(name: &str) -> Self {
+        Self {
+            version: DOCUMENT_VERSION,
+            name: name.to_string(),
+            stages: StageKind::ALL
+                .into_iter()
+                .map(|kind| Stage {
+                    kind,
+                    steps: Vec::new(),
+                    layers: Vec::new(),
+                    junction: Junction::default(),
+                })
+                .collect(),
+        }
+    }
+
+    /// The stages, in order.
+    pub fn stages(&self) -> &[Stage] {
+        &self.stages
+    }
+
+    /// One stage.
+    pub fn stage(&self, kind: StageKind) -> &Stage {
+        &self.stages[kind as usize]
+    }
+
+    /// One stage's junction, to record an export or an edit.
+    pub fn junction_mut(&mut self, kind: StageKind) -> &mut Junction {
+        &mut self.stages[kind as usize].junction
+    }
+
+    /// Puts a step into a stage at `index`, or at the end when `index` is
+    /// past it.
+    ///
+    /// Refuses a step that does not work on the stage's samples, a manual
+    /// edit in a stage that does not take them, and a mask on a step in such
+    /// a stage.
+    pub fn insert_step(
+        &mut self,
+        stage: StageKind,
+        index: usize,
+        step: StepRecord,
+    ) -> Result<(), StudioError> {
+        step.kind
+            .accepts()
+            .check(step.kind.name(), stage.works_on())?;
+        let manual =
+            step.kind.is_manual_edit() || matches!(step.mask, Some(MaskRecord::Painted(_)));
+        if manual && !stage.allows_manual_edits() {
+            return Err(StudioError::Document(format!(
+                "the {stage} stage takes no manual edits"
+            )));
+        }
+        let steps = &mut self.stages[stage as usize].steps;
+        steps.insert(index.min(steps.len()), step);
+        Ok(())
+    }
+
+    /// The Combine stage's layers, bottom first.
+    pub fn layers(&self) -> &[LayerRecord] {
+        &self.stages[StageKind::Combine as usize].layers
+    }
+
+    /// One layer, to change its settings. Use [`Self::insert_layer_step`]
+    /// to add a step to it.
+    pub fn layer_mut(&mut self, id: Uuid) -> Option<&mut LayerRecord> {
+        self.stages[StageKind::Combine as usize]
+            .layers
+            .iter_mut()
+            .find(|layer| layer.id == id)
+    }
+
+    /// Puts a layer into the Combine stage at `index`, counted from the
+    /// bottom, or on top when `index` is past the last layer.
+    ///
+    /// Refuses an opacity outside 0 to 1, and a layer step that does not
+    /// work on display samples.
+    pub fn insert_layer(&mut self, index: usize, layer: LayerRecord) -> Result<(), StudioError> {
+        if !(0.0..=1.0).contains(&layer.opacity) {
+            return Err(StudioError::Document(format!(
+                "a layer's opacity is from 0 to 1, not {}",
+                layer.opacity
+            )));
+        }
+        for step in &layer.steps {
+            step.kind
+                .accepts()
+                .check(step.kind.name(), StageKind::Combine.works_on())?;
+        }
+        let layers = &mut self.stages[StageKind::Combine as usize].layers;
+        layers.insert(index.min(layers.len()), layer);
+        Ok(())
+    }
+
+    /// Adds a step to one layer, after the layer's other steps.
+    pub fn insert_layer_step(&mut self, layer: Uuid, step: StepRecord) -> Result<(), StudioError> {
+        step.kind
+            .accepts()
+            .check(step.kind.name(), StageKind::Combine.works_on())?;
+        let layer = self
+            .layer_mut(layer)
+            .ok_or_else(|| StudioError::Document("the layer is not in the document".to_string()))?;
+        layer.steps.push(step);
+        Ok(())
+    }
+
+    /// Moves a layer to `index`, counted from the bottom.
+    pub fn move_layer(&mut self, id: Uuid, index: usize) -> bool {
+        let layers = &mut self.stages[StageKind::Combine as usize].layers;
+        let Some(from) = layers.iter().position(|layer| layer.id == id) else {
+            return false;
+        };
+        let layer = layers.remove(from);
+        layers.insert(index.min(layers.len()), layer);
+        true
+    }
+
+    /// Takes a layer out of the document and returns it.
+    pub fn remove_layer(&mut self, id: Uuid) -> Option<LayerRecord> {
+        let layers = &mut self.stages[StageKind::Combine as usize].layers;
+        let index = layers.iter().position(|layer| layer.id == id)?;
+        Some(layers.remove(index))
+    }
+
+    /// A step of any stage, and the stage it is in.
+    pub fn step(&self, id: Uuid) -> Option<(StageKind, &StepRecord)> {
+        self.stages.iter().find_map(|stage| {
+            let step = stage.steps.iter().find(|step| step.id == id)?;
+            Some((stage.kind, step))
+        })
+    }
+
+    fn step_mut(&mut self, id: Uuid) -> Option<(StageKind, &mut StepRecord)> {
+        self.stages.iter_mut().find_map(|stage| {
+            let kind = stage.kind;
+            let step = stage.steps.iter_mut().find(|step| step.id == id)?;
+            Some((kind, step))
+        })
+    }
+
+    /// Replaces an operation's settings. Returns whether the document has
+    /// such an operation.
+    pub fn set_step_settings(&mut self, id: Uuid, new: serde_json::Value) -> bool {
+        match self.step_mut(id) {
+            Some((
+                _,
+                StepRecord {
+                    kind: StepKind::Operation { settings, .. },
+                    ..
+                },
+            )) => {
+                *settings = new;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Turns a step on or off. Returns whether the document has the step.
+    pub fn set_step_enabled(&mut self, id: Uuid, enabled: bool) -> bool {
+        self.step_mut(id)
+            .map(|(_, step)| step.enabled = enabled)
+            .is_some()
+    }
+
+    /// Adds a stroke to a step's painted mask, starting the mask if the step
+    /// has none. A mask of another kind is replaced by the painted one.
+    ///
+    /// Refuses a step in a stage that takes no manual edits.
+    pub fn paint_step_mask(&mut self, id: Uuid, stroke: Stroke) -> Result<(), StudioError> {
+        let (stage, step) = self
+            .step_mut(id)
+            .ok_or_else(|| StudioError::Document("the step is not in the document".to_string()))?;
+        if !stage.allows_manual_edits() {
+            return Err(StudioError::Document(format!(
+                "the {stage} stage takes no manual edits"
+            )));
+        }
+        match &mut step.mask {
+            Some(MaskRecord::Painted(mask)) => mask.strokes.push(stroke),
+            mask => {
+                *mask = Some(MaskRecord::Painted(PaintedMask {
+                    strokes: vec![stroke],
+                }));
+            }
+        }
+        Ok(())
+    }
+
+    /// Takes a step out of the document and returns it.
+    pub fn remove_step(&mut self, id: Uuid) -> Option<StepRecord> {
+        self.stages.iter_mut().find_map(|stage| {
+            let index = stage.steps.iter().position(|step| step.id == id)?;
+            Some(stage.steps.remove(index))
+        })
+    }
+
+    /// The document as JSON.
+    pub fn to_json(&self) -> String {
+        serde_json::to_string_pretty(self).expect("a document is always valid JSON")
+    }
+
+    /// Reads a document from JSON. Refuses a document from a newer build,
+    /// and one whose stages are missing or out of order.
+    pub fn from_json(text: &str) -> Result<Self, StudioError> {
+        let document: Document =
+            serde_json::from_str(text).map_err(|error| StudioError::Document(error.to_string()))?;
+        if document.version > DOCUMENT_VERSION {
+            return Err(StudioError::Document(format!(
+                "it was written by a newer version (format {}; this build reads up to {})",
+                document.version, DOCUMENT_VERSION
+            )));
+        }
+        let kinds: Vec<StageKind> = document.stages.iter().map(|stage| stage.kind).collect();
+        if kinds != StageKind::ALL {
+            return Err(StudioError::Document(
+                "its stages are missing or out of order".to_string(),
+            ));
+        }
+        Ok(document)
+    }
+}
