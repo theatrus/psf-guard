@@ -162,6 +162,9 @@ pub struct StepRecord {
     pub kind: StepKind,
     /// Where the step takes effect. `None` is everywhere.
     pub mask: Option<MaskRecord>,
+    /// The band the step applies to. `None` is every band.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub band: Option<String>,
 }
 
 impl StepRecord {
@@ -172,7 +175,14 @@ impl StepRecord {
             enabled: true,
             kind,
             mask: None,
+            band: None,
         }
+    }
+
+    /// The step, applied to one band only.
+    pub fn for_band(mut self, band: &str) -> Self {
+        self.band = Some(band.to_string());
+        self
     }
 }
 

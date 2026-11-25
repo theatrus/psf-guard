@@ -3,20 +3,18 @@
 //! stage's own controls on the right.
 
 use super::{
-    Drag, Scene, SliderId, Studio, Tool, BAND_COLORS, BAND_NAMES, COLOR_GAIN, PANEL_WIDTH,
-    STEPS_WIDTH,
+    Drag, Scene, SliderId, Studio, Tool, BAND_COLORS, BAND_NAMES, PANEL_WIDTH, STEPS_WIDTH,
 };
 use crate::image_steps::Accepts;
 use crate::studio_model::{
-    level_for_zoom, BlendMode, Document, JunctionStatus, LayerRecord, LayerSource, MaskRecord,
-    StageKind, StepKind, StepRecord, Stroke, StrokeMode,
+    document_from_color_setup, level_for_zoom, BlendMode, Document, JunctionStatus, LayerSource,
+    MaskRecord, StageKind, StepKind, StepRecord, Stroke, StrokeMode,
 };
 use gpui::{
     canvas, div, prelude::*, px, relative, rgb, AnyElement, Context, MouseButton, MouseDownEvent,
     Rgba, Window,
 };
 use std::sync::Arc;
-use studio_render_spike::synth::{BANDS, MAX_LEVEL};
 use studio_render_spike::{
     Blend, FinishKind, FinishStep, Layer, Segment, MAX_FINISH_STEPS, MAX_LAYERS, MAX_MASKS,
 };
@@ -81,34 +79,81 @@ fn operation(name: &str, accepts: Accepts) -> StepRecord {
     })
 }
 
-/// A document like one a person would have part way through: eight bands
-/// through Linear and Stretch, one layer per band, and two global
-/// adjustments.
-pub(super) fn demo_document() -> Document {
-    let mut document = Document::new("Synthetic mosaic");
-    let mut add = |stage: StageKind, name: &str, accepts: Accepts| {
-        document
-            .insert_step(stage, usize::MAX, operation(name, accepts))
-            .expect("a demo step fits its stage");
-    };
-    add(StageKind::Linear, "Background", Accepts::Linear);
-    add(StageKind::Linear, "Deconvolution", Accepts::Linear);
-    add(StageKind::Linear, "Noise reduction", Accepts::Linear);
-    add(StageKind::Stretch, "Stretch", Accepts::Linear);
-    add(StageKind::Finish, "Curves", Accepts::Display);
-    add(StageKind::Finish, "Saturation", Accepts::Display);
-    for (index, name) in BAND_NAMES.iter().enumerate() {
-        let mut layer = LayerRecord::new(
-            name,
-            LayerSource::Band {
-                band: name.to_string(),
-            },
-        );
+/// A name and a color for each band of a document, up to the layers one
+/// frame draws: the eight synthetic bands, red, green and blue for three,
+/// and gray for one.
+pub(super) fn band_labels(bands: usize) -> Vec<(String, [f32; 3])> {
+    let bright = |color: [f32; 3]| color.map(|channel| (channel * 2.0).min(1.0));
+    match bands {
+        1 => vec![("L".to_string(), [1.0; 3])],
+        3 => ["R", "G", "B"]
+            .iter()
+            .enumerate()
+            .map(|(index, name)| (name.to_string(), bright(BAND_COLORS[index + 1])))
+            .collect(),
+        _ => (0..bands.min(MAX_LAYERS))
+            .map(|index| match BAND_NAMES.get(index) {
+                Some(name) if bands == BAND_NAMES.len() => {
+                    (name.to_string(), bright(BAND_COLORS[index]))
+                }
+                _ => (
+                    format!("Band {}", index + 1),
+                    bright(BAND_COLORS[index % 8]),
+                ),
+            })
+            .collect(),
+    }
+}
+
+/// The name PSF Guard's settings give a band's channel, such as `ha` for
+/// `Ha`. A band PSF Guard has no role for, such as NII, keeps its own name in
+/// lower case.
+pub(super) fn channel_name(band: &str) -> String {
+    match band {
+        "L" => "luminance".to_string(),
+        "R" => "red".to_string(),
+        "G" => "green".to_string(),
+        "B" => "blue".to_string(),
+        other => other.to_lowercase(),
+    }
+}
+
+/// PSF Guard's built-in default color setup.
+const DEFAULT_COLOR_SETUP: &str =
+    include_str!("../../../../src/processing_setups/default_color.json");
+
+/// A new document: PSF Guard's default color flow over the bands. The steps
+/// and their settings are the ones PSF Guard's color previews apply. The
+/// layers get a color each, which the settings leave to the palette.
+pub(super) fn flow_document(bands: usize) -> Document {
+    let labels = band_labels(bands);
+    let channels: Vec<String> = labels.iter().map(|(name, _)| channel_name(name)).collect();
+    let channels: Vec<&str> = channels.iter().map(String::as_str).collect();
+    let settings = serde_json::from_str(DEFAULT_COLOR_SETUP).expect("the default setup is JSON");
+    let mut document = document_from_color_setup("PSF Guard default color", &settings, &channels)
+        .expect("the default setup makes a document");
+    // The layers add together, so their colors are scaled until the
+    // brightest channel of their sum is full scale.
+    let brightest = (0..3)
+        .map(|channel| labels.iter().map(|(_, color)| color[channel]).sum::<f32>())
+        .fold(f32::MIN_POSITIVE, f32::max);
+    let ids: Vec<_> = document.layers().iter().map(|layer| layer.id).collect();
+    for (id, (name, color)) in ids.into_iter().zip(labels) {
+        let layer = document.layer_mut(id).expect("the layer was just listed");
+        layer.name = name;
         layer.blend = BlendMode::Add;
-        layer.color = Some(BAND_COLORS[index].map(|channel| (channel * 2.0).min(1.0)));
+        layer.color = Some(color.map(|channel| channel / brightest));
+    }
+    // Two adjustments PSF Guard's flow does not have, so the Finish stage
+    // has something to draw. They stay out of PSF Guard's settings.
+    for name in ["Curves", "Saturation"] {
         document
-            .insert_layer(usize::MAX, layer)
-            .expect("a demo layer is valid");
+            .insert_step(
+                StageKind::Finish,
+                usize::MAX,
+                operation(name, Accepts::Display),
+            )
+            .expect("a Finish step fits its stage");
     }
     document
 }
@@ -205,7 +250,8 @@ fn step_strokes(step: &StepRecord) -> Vec<Segment> {
 }
 
 /// What the document asks the canvas to draw.
-fn scene(document: &Document, version: u64) -> Scene {
+fn scene(document: &Document, bands: usize, version: u64) -> Scene {
+    let labels = band_labels(bands);
     let layers = document
         .layers()
         .iter()
@@ -215,7 +261,9 @@ fn scene(document: &Document, version: u64) -> Scene {
                 // A layer made from a step's result needs the engine.
                 return None;
             };
-            let band = BAND_NAMES.iter().position(|name| name == band)?;
+            let band = labels
+                .iter()
+                .position(|(name, _)| name == band || &channel_name(name) == band)?;
             // A layer's own Curves steps add up to one curve.
             let curve = layer
                 .steps
@@ -225,10 +273,7 @@ fn scene(document: &Document, version: u64) -> Scene {
                 .sum();
             Some(Layer {
                 band,
-                color: layer
-                    .color
-                    .unwrap_or([1.0; 3])
-                    .map(|channel| channel * COLOR_GAIN * 0.5),
+                color: layer.color.unwrap_or([1.0; 3]),
                 opacity: if layer.visible { layer.opacity } else { 0.0 },
                 blend: match layer.blend {
                     BlendMode::Normal => Blend::Normal,
@@ -238,9 +283,6 @@ fn scene(document: &Document, version: u64) -> Scene {
                     BlendMode::Lighten => Blend::Lighten,
                     BlendMode::Darken => Blend::Darken,
                 },
-                black: 0.0195,
-                white: 1.0,
-                midtone: 0.5,
                 curve,
             })
         })
@@ -327,7 +369,7 @@ impl Studio {
     /// Sends the canvas what the document now asks it to draw.
     pub(super) fn refresh_canvas(&mut self) {
         self.scene_version += 1;
-        let scene = Arc::new(scene(&self.document, self.scene_version));
+        let scene = Arc::new(scene(&self.document, self.bands, self.scene_version));
         // While a brush is in hand, the selected step's mask shows over the
         // image, so a person sees what they have painted.
         let overlay = if self.tool == Tool::Pan {
@@ -488,7 +530,10 @@ impl Studio {
                     } else {
                         CONTROL
                     }))
-                    .child(format!("{}. {}", index + 1, step.kind.name()))
+                    .child(match &step.band {
+                        Some(band) => format!("{}. {} · {band}", index + 1, step.kind.name()),
+                        None => format!("{}. {}", index + 1, step.kind.name()),
+                    })
                     .child(div().text_xs().text_color(rgb(QUIET)).child(mask))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.selected_step = Some(id);
@@ -722,12 +767,13 @@ impl Studio {
         slider: Option<fn(usize) -> SliderId>,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
-        (0..BANDS)
-            .map(|band| {
+        band_labels(self.bands)
+            .into_iter()
+            .enumerate()
+            .map(|(band, (name, color))| {
                 let (midtone, enabled) = self
                     .canvas
                     .read(|shared| (shared.canvas.sliders[band], true));
-                let color = BAND_COLORS[band].map(|channel| (channel * 2.0).min(1.0));
                 div()
                     .flex()
                     .items_center()
@@ -739,7 +785,7 @@ impl Studio {
                             .rounded_sm()
                             .bg(swatch(color, if enabled { 1.0 } else { 0.25 }))
                             .text_color(rgb(0xffffff))
-                            .child(BAND_NAMES[band]),
+                            .child(name),
                     )
                     .when_some(slider, |row, slider| {
                         row.child(self.slider(slider(band), midtone, cx))
@@ -751,7 +797,7 @@ impl Studio {
 
     fn linear_notes(&self) -> impl IntoElement {
         let zoom = self.canvas.read(|shared| shared.canvas.view.zoom);
-        let level = level_for_zoom(zoom, MAX_LEVEL + 1);
+        let level = level_for_zoom(zoom, self.levels);
         let omitted: Vec<&str> = self
             .document
             .stage(StageKind::Linear)

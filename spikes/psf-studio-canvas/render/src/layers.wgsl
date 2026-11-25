@@ -22,9 +22,15 @@ fn tile_vertex(
     return out;
 }
 
-// The midtone transfer function. A balance of 0.5 leaves x unchanged.
-fn midtone(balance: f32, x: f32) -> f32 {
-    return (balance - 1.0) * x / ((2.0 * balance - 1.0) * x - balance);
+// A layer's stretch of a band's sample. The stretch itself is resolved by
+// the host and arrives as a table; nothing here knows its form.
+fn stretched(sample: f32, row: f32) -> f32 {
+    let size = vec2f(textureDimensions(stretch_table));
+    let at = vec2f(
+        (sqrt(clamp(sample, 0.0, 1.0)) * (size.x - 1.0) + 0.5) / size.x,
+        (row + 0.5) / size.y,
+    );
+    return textureSampleLevel(stretch_table, linear_sampler, at, 0.0).r;
 }
 
 // How a layer's color combines with what is beneath it, before opacity.
@@ -51,8 +57,7 @@ fn tile_fragment(in: TileVertex) -> @location(0) vec4f {
     for (var index = 0; index < count; index++) {
         let layer = globals.layers[index];
         let sample = textureSampleLevel(tile, linear_sampler, in.uv, i32(layer.select.x), 0.0).r;
-        let x = clamp((sample - layer.stretch.x) * layer.stretch.y, 0.0, 1.0);
-        let value = contrast_curve(midtone(layer.stretch.z, x), layer.stretch.w);
+        let value = contrast_curve(stretched(sample, layer.stretch.x), layer.stretch.w);
         let blended = blend(layer.select.y, color, layer.color.rgb * value);
         color = mix(color, blended, layer.color.a);
     }

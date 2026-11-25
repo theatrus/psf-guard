@@ -17,7 +17,7 @@ and it needs Rust 1.100 for GPUI.
 | `app/` | A GPUI window that hosts the canvas in a native view, with band sliders and a brush. macOS only. |
 | `web/` | The canvas as it was when the web comparison was measured, in WebGPU, with its own copy of that shader, and the page for the crop preview. |
 | `color/` | The display transform built from ICC profiles with Little CMS, and a check of the shader against Little CMS and ColorSync. macOS only. |
-| `crop/` | Seiza deconvolution previewed on a crop: timings in process, and a server that answers the same previews over HTTP. |
+| `crop/` | Seiza deconvolution previewed on a crop: timings in process, and a server that answers the same previews over HTTP. Also `store_bench`, which measures PSF Guard's tile store. |
 | `results/` | The measurements quoted in the design record. |
 
 ## The staged panes
@@ -51,6 +51,34 @@ cargo run --release -p studio-canvas-spike
 Drag to pan. Scroll with Command held to zoom. Choose **Brush** and drag to
 paint a mask. Drag a band's slider to change its midtone; click a band's name
 to turn the band off.
+
+## Open a tile store
+
+The canvas draws the synthetic document unless it is given a tile store, the
+file format of PSF Guard's `src/studio/store.rs`. Write part of the synthetic
+document to a store, then open it. The default is 12,000 by 8,000 pixels in
+eight bands, which takes 4.1 GB.
+
+```bash
+cargo run --release -p studio-canvas-spike -- --make-store /tmp/synthetic.pgtiles
+```
+
+```bash
+cargo run --release -p studio-canvas-spike -- --open /tmp/synthetic.pgtiles
+```
+
+To open a real FITS or XISF frame, write a store from it with PSF Guard,
+from the repository's root, and open that:
+
+```bash
+cargo run -- studio-store /path/to/master.fits --output /tmp/master.pgtiles
+```
+
+The canvas takes the document's size, pyramid levels and bands from the
+store. One band is shown as a gray layer, three as red, green and blue, and
+any other count as that many layers, up to eight. Each band's stretch is
+Seiza's automatic midtones stretch, resolved from patches of the image at
+full resolution; the band's slider sets where the background lands.
 
 ## Run the measurements
 
@@ -120,6 +148,19 @@ cargo run --release -p studio-canvas-spike -- --output p3-extended --working "/S
 
 The panel's **Layer** line shows the pixel format and color space that the
 canvas's Metal layer ended up with.
+
+## Measure the tile store
+
+Give it a folder with room for the store: about 1.5 GB for the default
+image, and 9.2 GB for the 600-megapixel one.
+
+```bash
+/usr/bin/time -l cargo run --release -p studio-crop-preview-spike --bin store_bench -- /tmp/store results/tile-store.json
+```
+
+```bash
+/usr/bin/time -l cargo run --release -p studio-crop-preview-spike --bin store_bench -- /tmp/store results/tile-store.json 30000 20000 3
+```
 
 `--capture <prefix>` writes PNG captures of selected frames during a native
 measurement.

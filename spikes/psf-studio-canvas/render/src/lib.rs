@@ -4,10 +4,12 @@
 
 pub mod display;
 mod renderer;
+mod source;
 pub mod synth;
 mod tiles;
 
 pub use renderer::{
     Blend, FinishKind, FinishStep, Frame, FrameStats, Layer, Output, Renderer, Segment, View,
-    MAX_FINISH_STEPS, MAX_LAYERS, MAX_MASKS,
+    MAX_FINISH_STEPS, MAX_LAYERS, MAX_MASKS, STRETCH_TABLE_WIDTH,
 };
+pub use source::{Pyramid, TileSource};

@@ -45,6 +45,8 @@ pub mod spatial_analysis;
 pub mod star_contours;
 pub mod star_detection;
 pub mod studio;
+pub mod studio_flow;
+pub mod studio_frames;
 pub mod sync_client;
 pub mod template_repeats;
 pub mod ts_guids;

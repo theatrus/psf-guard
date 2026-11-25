@@ -4,7 +4,7 @@
 struct Layer {
     // rgb: the layer's color. a: its opacity, 0 when the layer is hidden.
     color: vec4f,
-    // x: black point, y: 1 / (white - black), z: midtone balance,
+    // x: the row of the stretch table that holds this layer's stretch.
     // w: the layer's own curve amount.
     stretch: vec4f,
     // x: the band the layer shows, y: the blend mode.
@@ -40,6 +40,10 @@ struct Globals {
 
 @group(0) @binding(0) var<uniform> globals: Globals;
 @group(0) @binding(1) var linear_sampler: sampler;
+// Each layer's stretch, sampled: one row per layer. A row is indexed by the
+// square root of the band's sample, so the dark end, where a stretch is
+// steepest, gets most of the entries.
+@group(0) @binding(2) var stretch_table: texture_2d<f32>;
 
 // An S-shaped contrast curve for a positive amount, and a flattening one for
 // a negative amount. 0 leaves x unchanged.

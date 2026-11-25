@@ -1168,6 +1168,21 @@ pub enum Commands {
         verbose: bool,
     },
 
+    /// Write a PSF-Studio tile store from a FITS or XISF frame
+    StudioStore {
+        /// Path to the FITS or XISF frame
+        input: String,
+
+        /// Output path (if not provided, the frame's name with .pgtiles)
+        #[arg(short, long)]
+        output: Option<String>,
+
+        /// Store 16-bit floats: half the size, about three significant
+        /// digits. For display-referred images, not linear data
+        #[arg(long)]
+        half_floats: bool,
+    },
+
     /// Convert FITS to PNG with MTF stretch applied
     StretchToPng {
         /// Path to FITS file

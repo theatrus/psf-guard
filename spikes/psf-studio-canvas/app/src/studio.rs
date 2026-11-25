@@ -1,4 +1,5 @@
 use crate::bench::Bench;
+use crate::store_tiles::BandStretch;
 use crate::studio_model::{Document, StageKind, Stroke, StrokeMode};
 use gpui::{
     prelude::*, px, rgb, size, App, Bounds, Context, MouseButton, MouseDownEvent, MouseMoveEvent,
@@ -20,7 +21,7 @@ use std::ptr::NonNull;
 use std::rc::Rc;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
-use studio_render_spike::synth::{BANDS, DOC_HEIGHT, DOC_WIDTH};
+use studio_render_spike::MAX_LAYERS;
 use studio_render_spike::{FinishStep, Frame, FrameStats, Layer, Output, Renderer, Segment, View};
 use uuid::Uuid;
 
@@ -34,6 +35,8 @@ pub struct Options {
     /// The ICC profile of the document's working space. With one, the canvas
     /// converts from it to the surface's color space.
     pub working_profile: Option<PathBuf>,
+    /// A tile store to open in place of the synthetic document.
+    pub open: Option<PathBuf>,
     /// Where the benchmark writes PNG captures of selected frames.
     pub capture_prefix: Option<PathBuf>,
 }
@@ -45,14 +48,15 @@ impl Default for Options {
             bench_frames: 600,
             vsync: true,
             capture_prefix: None,
+            open: None,
             output: String::new(),
             working_profile: None,
         }
     }
 }
 
-const BAND_NAMES: [&str; BANDS] = ["L", "R", "G", "B", "Ha", "OIII", "SII", "NII"];
-const BAND_COLORS: [[f32; 3]; BANDS] = [
+const BAND_NAMES: [&str; 8] = ["L", "R", "G", "B", "Ha", "OIII", "SII", "NII"];
+const BAND_COLORS: [[f32; 3]; 8] = [
     [0.30, 0.30, 0.30],
     [0.45, 0.02, 0.02],
     [0.02, 0.45, 0.02],
@@ -64,8 +68,6 @@ const BAND_COLORS: [[f32; 3]; BANDS] = [
 ];
 const PANEL_WIDTH: f32 = 320.0;
 const STEPS_WIDTH: f32 = 260.0;
-/// Scales the band colors so eight bands at once stay within range.
-const COLOR_GAIN: f32 = 0.6;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Tool {
@@ -98,9 +100,15 @@ enum Drag {
 pub struct CanvasState {
     pub view: View,
     /// Slider positions in 0..=1, one per band.
-    pub sliders: [f32; BANDS],
+    pub sliders: [f32; MAX_LAYERS],
+    /// The document's size in pixels.
+    pub document_size: (u32, u32),
+    /// The number of bands in the document.
+    pub band_count: usize,
     /// What the document asks the canvas to draw.
     scene: Arc<Scene>,
+    /// Each band's stretch analysis.
+    stretches: Arc<Vec<BandStretch>>,
     /// Strokes shown over the image: a stroke being drawn, or the selected
     /// step's mask.
     pub strokes: Vec<Segment>,
@@ -120,8 +128,12 @@ impl CanvasState {
                 center: [0.0, 0.0],
                 zoom: 1.0,
             },
-            sliders: [0.5; BANDS],
+            // A third of the way: a background target of 0.2, Seiza's default.
+            sliders: [1.0 / 3.0; MAX_LAYERS],
+            document_size: (1, 1),
+            band_count: 0,
             scene: Arc::new(Scene::default()),
+            stretches: Arc::default(),
             strokes: Vec::new(),
             surface_size: (1, 1),
             fitted: false,
@@ -133,25 +145,31 @@ impl CanvasState {
 
     pub fn fit_zoom(&self) -> f64 {
         let (width, height) = self.surface_size;
-        (width as f64 / DOC_WIDTH as f64).min(height as f64 / DOC_HEIGHT as f64)
+        (width as f64 / self.document_size.0 as f64)
+            .min(height as f64 / self.document_size.1 as f64)
     }
 
     pub fn fit(&mut self) {
         self.view = View {
-            center: [DOC_WIDTH as f64 / 2.0, DOC_HEIGHT as f64 / 2.0],
+            center: [
+                self.document_size.0 as f64 / 2.0,
+                self.document_size.1 as f64 / 2.0,
+            ],
             zoom: self.fit_zoom(),
         };
     }
 
-    /// The scene's layers, each with the midtone its band's slider gives.
-    fn layers(&self) -> Vec<Layer> {
+    /// Each layer's stretch table: Seiza's stretch of the layer's band,
+    /// with the background placed where the band's slider says.
+    fn stretch_tables(&self) -> Vec<Vec<f32>> {
         self.scene
             .layers
             .iter()
-            .map(|layer| Layer {
-                // The slider covers midtone balances from 0.001 to 0.5.
-                midtone: 10f32.powf(-3.0 + 2.7 * self.sliders[layer.band]),
-                ..*layer
+            .filter_map(|layer| {
+                let slider = self.sliders[layer.band.min(MAX_LAYERS - 1)];
+                // The slider covers background targets from 0.05 to 0.5.
+                let target = 0.05 + 0.45 * f64::from(slider);
+                Some(self.stretches.get(layer.band)?.table(target))
             })
             .collect()
     }
@@ -219,6 +237,9 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
         .is_some()
         .then(|| Bench::new(options.bench_frames));
     let mut last_frame: Option<Instant> = None;
+    let mut stretch_tables: Vec<Vec<f32>> = Vec::new();
+    let mut stretched_for = None;
+    let mut stretches_version = 0u64;
     let mut animate = true;
     loop {
         let input_at = {
@@ -229,7 +250,10 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
             }
             shared.dirty = false;
             canvas.surface_size = shared.canvas.surface_size;
+            canvas.document_size = shared.canvas.document_size;
+            canvas.band_count = shared.canvas.band_count;
             canvas.scene = shared.canvas.scene.clone();
+            canvas.stretches = shared.canvas.stretches.clone();
             if !shared.canvas.fitted && canvas.surface_size.0 > 1 {
                 canvas.fit();
                 shared.canvas.view = canvas.view;
@@ -260,10 +284,18 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
         if let Some(bench) = &mut bench {
             bench.before_frame(&mut canvas);
         }
-        let layers = canvas.layers();
+        // The tables change with a slider or with the scene's layers.
+        let stretch_inputs = (canvas.sliders, canvas.scene.version);
+        if stretched_for != Some(stretch_inputs) {
+            stretch_tables = canvas.stretch_tables();
+            stretched_for = Some(stretch_inputs);
+            stretches_version += 1;
+        }
         let frame = Frame {
             view: canvas.view,
-            layers: &layers,
+            layers: &canvas.scene.layers,
+            stretches: &stretch_tables,
+            stretches_version,
             finish: &canvas.scene.finish,
             masks: &canvas.scene.masks,
             masks_version: canvas.scene.version,
@@ -367,6 +399,10 @@ pub struct Studio {
     stroke: Option<Stroke>,
     /// Counts the scenes sent to the canvas.
     scene_version: u64,
+    /// The number of bands in the document.
+    bands: usize,
+    /// The levels in the document's pyramid.
+    levels: u8,
 }
 
 impl Studio {
@@ -406,22 +442,36 @@ impl Studio {
         let workers = std::thread::available_parallelism()
             .map(|count| count.get().saturating_sub(4).max(2))
             .unwrap_or(4);
+        let source = crate::store_tiles::source(options.open.as_deref());
+        let (source, stretches) = match source {
+            Ok((source, stretches)) => (Ok(source), Arc::new(stretches)),
+            Err(error) => (Err(error), Arc::default()),
+        };
+        let bands = stretches.len();
+        let mut levels = 1;
         let renderer = surface
             .map_err(|error| error.to_string())
-            .and_then(|surface| Ok((surface, output(&options)?)))
-            .and_then(|(surface, output)| {
+            .and_then(|surface| Ok((surface, output(&options)?, source?)))
+            .and_then(|(surface, output, source)| {
                 pollster::block_on(Renderer::new(
                     &instance,
                     surface,
-                    1,
-                    1,
                     2 << 30,
                     workers,
+                    source,
                     output,
                 ))
             });
         match renderer {
             Ok(renderer) => {
+                let pyramid = renderer.pyramid();
+                levels = pyramid.levels;
+                {
+                    let mut shared = canvas.0 .0.lock().expect("canvas state");
+                    shared.canvas.document_size = (pyramid.width, pyramid.height);
+                    shared.canvas.band_count = bands;
+                    shared.canvas.stretches = stretches.clone();
+                }
                 let handle = canvas.clone();
                 std::thread::Builder::new()
                     .name("canvas".into())
@@ -448,13 +498,13 @@ impl Studio {
         })
         .detach();
 
-        let document = panes::demo_document();
+        let document = panes::flow_document(bands);
         let mut studio = Self {
             native_view,
             _ns_view: ns_view,
             canvas,
             canvas_bounds: Rc::default(),
-            slider_bounds: (0..BANDS)
+            slider_bounds: (0..MAX_LAYERS)
                 .flat_map(|band| [SliderId::Midtone(band), SliderId::Opacity(band)])
                 .chain([SliderId::Amount])
                 .map(|id| (id, Rc::default()))
@@ -472,6 +522,8 @@ impl Studio {
             selected_layer: 0,
             stroke: None,
             scene_version: 0,
+            bands,
+            levels,
         };
         studio.refresh_canvas();
         studio

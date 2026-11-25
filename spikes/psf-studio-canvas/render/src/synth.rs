@@ -34,32 +34,25 @@ pub struct TileKey {
     pub y: u16,
 }
 
-impl TileKey {
-    /// The tile's rectangle in document pixels, clipped to the document.
-    pub fn doc_rect(self) -> [f32; 4] {
-        let span = (TILE << self.level) as f32;
-        let x0 = self.x as f32 * span;
-        let y0 = self.y as f32 * span;
-        [
-            x0,
-            y0,
-            (x0 + span).min(DOC_WIDTH as f32),
-            (y0 + span).min(DOC_HEIGHT as f32),
-        ]
+/// The synthetic document, as a source of tiles.
+pub struct Synthetic;
+
+impl crate::TileSource for Synthetic {
+    fn pyramid(&self) -> crate::Pyramid {
+        crate::Pyramid {
+            width: DOC_WIDTH,
+            height: DOC_HEIGHT,
+            levels: MAX_LEVEL + 1,
+        }
     }
 
-    pub fn parent(self) -> Option<TileKey> {
-        (self.level < MAX_LEVEL).then(|| TileKey {
-            level: self.level + 1,
-            x: self.x / 2,
-            y: self.y / 2,
-        })
+    fn bands(&self) -> usize {
+        BANDS
     }
-}
 
-pub fn tiles_across(level: u8) -> (u32, u32) {
-    let span = TILE << level;
-    (DOC_WIDTH.div_ceil(span), DOC_HEIGHT.div_ceil(span))
+    fn tile(&self, key: TileKey) -> Vec<u16> {
+        generate_tile(key)
+    }
 }
 
 fn hash(mut v: u64) -> u64 {

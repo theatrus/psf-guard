@@ -4,7 +4,6 @@
 use crate::studio::CanvasState;
 use serde_json::{json, Value};
 use std::time::Instant;
-use studio_render_spike::synth::{DOC_HEIGHT, DOC_WIDTH};
 use studio_render_spike::{FrameStats, Segment};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -91,7 +90,8 @@ impl Bench {
         let frame = self.frame_in_phase as f64;
         let progress = frame / self.frames_per_phase as f64;
         let (width, _) = canvas.surface_size;
-        let center = [DOC_WIDTH as f64 / 2.0, DOC_HEIGHT as f64 / 2.0];
+        let (document_width, document_height) = canvas.document_size;
+        let center = [document_width as f64 / 2.0, document_height as f64 / 2.0];
         match SCRIPT[self.step] {
             Phase::Settle("fit") => canvas.fit(),
             Phase::Settle("1:1") => {
@@ -101,7 +101,7 @@ impl Bench {
             Phase::Settle("pan_start") => {
                 canvas.strokes.clear();
                 canvas.view.zoom = 1.0;
-                canvas.view.center = pan_position(0.0);
+                canvas.view.center = pan_position(0.0, canvas.document_size);
             }
             Phase::Settle(_) | Phase::Done => {}
             Phase::StretchFit | Phase::Stretch1to1 => {
@@ -148,7 +148,8 @@ impl Bench {
                 // Screen pixels per second, by the clock, so a slow frame
                 // does not slow the pan.
                 let elapsed = self.phase_started.elapsed().as_secs_f64();
-                canvas.view.center = pan_position(speed * elapsed / canvas.view.zoom);
+                canvas.view.center =
+                    pan_position(speed * elapsed / canvas.view.zoom, canvas.document_size);
             }
             Phase::ZoomSweep => {
                 let fit = canvas.fit_zoom();
@@ -272,10 +273,10 @@ impl Bench {
             "metal_layer": layer,
             "mean_tile_compute_ms": mean_tile_ms,
             "document": {
-                "width": DOC_WIDTH,
-                "height": DOC_HEIGHT,
-                "megapixels": DOC_WIDTH as f64 * DOC_HEIGHT as f64 / 1.0e6,
-                "bands": studio_render_spike::synth::BANDS,
+                "width": canvas.document_size.0,
+                "height": canvas.document_size.1,
+                "megapixels": canvas.document_size.0 as f64 * canvas.document_size.1 as f64 / 1.0e6,
+                "bands": canvas.band_count,
             },
             "surface": {
                 "width": canvas.surface_size.0,
@@ -291,11 +292,12 @@ impl Bench {
 
 /// A closed path through the document for the pan phases: an ellipse, by
 /// distance travelled in document pixels.
-fn pan_position(distance: f64) -> [f64; 2] {
-    let angle = distance / 9000.0;
+fn pan_position(distance: f64, size: (u32, u32)) -> [f64; 2] {
+    let (width, height) = (size.0 as f64, size.1 as f64);
+    let angle = distance / (0.3 * width);
     [
-        DOC_WIDTH as f64 / 2.0 + 11_000.0 * angle.cos(),
-        DOC_HEIGHT as f64 / 2.0 + 7000.0 * angle.sin(),
+        width / 2.0 + 0.3667 * width * angle.cos(),
+        height / 2.0 + 0.35 * height * angle.sin(),
     ]
 }
 

@@ -37,6 +37,22 @@ pub enum StudioError {
     /// A document could not be read, or is not one this build understands.
     #[error("the document cannot be used: {0}")]
     Document(String),
+    /// A FITS or XISF frame could not be read.
+    #[error("{path} cannot be read as a frame: {reason}")]
+    Frame {
+        /// The file.
+        path: std::path::PathBuf,
+        /// What went wrong.
+        reason: String,
+    },
+    /// A tile store file is not one this build can read.
+    #[error("{path} is not a usable tile store: {reason}")]
+    Store {
+        /// The file.
+        path: std::path::PathBuf,
+        /// What is wrong with it.
+        reason: String,
+    },
     /// A file could not be read or written.
     #[error("{path}: {source}")]
     File {

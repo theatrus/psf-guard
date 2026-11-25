@@ -21,6 +21,8 @@ mod studio_model;
 #[cfg(target_os = "macos")]
 mod bench;
 #[cfg(target_os = "macos")]
+mod store_tiles;
+#[cfg(target_os = "macos")]
 mod studio;
 
 #[cfg(target_os = "macos")]
@@ -31,6 +33,32 @@ fn main() {
         match argument.as_str() {
             "--bench" => options.bench_output = arguments.next().map(Into::into),
             "--no-vsync" => options.vsync = false,
+            "--open" => options.open = arguments.next().map(Into::into),
+            "--make-store" => {
+                // Writes part of the synthetic document to a tile store and
+                // exits: something to open with --open.
+                let path: std::path::PathBuf = arguments.next().unwrap_or_default().into();
+                let mut size = |default: usize| {
+                    arguments
+                        .next()
+                        .and_then(|value| value.parse().ok())
+                        .unwrap_or(default)
+                };
+                let (width, height) = (size(12_000), size(8000));
+                let started = std::time::Instant::now();
+                match store_tiles::write_synthetic_store(&path, width, height) {
+                    Ok(()) => println!(
+                        "wrote {} in {:.1} s",
+                        path.display(),
+                        started.elapsed().as_secs_f64()
+                    ),
+                    Err(error) => {
+                        eprintln!("{error}");
+                        std::process::exit(1);
+                    }
+                }
+                return;
+            }
             "--output" => options.output = arguments.next().unwrap_or_default(),
             "--working" => options.working_profile = arguments.next().map(Into::into),
             "--capture" => options.capture_prefix = arguments.next().map(Into::into),

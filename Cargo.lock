@@ -4517,6 +4517,7 @@ dependencies = [
  "filetime",
  "flate2",
  "globset",
+ "half",
  "http-body-util",
  "humantime",
  "image",

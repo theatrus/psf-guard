@@ -7,7 +7,7 @@ use crate::cli::{Cli, Commands};
 use crate::commands::{
     analyze_fits_and_compare, annotate_stars, benchmark_psf, dump_grading_results,
     filter_rejected_files, list_projects, list_targets, read_fits, regrade_images, screen_fits,
-    show_images, stretch_to_png, update_grade,
+    show_images, stretch_to_png, studio_store, update_grade,
 };
 
 struct SyncPair {
@@ -1386,6 +1386,13 @@ pub fn main() -> Result<()> {
                 annotate_dir: annotate,
             };
             screen_fits(&path, &options)?;
+        }
+        Commands::StudioStore {
+            input,
+            output,
+            half_floats,
+        } => {
+            studio_store(&input, output, half_floats)?;
         }
         Commands::StretchToPng {
             fits_path,

@@ -1,8 +1,7 @@
 use crate::display::{DisplayCurves, TableFormat};
-use crate::synth::{
-    generate_tile, tiles_across, TileKey, BANDS, DOC_HEIGHT, DOC_WIDTH, MAX_LEVEL, TILE,
-};
+use crate::synth::{TileKey, TILE};
 use crate::tiles::{TileCache, TileProducer};
+use crate::{Pyramid, TileSource};
 use bytemuck::{Pod, Zeroable};
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
@@ -47,12 +46,12 @@ pub struct Layer {
     /// From 0 to 1. A hidden layer has 0.
     pub opacity: f32,
     pub blend: Blend,
-    pub black: f32,
-    pub white: f32,
-    pub midtone: f32,
     /// The layer's own contrast curve, from -1 to 1. 0 is none.
     pub curve: f32,
 }
+
+/// The entries in one layer's stretch table.
+pub const STRETCH_TABLE_WIDTH: usize = 4096;
 
 /// What a Finish step does.
 #[derive(Clone, Copy, Debug)]
@@ -93,6 +92,13 @@ pub struct Frame<'a> {
     pub view: View,
     /// The layers, bottom first. At most [`MAX_LAYERS`].
     pub layers: &'a [Layer],
+    /// Each layer's stretch, in the layers' order: [`STRETCH_TABLE_WIDTH`]
+    /// outputs from 0 to 1. Entry `i` is the stretch of the band sample
+    /// `(i / (width - 1))²`, where a band's samples run from 0 to 1.
+    pub stretches: &'a [Vec<f32>],
+    /// Changes whenever `stretches` does, so unchanged tables are not
+    /// uploaded again.
+    pub stretches_version: u64,
     /// The Finish steps, in order. At most [`MAX_FINISH_STEPS`].
     pub finish: &'a [FinishStep],
     /// The masks the Finish steps refer to. At most [`MAX_MASKS`].
@@ -221,6 +227,8 @@ pub struct Renderer {
     config: wgpu::SurfaceConfiguration,
     globals: wgpu::Buffer,
     common: wgpu::BindGroup,
+    stretch_table: wgpu::Texture,
+    stretches_version: Option<u64>,
     finish_layout: wgpu::BindGroupLayout,
     targets: Targets,
     display_curves: wgpu::TextureView,
@@ -242,6 +250,10 @@ pub struct Renderer {
     masks_version: Option<u64>,
     cache: TileCache,
     producer: TileProducer,
+    /// The document's size and levels.
+    pyramid: Pyramid,
+    /// The bands in the document.
+    bands: usize,
     timing: Option<GpuTiming>,
     frame: u64,
     /// The most tiles uploaded in one frame. Each is 4 MB.
@@ -259,10 +271,9 @@ impl Renderer {
     pub async fn new(
         instance: &wgpu::Instance,
         surface: wgpu::Surface<'static>,
-        width: u32,
-        height: u32,
         cache_budget_bytes: u64,
         workers: usize,
+        source: Arc<dyn TileSource>,
         output: Output,
     ) -> Result<Self, String> {
         let adapter = instance
@@ -312,8 +323,9 @@ impl Renderer {
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
-            width: width.max(1),
-            height: height.max(1),
+            // The host gives the size with `resize` once it has laid out.
+            width: 1,
+            height: 1,
             present_mode: if output.vsync {
                 wgpu::PresentMode::AutoVsync
             } else {
@@ -378,6 +390,7 @@ impl Renderer {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                texture_entry(2, wgpu::TextureViewDimension::D2),
             ],
         });
         let tile_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -471,6 +484,21 @@ impl Renderer {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
+        let stretch_table = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("stretch table"),
+            size: wgpu::Extent3d {
+                width: STRETCH_TABLE_WIDTH as u32,
+                height: MAX_LAYERS as u32,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R16Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let stretch_view = stretch_table.create_view(&wgpu::TextureViewDescriptor::default());
         let common = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("globals and sampler"),
             layout: &common_layout,
@@ -482,6 +510,10 @@ impl Renderer {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&stretch_view),
                 },
             ],
         });
@@ -529,16 +561,18 @@ impl Renderer {
         });
 
         // The coarsest level is always loaded, so a view never shows a hole.
-        let mut cache = TileCache::new(cache_budget_bytes);
-        let (across, down) = tiles_across(MAX_LEVEL);
+        let pyramid = source.pyramid();
+        let bands = source.bands().max(1);
+        let mut cache = TileCache::new(cache_budget_bytes, bands);
+        let (across, down) = pyramid.tiles_across(pyramid.max_level());
         for y in 0..down as u16 {
             for x in 0..across as u16 {
                 let key = TileKey {
-                    level: MAX_LEVEL,
+                    level: pyramid.max_level(),
                     x,
                     y,
                 };
-                cache.insert(&device, &queue, &tile_layout, key, &generate_tile(key), 0);
+                cache.insert(&device, &queue, &tile_layout, key, &source.tile(key), 0);
                 cache.pin(key);
             }
         }
@@ -553,6 +587,8 @@ impl Renderer {
             config,
             globals,
             common,
+            stretch_table,
+            stretches_version: None,
             finish_layout,
             targets,
             display_curves,
@@ -567,7 +603,9 @@ impl Renderer {
             mask_ranges: Vec::new(),
             masks_version: None,
             cache,
-            producer: TileProducer::new(workers),
+            producer: TileProducer::new(workers, source),
+            pyramid,
+            bands,
             timing,
             frame: 0,
             uploads_per_frame: 6,
@@ -656,7 +694,7 @@ impl Renderer {
         let level = ((1.0 / view.zoom)
             .log2()
             .floor()
-            .clamp(0.0, MAX_LEVEL as f64)) as u8;
+            .clamp(0.0, self.pyramid.max_level() as f64)) as u8;
         stats.level = level;
         let half = [width / (2.0 * view.zoom), height / (2.0 * view.zoom)];
         let visible = [
@@ -665,20 +703,24 @@ impl Renderer {
             view.center[0] + half[0],
             view.center[1] + half[1],
         ];
-        let visible_keys = keys_in(level, visible, 0);
+        let visible_keys = keys_in(&self.pyramid, level, visible, 0);
         let mut wanted: Vec<TileKey> = Vec::new();
-        let fallback_level = (level + 3).min(MAX_LEVEL);
+        let fallback_level = (level + 3).min(self.pyramid.max_level());
         if fallback_level != level {
-            wanted.extend(keys_in(fallback_level, visible, 0));
+            wanted.extend(keys_in(&self.pyramid, fallback_level, visible, 0));
         }
         let mut by_distance = visible_keys.clone();
         by_distance.sort_by(|a, b| {
-            center_distance(*a, view.center).total_cmp(&center_distance(*b, view.center))
+            center_distance(&self.pyramid, *a, view.center).total_cmp(&center_distance(
+                &self.pyramid,
+                *b,
+                view.center,
+            ))
         });
         wanted.extend(by_distance);
         // One ring of tiles past the edge, so a pan finds them loaded.
         wanted.extend(
-            keys_in(level, visible, 1)
+            keys_in(&self.pyramid, level, visible, 1)
                 .into_iter()
                 .filter(|key| !visible_keys.contains(key)),
         );
@@ -690,7 +732,7 @@ impl Renderer {
         for key in visible_keys.iter().take(MAX_TILE_INSTANCES as usize) {
             let mut source = *key;
             while !self.cache.contains(source) {
-                match source.parent() {
+                match self.pyramid.parent(source) {
                     Some(parent) => source = parent,
                     None => break,
                 }
@@ -702,7 +744,7 @@ impl Renderer {
             if source != *key {
                 stats.tiles_coarse += 1;
             }
-            let rect = key.doc_rect();
+            let rect = self.pyramid.doc_rect(*key);
             let span = (TILE << source.level) as f32;
             let origin = [source.x as f32 * span, source.y as f32 * span];
             instances.push(TileInstance {
@@ -720,6 +762,7 @@ impl Renderer {
         self.queue
             .write_buffer(&self.tile_instances, 0, bytemuck::cast_slice(&instances));
 
+        self.upload_stretches(frame);
         self.upload_strokes(frame);
 
         let target_view = target
@@ -823,17 +866,17 @@ impl Renderer {
             display_matrix: self.display_uniform.map_or([0.0; 12], |display| display.0),
             display: self.display_uniform.map_or([0.0; 4], |display| display.1),
         };
-        for (slot, layer) in globals.layers.iter_mut().zip(layers) {
+        for (row, (slot, layer)) in globals.layers.iter_mut().zip(layers).enumerate() {
             *slot = [
                 layer.color[0],
                 layer.color[1],
                 layer.color[2],
                 layer.opacity.clamp(0.0, 1.0),
-                layer.black,
-                1.0 / (layer.white - layer.black).max(1e-6),
-                layer.midtone.clamp(0.001, 0.999),
+                row as f32,
+                0.0,
+                0.0,
                 layer.curve.clamp(-1.0, 1.0),
-                layer.band.min(BANDS - 1) as f32,
+                layer.band.min(self.bands - 1) as f32,
                 layer.blend as u32 as f32,
                 0.0,
                 0.0,
@@ -868,6 +911,30 @@ impl Renderer {
         }
         self.queue
             .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
+    }
+
+    fn upload_stretches(&mut self, frame: &Frame) {
+        if self.stretches_version == Some(frame.stretches_version) {
+            return;
+        }
+        let mut bits = vec![0u16; STRETCH_TABLE_WIDTH * MAX_LAYERS];
+        for (row, table) in frame.stretches.iter().take(MAX_LAYERS).enumerate() {
+            let target = &mut bits[row * STRETCH_TABLE_WIDTH..(row + 1) * STRETCH_TABLE_WIDTH];
+            for (bits, value) in target.iter_mut().zip(table) {
+                *bits = half::f16::from_f32(*value).to_bits();
+            }
+        }
+        self.queue.write_texture(
+            self.stretch_table.as_image_copy(),
+            bytemuck::cast_slice(&bits),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(STRETCH_TABLE_WIDTH as u32 * 2),
+                rows_per_image: None,
+            },
+            self.stretch_table.size(),
+        );
+        self.stretches_version = Some(frame.stretches_version);
     }
 
     fn upload_strokes(&mut self, frame: &Frame) {
@@ -1069,6 +1136,11 @@ impl Renderer {
         best
     }
 
+    /// The size and levels of the document being drawn.
+    pub fn pyramid(&self) -> Pyramid {
+        self.pyramid
+    }
+
     /// The mean time a worker took to compute one tile.
     pub fn mean_tile_ms(&self) -> f32 {
         self.producer.mean_tile_ms()
@@ -1076,9 +1148,9 @@ impl Renderer {
 }
 
 /// The tiles of `level` that touch `rect`, grown by `ring` tiles on each side.
-fn keys_in(level: u8, rect: [f64; 4], ring: i64) -> Vec<TileKey> {
+fn keys_in(pyramid: &Pyramid, level: u8, rect: [f64; 4], ring: i64) -> Vec<TileKey> {
     let span = (TILE << level) as f64;
-    let (across, down) = tiles_across(level);
+    let (across, down) = pyramid.tiles_across(level);
     let x0 = ((rect[0] / span).floor() as i64 - ring).max(0);
     let y0 = ((rect[1] / span).floor() as i64 - ring).max(0);
     let x1 = ((rect[2] / span).ceil() as i64 + ring).min(across as i64);
@@ -1096,8 +1168,8 @@ fn keys_in(level: u8, rect: [f64; 4], ring: i64) -> Vec<TileKey> {
     keys
 }
 
-fn center_distance(key: TileKey, center: [f64; 2]) -> f64 {
-    let rect = key.doc_rect();
+fn center_distance(pyramid: &Pyramid, key: TileKey, center: [f64; 2]) -> f64 {
+    let rect = pyramid.doc_rect(key);
     let dx = (rect[0] + rect[2]) as f64 / 2.0 - center[0];
     let dy = (rect[1] + rect[3]) as f64 / 2.0 - center[1];
     dx * dx + dy * dy
@@ -1274,5 +1346,3 @@ impl GpuTiming {
             });
     }
 }
-
-const _: () = assert!(DOC_WIDTH > 0 && DOC_HEIGHT > 0);

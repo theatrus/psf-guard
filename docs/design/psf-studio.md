@@ -321,6 +321,7 @@ what was measured, and what it changes.
 5. **Tile format.** Sample depth (half or full float), tile size,
    compression, and whether tiles can be mapped from disk straight to the
    GPU.
+   See [the first result](#5-tile-format-2026-11-25-first-result).
 6. **Out-of-core heavy steps.** Which Seiza operations already work in tiles,
    which need a tiled form, and how RC-Astro tools behave on a mosaic-sized
    file.
@@ -614,6 +615,74 @@ the result.
 - A preview that cancels the run in progress when the slider moves again.
   Each measurement here ran to completion.
 - The preview shown in the GPUI canvas. This harness has no window.
+
+### 5. Tile format (2026-11-25, first result)
+
+The code is `src/studio/store.rs`, with a measurement program in the spike
+(`crop/src/bin/store_bench.rs`).
+
+**Result so far: a plain, uncompressed tiled file with a pyramid is fast
+enough and holds almost nothing in memory. Compression and mapping tiles
+straight to the GPU are not yet tried.**
+
+#### The format
+
+One file per image.
+
+- A short header in JSON: the image's shape and domain, the tile size, the
+  sample format, a key for what the store was made from, and each level's
+  size and offset.
+- Then each level's samples, the image first. A level is stored tile by
+  tile; a tile is 512 pixels a side, less at the right and bottom edges,
+  with its samples row-major and channel-interleaved. A tile's offset
+  follows from the level's size, so the file has no index.
+- Each further level halves the one before it, leaving out samples that are
+  not finite, so a registration border does not darken the pyramid. The last
+  level fits in one tile.
+- Samples are 32-bit floats, or 16-bit floats at half the size.
+
+A store is written beside its final path and moved into place when it is
+complete. A failed write removes the partial file and leaves an existing
+store as it was.
+
+#### Measurements
+
+Same machine as investigation 1, internal SSD. The source is computed as it
+is read, so the image is never in memory. Reads are from a file that was
+just written, so they come from the system's file cache; a first read from
+a cold disk was not measured.
+
+| | 96 megapixels, 3 channels | 600 megapixels, 3 channels |
+|---|---|---|
+| Raw size as 32-bit floats | 1.1 GB | 6.9 GB |
+| Store, 32-bit floats | 1.46 GB (1.33 times raw) | 9.2 GB |
+| Store, 16-bit floats | 0.73 GB | 4.6 GB |
+| Levels | 6 | 7 |
+| Time to write, either format | 0.8 s | 5.0 s |
+| Read a 1024 × 1024 crop, 32-bit | 1.4 ms | 1.6 ms |
+| Read a 3840 × 2160 view at full resolution, 32-bit | 10.8 ms | 13.5 ms |
+| Read the whole top level | 0.1 ms | 0.2 ms |
+| Peak memory of the process | 247 MB | 242 MB |
+
+- **Memory does not grow with the image.** Writing a 6.9 GB image and
+  reading from it peaked at 242 MB, most of it the 95 MB views the
+  measurement asked for.
+- **Read time does not grow with the image.** A crop takes the same time
+  from a 96-megapixel store as from a 600-megapixel one.
+- **16-bit floats are slightly slower to read** (1.8 ms a crop), because
+  each sample is converted. They halve the file.
+
+#### What this settles, and what it leaves
+
+- Tile size: 512 pixels. Not compared with other sizes.
+- Sample format: 32-bit floats for linear results, where faint signal
+  matters. 16-bit floats are an option for display-referred results, with
+  about three significant digits.
+- The pyramid costs one third more disk.
+- Still open: compression (a noisy linear stack compresses poorly, and it
+  would end offsets that follow from the level's size); mapping tiles from
+  disk to the GPU; a cold disk and a network share; and how the janitor
+  counts stores against the disk budget.
 
 ### 9. Color-managed display (2026-11-24, macOS, numbers only)
 
@@ -1013,6 +1082,7 @@ In `src/studio/`, with tests:
   out;
 - strokes, painted masks and the heal brush;
 - the junction's record and its states.
+- the tile store, written from any region reader within the memory budget.
 
 The document records layers, with their blend mode, opacity, color, mask and
 steps.
@@ -1041,9 +1111,221 @@ a layer whose source is an earlier step's result; a heal whose source is
 off the surface; and the brightness match of a heal, which needs the engine
 to read the image.
 
-Not built: any Seiza step wrapped as a Studio step, a tile store on disk,
-the round-trip file writer and reader, undo history, and the panes
-themselves.
+A tile store keeps an image on disk with its pyramid, and is a region reader
+like any other; see
+[investigation 5](#5-tile-format-2026-11-25-first-result).
+
+The spike's canvas draws from a store. The renderer takes a tile source,
+which gives the document's size, pyramid levels and band count, and any
+tile of any level; the synthetic document and a store on disk are two
+sources. Opened on a 12,000 × 8,000, eight-band store of 4.1 GB, the canvas
+read a tile from disk in 6.6 ms, against 14 ms to compute a synthetic one.
+Through the whole measurement script it had no late frame, no blank tile,
+and no tile from a coarser level while panning at 1500 or 6000 pixels per
+second. After a jump to an unloaded area the view was sharp within 81 ms.
+That run was on a 1293 × 970 surface at 120 Hz, not the 3840 × 2160 surface
+of investigation 1, so it shows the store keeping up, not a 4K frame cost.
+
+FITS and XISF frames are sources too, read by region through Seiza:
+`studio_frames::FrameSource`. The `studio-store` command writes a store
+from a frame.
+
+Not built: any Seiza step wrapped as a Studio step, the round-trip file
+writer and reader, and undo history.
+
+## Seiza does the work; Studio starts from PSF Guard's flow (2026-11-25)
+
+The owner's direction, which governs everything above:
+
+- **Seiza has the core operations, and Studio uses them.** Reading FITS and
+  XISF, stretching, background, deconvolution, color calibration,
+  composition and star handling are Seiza's. Studio does not copy or
+  rewrite them.
+- **Where a Seiza API does not fit, the API is fixed in Seiza,** on a
+  branch, in the crate that owns the operation, by making it more flexible.
+  Studio does not work around it with its own version.
+- **A new document is PSF Guard's processing flow.** It starts as the steps
+  PSF Guard's previews already apply, with the same results. What Studio
+  adds is that every step is interactive, and that the final composition is
+  far more adjustable.
+
+### Where this stands
+
+| Part | Whose code runs | State |
+|---|---|---|
+| Reading a FITS or XISF frame by region | Seiza's windowed reader, through `image_io::read_window` | Built: `studio_frames::FrameSource`, and the `studio-store` command |
+| Stretch on the canvas | Seiza's sample domain and automatic midtones stretch; the canvas samples the resolved curve into a table and draws from the table | Built in the spike. The shader holds no stretch math |
+| A layer's Curves, and Saturation, on the canvas | The spike's own shader code | Stand-ins. Seiza's planned curves and saturation replace them, as tables or as shared shader source |
+| Heal, painted masks, blends | New in `studio`; Seiza has none | Candidates to move to Seiza once settled |
+| Tile store and pyramid | New in `studio`; Seiza has no tiled store | PSF Guard's cache format, like its other caches |
+| `image_steps` types | New here; drafted for Seiza and withdrawn | Moves to Seiza once settled |
+| Display transform | Little CMS in the spike; Seiza has no color management | To decide: a Seiza crate, or PSF Guard's |
+| Linear steps | None runs yet | Seiza's, wrapped as steps |
+| The default document | The mapping in `studio::flow`, from a Color processing setup's settings | Built: see “The default document” |
+
+### The default document (2026-11-25)
+
+A new document is made from a Color processing setup, the settings PSF
+Guard's color previews already use (`StackColorProcessing`).
+`studio::document_from_color_setup` turns the settings into steps, and
+`studio::color_setup_from_document` turns the steps back into settings.
+
+| Setting | Stage | Step |
+|---|---|---|
+| A channel of the color card | Sources | Channel stack, one per channel |
+| `background_extraction` | Linear | Background extraction |
+| `input_processing` | Linear | Inputs follow their channel cards |
+| `input_deconvolutions` | Linear | Deconvolution, one per channel |
+| `input_rc_astro` | Linear | RC-Astro tools, one per channel |
+| `emission` | Linear | Subtract continuum |
+| `color_rc_astro` | Linear | RC-Astro tools on color |
+| `color_calibration` | Linear | Color calibration |
+| `input_stretches` | Stretch | Stretch, one per channel per stretch, in order |
+| `narrowband` | Stretch | Narrowband balance and stars |
+| `output_stretches` | Finish | Output stretch, in order |
+| A channel of the color card | Combine | One layer per channel |
+
+The rules the mapping keeps:
+
+- **A step stores PSF Guard's settings unchanged.** The step's settings are
+  the JSON PSF Guard saved. The settings read back from the document are
+  equal to the settings it was made from, so the existing pipeline gives the
+  same image and uses the same cache entries. Tests check this for the
+  built-in default setup, in JSON and through `StackColorProcessing`.
+- **A step that is off is left out of the settings,** which is how PSF Guard
+  records a tool that is off.
+- **A step Studio adds stays out of PSF Guard's settings.** A heal stroke or
+  a Finish curve has no place there.
+- **A setting this build does not know is kept,** in a step in the Export
+  stage, and written back. A document opened and saved by an older Studio
+  does not drop a newer PSF Guard's settings.
+- **A channel the setup did not save takes the stretch the saved channels
+  share,** when they all share one. NII gets the default stretch this way.
+  A channel the setup saved and the card lacks keeps its stretch.
+- **The order of steps does not depend on the order of keys in the file.**
+  Channels sort by name. The spike caught this: its `serde_json` keeps key
+  order and PSF Guard's sorts keys, and the two gave different step orders.
+
+`studio_flow` is the typed side: it takes a `ProcessingSetupRecord` or a
+`StackColorProcessing` and refuses a View setup and settings the color
+pipeline would refuse. The spike's new document is this flow over the
+default setup, with a Curves and a Saturation step added in Finish so that
+stage has something to draw.
+
+What this does not do yet:
+
+- **No step runs.** The steps list PSF Guard's flow and hold its settings.
+  The canvas still draws only the stretch, the layers and the Finish
+  stand-ins. Running the flow means wrapping Seiza's operations as steps, or
+  handing the settings to PSF Guard's color pipeline for a full render.
+- **The order inside a stage is the pipeline's phase order, not a second
+  source of truth.** The color pipeline runs its phases in a fixed order.
+  Moving a step in Studio does not yet change what the pipeline does.
+- **Narrowband is one step.** Its settings cover the palette, the balance,
+  star separation and green reduction. Combine needs these as separate
+  layers and mixes; see “Combine: what layering has to support.”
+- **The layer colors are the spike's,** not the palette in the settings.
+- **The spike's Add buttons make steps with no settings.** A Deconvolution
+  step added that way has no channel, and reading the settings back refuses
+  the document until the step has one.
+- **Not tested against a setup a person saved.** This Mac has no
+  `processing-setups.json`; the tests use the built-in default and settings
+  written for the tests.
+
+### Seiza changes this work has found so far
+
+Each is a change to an existing crate.
+
+1. `seiza-deconvolution`: take the sample range from the caller, and
+   replace or drop the flux scale that needs the finished whole-image
+   result, so a crop and a tile match the whole image.
+2. `seiza-stretch`: give a resolved stretch as a sampled table, and map one
+   value through a resolved sample domain. The spike gets both by calling
+   `apply` on a ramp of values, which works and allocates for every table.
+3. `seiza-stretch`: a stretch linked across the channels of a color image,
+   resolved once and given per channel. The spike stretches each band on
+   its own.
+
+A real frame was the test: one 6248 × 4176 H-alpha sub of Sh2-157, read by
+`FrameSource`, written to a store in 0.2 s, and shown on the canvas with
+Seiza's stretch.
+
+## Combine: what layering has to support (2026-11-25, for later)
+
+The owner's direction for the Combine stage, recorded so the scaffolding
+grows toward it. Nothing here is built. The spike's Combine is the simple
+start: one layer per band, a fixed color each, six blend modes.
+
+### What is wanted
+
+- **Layers that compose as in Photoshop:** a stack with groups, where each
+  layer has a mask, an opacity, a blend mode and its own adjustments.
+- **Our own blend and mix modes** beside the general ones: the narrowband
+  palettes, continuum subtraction, and luminance added to RGB by a variable
+  amount, as in LRGB.
+- **PSF Guard's star composition and Gaia correction passes** as part of the
+  stack: a starless image and a stars image stretched separately and
+  recombined, and star colors corrected from the catalog.
+- **A stretch of its own for each layer.**
+- **One band used more than once:** NII or He II as two layers, each mapped
+  differently.
+- **Bands mapped to color by rule:** Sloan filters by wavelength, as well as
+  a color chosen by hand.
+- **Masks on a layer,** for the imaging modes that need them.
+- **Palettes that depend on the pixels,** as Foraxx does: the share of each
+  band in a color changes with the bands' own values.
+
+### What it changes in the model
+
+1. **A layer is a chain, not a band with a color.** Source, linear steps, its
+   own stretch, display adjustments, then how it enters the stack. The
+   Stretch stage stops being one boundary for the whole document. Its pane
+   edits each layer's stretch, with a default that new layers take.
+2. **Layers and sources are separate.** A source is a band or the result of
+   a step. Any number of layers may read one source, so NII can appear
+   twice with two mappings. The document already lets a layer name a step's
+   result; it needs the same for a band used twice.
+3. **Some nodes take several inputs.** Continuum subtraction takes a line
+   band and a continuum band. A dynamic palette takes every band it mixes.
+   Star recombination takes a starless image and a stars image. A layer over
+   the layer beneath cannot express these. The stack needs mix nodes whose
+   inputs are named, as the design's graph of typed nodes already says; the
+   fixed lists of steps in the scaffolding are a simplification of it.
+4. **Combining is not only display-referred.** Continuum subtraction and
+   star color correction work on linear samples. They belong to a linear
+   part of Combine, before each layer's stretch, and the domain check must
+   allow a layer's chain to cross from linear to display inside the stage.
+5. **A color mapping is a rule with settings,** not three numbers: a fixed
+   color, a wavelength, or a palette that reads other bands.
+6. **Groups** carry a mask, an opacity and a blend mode for the layers in
+   them, so a star group and a nebula group can be handled as two things.
+
+### What it changes on the canvas
+
+The spike's shader goes through at most eight layers, each one band with a
+color, blended onto the layer beneath. That cannot draw a mix node or a
+group. The likely form is a shader written from the document's graph: one
+function per node, composed in order, compiled again only when the graph's
+shape changes and not when a setting does. Settings stay in uniforms, so a
+slider still costs nothing to move. Every band is already in each tile, so
+a node may read any band at a pixel.
+
+Heavy nodes stay off the canvas: star separation and catalog star colors
+are tracked jobs whose results are stores, read as sources.
+
+### Order to build, when the time comes
+
+1. Per-layer stretch, and a band used by more than one layer.
+2. Mix nodes on the CPU model, with continuum subtraction and LRGB with a
+   luminance amount as the first two.
+3. The shader written from the graph, with those two nodes and groups.
+4. Dynamic palettes: Foraxx as the first, moved from the existing preview
+   pipeline with its output held equal.
+5. Star composition and the Gaia correction pass as sources and layers.
+6. Wavelength mapping for Sloan and other filter sets.
+
+Each step that moves an existing pass must keep its output and cache keys,
+as [pipeline parity](#what-to-investigate-first) requires.
 
 ## Suggested order of work
 

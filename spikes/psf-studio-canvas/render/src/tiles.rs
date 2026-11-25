@@ -1,13 +1,12 @@
 //! Tile production on worker threads and the GPU tile cache.
 
-use crate::synth::{generate_tile, TileKey, BANDS, TILE};
+use crate::synth::{TileKey, TILE};
+use crate::TileSource;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Instant;
-
-pub const TILE_BYTES: u64 = TILE as u64 * TILE as u64 * BANDS as u64 * 2;
 
 #[derive(Default)]
 struct Requests {
@@ -29,7 +28,7 @@ pub struct TileProducer {
 }
 
 impl TileProducer {
-    pub fn new(worker_count: usize) -> Self {
+    pub fn new(worker_count: usize, source: Arc<dyn TileSource>) -> Self {
         let requests = Arc::new((Mutex::new(Requests::default()), Condvar::new()));
         let (sender, finished) = channel();
         let spent = Arc::new((AtomicU64::new(0), AtomicU64::new(0)));
@@ -38,9 +37,10 @@ impl TileProducer {
                 let requests = requests.clone();
                 let sender: Sender<(TileKey, Vec<u16>)> = sender.clone();
                 let spent = spent.clone();
+                let source = source.clone();
                 std::thread::Builder::new()
                     .name(format!("tile-{index}"))
-                    .spawn(move || worker(&requests, &sender, &spent))
+                    .spawn(move || worker(&requests, &sender, &spent, source.as_ref()))
                     .expect("spawning a tile worker")
             })
             .collect();
@@ -99,6 +99,7 @@ fn worker(
     requests: &(Mutex<Requests>, Condvar),
     sender: &Sender<(TileKey, Vec<u16>)>,
     spent: &(AtomicU64, AtomicU64),
+    source: &dyn TileSource,
 ) {
     let (lock, wake) = requests;
     loop {
@@ -121,7 +122,7 @@ fn worker(
             }
         };
         let started = Instant::now();
-        let samples = generate_tile(key);
+        let samples = source.tile(key);
         spent
             .0
             .fetch_add(started.elapsed().as_micros() as u64, Ordering::Relaxed);
@@ -144,15 +145,23 @@ pub struct TileCache {
     tiles: HashMap<TileKey, GpuTile>,
     pinned: HashSet<TileKey>,
     budget_bytes: u64,
+    /// The layers in every tile.
+    bands: usize,
 }
 
 impl TileCache {
-    pub fn new(budget_bytes: u64) -> Self {
+    pub fn new(budget_bytes: u64, bands: usize) -> Self {
         Self {
             tiles: HashMap::new(),
             pinned: HashSet::new(),
             budget_bytes,
+            bands,
         }
+    }
+
+    /// The bytes one tile takes on the GPU.
+    pub fn tile_bytes(&self) -> u64 {
+        TILE as u64 * TILE as u64 * self.bands as u64 * 2
     }
 
     pub fn contains(&self, key: TileKey) -> bool {
@@ -160,7 +169,7 @@ impl TileCache {
     }
 
     pub fn bytes(&self) -> u64 {
-        self.tiles.len() as u64 * TILE_BYTES
+        self.tiles.len() as u64 * self.tile_bytes()
     }
 
     pub fn len(&self) -> usize {
@@ -194,7 +203,7 @@ impl TileCache {
         let size = wgpu::Extent3d {
             width: TILE,
             height: TILE,
-            depth_or_array_layers: BANDS as u32,
+            depth_or_array_layers: self.bands as u32,
         };
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("tile"),
@@ -252,7 +261,7 @@ impl TileCache {
             .map(|(key, tile)| (tile.last_used, *key))
             .collect();
         candidates.sort_unstable();
-        let count = (over.div_ceil(TILE_BYTES) as usize).min(candidates.len());
+        let count = (over.div_ceil(self.tile_bytes()) as usize).min(candidates.len());
         for (_, key) in &candidates[..count] {
             self.tiles.remove(key);
         }
