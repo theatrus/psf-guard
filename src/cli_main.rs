@@ -1413,6 +1413,24 @@ pub fn main() -> Result<()> {
                 },
             ))?;
         }
+        Commands::StudioPrepare {
+            sources,
+            document,
+            apply,
+            output,
+        } => {
+            crate::commands::studio_sources::studio_prepare(
+                crate::commands::studio_sources::StudioPrepareOptions {
+                    sources: sources.into(),
+                    apply: apply.map(Into::into),
+                    document: document.map(Into::into),
+                    output: output.into(),
+                },
+            )?;
+        }
+        Commands::StudioTools => {
+            crate::commands::studio_sources::studio_tools()?;
+        }
         Commands::StudioStore {
             input,
             output,

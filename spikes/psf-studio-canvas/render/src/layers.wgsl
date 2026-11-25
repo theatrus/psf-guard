@@ -126,32 +126,40 @@ fn computed_mask(index: i32, uv: vec2f, pixel: vec2i) -> f32 {
     return value;
 }
 
-struct FourMasks {
+struct EveryMask {
     @location(0) first: vec4f,
     @location(1) second: vec4f,
     @location(2) third: vec4f,
     @location(3) fourth: vec4f,
+    @location(4) fifth: vec4f,
+    @location(5) sixth: vec4f,
+    @location(6) seventh: vec4f,
+    @location(7) eighth: vec4f,
 }
 
-fn four_masks(values: array<f32, 4>) -> FourMasks {
-    var out: FourMasks;
+fn every_mask(values: array<f32, 8>) -> EveryMask {
+    var out: EveryMask;
     out.first = vec4f(values[0]);
     out.second = vec4f(values[1]);
     out.third = vec4f(values[2]);
     out.fourth = vec4f(values[3]);
+    out.fifth = vec4f(values[4]);
+    out.sixth = vec4f(values[5]);
+    out.seventh = vec4f(values[6]);
+    out.eighth = vec4f(values[7]);
     return out;
 }
 
 // The computed masks that are smoothed, one per target, before the blurs.
 @fragment
-fn computed_fragment(in: TileVertex) -> FourMasks {
-    var values = array<f32, 4>(0.0, 0.0, 0.0, 0.0);
-    for (var index = 0; index < 4; index++) {
+fn computed_fragment(in: TileVertex) -> EveryMask {
+    var values = array<f32, 8>(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+    for (var index = 0; index < 8; index++) {
         if globals.computed[index].touch.z > 0.0 {
             values[index] = computed_shape(index, in.uv);
         }
     }
-    return four_masks(values);
+    return every_mask(values);
 }
 
 // One triangle over the whole target.
@@ -164,10 +172,10 @@ fn whole_vertex(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
 // One direction of a Gaussian blur of each smoothed mask. A blur reads the
 // masks through the tile binding. Thirty-three samples cover three standard
 // deviations to each side; a wide blur spaces them further apart.
-fn blurred(position: vec2f, direction: vec2f) -> FourMasks {
+fn blurred(position: vec2f, direction: vec2f) -> EveryMask {
     let size = vec2f(textureDimensions(tile).xy);
-    var values = array<f32, 4>(0.0, 0.0, 0.0, 0.0);
-    for (var index = 0; index < 4; index++) {
+    var values = array<f32, 8>(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+    for (var index = 0; index < 8; index++) {
         let sigma = globals.computed[index].touch.z;
         if sigma <= 0.0 {
             continue;
@@ -184,16 +192,16 @@ fn blurred(position: vec2f, direction: vec2f) -> FourMasks {
         }
         values[index] = sum / weights;
     }
-    return four_masks(values);
+    return every_mask(values);
 }
 
 @fragment
-fn blur_across_fragment(@builtin(position) position: vec4f) -> FourMasks {
+fn blur_across_fragment(@builtin(position) position: vec4f) -> EveryMask {
     return blurred(position.xy, vec2f(1.0, 0.0));
 }
 
 @fragment
-fn blur_down_fragment(@builtin(position) position: vec4f) -> FourMasks {
+fn blur_down_fragment(@builtin(position) position: vec4f) -> EveryMask {
     return blurred(position.xy, vec2f(0.0, 1.0));
 }
 

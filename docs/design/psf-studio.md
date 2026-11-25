@@ -1679,12 +1679,18 @@ out.
 - Choosing another palette removes the masks the old palette made and
   keeps painted masks.
 
-**Smoothing is a difference from Seiza.** Seiza's Foraxx composition,
-which PSF Guard's Foraxx palettes use, computes the mix at each pixel with
-no smoothing, so OIII noise shows as speckle in blue and green. A new
-shared mask is smoothed by 4 pixels. For PSF Guard to render a Studio
-document with the same result, Seiza's dynamic palettes need a smoothing
-option; that is a change to an existing Seiza crate, not yet made.
+**Smoothing is a difference from Seiza as released.** Seiza's Foraxx
+composition, which PSF Guard's Foraxx palettes use, computes the mix at
+each pixel with no smoothing, so OIII noise shows as speckle in blue and
+green. A new shared mask is smoothed by 4 pixels.
+
+Seiza gets the same step in theatrus/seiza#519, not yet merged:
+`ForaxxOptions::mask_smoothing`, a Gaussian blur of the two blend factors
+in pixels, 0 by default so existing output is unchanged. Two things differ
+from the canvas and must be settled before PSF Guard renders a Studio
+document with it: Seiza's kernel reaches four standard deviations and the
+canvas samples three; and Seiza blurs at full resolution, where the canvas
+blurs at the zoom on screen.
 
 These palettes are meant for stretched, starless inputs. With stars in
 the inputs, the stars take part in the masks.
@@ -1848,7 +1854,7 @@ stacks of Sh2-157.
 
 One frame draws at most 24 layers, counting each adjustment and both ends
 of each group, 15 masks,
-16 heals of single layers on at most 4 layers, 4 shared masks, and 8
+16 heals of single layers on at most 4 layers, 8 shared masks, and 8
 Finish steps. What
 does not fit is listed in the pane's label and is not drawn; nothing is
 drawn without its mask. The engine has no such limits, because it renders
@@ -1939,18 +1945,79 @@ prepared for the document, the canvas shows the input as stacked before
 that step and the tools' result after it, so Before and after and Wipe
 compare the two. The store's corrected channel is the tools' result
 corrected, so a view that leaves the tools out shows the input without
-background correction, and the pane's label says so. The spike opens a
-document with `--document <path>`; the step's controls list the tools that
-ran.
+background correction, and the pane's label says so.
 
-Not built yet:
+### Choosing and running tools from Studio
 
-- Choosing tools and their settings in Studio, and starting the run from
-  Studio. Today the document is edited by hand and the store prepared with
-  the command.
-- Stars as a layer of their own.
+The app does not run a tool itself, and does not link PSF Guard's server
+code. It works through two commands of the `psf-guard` program, so a web
+canvas could do the same through the server:
+
+- `psf-guard studio-tools` prints the tools this computer can run, as
+  JSON: each provider with what it does, and its settings with their
+  kinds, defaults and ranges, as the tool itself reports them.
+- `psf-guard studio-prepare --sources <folder> --apply <document>
+  --output <store>` prepares the store again from the channel stacks
+  `studio-sources` downloaded, with no server. `studio-sources` now writes
+  a `sources.json` beside the stacks for this.
+
+In the app, started with `--psf-guard <path>`:
+
+- An input's controls list one choice per kind of tool: Sharpening, Noise
+  reduction and Star removal, each **None** or one of the providers the
+  computer has. A tool this computer cannot run is listed with the reason.
+- Each chosen tool's settings follow, as sliders and switches from the
+  tool's own list.
+- The choice is kept in the document as PSF Guard keeps it
+  (`input_rc_astro`), in the input's Processing tools step.
+- **Run the tools** saves the document, runs `studio-prepare`, shows the
+  tool and its progress as it goes, and has the canvas draw the new store
+  when it ends, without a restart. A note says when the tools have changed
+  since the store was prepared.
+
+A tool that ran with the same settings before is not run again: each
+step's result is kept beside the stacks.
+
+### Stars
+
+When a star removal keeps the stars it took out (StarXTerminator's
+“Generate Star Image”), the store holds them as `<input>@stars`. Studio
+lists them as an input of their own, “Ha stars”, and adds a layer for
+them on top with the screen blend, which puts stars back onto a starless
+picture.
+
+- The stars are stretched as their input is, from the input's own
+  analysis, so the two go back together. Stretched on their own, a stars
+  image is almost all background and the stretch blows it up.
+- A palette leaves a stars layer where it is.
+- PSF Guard's settings have no place for a stars input, so it stays out
+  of them.
+
+### Tried
+
+On the Sh2-157 stacks on this Mac:
+
+- BlurXTerminator and NoiseXTerminator on Ha, OIII and SII, and
+  StarXTerminator on Ha, from the command: 68 seconds in all.
+- Seiza's noise model, installed with `psf-guard noise-model download`,
+  on the same three stacks through the same step: 87 seconds
+  (noise-v1-d33 on the GPU through Core ML). Nothing in Studio is
+  particular to a provider: the chain names `noise-model` where it named
+  `nxt`.
+- From the app: StarXTerminator chosen for Ha with its star image
+  switched on, then **Run the tools**. The store was prepared again in 15
+  seconds, and the canvas took it and listed “Ha stars” as an input and a
+  layer.
+
+### Not built yet
+
 - Tools on the combined color image (`color_rc_astro`) and the narrowband
-  star steps.
+  star steps. Both run after the channels are resampled and normalized
+  together, which Studio's preparation does not do yet.
+- A run cannot be stopped from the app, and a second cannot be queued.
+- The stars follow their input's stretch and have no stretch of their
+  own.
+- The app saves the document only when the tools are run.
 
 ## Suggested order of work
 

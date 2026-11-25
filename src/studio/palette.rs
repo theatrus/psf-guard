@@ -200,6 +200,10 @@ pub fn default_palette(channels: &[String]) -> Option<&'static Palette> {
 
 /// An input's name as a person reads it: `Ha` for `ha`, `R` for `red`.
 pub fn channel_label(channel: &str) -> String {
+    // The stars a star removal took out of an input.
+    if let Some(input) = channel.strip_suffix("@stars") {
+        return format!("{} stars", channel_label(input));
+    }
     match channel {
         "luminance" => "L".to_string(),
         "red" => "R".to_string(),
@@ -295,6 +299,14 @@ pub fn band_layer(channel: &str, hue: f32, saturation: f32, blend: BlendMode) ->
     layer
 }
 
+/// Whether a layer is one a palette makes and replaces: a layer that shows
+/// one of the document's channel stacks. A layer that shows another state
+/// of an input, such as the stars a tool took out of it, is a person's to
+/// keep and place.
+fn shows_a_palette_input(layer: &LayerRecord) -> bool {
+    matches!(&layer.source, LayerSource::Band { band } if !band.contains('@'))
+}
+
 impl Document {
     /// Replaces the layers that show an input with the palette's, each
     /// slot showing the input of the same name, and keeps every other layer
@@ -351,9 +363,8 @@ impl Document {
         for layer in &old {
             self.remove_layer(layer.id);
         }
-        let (mut replaced, kept): (Vec<_>, Vec<_>) = old
-            .into_iter()
-            .partition(|layer| matches!(layer.source, LayerSource::Band { .. }));
+        let (mut replaced, kept): (Vec<_>, Vec<_>) =
+            old.into_iter().partition(shows_a_palette_input);
         let by_place = remade && replaced.len() == palette.layers.len();
 
         // The palette's masks: one per set of slots. A mask made for the
@@ -462,7 +473,7 @@ impl Document {
         let shown = self
             .layers()
             .iter()
-            .filter(|layer| matches!(layer.source, LayerSource::Band { .. }))
+            .filter(|layer| shows_a_palette_input(layer))
             .count();
         self.palette
             .as_ref()

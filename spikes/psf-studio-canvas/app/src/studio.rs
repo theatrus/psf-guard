@@ -42,6 +42,9 @@ pub struct Options {
     /// A PSF-Studio document to open with the store, in place of PSF
     /// Guard's default flow over the store's inputs.
     pub document: Option<PathBuf>,
+    /// The `psf-guard` program, which lists the processing tools and
+    /// prepares a store again when a person runs them.
+    pub psf_guard: Option<PathBuf>,
     /// Where the benchmark writes PNG captures of selected frames.
     pub capture_prefix: Option<PathBuf>,
 }
@@ -55,6 +58,7 @@ impl Default for Options {
             capture_prefix: None,
             open: None,
             document: None,
+            psf_guard: None,
             output: String::new(),
             working_profile: None,
         }
@@ -87,6 +91,9 @@ enum SliderId {
     Amount,
     /// The selected adjustment layer's amount.
     LayerAmount,
+    /// One setting of one processing tool of the selected input, by its
+    /// place in the list of the input's tool settings.
+    ToolParam(usize),
     /// The selected shared mask's reach.
     Reach,
     /// How far the selected shared mask is smoothed.
@@ -285,6 +292,9 @@ struct Readout {
 
 struct Shared {
     canvas: CanvasState,
+    /// A document for the canvas to draw from now on, in place of the one
+    /// it has: set by the UI, taken by the render thread.
+    new_source: Option<Arc<dyn studio_render_spike::TileSource>>,
     /// Set by the UI when the canvas changed; cleared by the render thread.
     dirty: bool,
     /// When the oldest input not yet drawn arrived.
@@ -334,6 +344,9 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
                 last_frame = None;
             }
             shared.dirty = false;
+            if let Some(source) = shared.new_source.take() {
+                renderer.replace_source(source);
+            }
             canvas.surface_size = shared.canvas.surface_size;
             canvas.document_size = shared.canvas.document_size;
             canvas.band_count = shared.canvas.band_count;
@@ -524,6 +537,8 @@ pub struct Studio {
     analysed: Vec<(Vec<BandState>, Arc<Vec<BandStretch>>)>,
     /// The levels in the document's pyramid.
     levels: u8,
+    /// The processing tools: which this computer has, and the run in hand.
+    tools: tools::Tools,
 }
 
 impl Studio {
@@ -542,6 +557,7 @@ impl Studio {
         let canvas = CanvasHandle(Arc::new((
             Mutex::new(Shared {
                 canvas: CanvasState::new(),
+                new_source: None,
                 dirty: true,
                 input_at: None,
                 readout: Readout::default(),
@@ -564,6 +580,7 @@ impl Studio {
             .map(|count| count.get().saturating_sub(4).max(2))
             .unwrap_or(4);
         let document_path = options.document.clone();
+        let tools = tools::Tools::new(&options);
         let source = crate::store_tiles::source(options.open.as_deref());
         let (source, band_info) = match source {
             Ok((source, bands)) => (Ok(source), Arc::new(bands)),
@@ -608,6 +625,7 @@ impl Studio {
                 .timer(Duration::from_millis(250))
                 .await;
             let updated = this.update(cx, |this, cx| {
+                this.follow_tools();
                 // SAFETY: the view is alive and this runs on the main thread.
                 let layer = unsafe { layer_description(&this._ns_view) };
                 this.canvas.0 .0.lock().expect("canvas state").readout.layer = layer;
@@ -641,6 +659,7 @@ impl Studio {
                         [SliderId::ToneHue(layer), SliderId::ToneSaturation(layer)]
                     }))
                     .chain((0..8).map(SliderId::StretchParam))
+                    .chain((0..tools::MAX_TOOL_SETTINGS).map(SliderId::ToolParam))
                     .map(|id| (id, Rc::default()))
                     .collect(),
                 tool: Tool::Pan,
@@ -662,7 +681,12 @@ impl Studio {
                 band_info,
                 analysed: Vec::new(),
                 levels,
+                tools,
             };
+        // The store was prepared for the document it is opened with, and
+        // may hold inputs the document has not listed yet.
+        studio.take_in_new_inputs();
+        studio.tools_are_prepared();
         studio.refresh_canvas();
         studio
     }
@@ -1013,5 +1037,7 @@ pub fn run(options: Options) {
 mod inspector;
 #[path = "panes.rs"]
 mod panes;
+#[path = "tools.rs"]
+mod tools;
 #[path = "tree.rs"]
 mod tree;

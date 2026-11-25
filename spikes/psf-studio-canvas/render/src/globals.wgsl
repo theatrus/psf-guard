@@ -76,7 +76,7 @@ struct Globals {
     // first, or -1, z: how much of the second. A place not in use has -1.
     healed: array<vec4f, 4>,
     heals: array<LayerHeal, 16>,
-    computed: array<ComputedMask, 4>,
+    computed: array<ComputedMask, 8>,
     // Linear working-space RGB to linear target RGB.
     display_matrix: mat3x3f,
     // x: samples per display curve, or 0 when there is no display transform.

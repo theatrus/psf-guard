@@ -35,6 +35,7 @@ fn main() {
             "--no-vsync" => options.vsync = false,
             "--open" => options.open = arguments.next().map(Into::into),
             "--document" => options.document = arguments.next().map(Into::into),
+            "--psf-guard" => options.psf_guard = arguments.next().map(Into::into),
             "--make-store" => {
                 // Writes part of the synthetic document to a tile store and
                 // exits: something to open with --open.

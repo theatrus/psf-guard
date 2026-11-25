@@ -638,3 +638,50 @@ fn another_input_for_a_slot_remakes_the_layers_and_masks_and_keeps_the_tweaks() 
     assert!(document.layers()[0].mask.is_none());
     assert_eq!(document.masks().len(), 1);
 }
+
+#[test]
+fn the_stars_of_an_input_are_stretched_as_the_input_is() {
+    let document = document(&["ha", "oiii", "sii"]);
+    let stretch = |channel: &str| {
+        let view = View {
+            subject: Subject::Channel(channel.to_string()),
+            up_to: UpTo::Final,
+            stretch: DisplayStretch::Document,
+            own_until: None,
+        };
+        plan(&document, &view).channels[0].stretch.clone()
+    };
+    assert!(matches!(stretch("ha"), PlannedStretch::Document(_)));
+    assert_eq!(stretch("ha@stars"), stretch("ha"));
+    assert_eq!(channel_label("ha@stars"), "Ha stars");
+    // A palette leaves the stars layer where it is.
+    let mut layered = document.clone();
+    let mut stars = LayerRecord::new(
+        "Ha stars",
+        LayerSource::Band {
+            band: "ha@stars".to_string(),
+        },
+    );
+    stars.blend = BlendMode::Screen;
+    let stars_id = stars.id;
+    layered.insert_layer(usize::MAX, stars).unwrap();
+    layered.apply_palette(&PALETTES[4]);
+    assert_eq!(layered.layers().last().unwrap().id, stars_id);
+    assert!(layered.uses_palette(&PALETTES[4]));
+
+    // PSF Guard's settings have no place for the stars input.
+    let mut with_stars = document.clone();
+    let stars = StepRecord::new(StepKind::Operation {
+        operation: op::STRETCH.to_string(),
+        accepts: crate::image_steps::Accepts::Linear,
+        settings: serde_json::json!({ "model": { "type": "identity" } }),
+    })
+    .for_band("ha@stars");
+    with_stars
+        .insert_step(StageKind::Stretch, usize::MAX, stars)
+        .unwrap();
+    assert_eq!(
+        color_setup_from_document(&with_stars).unwrap(),
+        color_setup_from_document(&document).unwrap()
+    );
+}

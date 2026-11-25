@@ -1212,6 +1212,33 @@ pub enum Commands {
         output: String,
     },
 
+    /// Prepare a PSF-Studio tile store again from channel stacks that
+    /// studio-sources downloaded, without the server
+    StudioPrepare {
+        /// The folder studio-sources downloaded the channel stacks to
+        #[arg(long)]
+        sources: String,
+
+        /// Also write a document that starts as PSF Guard's default color
+        /// flow to this path
+        #[arg(long)]
+        document: Option<String>,
+
+        /// Prepare the store for this PSF-Studio document in place of the
+        /// default flow: its processing tools run on each channel, and its
+        /// background settings are used
+        #[arg(long, conflicts_with = "document")]
+        apply: Option<String>,
+
+        /// Output path of the tile store
+        #[arg(short, long)]
+        output: String,
+    },
+
+    /// Print the processing tools this computer can run, with their
+    /// settings, as JSON
+    StudioTools,
+
     /// Write a PSF-Studio tile store from a FITS or XISF frame
     StudioStore {
         /// Path to the FITS or XISF frame

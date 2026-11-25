@@ -293,7 +293,11 @@ pub fn color_setup_from_document(document: &Document) -> Result<Value, StudioErr
         .stages()
         .iter()
         .flat_map(|stage| &stage.steps)
-        .filter(|step| step.enabled);
+        .filter(|step| step.enabled)
+        // A channel that is another's in another state, such as the stars
+        // a tool took out of it, is Studio's: PSF Guard's settings have no
+        // place for it.
+        .filter(|step| step.band.as_deref().is_none_or(|band| !band.contains('@')));
     for step in steps {
         let StepKind::Operation {
             operation,

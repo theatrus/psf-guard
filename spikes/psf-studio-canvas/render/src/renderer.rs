@@ -19,7 +19,7 @@ pub const MAX_HEALS: usize = 16;
 /// layer's samples as a surface-sized image, to copy from.
 pub const MAX_HEALED_LAYERS: usize = 4;
 /// The most masks computed from bands one frame draws.
-pub const MAX_COMPUTED_MASKS: usize = 4;
+pub const MAX_COMPUTED_MASKS: usize = 8;
 /// A computed mask while it is smoothed, from 0 to 1.
 const SMOOTHED_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R8Unorm;
 /// The mask layer that holds the stroke overlay.
@@ -441,7 +441,11 @@ pub struct Renderer {
     mask_ranges: Vec<(u32, u32)>,
     masks_version: Option<u64>,
     cache: TileCache,
+    /// The most bytes of tiles kept on the GPU.
+    cache_budget_bytes: u64,
     producer: TileProducer,
+    /// The threads that compute tiles.
+    workers: usize,
     /// The document's size and levels.
     pyramid: Pyramid,
     /// The bands in the document.
@@ -849,6 +853,8 @@ impl Renderer {
             mask_ranges: Vec::new(),
             masks_version: None,
             cache,
+            cache_budget_bytes,
+            workers,
             producer: TileProducer::new(workers, source),
             pyramid,
             bands,
@@ -860,6 +866,39 @@ impl Renderer {
             capture_next: false,
             captured: None,
         })
+    }
+
+    /// Draws another document from now on, such as a store that was
+    /// prepared again. Every tile of the document before is dropped.
+    pub fn replace_source(&mut self, source: Arc<dyn TileSource>) {
+        let pyramid = source.pyramid();
+        let bands = source.bands().max(1);
+        let mut cache = TileCache::new(self.cache_budget_bytes, bands);
+        // The coarsest level is always loaded, so a view never shows a hole.
+        let (across, down) = pyramid.tiles_across(pyramid.max_level());
+        for y in 0..down as u16 {
+            for x in 0..across as u16 {
+                let key = TileKey {
+                    level: pyramid.max_level(),
+                    x,
+                    y,
+                };
+                cache.insert(
+                    &self.device,
+                    &self.queue,
+                    &self.tile_layout,
+                    key,
+                    &source.tile(key),
+                    self.frame,
+                );
+                cache.pin(key);
+            }
+        }
+        self.cache = cache;
+        self.producer = TileProducer::new(self.workers, source);
+        self.pyramid = pyramid;
+        self.bands = bands;
+        self.last_sources.clear();
     }
 
     pub fn size(&self) -> (u32, u32) {

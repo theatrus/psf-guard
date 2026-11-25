@@ -508,6 +508,25 @@ fn band_source(
     )
 }
 
+/// The input whose stretch a band is drawn with: its own, or, for the
+/// stars a tool took out of an input, that input's.
+fn stretch_source<'a>(
+    bands: &Bands,
+    inputs: &'a [ChannelPlan],
+    band: usize,
+    plan: &'a ChannelPlan,
+) -> (usize, &'a ChannelPlan) {
+    plan.channel
+        .strip_suffix("@stars")
+        .and_then(|input| {
+            Some((
+                bands.band_of(input)?,
+                inputs.iter().find(|other| other.channel == input)?,
+            ))
+        })
+        .unwrap_or((band, plan))
+}
+
 /// Adds a heal of one layer to a scene, or records that it is left out
 /// because the frame has no room for it.
 fn push_heal(
@@ -682,9 +701,20 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
         let Some(band) = bands.band_of(&channel.channel) else {
             continue;
         };
-        let (state, plane, blended, stages) =
+        let (state, plane, blended, own_stages) =
             band_source(document, bands, band, channel, &mut omitted);
         states[band] = state;
+        // The stars a tool took out of an input are stretched as that
+        // input is, so the two go back together.
+        let (stretched_as, like) = stretch_source(bands, &planned.inputs, band, channel);
+        let stages = if stretched_as == band {
+            own_stages
+        } else {
+            let (like_state, _, _, stages) =
+                band_source(document, bands, stretched_as, like, &mut omitted);
+            states[stretched_as] = like_state;
+            stages
+        };
         let shown = Layer {
             band: plane,
             blended,
@@ -701,7 +731,7 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
         let Some(layer) = layer else {
             // A channel on its own is drawn in gray.
             layers.push(shown);
-            layer_bands.push(band);
+            layer_bands.push(stretched_as);
             layer_stretches.push(stages.clone());
             for step in input_heals {
                 let mask = mask_for(step_strokes(step));
@@ -738,7 +768,7 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
             clip: clip_mask,
             ..shown
         });
-        layer_bands.push(band);
+        layer_bands.push(stretched_as);
         layer_stretches.push(stages.clone());
         let shown_at = layers.len() - 1;
         masked.push((shown_at, layer));
@@ -835,17 +865,31 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
             else {
                 continue;
             };
-            let (state, plane, blended, stages) =
+            let (state, plane, blended, own_stages) =
                 band_source(document, bands, band, plan, &mut omitted);
             states[band] = state;
-            let known = layer_bands
-                .iter()
-                .zip(&layer_stretches)
-                .position(|(row_band, row_stages)| *row_band == band && *row_stages == stages);
+            // The stars a tool took out of an input are stretched as that
+            // input is, so the two go back together.
+            let (stretched_as, like) = stretch_source(bands, &planned.inputs, band, plan);
+            let stages = if stretched_as == band {
+                own_stages
+            } else {
+                let (like_state, _, _, stages) =
+                    band_source(document, bands, stretched_as, like, &mut omitted);
+                states[stretched_as] = like_state;
+                stages
+            };
+            let known =
+                layer_bands
+                    .iter()
+                    .zip(&layer_stretches)
+                    .position(|(row_band, row_stages)| {
+                        *row_band == stretched_as && *row_stages == stages
+                    });
             let row = match known {
                 Some(row) => row,
                 None if layer_bands.len() < MAX_LAYERS => {
-                    layer_bands.push(band);
+                    layer_bands.push(stretched_as);
                     layer_stretches.push(stages.clone());
                     layer_bands.len() - 1
                 }
@@ -1142,6 +1186,7 @@ impl Studio {
     /// Applies a slider's new position, from 0 to 1, to the selected row.
     pub(super) fn slider_moved(&mut self, slider: SliderId, position: f32) {
         match slider {
+            SliderId::ToolParam(index) => self.tool_slider_moved(index, position),
             SliderId::StretchParam(index) => {
                 let Some(id) = self.selected_step() else {
                     return;

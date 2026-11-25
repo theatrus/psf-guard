@@ -22,13 +22,6 @@ use uuid::Uuid;
 /// pixel scale. The engine reports these per step; the demo names them.
 const FULL_RESOLUTION_ONLY: [&str; 2] = ["Deconvolution", "Noise reduction"];
 
-/// The steps offered for one input, with the samples each works on.
-const INPUT_STEPS: [(&str, Accepts); 3] = [
-    ("Deconvolution", Accepts::Linear),
-    ("Noise reduction", Accepts::Linear),
-    ("Star separation", Accepts::Either),
-];
-
 /// The steps offered on the combined picture.
 const FINISH_STEPS: [(&str, Accepts); 3] = [
     ("Curves", Accepts::Display),
@@ -296,79 +289,16 @@ impl Studio {
         ))
     }
 
-    /// The tools an input's tools step ran, for a person to read.
-    fn tools_block(step: &StepRecord) -> Option<gpui::Div> {
-        let StepKind::Operation {
-            operation,
-            settings,
-            ..
-        } = &step.kind
-        else {
-            return None;
-        };
-        if operation != flow_operations::RC_ASTRO_INPUT {
-            return None;
-        }
-        // The providers PSF Guard has today, by their keys.
-        let name = |provider: &str| match provider {
-            "bxt" => "BlurXTerminator (RC-Astro), sharpening".to_string(),
-            "nxt" => "NoiseXTerminator (RC-Astro), noise reduction".to_string(),
-            "sxt" => "StarXTerminator (RC-Astro), star removal".to_string(),
-            "noise-model" => "Seiza noise model, noise reduction".to_string(),
-            other => other.to_string(),
-        };
-        let tools: Vec<String> = settings["steps"]
-            .as_array()
-            .map(|steps| {
-                steps
-                    .iter()
-                    .filter_map(|step| step["provider"].as_str().or(step["tool"].as_str()))
-                    .map(name)
-                    .collect()
-            })
-            .unwrap_or_default();
-        Some(
-            column()
-                .child(Self::heading("Tools, in order"))
-                .children(tools.into_iter().map(|tool| div().text_xs().child(tool)))
-                .child(Self::note(
-                    "The tools run when the store is prepared: psf-guard studio-sources --apply with this document. Their result is kept, so a view before and after them is at hand.",
-                )),
-        )
-    }
-
     // ---- one inspector per kind of row ----------------------------------
 
     fn inspect_input(&self, channel: &str, cx: &mut Context<Self>) -> AnyElement {
         let label = channel_label(channel);
-        let add = INPUT_STEPS
-            .iter()
-            .enumerate()
-            .map(|(index, (name, accepts))| {
-                let (name, accepts) = (*name, *accepts);
-                let channel = channel.to_string();
-                Self::act(name, ("add-input", index), false, cx, move |this| {
-                    let step = operation(name, accepts).for_band(&channel);
-                    let id = step.id;
-                    if this
-                        .document
-                        .insert_step(StageKind::Linear, usize::MAX, step)
-                        .is_ok()
-                    {
-                        this.selected = Row::InputStep {
-                            channel: channel.clone(),
-                            step: id,
-                        };
-                    }
-                })
-            });
         column()
             .child(Self::title(
                 format!("{label} input"),
                 "The stack as PSF Guard made it, before any step.",
             ))
-            .child(Self::heading(format!("Add a step for {label} only")))
-            .child(wrap().children(add))
+            .child(self.tools_block(channel, cx))
             .child(self.zoom_notes(channel))
             .into_any_element()
     }
@@ -406,7 +336,10 @@ impl Studio {
         column()
             .child(Self::title(step.kind.name().to_string(), applies_to))
             .child(self.step_controls(stage, step, cx))
-            .children(Self::tools_block(step))
+            .when(
+                step.kind.name() == flow_operations::RC_ASTRO_INPUT,
+                |pane| pane.child(self.tools_block(&channel, cx)),
+            )
             .children(own)
             .child(Self::act(
                 if shared {

@@ -247,10 +247,13 @@ fn stage_word(stage: StageKind) -> &'static str {
 pub fn plan(document: &Document, view: &View) -> ViewPlan {
     let steps = applied(document, view.up_to);
     let channel_plan = |channel: &str| {
+        // The stars a tool took out of an input are stretched as that
+        // input is, so the two go back together.
+        let stretched_as = channel.strip_suffix("@stars").unwrap_or(channel);
         let stretches: Vec<Uuid> = steps
             .iter()
             .filter(|(_, step)| step.enabled && step.kind.name() == op::STRETCH)
-            .filter(|(_, step)| step.band.as_deref() == Some(channel))
+            .filter(|(_, step)| step.band.as_deref() == Some(stretched_as))
             .map(|(_, step)| step.id)
             .collect();
         ChannelPlan {

@@ -1,11 +1,11 @@
 use anyhow::{anyhow, bail, Context, Result};
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::color_steps::ToolChain;
 use crate::processing_setups::DEFAULT_COLOR_SETTINGS;
-use crate::server::stack_preview::color::StackColorRole;
+use crate::server::stack_preview::color::{StackColorRole, StackColorSource};
 use crate::server::workers::Workers;
 use crate::studio::{Document, RegionReader, StoreOptions, TileStore};
 use crate::studio_flow::{document_from_processing, processing_from_document};
@@ -54,9 +54,8 @@ pub async fn studio_sources(options: StudioSourcesOptions) -> Result<()> {
 
     let folder = options.output.with_extension("sources");
     std::fs::create_dir_all(&folder).with_context(|| format!("creating {}", folder.display()))?;
-    let mut files = Vec::new();
     for stack in &stacks {
-        let path = folder.join(format!("{}.fits", stack.job_id));
+        let path = folder.join(stack_file(stack));
         let bytes = server.download_stack(stack, &path).await?;
         println!(
             "Downloaded the {} stack ({} frames, {:.1} MB)",
@@ -64,12 +63,81 @@ pub async fn studio_sources(options: StudioSourcesOptions) -> Result<()> {
             stack.accepted_frames,
             bytes as f64 / (1 << 20) as f64
         );
-        files.push((stack.role, path));
     }
+    // What was downloaded, so the store can be prepared again without the
+    // server: for other tools, or other settings.
+    let listing = folder.join(SOURCES_FILE);
+    std::fs::write(&listing, serde_json::to_string_pretty(&stacks)?)
+        .with_context(|| format!("writing {}", listing.display()))?;
+    prepare_store(
+        &stacks,
+        &folder,
+        options.apply.as_deref(),
+        options.document.as_deref(),
+        &options.output,
+    )
+}
+
+/// The file in a sources folder that lists the downloaded channel stacks.
+const SOURCES_FILE: &str = "sources.json";
+
+/// The name of a downloaded channel stack in its sources folder.
+fn stack_file(stack: &StackColorSource) -> String {
+    format!("{}.fits", stack.job_id)
+}
+
+pub struct StudioPrepareOptions {
+    /// The folder `studio-sources` downloaded the channel stacks to.
+    pub sources: PathBuf,
+    /// A document to prepare the store for, in place of the default flow.
+    pub apply: Option<PathBuf>,
+    /// Where a new default document goes.
+    pub document: Option<PathBuf>,
+    pub output: PathBuf,
+}
+
+/// Prepares a PSF-Studio tile store from channel stacks that were
+/// downloaded before, without a server: registers them, runs the document's
+/// processing tools, fits the backgrounds and writes the store.
+pub fn studio_prepare(options: StudioPrepareOptions) -> Result<()> {
+    let listing = options.sources.join(SOURCES_FILE);
+    let text = std::fs::read_to_string(&listing).with_context(|| {
+        format!(
+            "reading {}; fetch the stacks with studio-sources first",
+            listing.display()
+        )
+    })?;
+    let stacks: Vec<StackColorSource> =
+        serde_json::from_str(&text).with_context(|| format!("reading {}", listing.display()))?;
+    prepare_store(
+        &stacks,
+        &options.sources,
+        options.apply.as_deref(),
+        options.document.as_deref(),
+        &options.output,
+    )
+}
+
+/// Registers downloaded channel stacks, runs the document's processing
+/// tools on them, fits the backgrounds and writes the store.
+fn prepare_store(
+    stacks: &[StackColorSource],
+    folder: &Path,
+    apply: Option<&Path>,
+    document_out: Option<&Path>,
+    output: &Path,
+) -> Result<()> {
+    if stacks.is_empty() {
+        bail!("there are no channel stacks to prepare");
+    }
+    let files: Vec<(StackColorRole, PathBuf)> = stacks
+        .iter()
+        .map(|stack| (stack.role, folder.join(stack_file(stack))))
+        .collect();
 
     // The document decides what runs: a new one is PSF Guard's default flow.
     let roles: Vec<StackColorRole> = stacks.iter().map(|stack| stack.role).collect();
-    let document = match &options.apply {
+    let document = match apply {
         Some(path) => {
             let text = std::fs::read_to_string(path)
                 .with_context(|| format!("reading {}", path.display()))?;
@@ -87,7 +155,7 @@ pub async fn studio_sources(options: StudioSourcesOptions) -> Result<()> {
     // machine has. A tool's result is kept beside the downloaded stacks.
     let workers = Workers::default();
     let mut chains = BTreeMap::new();
-    for stack in &stacks {
+    for stack in stacks {
         let Some(config) = processing.input_rc_astro.get(&stack.role) else {
             continue;
         };
@@ -117,7 +185,7 @@ pub async fn studio_sources(options: StudioSourcesOptions) -> Result<()> {
     };
     let tools = ChannelTools {
         workers: &workers,
-        cache: &folder,
+        cache: folder,
         chains,
         progress: &report,
     };
@@ -194,7 +262,7 @@ pub async fn studio_sources(options: StudioSourcesOptions) -> Result<()> {
     };
     let started = Instant::now();
     let store = TileStore::create(
-        &options.output,
+        output,
         &registered,
         &StoreOptions {
             channels: registered.names.clone(),
@@ -204,7 +272,7 @@ pub async fn studio_sources(options: StudioSourcesOptions) -> Result<()> {
     let shape = registered.shape();
     println!(
         "Wrote {}: {} x {} pixels, {} channel(s), {} levels, in {:.1} s",
-        options.output.display(),
+        output.display(),
         shape.width,
         shape.height,
         shape.channels,
@@ -212,10 +280,34 @@ pub async fn studio_sources(options: StudioSourcesOptions) -> Result<()> {
         started.elapsed().as_secs_f64()
     );
 
-    if let Some(path) = &options.document {
+    if let Some(path) = document_out {
         std::fs::write(path, document.to_json())
             .with_context(|| format!("writing {}", path.display()))?;
         println!("Wrote the document to {}", path.display());
     }
+    Ok(())
+}
+
+/// Prints the processing tools this computer can run, with each tool's
+/// settings, as JSON: what PSF-Studio offers a person to choose from.
+pub fn studio_tools() -> Result<()> {
+    let workers = Workers::default();
+    let tools: Vec<serde_json::Value> = crate::remote_work::steps::PROVIDERS
+        .iter()
+        .map(|provider| {
+            let (schema, unavailable) = match workers.step_schema(provider.key) {
+                Ok(schema) => (Some(schema), None),
+                Err(why) => (None, Some(why)),
+            };
+            serde_json::json!({
+                "key": provider.key,
+                "category": provider.category,
+                "name": provider.name,
+                "schema": schema,
+                "unavailable": unavailable,
+            })
+        })
+        .collect();
+    println!("{}", serde_json::to_string_pretty(&tools)?);
     Ok(())
 }

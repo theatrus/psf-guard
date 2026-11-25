@@ -322,10 +322,11 @@ impl StoreTiles {
         // A channel named after another with a suffix holds that channel
         // in another state, and is not a band of its own.
         let named = |name: String| self.names.iter().position(|other| *other == name);
+        // The stars a tool took out of a channel are an input of their own.
         let is_band = |channel: usize| {
             self.names
                 .get(channel)
-                .is_none_or(|name| !name.contains('@'))
+                .is_none_or(|name| !name.contains('@') || name.ends_with("@stars"))
         };
         let mut bands = Bands::default();
         for channel in (0..self.bands).filter(|channel| is_band(*channel)) {
@@ -341,6 +342,13 @@ impl StoreTiles {
                 .flatten()
                 .map(|plane| largest(&channels[plane]))
                 .fold(f32::MIN_POSITIVE, f32::max);
+            // The stars a tool took out of an input take the input's scale,
+            // so one stretch serves both.
+            let scale = name
+                .as_deref()
+                .and_then(|name| name.strip_suffix("@stars"))
+                .and_then(|input| bands.names.iter().position(|other| other == input))
+                .map_or(scale, |input| bands.scales[input]);
             for plane in [Some(channel), tools, corrected].into_iter().flatten() {
                 self.scales[plane] = scale;
             }
