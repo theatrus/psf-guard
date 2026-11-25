@@ -154,8 +154,8 @@ fn every_kind_of_setting_survives_the_round_trip() {
         [
             op::FOLLOW_CHANNELS.to_string(),
             "Deconvolution (ha)".to_string(),
-            "RC-Astro tools (ha)".to_string(),
-            "RC-Astro tools (oiii)".to_string(),
+            "Processing tools (ha)".to_string(),
+            "Processing tools (oiii)".to_string(),
             op::BACKGROUND.to_string(),
             op::EMISSION.to_string(),
             op::RC_ASTRO_COLOR.to_string(),

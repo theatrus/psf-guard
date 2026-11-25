@@ -1196,9 +1196,9 @@ Guard's color previews already use (`StackColorProcessing`).
 | `background_extraction` | Linear | Background extraction |
 | `input_processing` | Linear | Inputs follow their channel cards |
 | `input_deconvolutions` | Linear | Deconvolution, one per channel |
-| `input_rc_astro` | Linear | RC-Astro tools, one per channel |
+| `input_rc_astro` | Linear | Processing tools, one per channel |
 | `emission` | Linear | Subtract continuum |
-| `color_rc_astro` | Linear | RC-Astro tools on color |
+| `color_rc_astro` | Linear | Processing tools on color |
 | `color_calibration` | Linear | Color calibration |
 | `input_stretches` | Stretch | Stretch, one per channel per stretch, in order |
 | `narrowband` | Stretch | Narrowband balance and stars |
@@ -1902,7 +1902,7 @@ The tools are the ones PSF Guard's color processing runs: sharpening,
 noise reduction and star removal, each by a provider. The providers today
 are RC-Astro's BlurXTerminator, NoiseXTerminator and StarXTerminator, and
 Seiza's built-in noise model. A document keeps them as PSF Guard does: one
-chain per input, in the step “RC-Astro tools” of that input.
+chain per input, in the step “Processing tools” of that input.
 
 A tool takes seconds to minutes on a whole stack, so it is not live.
 Studio runs the tools when a document's store is prepared, and keeps each
@@ -1928,6 +1928,11 @@ NoiseXTerminator on Ha, OIII and SII, and StarXTerminator on Ha, took 68
 seconds in all. StarXTerminator returned no stars image with its default
 settings, so the store has no `ha@stars`.
 
+Seiza's noise model, installed with `psf-guard noise-model download`, ran
+on the same three stacks through the same step in 87 seconds
+(noise-v1-d33 on the GPU through Core ML). Nothing in Studio is particular
+to a provider: the chain names `noise-model` where it named `nxt`.
+
 In Studio an input's tools are one step of the input, listed before the
 background step, which is the order the pipeline runs them. With a store
 prepared for the document, the canvas shows the input as stacked before
@@ -1946,8 +1951,6 @@ Not built yet:
 - Stars as a layer of their own.
 - Tools on the combined color image (`color_rc_astro`) and the narrowband
   star steps.
-- Seiza's noise model is not installed on this Mac, so it has not been
-  run from Studio.
 
 ## Suggested order of work
 

@@ -26,12 +26,14 @@ pub mod flow_operations {
     pub const FOLLOW_CHANNELS: &str = "Inputs follow their channel cards";
     /// Deconvolution of one input channel.
     pub const DECONVOLUTION: &str = "Deconvolution";
-    /// RC-Astro tools on one input channel.
-    pub const RC_ASTRO_INPUT: &str = "RC-Astro tools";
+    /// The processing tools of one input channel: sharpening, noise
+    /// reduction and star removal, each by a provider, such as an RC-Astro
+    /// tool or Seiza's noise model. The settings key keeps its older name.
+    pub const RC_ASTRO_INPUT: &str = "Processing tools";
     /// Continuum subtraction and emission amounts.
     pub const EMISSION: &str = "Subtract continuum";
-    /// RC-Astro tools on the color channels together.
-    pub const RC_ASTRO_COLOR: &str = "RC-Astro tools on color";
+    /// The processing tools of the color channels together.
+    pub const RC_ASTRO_COLOR: &str = "Processing tools on color";
     /// Photometric color calibration against Gaia.
     pub const COLOR_CALIBRATION: &str = "Color calibration";
     /// One display stretch of one channel.
