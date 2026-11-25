@@ -1640,25 +1640,70 @@ input is strong. Foraxx is the common one. Its SHO form is:
 "Strong" is the power of inverted pixels of the stretched samples: a
 value `x` from 0 to 1 becomes `x^(1 - x)`, which lifts faint signal.
 
-Studio builds this from what layers already are. A layer's mask may be
-**computed from inputs** (`MaskRecord::FromInputs`): the product of one or
-two inputs' stretched samples, shaped by `MaskShape`, and inverted or not.
-A Foraxx palette is then five ordinary layers: SII as red behind the mask
-of OIII, Ha as red behind that mask inverted, and so on. Two layers behind
-a mask and its inverse share one color between them, so they keep their
-full color; “Balance the layers' colors” leaves them out.
+Studio builds this from layers and **shared masks**. A shared mask
+(`SharedMask`) belongs to the document, not to one layer. At each pixel
+it is:
 
-- The palettes **SHO, Foraxx** and **HOO, Foraxx** are offered with the
-  others. A plain palette stays the default.
-- Any layer, group or adjustment layer can be given such a mask in its
-  controls, under **Mask from inputs**: choose one or two inputs, where
-  strong or where weak, and whether faint signal is lifted.
-- A computed mask reads each input with the stretch the view gives that
-  input, so it follows the input's own Stretch step.
-- Choosing another palette removes computed masks and keeps painted ones.
+1. the product of one or two inputs' stretched samples;
+2. shaped by `MaskShape`, and raised to the mask's **reach**;
+3. **smoothed** by a Gaussian blur, so the inputs' noise does not become
+   speckle in the layers behind the mask;
+4. **touched up** by strokes that set it to 1 or to 0.
+
+A layer is behind a shared mask or its inverse (`MaskRecord::Shared`). A
+Foraxx palette is then five ordinary layers and two masks: SII as red
+behind the OIII mask, Ha as red behind its inverse, and so on. Because the
+two layers use one mask, a change to the mask keeps them consistent: their
+shares of red still sum to the whole. Two layers behind a mask and its
+inverse keep their full color; “Balance the layers' colors” leaves them
+out.
+
+- **SHO, Foraxx** and **HOO, Foraxx** are offered with the other palettes.
+  A plain palette stays the default.
+- **Masks are remade from the palette's inputs.** A palette has slots,
+  named after the inputs they show to start with. The document records
+  which input each slot shows (`Document::palette`). Giving a slot another
+  input (`Document::set_palette_input`) remakes the layers and the masks
+  that use the slot. Each layer keeps its color, opacity, own edits and
+  place; each mask keeps its reach, smoothing and touch-ups.
+- **A mask follows its inputs without being remade.** It reads each input
+  with the stretch the view gives that input, at every frame.
+- **Tweaking a mask by hand:** a mask has its own row in the tree, under
+  Masks. Its controls set the inputs, the shape, the reach and the
+  smoothing. The mask brush adds to the mask or takes away from it. A mask
+  a person gives other inputs is theirs: a palette no longer remakes it.
+- **Seeing the result:** with a mask selected the canvas shows the mask
+  in gray, or the final picture. The Input and picture split shows both.
+- Any layer, group or adjustment layer can be put behind a shared mask in
+  its controls, under **Shared mask**.
+- Choosing another palette removes the masks the old palette made and
+  keeps painted masks.
+
+**Smoothing is a difference from Seiza.** Seiza's Foraxx composition,
+which PSF Guard's Foraxx palettes use, computes the mix at each pixel with
+no smoothing, so OIII noise shows as speckle in blue and green. A new
+shared mask is smoothed by 4 pixels. For PSF Guard to render a Studio
+document with the same result, Seiza's dynamic palettes need a smoothing
+option; that is a change to an existing Seiza crate, not yet made.
 
 These palettes are meant for stretched, starless inputs. With stars in
 the inputs, the stars take part in the masks.
+
+### Color tones
+
+A palette is a starting point. The Combined row's controls list every
+layer that shows an input with its hue and saturation, so the tone of each
+can be set in one place. The same two sliders are in each layer's own
+controls.
+
+### What is being edited is always shown
+
+A line under the top bar states what is selected, what it applies to, and
+what the tool in hand will change: “the mask OIII signal, shared by 2
+layers · The mask brush takes away from this mask.” While a mask is
+selected, or the mask brush is in hand, the line is marked in amber and
+reads “Editing a mask”, because a stroke then changes where layers show
+and not the picture itself.
 
 ### One tree
 
@@ -1796,13 +1841,15 @@ saturation per layer, layers that share an input, adjustments for one
 layer and for the stack with painted masks and opacity, dragging between
 the two, heals of one input, of one layer and of the whole picture, groups
 with their own adjustments, clipping, the tree, the row controls, the five
-splits, pinning, the mask overlay, masks computed from inputs and the two
-Foraxx palettes.
+splits, pinning, the mask overlay, shared masks with smoothing and
+touch-ups, the two Foraxx palettes, palette input mapping and the list of
+color tones. The palettes and masks were tried on real Ha, OIII and SII
+stacks of Sh2-157.
 
 One frame draws at most 24 layers, counting each adjustment and both ends
 of each group, 15 masks,
-16 heals of single layers on at most 4 layers, 8 masks computed from
-inputs, and 8 Finish steps. What
+16 heals of single layers on at most 4 layers, 4 shared masks, and 8
+Finish steps. What
 does not fit is listed in the pane's label and is not drawn; nothing is
 drawn without its mask. The engine has no such limits, because it renders
 a layer at a time.
@@ -1812,15 +1859,59 @@ Not built:
 - Groups inside groups, and a group that passes its members through to
   the layers beneath one by one, as Photoshop's default group does.
 - Clipping a group to the layer beneath it, and a heal of a group.
-- A computed mask on one layer's own adjustment; a layer with both a
-  painted and a computed mask; clipping to a layer's computed mask.
-- Computed masks have been tried on RGB stacks renamed as narrowband, and
-  not yet judged on real narrowband data.
+- A shared mask on one layer's own adjustment; a layer with both a
+  painted and a shared mask; clipping to a layer's shared mask.
+- A wide smoothing is drawn from 33 samples in each direction, so at the
+  widest settings it is an approximation of a Gaussian.
 - A heal copies samples as they were before any heal of the same layer, so
   one heal cannot copy what another healed.
 - The adjustment math and the heal are still the spike's shader code,
   standing in for Seiza's. Seiza has no exposure, curves or saturation
   step for display samples yet.
+
+## Processing tools in Studio (2026-11-25, first part)
+
+The tools are the ones PSF Guard's color processing runs: sharpening,
+noise reduction and star removal, each by a provider. The providers today
+are RC-Astro's BlurXTerminator, NoiseXTerminator and StarXTerminator, and
+Seiza's built-in noise model. A document keeps them as PSF Guard does: one
+chain per input, in the step “RC-Astro tools” of that input.
+
+A tool takes seconds to minutes on a whole stack, so it is not live.
+Studio runs the tools when a document's store is prepared, and keeps each
+result.
+
+- **Shared step.** `color_steps::run_tool_chain` runs one chain on one
+  linear image, and `color_steps::ToolChain::resolve` fills in a chain's
+  settings and cache ids. PSF Guard's color previews call the same
+  function; their behavior is unchanged. A provider is chosen by its key,
+  so a Seiza model and an RC-Astro tool go the same way.
+- **Preparing a store.** `psf-guard studio-sources --apply <document>`
+  runs each input's chain on its stack as it came, then fits the
+  background on the tools' result, as the color pipeline does.
+- **What the store keeps.** Per input: the stack as it came; the tools'
+  result (`<input>@tools`); the stars a star removal kept
+  (`<input>@stars`); and the result with its background corrected
+  (`<input>@background`).
+- **Cache.** Each step's result is kept beside the downloaded stacks, so
+  a chain that grew by one tool runs only that tool.
+
+Tried on the Sh2-157 stacks on this Mac: BlurXTerminator and
+NoiseXTerminator on Ha, OIII and SII, and StarXTerminator on Ha, took 68
+seconds in all. StarXTerminator returned no stars image with its default
+settings, so the store has no `ha@stars`.
+
+Not built yet:
+
+- The canvas does not show an input before and after its tools, and lists
+  a store's `@tools` planes as if they were inputs.
+- Choosing tools and their settings in Studio, and starting the run from
+  Studio.
+- Stars as a layer of their own.
+- Tools on the combined color image (`color_rc_astro`) and the narrowband
+  star steps.
+- Seiza's noise model is not installed on this Mac, so it has not been
+  run from Studio.
 
 ## Suggested order of work
 

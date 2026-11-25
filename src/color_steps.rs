@@ -5,16 +5,97 @@
 //! them. It knows nothing of jobs, caches or progress bars: a caller passes
 //! a function that hears what the step is doing, and may stop it.
 //!
-//! Registration and the background step are here. The rest of the color
-//! pipeline still lives in `server::stack_preview::color` and moves here
-//! step by step.
+//! Registration, the processing tools of one channel and the background
+//! step are here. The rest of the color pipeline still lives in
+//! `server::stack_preview::color` and moves here step by step.
 
 use crate::server::stack_preview::color::{StackBackgroundExtraction, StackColorRole};
+use crate::server::stack_preview::rc_astro::{self, ProcessingChain, RcAstroOutcome};
+use crate::server::workers::rc_astro::RcAstroRunner;
+use crate::server::workers::Workers;
 use seiza_background::{BackgroundFit, FittedModel, ModelConfig, ProtectedRegion};
 use seiza_stacking::{
-    resample_to_reference_with_gpu, GpuOptions, LinearImage, Registrar, RegistrationOptions,
-    RegistrationResult,
+    resample_to_reference_with_gpu, CancelSignal, ExternalToolSchema, GpuOptions, LinearImage,
+    Registrar, RegistrationOptions, RegistrationResult,
 };
+use std::path::Path;
+
+/// What a chain of processing tools is doing.
+pub enum ToolEvent<'a> {
+    /// A tool is running: its name as a person reads it, and how far the
+    /// whole chain has got, from 0 to 1.
+    Running { label: &'a str, fraction: f32 },
+}
+
+/// A chain of processing tools, ready to run on one image: the tools in
+/// their order with their settings filled in, each tool's schema, and one
+/// cache id per step.
+pub struct ToolChain {
+    pub config: ProcessingChain,
+    pub schemas: Vec<(String, ExternalToolSchema)>,
+    pub ids: Vec<String>,
+}
+
+impl ToolChain {
+    /// Resolves a chain against the tools the workers offer. `scope`,
+    /// `source` and `revision` say which image the chain runs on, so the
+    /// cache keeps one result per image and per setting.
+    ///
+    /// Refuses a chain with a tool no worker offers.
+    pub fn resolve(
+        workers: &Workers,
+        config: &ProcessingChain,
+        scope: &str,
+        source: &str,
+        revision: &str,
+    ) -> Result<Self, String> {
+        let schemas = rc_astro::schemas_for(workers, config)?;
+        let config = rc_astro::normalize_against_schemas(config, &schemas)?;
+        let ids = rc_astro::rc_astro_chain_ids(scope, source, revision, &config, &schemas, None)
+            .map_err(|error| format!("{error:?}"))?;
+        Ok(Self {
+            config,
+            schemas,
+            ids,
+        })
+    }
+}
+
+/// Runs a chain of processing tools on one linear image: sharpening, noise
+/// reduction and star removal, each by the provider the chain names
+/// (RC-Astro's BlurXTerminator, NoiseXTerminator and StarXTerminator, or
+/// Seiza's noise model).
+///
+/// Each step's result is kept under `cache`, so a chain that ran before
+/// returns at once, and a chain that grew by one tool runs only that tool.
+/// `before_step` is read before each tool starts; an error ends the chain
+/// there. `cancel` stops the tool in hand.
+///
+/// Returns the processed image, and the stars when star removal kept them.
+#[allow(clippy::too_many_arguments)]
+pub fn run_tool_chain(
+    runner: RcAstroRunner<'_>,
+    cache: &Path,
+    chain: &ToolChain,
+    image: &LinearImage,
+    headers: &[(String, seiza_fits::HeaderValue)],
+    cancel: Option<&CancelSignal>,
+    mut observe: impl FnMut(ToolEvent<'_>),
+    before_step: &mut dyn FnMut() -> Result<(), String>,
+) -> Result<RcAstroOutcome, String> {
+    rc_astro::apply_rc_astro(
+        runner,
+        cache,
+        &chain.ids,
+        &chain.config,
+        &chain.schemas,
+        image,
+        headers,
+        &mut |label, fraction| observe(ToolEvent::Running { label, fraction }),
+        cancel,
+        before_step,
+    )
+}
 
 /// The largest registration residual a channel may have, in pixels.
 pub const MAX_REGISTRATION_RMS_PIXELS: f64 = 2.0;

@@ -1395,6 +1395,7 @@ pub fn main() -> Result<()> {
             target,
             channels,
             document,
+            apply,
             output,
         } => {
             let runtime = tokio::runtime::Runtime::new()?;
@@ -1407,6 +1408,7 @@ pub fn main() -> Result<()> {
                     target_id: target,
                     channels,
                     document: document.map(Into::into),
+                    apply: apply.map(Into::into),
                     output: output.into(),
                 },
             ))?;

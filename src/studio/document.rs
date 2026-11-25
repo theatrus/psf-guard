@@ -147,19 +147,99 @@ pub enum MaskRecord {
         /// How far outside `low` and `high` the mask reaches 0.
         feather: f32,
     },
-    /// A mask computed from inputs at each pixel: the product of the named
-    /// inputs' stretched samples, shaped. A layer behind such a mask shows
-    /// where those inputs are bright, or where they are not when the mask
-    /// is inverted. This is how a palette mixes inputs by their signal.
-    FromInputs {
-        /// The inputs whose stretched samples are multiplied, by PSF
-        /// Guard's role names. One or two.
-        inputs: Vec<String>,
-        /// How the product becomes the mask.
-        shape: MaskShape,
-        /// Whether the mask is 1 minus the shaped product.
+    /// One of the document's shared masks, or its inverse. A shared mask is
+    /// computed from inputs at each pixel, so it follows their signal; two
+    /// layers that use a mask and its inverse share one color between them.
+    Shared {
+        /// The shared mask.
+        mask: Uuid,
+        /// Whether the layer shows where the mask is weak.
         inverted: bool,
     },
+}
+
+/// A mask computed from inputs, kept by the document so that several layers
+/// can use it, or its inverse, and stay consistent when it is changed.
+///
+/// At each pixel the mask is the product of the inputs' stretched samples,
+/// shaped and raised to `reach`. The result is smoothed, so the noise of
+/// the inputs does not become speckle in the layers behind the mask, and
+/// then touched up by hand.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SharedMask {
+    /// The mask's identity.
+    pub id: Uuid,
+    /// The mask's name, as a person reads it.
+    pub name: String,
+    /// The inputs whose stretched samples are multiplied, by PSF Guard's
+    /// role names. One or two.
+    pub inputs: Vec<String>,
+    /// How the product becomes the mask.
+    pub shape: MaskShape,
+    /// The power the shaped mask is raised to. 1 leaves it as it is; below
+    /// 1 the mask reaches further into faint signal, above 1 less far.
+    pub reach: f32,
+    /// How far the mask is smoothed: the standard deviation of a Gaussian
+    /// blur, in document pixels. 0 leaves the mask as computed, noise and
+    /// all.
+    #[serde(default = "SharedMask::default_smoothing")]
+    pub smoothing: f32,
+    /// Strokes painted over the computed mask: an adding stroke sets the
+    /// mask to 1 under it, a subtracting stroke to 0.
+    #[serde(default)]
+    pub touch_ups: Vec<Stroke>,
+    /// The palette slots the mask was made for, such as `oiii`. A palette
+    /// remakes such a mask when its slots are given other inputs. Empty for
+    /// a mask a person made.
+    #[serde(default)]
+    pub slots: Vec<String>,
+}
+
+impl SharedMask {
+    /// A new mask of these inputs, with no touch-ups.
+    pub fn new(inputs: Vec<String>) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            name: Self::name_for(&inputs),
+            inputs,
+            shape: MaskShape::PowerOfInverse,
+            reach: 1.0,
+            smoothing: Self::default_smoothing(),
+            touch_ups: Vec::new(),
+            slots: Vec::new(),
+        }
+    }
+
+    /// The smoothing a new mask has: enough to take the pixel noise of a
+    /// stack out of the mask without softening the structures it follows.
+    pub fn default_smoothing() -> f32 {
+        4.0
+    }
+
+    /// The name a mask gets from its inputs: "OIII signal", "Ha × OIII
+    /// signal".
+    pub fn name_for(inputs: &[String]) -> String {
+        let labels: Vec<String> = inputs
+            .iter()
+            .map(|input| super::channel_label(input))
+            .collect();
+        if labels.is_empty() {
+            "Mask with no input".to_string()
+        } else {
+            format!("{} signal", labels.join(" × "))
+        }
+    }
+}
+
+/// The palette a document's layers were made from, and the input each of
+/// its slots shows. A slot is one of the palette's own names, such as `ha`;
+/// giving a slot another input remakes the layers and the masks.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaletteUse {
+    /// The palette's name.
+    pub name: String,
+    /// The input each slot shows, by slot.
+    pub inputs: std::collections::BTreeMap<String, String>,
 }
 
 /// How the product of a computed mask's inputs becomes the mask.
@@ -420,6 +500,12 @@ pub struct Document {
     /// The document's name.
     pub name: String,
     stages: Vec<Stage>,
+    /// The masks layers share, in the order they were made.
+    #[serde(default)]
+    masks: Vec<SharedMask>,
+    /// The palette the layers were made from, if any.
+    #[serde(default)]
+    pub palette: Option<PaletteUse>,
 }
 
 impl Document {
@@ -437,7 +523,58 @@ impl Document {
                     junction: Junction::default(),
                 })
                 .collect(),
+            masks: Vec::new(),
+            palette: None,
         }
+    }
+
+    /// The masks layers share, in the order they were made.
+    pub fn masks(&self) -> &[SharedMask] {
+        &self.masks
+    }
+
+    /// One shared mask.
+    pub fn mask(&self, id: Uuid) -> Option<&SharedMask> {
+        self.masks.iter().find(|mask| mask.id == id)
+    }
+
+    /// One shared mask, to change it.
+    pub fn mask_mut(&mut self, id: Uuid) -> Option<&mut SharedMask> {
+        self.masks.iter_mut().find(|mask| mask.id == id)
+    }
+
+    /// Adds a shared mask and returns its id.
+    pub fn add_mask(&mut self, mask: SharedMask) -> Uuid {
+        let id = mask.id;
+        self.masks.push(mask);
+        id
+    }
+
+    /// The layers that use a shared mask, or its inverse.
+    pub fn layers_using_mask(&self, id: Uuid) -> impl Iterator<Item = &LayerRecord> {
+        self.layers().iter().filter(
+            move |layer| matches!(layer.mask, Some(MaskRecord::Shared { mask, .. }) if mask == id),
+        )
+    }
+
+    /// Takes a shared mask out of the document. The layers that used it
+    /// then show everywhere.
+    pub fn remove_mask(&mut self, id: Uuid) -> Option<SharedMask> {
+        let at = self.masks.iter().position(|mask| mask.id == id)?;
+        for layer in &mut self.stages[StageKind::Combine as usize].layers {
+            if matches!(layer.mask, Some(MaskRecord::Shared { mask, .. }) if mask == id) {
+                layer.mask = None;
+            }
+        }
+        Some(self.masks.remove(at))
+    }
+
+    /// Adds a stroke to a shared mask's touch-ups. Returns whether the
+    /// document has the mask.
+    pub fn touch_up_mask(&mut self, id: Uuid, stroke: Stroke) -> bool {
+        self.mask_mut(id)
+            .map(|mask| mask.touch_ups.push(stroke))
+            .is_some()
     }
 
     /// The stages, in order.
@@ -857,8 +994,9 @@ impl Document {
     }
 
     /// Adds a stroke to a layer's painted mask. A layer with no mask gets a
-    /// painted one. A layer with a computed mask is refused: painting over it
-    /// would discard it.
+    /// painted one. A layer behind a shared or computed mask is refused:
+    /// painting over it would discard it. A shared mask is touched up with
+    /// [`Self::touch_up_mask`].
     pub fn paint_layer_mask(&mut self, id: Uuid, stroke: Stroke) -> Result<(), StudioError> {
         let layer = self
             .layer_mut(id)

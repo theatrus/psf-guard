@@ -1201,6 +1201,12 @@ pub enum Commands {
         #[arg(long)]
         document: Option<String>,
 
+        /// Prepare the store for this PSF-Studio document in place of the
+        /// default flow: its processing tools run on each channel, and its
+        /// background settings are used
+        #[arg(long, conflicts_with = "document")]
+        apply: Option<String>,
+
         /// Output path of the tile store
         #[arg(short, long)]
         output: String,

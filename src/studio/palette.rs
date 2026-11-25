@@ -6,12 +6,15 @@
 //! After that every layer's color is the person's to change, to any hue and
 //! saturation, not only to pure red, green or blue.
 
-use super::{BlendMode, Document, LayerRecord, LayerSource, MaskRecord, MaskShape};
+use super::{BlendMode, Document, LayerRecord, LayerSource, MaskRecord, PaletteUse, SharedMask};
+use std::collections::BTreeMap;
 
 /// One layer a palette makes.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PaletteLayer {
-    /// The input the layer shows, by PSF Guard's role name, such as `ha`.
+    /// The slot the layer shows. A slot is named after the input it shows
+    /// unless a person gives it another: PSF Guard's role name, such as
+    /// `ha`.
     pub channel: &'static str,
     /// The layer's hue in degrees: 0 is red, 120 green, 240 blue.
     pub hue: f32,
@@ -23,24 +26,15 @@ pub struct PaletteLayer {
     pub mask: Option<PaletteMask>,
 }
 
-/// A palette layer's mask, computed from inputs at each pixel: the power of
-/// inverted pixels of the product of the inputs' stretched samples.
+/// A palette layer's mask: the shared mask of these slots, computed at each
+/// pixel as the power of inverted pixels of the product of the slots'
+/// stretched samples.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PaletteMask {
-    /// The inputs multiplied, by PSF Guard's role names.
+    /// The slots multiplied.
     pub inputs: &'static [&'static str],
     /// Whether the layer shows where the product is weak.
     pub inverted: bool,
-}
-
-impl PaletteMask {
-    fn record(&self) -> MaskRecord {
-        MaskRecord::FromInputs {
-            inputs: self.inputs.iter().map(|input| input.to_string()).collect(),
-            shape: MaskShape::PowerOfInverse,
-            inverted: self.inverted,
-        }
-    }
 }
 
 /// A starting set of layers, bottom first.
@@ -177,12 +171,20 @@ pub fn palettes_for(channels: &[String]) -> Vec<&'static Palette> {
 }
 
 impl Palette {
-    /// The inputs the palette's layers show.
-    fn inputs(&self) -> Vec<&'static str> {
-        let mut inputs: Vec<&'static str> = self.layers.iter().map(|layer| layer.channel).collect();
-        inputs.sort_unstable();
-        inputs.dedup();
-        inputs
+    /// The palette's slots: the inputs its layers show and its masks read,
+    /// before a person gives a slot another input.
+    pub fn slots(&self) -> Vec<&'static str> {
+        let mut slots: Vec<&'static str> = self
+            .layers
+            .iter()
+            .flat_map(|layer| {
+                let masked = layer.mask.map_or(&[][..], |mask| mask.inputs);
+                [layer.channel].into_iter().chain(masked.iter().copied())
+            })
+            .collect();
+        slots.sort_unstable();
+        slots.dedup();
+        slots
     }
 }
 
@@ -190,10 +192,10 @@ impl Palette {
 /// its inputs, and the first of those in [`PALETTES`].
 pub fn default_palette(channels: &[String]) -> Option<&'static Palette> {
     let offered = palettes_for(channels);
-    let most = offered.iter().map(|palette| palette.inputs().len()).max()?;
+    let most = offered.iter().map(|palette| palette.slots().len()).max()?;
     offered
         .into_iter()
-        .find(|palette| palette.inputs().len() == most)
+        .find(|palette| palette.slots().len() == most)
 }
 
 /// An input's name as a person reads it: `Ha` for `ha`, `R` for `red`.
@@ -294,16 +296,57 @@ pub fn band_layer(channel: &str, hue: f32, saturation: f32, blend: BlendMode) ->
 }
 
 impl Document {
-    /// Replaces the layers that show an input with the palette's, and keeps
-    /// every other layer above them in its order.
+    /// Replaces the layers that show an input with the palette's, each
+    /// slot showing the input of the same name, and keeps every other layer
+    /// above them in its order.
     ///
-    /// A palette layer takes over the mask and the own steps of the first
-    /// replaced layer that showed the same input, so choosing another
+    /// A palette layer takes over the painted mask and the own steps of the
+    /// first replaced layer that showed the same input, so choosing another
     /// palette does not discard that work.
     ///
     /// The added layers' colors are scaled together so that their sum is
     /// full scale in its brightest component.
     pub fn apply_palette(&mut self, palette: &Palette) {
+        self.apply_palette_with(palette, &BTreeMap::new());
+    }
+
+    /// Gives one slot of the document's palette another input, and remakes
+    /// the layers and the masks that show or read that slot. Each layer
+    /// keeps its color, opacity, own steps and place; each shared mask keeps
+    /// its reach and its touch-ups.
+    ///
+    /// Returns whether the document has a palette with that slot.
+    pub fn set_palette_input(&mut self, slot: &str, input: &str) -> bool {
+        let Some(used) = self.palette.clone() else {
+            return false;
+        };
+        let Some(palette) = PALETTES.iter().find(|palette| palette.name == used.name) else {
+            return false;
+        };
+        if !palette.slots().contains(&slot) {
+            return false;
+        }
+        let mut inputs = used.inputs;
+        inputs.insert(slot.to_string(), input.to_string());
+        self.apply_palette_with(palette, &inputs);
+        true
+    }
+
+    /// Applies a palette with `inputs` saying which input each slot shows.
+    /// A slot not in `inputs` shows the input of its own name.
+    fn apply_palette_with(&mut self, palette: &Palette, inputs: &BTreeMap<String, String>) {
+        let input_of = |slot: &str| {
+            inputs
+                .get(slot)
+                .cloned()
+                .unwrap_or_else(|| slot.to_string())
+        };
+        // The same palette again, with other inputs: each layer is the one
+        // it was, showing another input.
+        let remade = self
+            .palette
+            .as_ref()
+            .is_some_and(|used| used.name == palette.name);
         let old: Vec<LayerRecord> = self.layers().to_vec();
         for layer in &old {
             self.remove_layer(layer.id);
@@ -311,74 +354,134 @@ impl Document {
         let (mut replaced, kept): (Vec<_>, Vec<_>) = old
             .into_iter()
             .partition(|layer| matches!(layer.source, LayerSource::Band { .. }));
-        let mut layers: Vec<LayerRecord> = palette
-            .layers
-            .iter()
-            .map(|entry| {
-                let mut layer = band_layer(entry.channel, entry.hue, entry.saturation, entry.blend);
-                let earlier = replaced.iter().position(|old| {
-                    matches!(&old.source, LayerSource::Band { band } if band == entry.channel)
-                });
-                if let Some(at) = earlier {
-                    let old = replaced.remove(at);
-                    // A painted mask is the person's work and is kept. A
-                    // computed one belonged to the palette it came from.
-                    layer.mask = old
-                        .mask
-                        .filter(|mask| matches!(mask, MaskRecord::Painted(_)));
+        let by_place = remade && replaced.len() == palette.layers.len();
+
+        // The palette's masks: one per set of slots. A mask made for the
+        // same slots before is kept, with its reach and touch-ups, and
+        // reads the slots' inputs as they are now.
+        let mut masks: Vec<(&'static [&'static str], uuid::Uuid)> = Vec::new();
+        for needed in palette.layers.iter().filter_map(|layer| layer.mask) {
+            if masks.iter().any(|(slots, _)| *slots == needed.inputs) {
+                continue;
+            }
+            let slots: Vec<String> = needed.inputs.iter().map(|slot| slot.to_string()).collect();
+            let read: Vec<String> = needed.inputs.iter().map(|slot| input_of(slot)).collect();
+            let known = self
+                .masks()
+                .iter()
+                .find(|mask| mask.slots == slots)
+                .map(|mask| mask.id);
+            let id = match known {
+                Some(id) => {
+                    let mask = self.mask_mut(id).expect("the mask was just found");
+                    mask.name = SharedMask::name_for(&read);
+                    mask.inputs = read;
+                    id
+                }
+                None => self.add_mask(SharedMask {
+                    slots,
+                    ..SharedMask::new(read)
+                }),
+            };
+            masks.push((needed.inputs, id));
+        }
+
+        let mut layers: Vec<LayerRecord> = Vec::new();
+        for (at, entry) in palette.layers.iter().enumerate() {
+            let input = input_of(entry.channel);
+            let mut layer = band_layer(&input, entry.hue, entry.saturation, entry.blend);
+            if by_place {
+                // The layer it was, showing the slot's input as it is now.
+                let was = replaced[at].clone();
+                let color = was.color.unwrap_or([1.0; 3]);
+                layer = LayerRecord {
+                    name: layer_name(&input, color, was.blend),
+                    source: layer.source,
+                    ..was
+                };
+            } else {
+                let earlier = replaced.iter().position(
+                    |old| matches!(&old.source, LayerSource::Band { band } if *band == input),
+                );
+                if let Some(earlier) = earlier {
+                    let old = replaced.remove(earlier);
                     layer.steps = old.steps;
                     layer.group = old.group;
                     layer.clipped = old.clipped;
+                    layer.mask = old.mask;
                 }
-                if let Some(mask) = &entry.mask {
-                    layer.mask = Some(mask.record());
-                }
-                layer
-            })
-            .collect();
-        balance_colors(&mut layers);
+            }
+            // A painted mask is the person's work and is kept. A shared one
+            // belongs to the palette it came from.
+            if matches!(layer.mask, Some(MaskRecord::Shared { .. })) {
+                layer.mask = None;
+            }
+            if let Some(needed) = entry.mask {
+                let (_, mask) = masks
+                    .iter()
+                    .find(|(slots, _)| *slots == needed.inputs)
+                    .expect("every palette mask was made above");
+                layer.mask = Some(MaskRecord::Shared {
+                    mask: *mask,
+                    inverted: needed.inverted,
+                });
+            }
+            layers.push(layer);
+        }
+        if !by_place {
+            balance_colors(&mut layers);
+        }
         for layer in layers.into_iter().chain(kept) {
             self.insert_layer(usize::MAX, layer)
                 .expect("a palette's layers and a document's own layers are valid");
         }
+        // A mask an earlier palette made, which no layer uses now, goes.
+        let unused: Vec<uuid::Uuid> = self
+            .masks()
+            .iter()
+            .filter(|mask| !mask.slots.is_empty())
+            .filter(|mask| self.layers_using_mask(mask.id).next().is_none())
+            .map(|mask| mask.id)
+            .collect();
+        for id in unused {
+            self.remove_mask(id);
+        }
+        self.palette = Some(PaletteUse {
+            name: palette.name.to_string(),
+            inputs: palette
+                .slots()
+                .into_iter()
+                .map(|slot| (slot.to_string(), input_of(slot)))
+                .collect(),
+        });
     }
 
-    /// Whether the document's layers that show an input are the palette's,
-    /// in its order, with its hues and blend modes.
+    /// Whether the document's layers were made from this palette and are
+    /// still as many as it makes.
     pub fn uses_palette(&self, palette: &Palette) -> bool {
-        let shown: Vec<&LayerRecord> = self
+        let shown = self
             .layers()
             .iter()
             .filter(|layer| matches!(layer.source, LayerSource::Band { .. }))
-            .collect();
-        shown.len() == palette.layers.len()
-            && shown.iter().zip(palette.layers).all(|(layer, entry)| {
-                let (hue, saturation, _) = hue_of(layer.color.unwrap_or([1.0; 3]));
-                let turn = (hue - entry.hue).rem_euclid(360.0);
-                let computed = match &layer.mask {
-                    Some(mask @ MaskRecord::FromInputs { .. }) => Some(mask.clone()),
-                    _ => None,
-                };
-                matches!(&layer.source, LayerSource::Band { band } if band == entry.channel)
-                    && computed == entry.mask.map(|mask| mask.record())
-                    && layer.blend == entry.blend
-                    && (saturation - entry.saturation).abs() < 0.02
-                    && (entry.saturation == 0.0 || turn.min(360.0 - turn) < 1.0)
-            })
+            .count();
+        self.palette
+            .as_ref()
+            .is_some_and(|used| used.name == palette.name)
+            && shown == palette.layers.len()
     }
 }
 
 /// Scales the colors of the layers that add together, so that their sum is
 /// full scale in its brightest component.
 ///
-/// A layer behind a computed mask is left out and keeps its color: such
+/// A layer behind a shared mask is left out and keeps its color: such
 /// layers share a color between them by their masks, so they do not add
 /// together everywhere.
 pub fn balance_colors(layers: &mut [LayerRecord]) {
     let adds = |layer: &LayerRecord| {
         layer.blend == BlendMode::Add
             && layer.color.is_some()
-            && !matches!(layer.mask, Some(MaskRecord::FromInputs { .. }))
+            && !matches!(layer.mask, Some(MaskRecord::Shared { .. }))
     };
     let brightest = (0..3)
         .map(|component| {

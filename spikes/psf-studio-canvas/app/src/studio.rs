@@ -82,16 +82,28 @@ enum SliderId {
     Amount,
     /// The selected adjustment layer's amount.
     LayerAmount,
+    /// The selected shared mask's reach.
+    Reach,
+    /// How far the selected shared mask is smoothed.
+    Smoothing,
+    /// The hue of one layer, by its place in the stack, in the palette's
+    /// list of tones.
+    ToneHue(usize),
+    /// The saturation of one layer, by its place in the stack, in the
+    /// palette's list of tones.
+    ToneSaturation(usize),
 }
 
 impl SliderId {
-    const ALL: [SliderId; 6] = [
+    const ALL: [SliderId; 8] = [
         SliderId::Midtone,
         SliderId::Opacity,
         SliderId::Hue,
         SliderId::Saturation,
         SliderId::Amount,
         SliderId::LayerAmount,
+        SliderId::Reach,
+        SliderId::Smoothing,
     ];
 }
 
@@ -482,6 +494,12 @@ pub struct Studio {
     alone: bool,
     /// Whether the selected row's mask is drawn over the image.
     mask_shown: bool,
+    /// Whether the brush takes away from a shared mask, in place of adding
+    /// to it.
+    brush_removes: bool,
+    /// Whether the canvas shows the final picture while a mask is selected,
+    /// in place of the mask itself.
+    mask_shows_picture: bool,
     /// Where a wipe's divider is, as a fraction of the canvas's width.
     wipe: f32,
     /// How the canvas is divided.
@@ -597,33 +615,39 @@ impl Studio {
         .detach();
 
         let document = panes::flow_document(&band_info.names);
-        let mut studio = Self {
-            native_view,
-            _ns_view: ns_view,
-            canvas,
-            canvas_bounds: Rc::default(),
-            slider_bounds: SliderId::ALL
-                .into_iter()
-                .map(|id| (id, Rc::default()))
-                .collect(),
-            tool: Tool::Pan,
-            drag: None,
-            scale_factor: window.scale_factor(),
-            document,
-            selected: Row::Combined,
-            alone: false,
-            mask_shown: false,
-            wipe: 0.5,
-            split: Split::One,
-            pins: Vec::new(),
-            places: Vec::new(),
-            unfolded: HashSet::new(),
-            stroke: None,
-            scene_version: 0,
-            band_info,
-            analysed: Vec::new(),
-            levels,
-        };
+        let mut studio =
+            Self {
+                native_view,
+                _ns_view: ns_view,
+                canvas,
+                canvas_bounds: Rc::default(),
+                slider_bounds: SliderId::ALL
+                    .into_iter()
+                    .chain((0..MAX_LAYERS).flat_map(|layer| {
+                        [SliderId::ToneHue(layer), SliderId::ToneSaturation(layer)]
+                    }))
+                    .map(|id| (id, Rc::default()))
+                    .collect(),
+                tool: Tool::Pan,
+                drag: None,
+                scale_factor: window.scale_factor(),
+                document,
+                selected: Row::Combined,
+                alone: false,
+                mask_shown: false,
+                brush_removes: false,
+                mask_shows_picture: false,
+                wipe: 0.5,
+                split: Split::One,
+                pins: Vec::new(),
+                places: Vec::new(),
+                unfolded: HashSet::new(),
+                stroke: None,
+                scene_version: 0,
+                band_info,
+                analysed: Vec::new(),
+                levels,
+            };
         studio.refresh_canvas();
         studio
     }

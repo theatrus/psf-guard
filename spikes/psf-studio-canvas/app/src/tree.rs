@@ -99,7 +99,7 @@ impl Studio {
     /// What a step's row says under its name.
     fn step_words(&self, stage: StageKind, step: &StepRecord, applies_to: String) -> String {
         let mut words = vec![applies_to];
-        words.extend(mask_words(&step.mask));
+        words.extend(mask_words(&self.document, &step.mask));
         if !is_drawn(stage, step, &self.band_info) {
             words.push("recorded, not drawn yet".to_string());
         }
@@ -333,7 +333,7 @@ impl Studio {
         if let Some(base) = self.clipped_to(index) {
             words.push(format!("clipped to {}", base.name));
         }
-        words.extend(mask_words(&layer.mask));
+        words.extend(mask_words(&self.document, &layer.mask));
         let name = layer.name.clone();
         let label: SharedString = name.clone().into();
         let indent = if in_group { CHILD_INDENT } else { 0.0 };
@@ -465,6 +465,32 @@ impl Studio {
         rows
     }
 
+    /// The masks layers share, each a row of its own: a mask is changed in
+    /// one place, for every layer behind it.
+    fn mask_rows(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let masks = self.document.masks();
+        if masks.is_empty() {
+            return Vec::new();
+        }
+        let mut rows = vec![Self::heading("Masks").into_any_element()];
+        for (index, mask) in masks.iter().enumerate() {
+            let mut words = vec![format!(
+                "shared by {}",
+                counted(self.document.layers_using_mask(mask.id).count(), "layer")
+            )];
+            if !mask.touch_ups.is_empty() {
+                words.push(counted(mask.touch_ups.len(), "touch-up"));
+            }
+            rows.push(
+                self.tree_row(("mask", index), Row::Mask(mask.id), 0.0, cx)
+                    .child(div().w(px(14.0)).text_color(rgb(QUIET)).child("◑"))
+                    .child(Self::named(mask.name.clone(), words.join(" · ")))
+                    .into_any_element(),
+            );
+        }
+        rows
+    }
+
     // ---- the pane -------------------------------------------------------
 
     pub(super) fn tree(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -515,6 +541,7 @@ impl Studio {
             .children(self.input_rows(cx))
             .child(Self::heading(format!("Combine · {palette}")))
             .children(self.layer_rows(cx))
+            .children(self.mask_rows(cx))
             .child(
                 self.tree_row("combined", Row::Combined, 0.0, cx)
                     .child(Self::named("Combined", "every layer, before Finish")),

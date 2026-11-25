@@ -6,6 +6,8 @@
 @group(2) @binding(0) var layer_masks: texture_2d_array<f32>;
 // The samples of each layer that has heals of its own, in surface pixels.
 @group(2) @binding(1) var healed_layers: texture_2d_array<f32>;
+// The computed masks that are smoothed, in surface pixels.
+@group(2) @binding(2) var smoothed_masks: texture_2d_array<f32>;
 
 struct TileVertex {
     @builtin(position) position: vec4f,
@@ -83,9 +85,9 @@ fn band_sample(uv: vec2f, band: f32, second: f32, amount: f32) -> f32 {
     return sample;
 }
 
-// A computed mask at a place in a tile: the product of its bands'
-// stretched samples, shaped.
-fn computed_mask(index: i32, uv: vec2f) -> f32 {
+// A computed mask as its bands give it at a place in a tile: the product of
+// their stretched samples, shaped and raised to the mask's reach.
+fn computed_shape(index: i32, uv: vec2f) -> f32 {
     let mask = globals.computed[index];
     var product = 1.0;
     if mask.first.x >= 0.0 {
@@ -98,10 +100,101 @@ fn computed_mask(index: i32, uv: vec2f) -> f32 {
     if mask.shape.x > 0.5 {
         product = pow(product, 1.0 - product);
     }
-    if mask.shape.y > 0.5 {
-        product = 1.0 - product;
+    return pow(product, mask.shape.z);
+}
+
+// A computed mask as a layer uses it: smoothed when it asks for that, so
+// the bands' noise does not become speckle, then touched up by strokes that
+// set it to 1 or to 0, then inverted or not.
+fn computed_mask(index: i32, uv: vec2f, pixel: vec2i) -> f32 {
+    let mask = globals.computed[index];
+    var value = 0.0;
+    if mask.touch.z > 0.0 {
+        value = textureLoad(smoothed_masks, pixel, index, 0).r;
+    } else {
+        value = computed_shape(index, uv);
     }
-    return product;
+    if mask.touch.x >= 0.0 {
+        value = max(value, textureLoad(layer_masks, pixel, i32(mask.touch.x), 0).r);
+    }
+    if mask.touch.y >= 0.0 {
+        value *= 1.0 - textureLoad(layer_masks, pixel, i32(mask.touch.y), 0).r;
+    }
+    if mask.shape.y > 0.5 {
+        value = 1.0 - value;
+    }
+    return value;
+}
+
+struct FourMasks {
+    @location(0) first: vec4f,
+    @location(1) second: vec4f,
+    @location(2) third: vec4f,
+    @location(3) fourth: vec4f,
+}
+
+fn four_masks(values: array<f32, 4>) -> FourMasks {
+    var out: FourMasks;
+    out.first = vec4f(values[0]);
+    out.second = vec4f(values[1]);
+    out.third = vec4f(values[2]);
+    out.fourth = vec4f(values[3]);
+    return out;
+}
+
+// The computed masks that are smoothed, one per target, before the blurs.
+@fragment
+fn computed_fragment(in: TileVertex) -> FourMasks {
+    var values = array<f32, 4>(0.0, 0.0, 0.0, 0.0);
+    for (var index = 0; index < 4; index++) {
+        if globals.computed[index].touch.z > 0.0 {
+            values[index] = computed_shape(index, in.uv);
+        }
+    }
+    return four_masks(values);
+}
+
+// One triangle over the whole target.
+@vertex
+fn whole_vertex(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+    let corner = vec2f(f32((index << 1u) & 2u), f32(index & 2u));
+    return vec4f(corner * 2.0 - 1.0, 0.0, 1.0);
+}
+
+// One direction of a Gaussian blur of each smoothed mask. A blur reads the
+// masks through the tile binding. Thirty-three samples cover three standard
+// deviations to each side; a wide blur spaces them further apart.
+fn blurred(position: vec2f, direction: vec2f) -> FourMasks {
+    let size = vec2f(textureDimensions(tile).xy);
+    var values = array<f32, 4>(0.0, 0.0, 0.0, 0.0);
+    for (var index = 0; index < 4; index++) {
+        let sigma = globals.computed[index].touch.z;
+        if sigma <= 0.0 {
+            continue;
+        }
+        let spacing = sigma * 3.0 / 16.0;
+        var sum = 0.0;
+        var weights = 0.0;
+        for (var tap = -16; tap <= 16; tap++) {
+            let offset = f32(tap) * spacing;
+            let weight = exp(-offset * offset / (2.0 * sigma * sigma));
+            let at = (position + direction * offset) / size;
+            sum += weight * textureSampleLevel(tile, linear_sampler, at, index, 0.0).r;
+            weights += weight;
+        }
+        values[index] = sum / weights;
+    }
+    return four_masks(values);
+}
+
+@fragment
+fn blur_across_fragment(@builtin(position) position: vec4f) -> FourMasks {
+    return blurred(position.xy, vec2f(1.0, 0.0));
+}
+
+@fragment
+fn blur_down_fragment(@builtin(position) position: vec4f) -> FourMasks {
+    return blurred(position.xy, vec2f(0.0, 1.0));
 }
 
 struct HealedLayers {
@@ -204,7 +297,7 @@ fn tile_fragment(in: TileVertex) -> @location(0) vec4f {
             cover *= textureLoad(layer_masks, pixel, i32(layer.stretch.z), 0).r;
         }
         if layer.more.x >= 0.0 {
-            cover *= computed_mask(i32(layer.more.x), in.uv);
+            cover *= computed_mask(i32(layer.more.x), in.uv, pixel);
         }
         let kind = layer.adjust.x;
         if kind > 0.5 && kind < 9.5 && layer.adjust.w > 0.5 {
@@ -217,6 +310,14 @@ fn tile_fragment(in: TileVertex) -> @location(0) vec4f {
         if waiting {
             color = mix(color, blend(own_mode, color, own), own_cover);
             waiting = false;
+        }
+        if kind > 11.5 {
+            // A layer of its color everywhere.
+            own = layer.color.rgb;
+            own_cover = cover;
+            own_mode = layer.select.y;
+            waiting = true;
+            continue;
         }
         if kind > 10.5 {
             // The end of a group: its members' blend is one layer now.

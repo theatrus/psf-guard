@@ -52,6 +52,20 @@ pub fn background_corrected_channel(channel: &str) -> String {
     format!("{channel}@background")
 }
 
+/// The name of the channel that holds `channel` after its processing tools
+/// ran, in a store that keeps both. The channel under its own name is then
+/// the stack as it came, and [`background_corrected_channel`] holds the
+/// tools' result with its background corrected.
+pub fn tools_channel(channel: &str) -> String {
+    format!("{channel}@tools")
+}
+
+/// The name of the channel that holds the stars a star removal tool took
+/// out of `channel`.
+pub fn stars_channel(channel: &str) -> String {
+    format!("{channel}@stars")
+}
+
 /// The settings keys this module turns into steps.
 const KNOWN_KEYS: [&str; 11] = [
     "input_processing",

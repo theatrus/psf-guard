@@ -264,6 +264,13 @@ fn splits_choose_their_panes_from_the_selection() {
     assert!(matches!(&pair[0], Place::Input { channel, after: Some(_) } if channel == "blue"));
     assert_eq!(pair[1], selected);
 
+    // A mask is shown beside the picture it shapes.
+    let mask = Place::Mask(Uuid::new_v4());
+    assert_eq!(
+        panes(Split::InputAndPicture, &mask, &document),
+        [mask.clone(), Place::Final]
+    );
+
     let pair = panes(Split::BeforeAndAfter, &Place::Final, &document);
     assert_eq!(pair, [Place::Combined, Place::Final]);
 }
@@ -506,19 +513,32 @@ fn a_foraxx_palette_mixes_inputs_by_their_signal() {
         let color = layer.color.unwrap();
         color.iter().copied().fold(0.0, f32::max) == 1.0
     }));
+    // Two masks serve four layers: each mask and its inverse.
+    let masks = document.masks();
+    assert_eq!(masks.len(), 2);
+    assert_eq!(masks[0].name, "OIII signal");
+    assert_eq!(masks[1].name, "Ha × OIII signal");
+    assert_eq!(
+        layers[0].mask,
+        Some(MaskRecord::Shared {
+            mask: masks[0].id,
+            inverted: false,
+        })
+    );
     assert_eq!(
         layers[1].mask,
-        Some(MaskRecord::FromInputs {
-            inputs: vec!["oiii".to_string()],
-            shape: MaskShape::PowerOfInverse,
+        Some(MaskRecord::Shared {
+            mask: masks[0].id,
             inverted: true,
         })
     );
+    assert_eq!(document.layers_using_mask(masks[1].id).count(), 2);
     assert_eq!(layers[4].mask, None);
 
-    // Back to a plain palette, the computed masks are gone.
+    // Back to a plain palette, the shared masks are gone.
     document.apply_palette(&PALETTES[2]);
     assert!(document.layers().iter().all(|layer| layer.mask.is_none()));
+    assert!(document.masks().is_empty());
 
     // The power of inverted pixels lifts faint signal and keeps the ends.
     assert_eq!(MaskShape::PowerOfInverse.apply(0.0), 0.0);
@@ -547,4 +567,56 @@ fn a_view_lists_every_input_for_computed_masks() {
         .inputs
         .iter()
         .all(|input| matches!(input.stretch, PlannedStretch::Document(_))));
+}
+
+#[test]
+fn another_input_for_a_slot_remakes_the_layers_and_masks_and_keeps_the_tweaks() {
+    let mut document = document(&["ha", "oiii", "sii"]);
+    let foraxx = PALETTES
+        .iter()
+        .find(|palette| palette.name == "SHO, Foraxx")
+        .unwrap();
+    document.apply_palette(foraxx);
+    assert_eq!(foraxx.slots(), ["ha", "oiii", "sii"]);
+
+    // A person tweaks a mask and a layer.
+    let mask = document.masks()[0].id;
+    document.mask_mut(mask).unwrap().reach = 0.6;
+    assert!(document.touch_up_mask(
+        mask,
+        Stroke {
+            points: vec![[10.0, 10.0]],
+            radius: 5.0,
+            hardness: 0.5,
+            mode: StrokeMode::Subtract,
+        }
+    ));
+    let sii_layer = document.layers()[0].id;
+    document.layer_mut(sii_layer).unwrap().opacity = 0.5;
+
+    // The OIII slot is given the SII input.
+    assert!(document.set_palette_input("oiii", "sii"));
+    let layers = document.layers();
+    assert_eq!(layers.len(), 5);
+    // The layer is the one it was.
+    assert_eq!((layers[0].id, layers[0].opacity), (sii_layer, 0.5));
+    // The layers that showed the slot show its new input.
+    assert_eq!(layers[4].name, "SII as blue");
+    assert!(matches!(&layers[3].source, LayerSource::Band { band } if band == "sii"));
+    // The mask is the one it was, reading the new input, tweaks kept.
+    let remade = document.mask(mask).unwrap();
+    assert_eq!(remade.inputs, ["sii"]);
+    assert_eq!(remade.name, "SII signal");
+    assert_eq!((remade.reach, remade.touch_ups.len()), (0.6, 1));
+    assert_eq!(document.masks()[1].inputs, ["ha", "sii"]);
+    assert_eq!(document.palette.as_ref().unwrap().inputs["oiii"], "sii");
+    assert!(document.uses_palette(foraxx));
+
+    // A slot the palette does not have is refused.
+    assert!(!document.set_palette_input("red", "ha"));
+
+    // Removing a mask leaves its layers showing everywhere.
+    document.remove_mask(mask);
+    assert!(document.layers()[0].mask.is_none());
+    assert_eq!(document.masks().len(), 1);
 }

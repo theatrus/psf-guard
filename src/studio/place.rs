@@ -36,6 +36,8 @@ pub enum Row {
     Layer(Uuid),
     /// An edit that belongs to one layer: an adjustment or a heal.
     LayerStep { layer: Uuid, step: Uuid },
+    /// One of the masks layers share.
+    Mask(Uuid),
     /// Every layer, blended.
     Combined,
     /// A step on the combined picture.
@@ -59,6 +61,8 @@ pub enum Place {
     /// One layer alone, with its own edits up to and including `after`.
     /// `None` is the layer before any of its own edits.
     LayerEdit { layer: Uuid, after: Option<Uuid> },
+    /// One of the masks layers share, drawn in gray.
+    Mask(Uuid),
     /// Every layer, blended, before the Finish steps.
     Combined,
     /// The combined picture after this Finish step.
@@ -126,6 +130,7 @@ impl Row {
                 layer: *layer,
                 after: Some(*step),
             },
+            Row::Mask(mask) => Place::Mask(*mask),
             Row::Combined => Place::Combined,
             Row::Finish(step) => Place::Finish(*step),
             Row::Final => Place::Final,
@@ -163,6 +168,7 @@ impl Place {
                 layer,
                 alone: false,
             } => (Subject::LayersUpTo(*layer), UpTo::EndOf(StageKind::Combine)),
+            Place::Mask(mask) => (Subject::Mask(*mask), UpTo::EndOf(StageKind::Stretch)),
             Place::Combined => (Subject::Combined, UpTo::EndOf(StageKind::Combine)),
             Place::Finish(step) => (Subject::Combined, UpTo::Step(*step)),
             Place::Final => (Subject::Combined, UpTo::Final),
@@ -233,7 +239,7 @@ impl Place {
                         .map(|before| own[before].id),
                 }
             }
-            Place::Combined => Place::Combined,
+            Place::Combined | Place::Mask(_) => self.clone(),
             Place::Finish(step) => finish
                 .iter()
                 .position(|other| other.id == *step)
@@ -282,6 +288,12 @@ impl Place {
                 layer,
                 after: Some(step),
             } => format!("{} · alone · after {}", layer_name(layer), step_name(step)),
+            Place::Mask(mask) => format!(
+                "Mask: {} · white is where it shows",
+                document
+                    .mask(*mask)
+                    .map_or("a mask that is gone", |mask| mask.name.as_str())
+            ),
             Place::Combined => "Combined · before Finish".to_string(),
             Place::Finish(step) => format!("Combined · after {}", step_name(step)),
             Place::Final => "Final picture".to_string(),
@@ -312,7 +324,8 @@ pub enum Split {
     /// row before the selected one on its left, the selected row on its
     /// right.
     Wipe,
-    /// One input, and the picture.
+    /// One input, and the picture. With a mask selected, the mask and the
+    /// final picture.
     InputAndPicture,
     /// Every input, side by side.
     AllInputs,
@@ -356,6 +369,10 @@ pub fn panes(split: Split, selected: &Place, document: &Document) -> Vec<Place> 
         Split::One => vec![selected.clone()],
         Split::BeforeAndAfter | Split::Wipe => {
             vec![selected.before(document), selected.clone()]
+        }
+        // A mask beside the picture it shapes.
+        Split::InputAndPicture if matches!(selected, Place::Mask(_)) => {
+            vec![selected.clone(), Place::Final]
         }
         Split::InputAndPicture => {
             let input = match selected {

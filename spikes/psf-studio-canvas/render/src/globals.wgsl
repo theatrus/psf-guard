@@ -14,7 +14,8 @@ struct Layer {
     select: vec4f,
     // x: 0 for a layer that shows a band; 1 exposure, 2 curves, 3 saturation
     // for an adjustment of the layers beneath; 10 for the start of a group
-    // and 11 for its end. y: the adjustment's amount.
+    // and 11 for its end; 12 for a layer of its color everywhere. y: the
+    // adjustment's amount.
     // z: the mask layer that limits the layer, or -1 for everywhere.
     // w: 1 for an adjustment of the band layer before it alone.
     adjust: vec4f,
@@ -51,8 +52,13 @@ struct ComputedMask {
     first: vec4f,
     second: vec4f,
     // x: 1 to raise the product to the power of 1 minus itself. y: 1 for
-    // 1 minus the result.
+    // 1 minus the result. z: the power the shaped product is raised to.
     shape: vec4f,
+    // x: the mask layer of strokes that set the mask to 1, or -1. y: the
+    // mask layer of strokes that set it to 0, or -1. z: how far the mask is
+    // smoothed before the strokes, as the standard deviation of a blur in
+    // surface pixels; 0 is not at all.
+    touch: vec4f,
 }
 
 struct Globals {
@@ -70,7 +76,7 @@ struct Globals {
     // first, or -1, z: how much of the second. A place not in use has -1.
     healed: array<vec4f, 4>,
     heals: array<LayerHeal, 16>,
-    computed: array<ComputedMask, 8>,
+    computed: array<ComputedMask, 4>,
     // Linear working-space RGB to linear target RGB.
     display_matrix: mat3x3f,
     // x: samples per display curve, or 0 when there is no display transform.

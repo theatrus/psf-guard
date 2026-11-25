@@ -1,12 +1,15 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::Instant;
 
+use crate::color_steps::ToolChain;
 use crate::processing_setups::DEFAULT_COLOR_SETTINGS;
 use crate::server::stack_preview::color::StackColorRole;
-use crate::studio::{RegionReader, StoreOptions, TileStore};
+use crate::server::workers::Workers;
+use crate::studio::{Document, RegionReader, StoreOptions, TileStore};
 use crate::studio_flow::{document_from_processing, processing_from_document};
-use crate::studio_sources::{RegisteredChannels, Server};
+use crate::studio_sources::{ChannelTools, RegisteredChannels, Server};
 
 pub struct StudioSourcesOptions {
     pub server: String,
@@ -19,6 +22,8 @@ pub struct StudioSourcesOptions {
     pub channels: Vec<String>,
     /// Where the document goes. It starts as PSF Guard's default color flow.
     pub document: Option<PathBuf>,
+    /// A document to prepare the store for, in place of the default flow.
+    pub apply: Option<PathBuf>,
     pub output: PathBuf,
 }
 
@@ -64,9 +69,58 @@ pub async fn studio_sources(options: StudioSourcesOptions) -> Result<()> {
 
     // The document decides what runs: a new one is PSF Guard's default flow.
     let roles: Vec<StackColorRole> = stacks.iter().map(|stack| stack.role).collect();
-    let processing = serde_json::from_str(DEFAULT_COLOR_SETTINGS)?;
-    let document = document_from_processing("PSF Guard default color", &processing, &roles)?;
-    let background = processing_from_document(&document)?.background_extraction;
+    let document = match &options.apply {
+        Some(path) => {
+            let text = std::fs::read_to_string(path)
+                .with_context(|| format!("reading {}", path.display()))?;
+            Document::from_json(&text)?
+        }
+        None => {
+            let processing = serde_json::from_str(DEFAULT_COLOR_SETTINGS)?;
+            document_from_processing("PSF Guard default color", &processing, &roles)?
+        }
+    };
+    let processing = processing_from_document(&document)?;
+    let background = processing.background_extraction;
+
+    // Each channel's processing tools, resolved against the tools this
+    // machine has. A tool's result is kept beside the downloaded stacks.
+    let workers = Workers::default();
+    let mut chains = BTreeMap::new();
+    for stack in &stacks {
+        let Some(config) = processing.input_rc_astro.get(&stack.role) else {
+            continue;
+        };
+        if config.steps.is_empty() {
+            continue;
+        }
+        let chain = ToolChain::resolve(
+            &workers,
+            config,
+            "studio",
+            &format!("mono:{}:{}", stack.job_id, stack.group_index),
+            &stack.artifact_revision.to_string(),
+        )
+        .map_err(|error| anyhow!("the tools of {}: {error}", stack.filter_name))?;
+        chains.insert(stack.role, chain);
+    }
+    // One line per tool and per tenth of its channel's chain.
+    let reported = std::cell::RefCell::new((String::new(), u32::MAX));
+    let report = |channel: &str, tool: &str, fraction: f32| {
+        let tenth = (fraction.clamp(0.0, 1.0) * 10.0) as u32;
+        let line = format!("{channel}: {tool}");
+        let mut last = reported.borrow_mut();
+        if *last != (line.clone(), tenth) {
+            println!("  {line} ({}%)", tenth * 10);
+            *last = (line, tenth);
+        }
+    };
+    let tools = ChannelTools {
+        workers: &workers,
+        cache: &folder,
+        chains,
+        progress: &report,
+    };
 
     let started = Instant::now();
     let inputs: Vec<_> = files
@@ -75,9 +129,18 @@ pub async fn studio_sources(options: StudioSourcesOptions) -> Result<()> {
         .collect();
     let prepared = RegisteredChannels::prepare(
         &inputs,
+        (!tools.chains.is_empty()).then_some(&tools),
         background.as_ref(),
         &seiza_stacking::GpuOptions::cpu(),
     )?;
+    for (role, chain) in &prepared.tools {
+        let ran: Vec<&str> = chain
+            .steps
+            .iter()
+            .map(|step| step.provider.as_str())
+            .collect();
+        println!("  {role:?} tools: {}", ran.join(", "));
+    }
     for placement in &prepared.placements {
         match &placement.registration {
             None => println!("  {:?} is the reference", placement.role),
@@ -117,6 +180,18 @@ pub async fn studio_sources(options: StudioSourcesOptions) -> Result<()> {
         })
         .collect::<Vec<_>>()
         .join("|");
+    // It also changes with the tools that ran and their settings.
+    let tool_key = tools
+        .chains
+        .values()
+        .filter_map(|chain| chain.ids.last().map(String::as_str))
+        .collect::<Vec<_>>()
+        .join("|");
+    let key = if tool_key.is_empty() {
+        key
+    } else {
+        format!("{key}|tools:{tool_key}")
+    };
     let started = Instant::now();
     let store = TileStore::create(
         &options.output,

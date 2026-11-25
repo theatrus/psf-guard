@@ -18,8 +18,8 @@ use crate::store_tiles::BandStretch;
 use crate::studio_model::{
     band_layer, channel_label, color_from_hue, document_from_color_setup, flow_operations, hue_of,
     layer_name, panes, plan, BlendMode, Document, LayerRecord, LayerSource, MaskRecord, MaskShape,
-    PlannedStretch, Row, Split, StackEntry, StageKind, StepKind, StepRecord, Stroke, StrokeMode,
-    View,
+    Place, PlannedStretch, Row, SharedMask, Split, StackEntry, StageKind, StepKind, StepRecord,
+    Stroke, StrokeMode, Subject, View,
 };
 use gpui::{
     canvas, div, prelude::*, px, relative, rgb, AnyElement, Context, MouseButton, MouseDownEvent,
@@ -40,6 +40,8 @@ pub(super) const CONTROL: u32 = 0x2a2e34;
 pub(super) const SELECTED: u32 = 0x3b6ea8;
 pub(super) const TEXT: u32 = 0xd8dee6;
 pub(super) const QUIET: u32 = 0x8a93a0;
+/// Behind the context line while a mask is being edited.
+const MASK_CONTEXT: u32 = 0x7a4a12;
 
 /// The adjustments offered in the Combine stage, for one layer or for the
 /// layers beneath: the name and what the canvas does.
@@ -264,22 +266,22 @@ fn step_strokes(step: &StepRecord) -> Vec<Segment> {
 }
 
 /// A mask in a few words, for a row or a note.
-pub(super) fn mask_words(mask: &Option<MaskRecord>) -> Option<String> {
+pub(super) fn mask_words(document: &Document, mask: &Option<MaskRecord>) -> Option<String> {
     match mask {
         Some(MaskRecord::Painted(mask)) => Some(format!(
             "painted mask, {}",
             counted(mask.strokes.len(), "stroke")
         )),
         Some(MaskRecord::Range { .. }) => Some("range mask".to_string()),
-        Some(MaskRecord::FromInputs {
-            inputs, inverted, ..
-        }) => {
-            let inputs: Vec<String> = inputs.iter().map(|input| channel_label(input)).collect();
-            Some(format!(
-                "shows where {} is {}",
-                inputs.join(" × "),
-                if *inverted { "weak" } else { "strong" }
-            ))
+        Some(MaskRecord::Shared { mask, inverted }) => {
+            let name = document
+                .mask(*mask)
+                .map_or("a mask that is gone", |mask| mask.name.as_str());
+            Some(if *inverted {
+                format!("where {name} is weak")
+            } else {
+                format!("where {name} is strong")
+            })
         }
         None => None,
     }
@@ -644,19 +646,32 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
             mask,
         });
     }
-    // The masks computed from inputs. Each input is read with the stretch
-    // the view gives it, from a row of the stretch tables: a layer's row
-    // when a layer shows the input with that stretch, or a row of its own.
+    // The shared masks the entries are behind: the entry's place in
+    // `layers`, the mask, whether it is inverted, and a name to report.
+    let mut wanted: Vec<(usize, Uuid, bool, String)> = masked
+        .into_iter()
+        .filter_map(|(at, layer)| match &layer.mask {
+            Some(MaskRecord::Shared { mask, inverted }) => {
+                Some((at, *mask, *inverted, layer.name.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    // A view of a mask draws white behind that mask, so the mask shows.
+    if let Subject::Mask(id) = &view.subject {
+        layers.push(Layer {
+            mark: Mark::Solid,
+            ..plain_layer()
+        });
+        wanted.push((layers.len() - 1, *id, false, "the mask".to_string()));
+    }
+    // Each input of a mask is read with the stretch the view gives it,
+    // from a row of the stretch tables: a layer's row when a layer shows
+    // the input with that stretch, or a row of its own.
     let mut computed: Vec<ComputedMask> = Vec::new();
-    for (at, layer) in masked {
-        let Some(MaskRecord::FromInputs {
-            inputs,
-            shape,
-            inverted,
-        }) = &layer.mask
-        else {
-            continue;
-        };
+    for (at, id, inverted, name) in wanted {
+        let shared = document.mask(id);
+        let inputs = shared.map_or(&[][..], |shared| shared.inputs.as_slice());
         let mut read = [None; 2];
         let mut found = 0;
         for (slot, input) in read.iter_mut().zip(inputs) {
@@ -700,17 +715,46 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
             });
             found += 1;
         }
-        if found != inputs.len() || inputs.len() > 2 || computed.len() == MAX_COMPUTED_MASKS {
+        // The touch-ups: strokes that add to the mask, and strokes that
+        // take away from it, each as a mask of its own.
+        let strokes = |mode: StrokeMode| -> Vec<Segment> {
+            shared
+                .map_or(&[][..], |shared| shared.touch_ups.as_slice())
+                .iter()
+                .filter(|stroke| stroke.mode == mode)
+                .flat_map(segments)
+                .map(|segment| Segment {
+                    value: 1.0,
+                    ..segment
+                })
+                .collect()
+        };
+        let touch_ups = mask_for(strokes(StrokeMode::Add))
+            .and_then(|added| Ok((added, mask_for(strokes(StrokeMode::Subtract))?)));
+        let (Some(shared), Ok((added, removed))) = (shared, touch_ups) else {
             // A layer is never drawn without its mask.
             layers[at].opacity = 0.0;
-            omitted.push(format!("{}, for its mask", layer.name));
+            omitted.push(format!("{name}, for its mask"));
+            continue;
+        };
+        if found != inputs.len()
+            || inputs.is_empty()
+            || inputs.len() > 2
+            || computed.len() == MAX_COMPUTED_MASKS
+        {
+            layers[at].opacity = 0.0;
+            omitted.push(format!("{name}, for its mask"));
             continue;
         }
         layers[at].computed = Some(computed.len());
         computed.push(ComputedMask {
             bands: read,
-            power_of_inverse: *shape == MaskShape::PowerOfInverse,
-            inverted: *inverted,
+            power_of_inverse: shared.shape == MaskShape::PowerOfInverse,
+            reach: shared.reach,
+            smoothing: shared.smoothing,
+            added,
+            removed,
+            inverted,
         });
     }
     let scene = Scene {
@@ -752,11 +796,25 @@ impl Studio {
         }
     }
 
+    /// The selected shared mask.
+    pub(super) fn selected_mask(&self) -> Option<&SharedMask> {
+        match &self.selected {
+            Row::Mask(id) => self.document.mask(*id),
+            _ => None,
+        }
+    }
+
     /// Whether the mask brush has something to paint: the canvas draws
-    /// masks for layers, for a layer's own adjustments and for Finish steps.
+    /// masks for layers, for a layer's own adjustments and for Finish
+    /// steps, and touch-ups for shared masks.
     pub(super) fn can_mask(&self) -> bool {
         match &self.selected {
-            Row::Layer(_) | Row::Finish(_) => true,
+            // A layer behind a shared mask is not painted on: its mask is
+            // touched up on the mask's own row.
+            Row::Layer(id) => !self
+                .layer(*id)
+                .is_some_and(|layer| matches!(layer.mask, Some(MaskRecord::Shared { .. }))),
+            Row::Finish(_) | Row::Mask(_) => true,
             Row::LayerStep { step, .. } => self
                 .document
                 .step(*step)
@@ -770,6 +828,9 @@ impl Studio {
     fn selected_strokes(&self) -> Vec<Segment> {
         if let Some(layer) = self.selected_layer() {
             return mask_strokes(&layer.mask);
+        }
+        if let Some(mask) = self.selected_mask() {
+            return mask.touch_ups.iter().flat_map(segments).collect();
         }
         self.selected_step()
             .and_then(|id| self.document.step(id))
@@ -823,6 +884,15 @@ impl Studio {
         self.scene_version += 1;
         let selected = self.selected.place(self.alone);
         let mut places = panes(self.split, &selected, &self.document);
+        // While a mask is edited a person may watch the final picture in
+        // place of the mask, to judge a change by its result.
+        if self.mask_shows_picture && self.split == Split::One {
+            for place in &mut places {
+                if matches!(place, Place::Mask(_)) {
+                    *place = Place::Final;
+                }
+            }
+        }
         self.pins.resize(places.len(), None);
         for (place, pin) in places.iter_mut().zip(&self.pins) {
             if let Some(pinned) = pin {
@@ -874,6 +944,17 @@ impl Studio {
                 Row::LayerStep { step, .. } | Row::Finish(step) => {
                     let _ = self.document.paint_step_mask(*step, stroke);
                 }
+                Row::Mask(mask) => {
+                    // The brush adds to a shared mask, or takes away from
+                    // it, as the person chose.
+                    let mode = if self.brush_removes {
+                        StrokeMode::Subtract
+                    } else {
+                        StrokeMode::Add
+                    };
+                    self.document
+                        .touch_up_mask(*mask, Stroke { mode, ..stroke });
+                }
                 _ => {}
             },
             Tool::Heal => {
@@ -901,7 +982,7 @@ impl Studio {
                         (shows_pixels && self.document.insert_layer_step(layer, step).is_ok())
                             .then_some(Row::LayerStep { layer, step: id })
                     }
-                    Row::Combined | Row::Finish(_) | Row::Final => self
+                    Row::Combined | Row::Finish(_) | Row::Final | Row::Mask(_) => self
                         .document
                         .insert_step(StageKind::Finish, usize::MAX, step)
                         .ok()
@@ -974,6 +1055,23 @@ impl Studio {
                     *settings = changed;
                 }
             }
+            SliderId::Reach => {
+                // The slider covers reaches from a quarter to four, evenly
+                // in powers of two.
+                if let Row::Mask(id) = &self.selected
+                    && let Some(mask) = self.document.mask_mut(*id)
+                {
+                    mask.reach = 2f32.powf(position * 4.0 - 2.0);
+                }
+            }
+            SliderId::Smoothing => {
+                // The slider covers blurs from none to 32 pixels.
+                if let Row::Mask(id) = &self.selected
+                    && let Some(mask) = self.document.mask_mut(*id)
+                {
+                    mask.smoothing = position * 32.0;
+                }
+            }
             SliderId::Opacity | SliderId::Hue | SliderId::Saturation => {
                 // A step's opacity, when a step is selected.
                 if let (SliderId::Opacity, Some(step)) = (slider, self.selected_step()) {
@@ -983,26 +1081,40 @@ impl Studio {
                 let Row::Layer(id) = &self.selected else {
                     return;
                 };
-                let Some(layer) = self.document.layer_mut(*id) else {
-                    return;
-                };
+                let id = *id;
                 if slider == SliderId::Opacity {
-                    layer.opacity = position;
+                    if let Some(layer) = self.document.layer_mut(id) {
+                        layer.opacity = position;
+                    }
                     return;
                 }
-                // The color keeps its brightness, which balances the layers.
-                let (hue, saturation, value) = hue_of(layer.color.unwrap_or([1.0; 3]));
-                let (hue, saturation) = if slider == SliderId::Hue {
-                    (position * 359.9, saturation)
-                } else {
-                    (hue, position)
-                };
-                let color = color_from_hue(hue, saturation, value);
-                layer.color = Some(color);
-                if let LayerSource::Band { band } = &layer.source {
-                    layer.name = layer_name(band, color, layer.blend);
+                self.set_tone(id, slider == SliderId::Hue, position);
+            }
+            SliderId::ToneHue(index) | SliderId::ToneSaturation(index) => {
+                if let Some(id) = self.document.layers().get(index).map(|layer| layer.id) {
+                    self.set_tone(id, matches!(slider, SliderId::ToneHue(_)), position);
                 }
             }
+        }
+    }
+
+    /// Sets a layer's hue or its saturation from a slider position, from 0
+    /// to 1. The color keeps its brightness, which is the layer's share of
+    /// the layers' sum.
+    fn set_tone(&mut self, id: Uuid, hue_moved: bool, position: f32) {
+        let Some(layer) = self.document.layer_mut(id) else {
+            return;
+        };
+        let (hue, saturation, value) = hue_of(layer.color.unwrap_or([1.0; 3]));
+        let (hue, saturation) = if hue_moved {
+            (position * 359.9, saturation)
+        } else {
+            (hue, position)
+        };
+        let color = color_from_hue(hue, saturation, value);
+        layer.color = Some(color);
+        if let LayerSource::Band { band } = &layer.source {
+            layer.name = layer_name(band, color, layer.blend);
         }
     }
 
@@ -1107,6 +1219,91 @@ impl Studio {
             .gap_2()
             .child(div().w(px(104.0)).text_xs().child(label))
             .child(self.slider(id, value, cx))
+    }
+
+    /// One line that is always on screen: what is being edited, what it
+    /// applies to, and what the tool in hand will change. Editing a mask is
+    /// marked, because a stroke then changes where layers show and not the
+    /// picture itself.
+    fn context_strip(&self) -> impl IntoElement {
+        let layer_words = |id: &Uuid| {
+            self.layer(*id)
+                .map_or("a layer that is gone".to_string(), |layer| {
+                    match &layer.source {
+                        LayerSource::Adjustment { .. } => {
+                            format!("the adjustment {}, of every layer beneath it", layer.name)
+                        }
+                        LayerSource::Group => format!("the group {}", layer.name),
+                        _ => format!("the layer {}", layer.name),
+                    }
+                })
+        };
+        let step_name = |id: &Uuid| {
+            self.document
+                .step(*id)
+                .map_or("a step that is gone", |(_, step)| step.kind.name())
+                .to_string()
+        };
+        let what = match &self.selected {
+            Row::Input(channel) => format!("the input {}", channel_label(channel)),
+            Row::InputStep { channel, step } => {
+                let shared = self
+                    .document
+                    .step(*step)
+                    .is_some_and(|(_, step)| step.band.is_none());
+                if shared {
+                    format!("{}, of every input", step_name(step))
+                } else {
+                    format!(
+                        "{}, of the input {} only",
+                        step_name(step),
+                        channel_label(channel)
+                    )
+                }
+            }
+            Row::Layer(id) => layer_words(id),
+            Row::LayerStep { layer, step } => {
+                format!("{}, of {} only", step_name(step), layer_words(layer))
+            }
+            Row::Mask(id) => format!(
+                "the mask {}, shared by {}",
+                self.document
+                    .mask(*id)
+                    .map_or("that is gone", |mask| mask.name.as_str()),
+                counted(self.document.layers_using_mask(*id).count(), "layer")
+            ),
+            Row::Combined => "the combined picture".to_string(),
+            Row::Finish(step) => format!("{}, of the whole picture", step_name(step)),
+            Row::Final => "the final picture".to_string(),
+        };
+        let on_a_mask = matches!(self.selected, Row::Mask(_));
+        let tool = match (self.tool, &self.selected) {
+            (Tool::Pan, _) => None,
+            (Tool::Brush, Row::Mask(_)) if self.brush_removes => {
+                Some("The mask brush takes away from this mask.".to_string())
+            }
+            (Tool::Brush, Row::Mask(_)) => Some("The mask brush adds to this mask.".to_string()),
+            (Tool::Brush, _) => Some("The mask brush paints where this applies.".to_string()),
+            (Tool::Heal, _) => Some("Heal adds a step here.".to_string()),
+        };
+        let marked = on_a_mask || self.tool == Tool::Brush;
+        div()
+            .flex_none()
+            .w_full()
+            .flex()
+            .items_center()
+            .gap_3()
+            .px_3()
+            .py_1()
+            .bg(rgb(if marked { MASK_CONTEXT } else { BACKGROUND }))
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(if marked { TEXT } else { QUIET }))
+                    .child(if marked { "Editing a mask" } else { "Editing" }),
+            )
+            .child(what)
+            .children(tool.map(|tool| div().text_xs().child(tool)))
     }
 
     // ---- the bar over the canvas ----------------------------------------
@@ -1227,6 +1424,7 @@ impl Render for Studio {
             .on_mouse_move(cx.listener(Self::mouse_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
             .child(self.top_bar(cx))
+            .child(self.context_strip())
             .child(
                 div()
                     .flex_1()

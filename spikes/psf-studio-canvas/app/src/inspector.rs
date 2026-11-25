@@ -13,7 +13,7 @@ use crate::image_steps::Accepts;
 use crate::studio_model::{
     balance_colors, band_layer, channel_label, flow_operations, hue_of, input_steps, layer_name,
     level_for_zoom, own_step_for_channel, palettes_for, BlendMode, JunctionStatus, LayerRecord,
-    LayerSource, MaskRecord, MaskShape, Row, StageKind, StepKind, StepRecord,
+    LayerSource, MaskRecord, MaskShape, Row, SharedMask, StageKind, StepKind, StepRecord,
 };
 use gpui::{div, prelude::*, px, rgb, AnyElement, Context};
 use uuid::Uuid;
@@ -187,7 +187,7 @@ impl Studio {
                     "The document records this step. The canvas does not draw it yet.",
                 ))
             })
-            .when_some(mask_words(&step.mask), |pane, words| {
+            .when_some(mask_words(&self.document, &step.mask), |pane, words| {
                 pane.child(Self::heading("Mask"))
                     .child(div().text_xs().child(words))
             })
@@ -354,7 +354,7 @@ impl Studio {
             .child(Self::blend_block(layer, cx))
             .child(self.shows_block("This layer alone", cx))
             .child(self.mask_block(layer, cx))
-            .child(self.inputs_mask_block(layer, cx))
+            .child(self.shared_mask_block(layer, cx))
             .child(Self::heading("Clipping"))
             .child(Self::act(
                 if layer.clipped {
@@ -521,7 +521,7 @@ impl Studio {
             .child(Self::blend_block(layer, cx))
             .child(self.shows_block("This group alone", cx))
             .child(self.mask_block(layer, cx))
-            .child(self.inputs_mask_block(layer, cx))
+            .child(self.shared_mask_block(layer, cx))
             .child(Self::heading("Add an adjustment to this group only"))
             .child(Self::adjustment_buttons(
                 "adjust-own",
@@ -554,32 +554,113 @@ impl Studio {
             .into_any_element()
     }
 
-    /// The controls for a mask computed from inputs: which inputs, whether
-    /// the layer shows where they are strong or weak, and how the mask is
-    /// shaped.
-    fn inputs_mask_block(&self, layer: &LayerRecord, cx: &mut Context<Self>) -> gpui::Div {
+    /// Which shared mask a layer is behind, and whether it shows where the
+    /// mask is strong or weak. The mask itself is changed on its own row.
+    fn shared_mask_block(&self, layer: &LayerRecord, cx: &mut Context<Self>) -> gpui::Div {
         let id = layer.id;
-        let (chosen, shape, inverted) = match &layer.mask {
-            Some(MaskRecord::FromInputs {
-                inputs,
-                shape,
-                inverted,
-            }) => (inputs.clone(), *shape, *inverted),
-            _ => (Vec::new(), MaskShape::PowerOfInverse, false),
+        let used = match &layer.mask {
+            Some(MaskRecord::Shared { mask, inverted }) => Some((*mask, *inverted)),
+            _ => None,
         };
         let painted = matches!(layer.mask, Some(MaskRecord::Painted(_)));
-        let computed = !chosen.is_empty();
-        // Sets the layer's mask from the inputs chosen. No input is no
-        // computed mask.
-        let set = move |this: &mut Self, inputs: Vec<String>, shape, inverted| {
-            if let Some(layer) = this.document.layer_mut(id) {
-                layer.mask = (!inputs.is_empty()).then_some(MaskRecord::FromInputs {
-                    inputs,
-                    shape,
-                    inverted,
-                });
-            }
+        let masks = self
+            .document
+            .masks()
+            .iter()
+            .enumerate()
+            .map(|(index, mask)| {
+                let mask_id = mask.id;
+                let on = used.is_some_and(|(used, _)| used == mask_id);
+                Self::act(
+                    mask.name.clone(),
+                    ("layer-mask", index),
+                    on,
+                    cx,
+                    move |this| {
+                        if let Some(layer) = this.document.layer_mut(id) {
+                            layer.mask = (!on).then_some(MaskRecord::Shared {
+                                mask: mask_id,
+                                inverted: false,
+                            });
+                        }
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        let first_input = self.document.channels().into_iter().next();
+        column()
+            .child(Self::heading("Shared mask"))
+            .child(wrap().children(masks).child(Self::act(
+                "New mask",
+                "layer-mask-new",
+                false,
+                cx,
+                move |this| {
+                    let Some(input) = first_input.clone() else {
+                        return;
+                    };
+                    let mask = this.document.add_mask(SharedMask::new(vec![input]));
+                    if let Some(layer) = this.document.layer_mut(id) {
+                        layer.mask = Some(MaskRecord::Shared {
+                            mask,
+                            inverted: false,
+                        });
+                    }
+                    this.selected = Row::Mask(mask);
+                },
+            )))
+            .child(Self::note(
+                "A shared mask follows the signal of one or two inputs. Several layers can be behind the same mask, or its inverse.",
+            ))
+            .when(painted, |pane| {
+                pane.child(Self::note("Choosing a shared mask replaces the painted mask."))
+            })
+            .when_some(used, |pane, (mask, inverted)| {
+                let set = move |this: &mut Self, inverted: bool| {
+                    if let Some(layer) = this.document.layer_mut(id) {
+                        layer.mask = Some(MaskRecord::Shared { mask, inverted });
+                    }
+                };
+                pane.child(
+                    wrap()
+                        .child(Self::act(
+                            "Where it is strong",
+                            "mask-strong",
+                            !inverted,
+                            cx,
+                            move |this| set(this, false),
+                        ))
+                        .child(Self::act(
+                            "Where it is weak",
+                            "mask-weak",
+                            inverted,
+                            cx,
+                            move |this| set(this, true),
+                        ))
+                        .child(Self::act("Edit the mask", "mask-edit", false, cx, move |this| {
+                            this.selected = Row::Mask(mask)
+                        })),
+                )
+            })
+    }
+
+    /// A shared mask's controls: what it is computed from, how far it
+    /// reaches, and its touch-ups.
+    fn inspect_mask(&self, id: Uuid, cx: &mut Context<Self>) -> AnyElement {
+        let Some(mask) = self.document.mask(id) else {
+            return Self::note("This mask is gone.").into_any_element();
         };
+        let users: Vec<String> = self
+            .document
+            .layers_using_mask(id)
+            .map(|layer| match &layer.mask {
+                Some(MaskRecord::Shared { inverted: true, .. }) => {
+                    format!("{} (where weak)", layer.name)
+                }
+                _ => layer.name.clone(),
+            })
+            .collect();
+        let chosen = mask.inputs.clone();
         let inputs = self
             .document
             .channels()
@@ -595,70 +676,240 @@ impl Studio {
                     cx,
                     move |this| {
                         let mut inputs = chosen.clone();
-                        if on {
+                        if on && inputs.len() > 1 {
                             inputs.retain(|input| *input != channel);
-                        } else if inputs.len() < 2 {
+                        } else if !on && inputs.len() < 2 {
                             inputs.push(channel.clone());
                         }
-                        set(this, inputs, shape, inverted);
+                        if let Some(mask) = this.document.mask_mut(id) {
+                            mask.name = SharedMask::name_for(&inputs);
+                            mask.inputs = inputs;
+                            // A mask a person changed is theirs: a palette
+                            // no longer remakes it.
+                            mask.slots.clear();
+                        }
                     },
                 )
             })
             .collect::<Vec<_>>();
-        let (for_side, for_shape) = (chosen.clone(), chosen);
+        let shape = mask.shape;
+        let reach = mask.reach;
+        let touch_ups = mask.touch_ups.len();
+        let smoothing = mask.smoothing;
+        let removes = self.brush_removes;
+        let set_shape = move |this: &mut Self, shape| {
+            if let Some(mask) = this.document.mask_mut(id) {
+                mask.shape = shape;
+            }
+        };
         column()
-            .child(Self::heading("Mask from inputs"))
+            .child(Self::title(
+                format!("Mask: {}", mask.name),
+                "Computed from inputs at each pixel, smoothed, then touched up by hand. In the mask, white is where a layer behind it shows.",
+            ))
+            .child(Self::heading("Canvas shows"))
+            .child(
+                wrap()
+                    .child(Self::act(
+                        "The mask",
+                        "mask-view-mask",
+                        !self.mask_shows_picture,
+                        cx,
+                        |this| this.mask_shows_picture = false,
+                    ))
+                    .child(Self::act(
+                        "The final picture",
+                        "mask-view-picture",
+                        self.mask_shows_picture,
+                        cx,
+                        |this| this.mask_shows_picture = true,
+                    )),
+            )
+            .child(Self::note(
+                "The Input and picture split shows the mask and the final picture side by side.",
+            ))
+            .child(Self::heading("Layers behind this mask"))
+            .child(div().text_xs().child(if users.is_empty() {
+                "None.".to_string()
+            } else {
+                users.join(", ")
+            }))
+            .child(Self::heading("Inputs, multiplied"))
             .child(wrap().children(inputs))
             .child(Self::note(
-                "Shows the layer by the signal of one input, or of two multiplied, as each is stretched.",
+                "Each input is read as its own Stretch step leaves it, so the mask follows the inputs.",
             ))
-            .when(painted, |pane| {
-                pane.child(Self::note("Choosing an input replaces the painted mask."))
-            })
-            .when(computed, |pane| {
-                pane.child(
-                    wrap()
-                        .child(Self::act(
-                            "Where strong",
-                            "mask-strong",
-                            !inverted,
+            .child(Self::heading("Shape"))
+            .child(
+                wrap()
+                    .child(Self::act(
+                        "Lift faint signal",
+                        "mask-lift",
+                        shape == MaskShape::PowerOfInverse,
+                        cx,
+                        move |this| set_shape(this, MaskShape::PowerOfInverse),
+                    ))
+                    .child(Self::act(
+                        "As stretched",
+                        "mask-plain",
+                        shape == MaskShape::Value,
+                        cx,
+                        move |this| set_shape(this, MaskShape::Value),
+                    )),
+            )
+            .child(self.labelled_slider(
+                format!("Reach {reach:.2}"),
+                SliderId::Reach,
+                (reach.log2() + 2.0) / 4.0,
+                cx,
+            ))
+            .child(Self::note(
+                "Below 1 the mask reaches further into faint signal. Above 1 it keeps to strong signal.",
+            ))
+            .child(self.labelled_slider(
+                format!("Smoothing {smoothing:.1} px"),
+                SliderId::Smoothing,
+                smoothing / 32.0,
+                cx,
+            ))
+            .child(Self::note(
+                "Blurs the mask so the inputs' noise does not become speckle in the layers behind it. 0 leaves the mask as computed.",
+            ))
+            .child(Self::heading("Touch-ups"))
+            .child(div().text_xs().child(format!(
+                "{}. Paint with the mask brush.",
+                super::panes::counted(touch_ups, "stroke")
+            )))
+            .child(
+                wrap()
+                    .child(Self::act("Brush adds", "brush-adds", !removes, cx, |this| {
+                        this.brush_removes = false
+                    }))
+                    .child(Self::act(
+                        "Brush takes away",
+                        "brush-removes",
+                        removes,
+                        cx,
+                        |this| this.brush_removes = true,
+                    ))
+                    .when(touch_ups > 0, |row| {
+                        row.child(Self::act(
+                            "Clear touch-ups",
+                            "mask-clear",
+                            false,
                             cx,
-                            {
-                                let inputs = for_side.clone();
-                                move |this| set(this, inputs.clone(), shape, false)
-                            },
-                        ))
-                        .child(Self::act("Where weak", "mask-weak", inverted, cx, {
-                            let inputs = for_side.clone();
-                            move |this| set(this, inputs.clone(), shape, true)
-                        })),
-                )
-                .child(
-                    wrap()
-                        .child(Self::act(
-                            "Lift faint signal",
-                            "mask-lift",
-                            shape == MaskShape::PowerOfInverse,
-                            cx,
-                            {
-                                let inputs = for_shape.clone();
-                                move |this| {
-                                    set(this, inputs.clone(), MaskShape::PowerOfInverse, inverted)
+                            move |this| {
+                                if let Some(mask) = this.document.mask_mut(id) {
+                                    mask.touch_ups.clear();
                                 }
                             },
                         ))
-                        .child(Self::act(
-                            "As stretched",
-                            "mask-plain",
-                            shape == MaskShape::Value,
-                            cx,
-                            {
-                                let inputs = for_shape.clone();
-                                move |this| set(this, inputs.clone(), MaskShape::Value, inverted)
-                            },
-                        )),
+                    }),
+            )
+            .child(Self::act("Remove mask", "mask-remove", false, cx, move |this| {
+                this.document.remove_mask(id);
+                this.selected = Row::Combined;
+            }))
+            .child(Self::note(
+                "Removing the mask leaves the layers behind it showing everywhere.",
+            ))
+            .into_any_element()
+    }
+
+    /// The tone of every layer that shows an input, in one list: a palette
+    /// is a starting point, and each layer's hue and saturation are set
+    /// here without selecting the layers one by one.
+    fn tones_block(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let mut block = column()
+            .child(Self::heading("Color tones"))
+            .child(Self::note(
+                "Each layer's hue and saturation. A palette sets them to start with.",
+            ));
+        // Top layer first, as the tree lists them.
+        for (index, layer) in self.document.layers().iter().enumerate().rev() {
+            let Some(color) = layer.color.filter(|_| layer.source.shows_pixels()) else {
+                continue;
+            };
+            if layer.blend == BlendMode::Luminance || index >= studio_render_spike::MAX_LAYERS {
+                continue;
+            }
+            let (hue, saturation, _) = hue_of(color);
+            block = block
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .pt_1()
+                        .child(
+                            div()
+                                .flex_none()
+                                .w(px(14.0))
+                                .h(px(14.0))
+                                .rounded_sm()
+                                .bg(super::panes::swatch(color, 1.0)),
+                        )
+                        .child(div().flex_1().text_xs().child(layer.name.clone()))
+                        .child(Self::note(format!(
+                            "{hue:.0}° · {:.0}%",
+                            saturation * 100.0
+                        ))),
                 )
-            })
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(Self::note("Hue"))
+                        .child(self.slider(SliderId::ToneHue(index), hue / 360.0, cx))
+                        .child(Self::note("Saturation"))
+                        .child(self.slider(SliderId::ToneSaturation(index), saturation, cx)),
+                );
+        }
+        block
+    }
+
+    /// For the document's palette: which input each of its slots shows.
+    fn palette_inputs_block(&self, cx: &mut Context<Self>) -> Option<gpui::Div> {
+        let used = self.document.palette.clone()?;
+        let channels = self.document.channels();
+        let mut block = column()
+            .child(Self::heading(format!("Inputs of {}", used.name)))
+            .child(Self::note(
+                "Giving a slot another input remakes the layers and the masks that use it. Their colors, adjustments and mask touch-ups are kept.",
+            ));
+        for (row, (slot, shown)) in used.inputs.into_iter().enumerate() {
+            let choices = channels
+                .iter()
+                .enumerate()
+                .map(|(index, channel)| {
+                    let (slot, channel) = (slot.clone(), channel.clone());
+                    Self::act(
+                        channel_label(&channel),
+                        ("slot-input", row * 16 + index),
+                        channel == shown,
+                        cx,
+                        move |this| {
+                            this.document.set_palette_input(&slot, &channel);
+                        },
+                    )
+                })
+                .collect::<Vec<_>>();
+            block = block.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .w(px(64.0))
+                            .text_xs()
+                            .child(format!("{} slot", channel_label(&slot))),
+                    )
+                    .child(wrap().children(choices)),
+            );
+        }
+        Some(block)
     }
 
     /// A layer's mask, and the button that removes it.
@@ -669,7 +920,7 @@ impl Studio {
             .child(
                 div()
                     .text_xs()
-                    .child(mask_words(&layer.mask).unwrap_or_else(|| {
+                    .child(mask_words(&self.document, &layer.mask).unwrap_or_else(|| {
                         "None: it applies everywhere. Paint one with the mask brush.".to_string()
                     })),
             )
@@ -747,7 +998,7 @@ impl Studio {
                 "Dragging does the same: onto a layer for that layer only, between layers for every layer beneath.",
             ))
             .child(self.mask_block(layer, cx))
-            .child(self.inputs_mask_block(layer, cx))
+            .child(self.shared_mask_block(layer, cx))
             .child(Self::act("Remove", "layer-remove", false, cx, move |this| {
                 this.document.remove_layer(id);
                 this.selected = Row::Combined;
@@ -846,6 +1097,8 @@ impl Studio {
             .child(Self::note(
                 "A palette replaces the layers that show an input. After that, each layer's color is yours to change.",
             ))
+            .children(self.palette_inputs_block(cx))
+            .child(self.tones_block(cx))
             .child(Self::act(
                 "Balance the layers' colors",
                 "balance",
@@ -979,7 +1232,9 @@ impl Studio {
                     || "nothing: an adjustment or a group has no pixels to heal".to_string(),
                     |layer| format!("the layer {} only", layer.name),
                 ),
-            Row::Combined | Row::Finish(_) | Row::Final => "the whole picture".to_string(),
+            Row::Combined | Row::Finish(_) | Row::Final | Row::Mask(_) => {
+                "the whole picture".to_string()
+            }
         }
     }
 
@@ -1051,6 +1306,7 @@ impl Studio {
                 Some(layer) => self.inspect_band_layer(layer, cx),
                 None => Self::note("This layer is gone.").into_any_element(),
             },
+            Row::Mask(mask) => self.inspect_mask(mask, cx),
             Row::LayerStep { layer, step } => self.inspect_layer_step(layer, step, cx),
             Row::Combined => self.inspect_combined(cx),
             Row::Finish(step) => self.inspect_finish(step, cx),

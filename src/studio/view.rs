@@ -34,6 +34,9 @@ pub enum Subject {
     Layer(Uuid),
     /// The layers from the bottom up to and including this one, blended.
     LayersUpTo(Uuid),
+    /// One of the document's shared masks, drawn in gray: white where a
+    /// layer behind it shows.
+    Mask(Uuid),
 }
 
 /// The last step the view applies.
@@ -271,7 +274,7 @@ pub fn plan(document: &Document, view: &View) -> ViewPlan {
     let layers = document.layers();
     let place = |id: &Uuid| layers.iter().position(|layer| layer.id == *id);
     let drawn: &[super::LayerRecord] = match &view.subject {
-        Subject::Channel(_) => &[],
+        Subject::Channel(_) | Subject::Mask(_) => &[],
         Subject::Combined => layers,
         Subject::LayersUpTo(id) => place(id).map_or(&[], |at| &layers[..=at]),
         Subject::Layer(id) => match place(id) {
@@ -392,6 +395,12 @@ pub fn plan(document: &Document, view: &View) -> ViewPlan {
     };
     let what = match &view.subject {
         Subject::Channel(channel) => format!("{channel} on its own"),
+        Subject::Mask(id) => format!(
+            "The mask {}",
+            document
+                .mask(*id)
+                .map_or("that is gone", |mask| mask.name.as_str())
+        ),
         Subject::Combined => "The combined image".to_string(),
         Subject::Layer(id) => match place(id) {
             Some(at) if matches!(layers[at].source, LayerSource::Adjustment { .. }) => {

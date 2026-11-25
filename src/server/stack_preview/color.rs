@@ -3450,19 +3450,25 @@ fn run_channel_tools(
             .get_mut(&source.role)
             .ok_or_else(|| format!("{} source was not loaded", source.role.label()))?;
         let steps = config.steps.len();
+        let tools = crate::color_steps::ToolChain {
+            config: config.clone(),
+            schemas: schemas.clone(),
+            ids: chain.clone(),
+        };
         let outcome = pool.install(|| {
-            super::rc_astro::apply_rc_astro(
+            crate::color_steps::run_tool_chain(
                 crate::server::workers::rc_astro::RcAstroRunner {
                     workers: &state.workers,
                     person: !job.automatic,
                 },
                 stack_root,
-                chain,
-                config,
-                schemas,
+                &tools,
                 &frame.image,
                 &frame.headers,
-                &mut |label, fraction| {
+                // A stop kills the tool in hand; the steps it finished stay
+                // cached for the next composition and the channel's card.
+                Some(&stop.signal()),
+                |crate::color_steps::ToolEvent::Running { label, fraction }| {
                     let percent = (fraction.clamp(0.0, 1.0) * 100.0).round() as u8;
                     progress.begin(
                         StackColorProgressPhase::RcAstroInputs,
@@ -3472,9 +3478,6 @@ fn run_channel_tools(
                     );
                     progress.partial(steps, fraction);
                 },
-                // A stop kills the tool in hand; the steps it finished stay
-                // cached for the next composition and the channel's card.
-                Some(&stop.signal()),
                 &mut || stop.check(),
             )
         })?;

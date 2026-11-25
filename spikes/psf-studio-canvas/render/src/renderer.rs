@@ -19,7 +19,9 @@ pub const MAX_HEALS: usize = 16;
 /// layer's samples as a surface-sized image, to copy from.
 pub const MAX_HEALED_LAYERS: usize = 4;
 /// The most masks computed from bands one frame draws.
-pub const MAX_COMPUTED_MASKS: usize = 8;
+pub const MAX_COMPUTED_MASKS: usize = 4;
+/// A computed mask while it is smoothed, from 0 to 1.
+const SMOOTHED_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R8Unorm;
 /// The mask layer that holds the stroke overlay.
 const OVERLAY_LAYER: u32 = MAX_MASKS as u32;
 
@@ -60,6 +62,9 @@ pub enum Mark {
     /// entry's opacity, blend and mask. Adjustments of the entry's own
     /// follow it, as they follow a layer.
     GroupEnd,
+    /// A layer of one color everywhere, with no band: what a mask is drawn
+    /// with, so the mask itself shows.
+    Solid,
 }
 
 /// One layer of the Combine stage: a band, stretched, colored and blended.
@@ -154,7 +159,18 @@ pub struct ComputedMask {
     pub bands: [Option<MaskBand>; 2],
     /// Whether the product is raised to the power of 1 minus itself.
     pub power_of_inverse: bool,
-    /// Whether the mask is 1 minus the shaped product.
+    /// The power the shaped product is raised to. 1 leaves it as it is.
+    pub reach: f32,
+    /// How far the mask is smoothed before the strokes: the standard
+    /// deviation of a Gaussian blur, in document pixels. 0 is not at all.
+    pub smoothing: f32,
+    /// Strokes that set the mask to 1 under them, as an index into
+    /// [`Pane::masks`].
+    pub added: Option<usize>,
+    /// Strokes that set the mask to 0 under them, as an index into
+    /// [`Pane::masks`].
+    pub removed: Option<usize>,
+    /// Whether the mask is 1 minus all of the above.
     pub inverted: bool,
 }
 
@@ -294,7 +310,7 @@ struct Globals {
     finish: [[f32; 12]; MAX_FINISH_STEPS],
     healed: [[f32; 4]; MAX_HEALED_LAYERS],
     heals: [[f32; 8]; MAX_HEALS],
-    computed: [[f32; 12]; MAX_COMPUTED_MASKS],
+    computed: [[f32; 16]; MAX_COMPUTED_MASKS],
     display_matrix: [f32; 12],
     display: [f32; 4],
 }
@@ -350,6 +366,11 @@ struct Targets {
     layer_masks: wgpu::BindGroup,
     /// One view per healed layer, to draw its samples into.
     healed_layers: Vec<wgpu::TextureView>,
+    /// One view per computed mask, to draw the mask into and to hold it
+    /// smoothed; and a second set, for the pass between the two blurs.
+    smoothed: [Vec<wgpu::TextureView>; 2],
+    /// Each set as what a blur pass reads.
+    smoothed_sources: [wgpu::BindGroup; 2],
 }
 
 /// A growable buffer of stroke segments.
@@ -401,6 +422,12 @@ pub struct Renderer {
     healed_pipeline: wgpu::RenderPipeline,
     /// The healed layers the pane being drawn has.
     healed_count: usize,
+    /// Draws the computed masks that are smoothed, before the blurs.
+    smoothed_pipeline: wgpu::RenderPipeline,
+    /// The blur across, then the blur down.
+    blur_pipelines: [wgpu::RenderPipeline; 2],
+    /// Whether the pane being drawn has a mask to smooth.
+    smooths: bool,
     stroke_pipeline: wgpu::RenderPipeline,
     finish_pipeline: wgpu::RenderPipeline,
     tile_instances: wgpu::Buffer,
@@ -567,6 +594,7 @@ impl Renderer {
             entries: &[
                 texture_entry(0, wgpu::TextureViewDimension::D2Array),
                 texture_entry(1, wgpu::TextureViewDimension::D2Array),
+                texture_entry(2, wgpu::TextureViewDimension::D2Array),
             ],
         });
         let finish_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -641,6 +669,30 @@ impl Renderer {
             true,
             &std::array::from_fn::<_, MAX_HEALED_LAYERS, _>(|_| Some(HEALED_FORMAT.into())),
         );
+        let smoothed_targets =
+            std::array::from_fn::<_, MAX_COMPUTED_MASKS, _>(|_| Some(SMOOTHED_FORMAT.into()));
+        let smoothed_pipeline = pipeline(
+            "computed masks",
+            &layers_shader,
+            Some(&tile_layout),
+            None,
+            ("tile_vertex", "computed_fragment"),
+            true,
+            &smoothed_targets,
+        );
+        // A blur reads the masks through the tile binding: both are arrays
+        // of single-channel images.
+        let blur_pipelines = ["blur_across_fragment", "blur_down_fragment"].map(|fragment| {
+            pipeline(
+                "mask blur",
+                &layers_shader,
+                Some(&tile_layout),
+                None,
+                ("whole_vertex", fragment),
+                false,
+                &smoothed_targets,
+            )
+        });
         let stroke_pipeline = pipeline(
             "strokes",
             &layers_shader,
@@ -735,6 +787,7 @@ impl Renderer {
             &device,
             &finish_layout,
             &masks_layout,
+            &tile_layout,
             &display_curves,
             config.width,
             config.height,
@@ -786,6 +839,9 @@ impl Renderer {
             tile_pipeline,
             healed_pipeline,
             healed_count: 0,
+            smoothed_pipeline,
+            blur_pipelines,
+            smooths: false,
             stroke_pipeline,
             finish_pipeline,
             tile_instances,
@@ -834,6 +890,7 @@ impl Renderer {
             &self.device,
             &self.finish_layout,
             &self.masks_layout,
+            &self.tile_layout,
             &self.display_curves,
             width,
             height,
@@ -1089,7 +1146,7 @@ impl Renderer {
             ],
             counts: [layers.len() as f32, finish.len() as f32, 0.0, 0.0],
             layers: [[0.0; 20]; MAX_LAYERS],
-            computed: [[0.0; 12]; MAX_COMPUTED_MASKS],
+            computed: [[0.0; 16]; MAX_COMPUTED_MASKS],
             finish: [[0.0; 12]; MAX_FINISH_STEPS],
             healed: [[-1.0, -1.0, 0.0, 0.0]; MAX_HEALED_LAYERS],
             heals: [[0.0; 8]; MAX_HEALS],
@@ -1108,6 +1165,7 @@ impl Renderer {
             let (kind, amount) = match layer.mark {
                 Mark::GroupBegin => (10.0, 0.0),
                 Mark::GroupEnd => (11.0, 0.0),
+                Mark::Solid => (12.0, 0.0),
                 Mark::Layer => layer
                     .adjustment
                     .map_or((0.0, 0.0), |(kind, amount)| (kind as u32 as f32, amount)),
@@ -1166,9 +1224,23 @@ impl Renderer {
             let (first, second) = (band(mask.bands[0]), band(mask.bands[1]));
             slot[..4].copy_from_slice(&first);
             slot[4..8].copy_from_slice(&second);
+            let strokes = |mask: Option<usize>| {
+                mask.filter(|mask| *mask < pane.masks.len().min(MAX_MASKS))
+                    .map_or(-1.0, |mask| mask as f32)
+            };
             slot[8] = if mask.power_of_inverse { 1.0 } else { 0.0 };
             slot[9] = if mask.inverted { 1.0 } else { 0.0 };
+            slot[10] = mask.reach.clamp(0.05, 20.0);
+            slot[12] = strokes(mask.added);
+            slot[13] = strokes(mask.removed);
+            // The blur's reach in surface pixels.
+            slot[14] = (f64::from(mask.smoothing.max(0.0)) * view.zoom) as f32;
         }
+        self.smooths = pane
+            .computed
+            .iter()
+            .take(MAX_COMPUTED_MASKS)
+            .any(|mask| mask.smoothing > 0.0);
         // Each layer with heals of its own gets a place among the healed
         // layers. A heal on a layer with no place left is not drawn.
         let mut healed: Vec<usize> = Vec::new();
@@ -1435,6 +1507,60 @@ impl Renderer {
             }
         }
 
+        // The computed masks that are smoothed: drawn, blurred across into
+        // the second set, then blurred down back into the first, which the
+        // layers read.
+        if self.smooths {
+            fn attachments(
+                views: &[wgpu::TextureView],
+            ) -> Vec<Option<wgpu::RenderPassColorAttachment<'_>>> {
+                views
+                    .iter()
+                    .map(|view| {
+                        Some(wgpu::RenderPassColorAttachment {
+                            view,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })
+                    })
+                    .collect()
+            }
+            {
+                let targets = attachments(&self.targets.smoothed[0]);
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("computed masks"),
+                    color_attachments: &targets,
+                    ..Default::default()
+                });
+                within(&mut pass);
+                pass.set_pipeline(&self.smoothed_pipeline);
+                pass.set_bind_group(0, &self.common, &[]);
+                pass.set_vertex_buffer(0, self.tile_instances.slice(..));
+                for (index, source) in sources.iter().enumerate() {
+                    let tile = self.cache.get(*source).expect("a chosen tile");
+                    pass.set_bind_group(1, &tile.bind_group, &[]);
+                    pass.draw(0..4, index as u32..index as u32 + 1);
+                }
+            }
+            for (blur, pipeline) in self.blur_pipelines.iter().enumerate() {
+                let targets = attachments(&self.targets.smoothed[1 - blur]);
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("mask blur"),
+                    color_attachments: &targets,
+                    ..Default::default()
+                });
+                within(&mut pass);
+                pass.set_pipeline(pipeline);
+                pass.set_bind_group(0, &self.common, &[]);
+                pass.set_bind_group(1, &self.targets.smoothed_sources[blur], &[]);
+                pass.draw(0..3, 0..1);
+            }
+        }
+
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("layers"),
@@ -1593,6 +1719,7 @@ fn create_targets(
     device: &wgpu::Device,
     finish_layout: &wgpu::BindGroupLayout,
     masks_layout: &wgpu::BindGroupLayout,
+    tile_layout: &wgpu::BindGroupLayout,
     display_curves: &wgpu::TextureView,
     width: u32,
     height: u32,
@@ -1663,6 +1790,36 @@ fn create_targets(
         dimension: Some(wgpu::TextureViewDimension::D2Array),
         ..Default::default()
     });
+    // Two sets of images for the computed masks: one to draw and to end
+    // in, one for the pass between the two blurs.
+    let smoothed_sets = ["smoothed masks", "masks half blurred"].map(|label| {
+        let texture = texture(label, SMOOTHED_FORMAT, MAX_COMPUTED_MASKS as u32);
+        let layers: Vec<wgpu::TextureView> = (0..MAX_COMPUTED_MASKS as u32)
+            .map(|layer| {
+                texture.create_view(&wgpu::TextureViewDescriptor {
+                    dimension: Some(wgpu::TextureViewDimension::D2),
+                    base_array_layer: layer,
+                    array_layer_count: Some(1),
+                    ..Default::default()
+                })
+            })
+            .collect();
+        let all = texture.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            ..Default::default()
+        });
+        (layers, all)
+    });
+    let smoothed_sources = [0, 1].map(|set: usize| {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("masks to blur"),
+            layout: tile_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&smoothed_sets[set].1),
+            }],
+        })
+    });
     let layer_masks = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("layer masks"),
         layout: masks_layout,
@@ -1675,14 +1832,21 @@ fn create_targets(
                 binding: 1,
                 resource: wgpu::BindingResource::TextureView(&all_healed),
             },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(&smoothed_sets[0].1),
+            },
         ],
     });
+    let [(first, _), (second, _)] = smoothed_sets;
     Targets {
         combined,
         mask_layers,
         finish_inputs,
         layer_masks,
         healed_layers,
+        smoothed: [first, second],
+        smoothed_sources,
     }
 }
 

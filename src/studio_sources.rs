@@ -6,18 +6,25 @@
 //! Seiza, which is the first thing every later step needs.
 
 use crate::color_steps::{
-    correct_channel_backgrounds, place_on_reference, register_channels, BackgroundEvent,
+    correct_channel_backgrounds, place_on_reference, register_channels, run_tool_chain,
+    BackgroundEvent, ToolChain, ToolEvent,
 };
 use crate::image_steps::{Domain, ImageShape, Region};
 use crate::server::stack_preview::color::{
     StackBackgroundExtraction, StackColorRole, StackColorSource,
 };
-use crate::studio::{background_corrected_channel, RegionReader, StudioError};
+use crate::server::stack_preview::rc_astro::ProcessingChain;
+use crate::server::workers::rc_astro::RcAstroRunner;
+use crate::server::workers::Workers;
+use crate::studio::{
+    background_corrected_channel, stars_channel, tools_channel, RegionReader, StudioError,
+};
 use crate::studio_flow::role_name;
 use anyhow::{anyhow, bail, Context, Result};
 use seiza_background::BackgroundFit;
 use seiza_stacking::{GpuOptions, LinearImage};
 use serde::de::DeserializeOwned;
+use std::collections::BTreeMap;
 use std::path::Path;
 
 /// One database on a PSF Guard server.
@@ -144,9 +151,12 @@ pub struct ChannelRegistration {
 
 /// Channel stacks on one grid: a linear image with one channel per plane.
 ///
-/// Without background correction there is one plane per stack, in the order
-/// the stacks were given. With it there are two per stack: first every
-/// channel uncorrected, then every channel corrected in full. A strength
+/// The planes are, in order: every stack as it came; for each channel with
+/// processing tools, the tools' result ([`tools_channel`]) and the stars a
+/// star removal took out ([`stars_channel`]); and, with background
+/// correction, every channel corrected in full
+/// ([`background_corrected_channel`]). The corrected plane is the tools'
+/// result corrected, where a channel has tools. A strength
 /// between is a blend of the two, because Seiza's correction changes each
 /// sample in proportion to the strength and resampling keeps proportions.
 /// So a person can move the strength and see the result at once, with no
@@ -163,15 +173,21 @@ pub struct RegisteredChannels {
     pub placements: Vec<ChannelPlacement>,
     /// Each channel's fitted background, when the channels were corrected.
     pub backgrounds: Vec<(StackColorRole, BackgroundFit)>,
+    /// The processing tools that ran on each channel that had any, with
+    /// their settings as they were run.
+    pub tools: Vec<(StackColorRole, ProcessingChain)>,
 }
 
 impl RegisteredChannels {
-    /// Reads each channel stack, corrects its background when `background`
-    /// is given, and places it on the first stack's grid.
+    /// Reads each channel stack, runs the channel's processing tools when
+    /// `tools` has a chain for it, corrects its background when
+    /// `background` is given, and places every result on the first stack's
+    /// grid.
     ///
     /// The steps and their order are the ones PSF Guard's color previews
     /// run: the code in `color_steps`. Registration is measured on the
-    /// stacks as they came. Each background is fitted and corrected in the
+    /// stacks as they came. The tools run on a stack as it came. Each
+    /// background is fitted and corrected on the tools' result, in the
     /// channel's own frame, before resampling, so the empty border a
     /// resample leaves is never fitted.
     ///
@@ -180,23 +196,29 @@ impl RegisteredChannels {
     /// steps by tile.
     pub fn prepare(
         stacks: &[(StackColorRole, &Path)],
+        tools: Option<&ChannelTools<'_>>,
         background: Option<&StackBackgroundExtraction>,
         gpu: &GpuOptions,
     ) -> Result<Self> {
         if stacks.is_empty() {
             bail!("a document needs at least one channel stack");
         }
-        let images = stacks
+        let frames = stacks
             .iter()
             .map(|(_, path)| open_mono(path))
             .collect::<Result<Vec<_>>>()?;
         let roles: Vec<StackColorRole> = stacks.iter().map(|(role, _)| *role).collect();
-        let reference = (roles[0], images[0].width, images[0].height);
+        let reference = (roles[0], frames[0].image.width, frames[0].image.height);
 
-        let others: Vec<(StackColorRole, &LinearImage)> =
-            roles.iter().copied().zip(&images).skip(1).collect();
-        let registrations = register_channels((roles[0], &images[0]), &others, gpu, |_, _| Ok(()))
-            .map_err(anyhow::Error::msg)?;
+        let others: Vec<(StackColorRole, &LinearImage)> = roles
+            .iter()
+            .copied()
+            .zip(frames.iter().map(|frame| &frame.image))
+            .skip(1)
+            .collect();
+        let registrations =
+            register_channels((roles[0], &frames[0].image), &others, gpu, |_, _| Ok(()))
+                .map_err(anyhow::Error::msg)?;
         let mut placements = vec![ChannelPlacement {
             role: roles[0],
             registration: None,
@@ -213,60 +235,100 @@ impl RegisteredChannels {
                     }),
                 }),
         );
-
-        // Places every channel of `images` on the reference grid.
-        let place = |images: Vec<LinearImage>| -> Result<Vec<Vec<f32>>> {
-            let mut images = images.into_iter();
-            let mut planes = vec![images.next().expect("checked above").data];
-            for (image, (role, registration)) in images.zip(&registrations) {
-                let placed = place_on_reference(*role, &image, reference, registration, gpu)
-                    .map_err(anyhow::Error::msg)?;
-                planes.push(placed.data);
+        // Places one channel's image on the reference grid.
+        let place = |channel: usize, image: LinearImage| -> Result<Vec<f32>> {
+            match channel.checked_sub(1) {
+                None => Ok(image.data),
+                Some(other) => {
+                    let (role, registration) = &registrations[other];
+                    Ok(
+                        place_on_reference(*role, &image, reference, registration, gpu)
+                            .map_err(anyhow::Error::msg)?
+                            .data,
+                    )
+                }
             }
-            Ok(planes)
         };
 
-        let mut names = roles
+        let channel_names = roles
             .iter()
             .map(|role| role_name(*role))
             .collect::<Result<Vec<_>, _>>()?;
-        let mut backgrounds = Vec::new();
-        let planes = match background {
-            None => place(images)?,
-            Some(extraction) => {
-                // Corrected in full: the strength is applied when the two
-                // planes are blended.
-                let full = StackBackgroundExtraction {
-                    strength: 1.0,
-                    ..extraction.clone()
+        let mut names = channel_names.clone();
+        let mut planes = Vec::new();
+        for (channel, frame) in frames.iter().enumerate() {
+            planes.push(place(channel, frame.image.clone())?);
+        }
+
+        // The tools run on each stack as it came, in the channel's own
+        // frame. What follows them, the background step included, works on
+        // their result.
+        let mut processed: Vec<LinearImage> =
+            frames.iter().map(|frame| frame.image.clone()).collect();
+        let mut tool_runs = Vec::new();
+        if let Some(tools) = tools {
+            for (channel, (role, frame)) in roles.iter().zip(&frames).enumerate() {
+                let Some(chain) = tools.chains.get(role) else {
+                    continue;
                 };
-                let mut corrected = images.clone();
-                let mut channels: Vec<(StackColorRole, &mut LinearImage)> =
-                    roles.iter().copied().zip(corrected.iter_mut()).collect();
-                // Catalog protection needs a plate solve of the stack, which
-                // Studio does not read yet, so no region is protected.
-                correct_channel_backgrounds(
-                    &mut channels,
-                    &full,
-                    |_| Vec::new(),
-                    |role, event| {
-                        if let BackgroundEvent::Corrected { fit, .. } = event {
-                            backgrounds.push((role, fit.clone()));
-                        }
-                        Ok(())
+                let label = channel_names[channel].clone();
+                let outcome = run_tool_chain(
+                    RcAstroRunner {
+                        workers: tools.workers,
+                        person: true,
                     },
+                    tools.cache,
+                    chain,
+                    &frame.image,
+                    &frame.headers,
+                    None,
+                    |ToolEvent::Running {
+                         label: tool,
+                         fraction,
+                     }| (tools.progress)(&label, tool, fraction),
+                    &mut || Ok(()),
                 )
-                .map_err(anyhow::Error::msg)?;
-                let corrected_names: Vec<String> = names
-                    .iter()
-                    .map(|name| background_corrected_channel(name))
-                    .collect();
-                names.extend(corrected_names);
-                let mut planes = place(images)?;
-                planes.extend(place(corrected)?);
-                planes
+                .map_err(|error| anyhow!("the tools of {label}: {error}"))?;
+                names.push(tools_channel(&label));
+                planes.push(place(channel, outcome.image.clone())?);
+                if let Some(stars) = outcome.stars {
+                    names.push(stars_channel(&label));
+                    planes.push(place(channel, stars)?);
+                }
+                processed[channel] = outcome.image;
+                tool_runs.push((*role, chain.config.clone()));
             }
-        };
+        }
+
+        let mut backgrounds = Vec::new();
+        if let Some(extraction) = background {
+            // Corrected in full: the strength is applied when the two
+            // planes are blended.
+            let full = StackBackgroundExtraction {
+                strength: 1.0,
+                ..extraction.clone()
+            };
+            let mut channels: Vec<(StackColorRole, &mut LinearImage)> =
+                roles.iter().copied().zip(processed.iter_mut()).collect();
+            // Catalog protection needs a plate solve of the stack, which
+            // Studio does not read yet, so no region is protected.
+            correct_channel_backgrounds(
+                &mut channels,
+                &full,
+                |_| Vec::new(),
+                |role, event| {
+                    if let BackgroundEvent::Corrected { fit, .. } = event {
+                        backgrounds.push((role, fit.clone()));
+                    }
+                    Ok(())
+                },
+            )
+            .map_err(anyhow::Error::msg)?;
+            for (channel, corrected) in processed.into_iter().enumerate() {
+                names.push(background_corrected_channel(&channel_names[channel]));
+                planes.push(place(channel, corrected)?);
+            }
+        }
         Ok(Self {
             shape: ImageShape {
                 width: reference.1,
@@ -277,11 +339,27 @@ impl RegisteredChannels {
             names,
             placements,
             backgrounds,
+            tools: tool_runs,
         })
     }
 }
 
-fn open_mono(path: &Path) -> Result<LinearImage> {
+/// The processing tools to run on channels, and where their results are
+/// kept.
+pub struct ChannelTools<'a> {
+    /// The workers that run the tools: this machine's own, and any
+    /// connected to it.
+    pub workers: &'a Workers,
+    /// Where each step's result is kept, so a repeat run is fast.
+    pub cache: &'a Path,
+    /// The chain for each channel that has one.
+    pub chains: BTreeMap<StackColorRole, ToolChain>,
+    /// Hears the channel, the tool running on it, and how far the channel's
+    /// chain has got, from 0 to 1.
+    pub progress: &'a dyn Fn(&str, &str, f32),
+}
+
+fn open_mono(path: &Path) -> Result<seiza_stacking::FitsFrame> {
     let frame = crate::image_io::open_linear_frame(path)
         .with_context(|| format!("reading {}", path.display()))?;
     if frame.image.channels != 1 {
@@ -291,7 +369,7 @@ fn open_mono(path: &Path) -> Result<LinearImage> {
             frame.image.channels
         );
     }
-    Ok(frame.image)
+    Ok(frame)
 }
 
 impl RegionReader for RegisteredChannels {
@@ -343,6 +421,7 @@ mod tests {
             names: Vec::new(),
             placements: Vec::new(),
             backgrounds: Vec::new(),
+            tools: Vec::new(),
         }
     }
 
