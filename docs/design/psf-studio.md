@@ -2019,6 +2019,115 @@ On the Sh2-157 stacks on this Mac:
   own.
 - The app saves the document only when the tools are run.
 
+## Setup and workspace: one flow for every kind of picture (2026-11-25, proposed)
+
+Proposed, not built. The tree, palettes, groups, masks and tools above
+serve one narrowband picture well. They do not yet make these easy to set
+up or to change:
+
+- narrowband alone;
+- narrowband blended into RGB, such as Ha into red;
+- narrowband with its continuum subtracted;
+- a narrowband nebula with RGB stars;
+- RGB, LRGB, and HaLRGB.
+
+All five answer the same two questions: what is each input for, and how do
+the results combine. The flow asks those two questions directly.
+
+### Parts
+
+A picture is made of a few **parts**. A part is a group in the Combine
+stage, with a name, the inputs that feed it, a palette for them, and a
+blend onto the parts beneath:
+
+| Part | Fed by | Blends |
+|---|---|---|
+| Nebula | starless narrowband inputs, by a narrowband palette | first |
+| Color | R, G, B, by the RGB palette | first |
+| Luminance | L, or L with some Ha | luminance |
+| Stars | the stars of R, G, B (or of the narrowband inputs) | screen |
+| Line into color | Ha into red, OIII into green and blue | lighten or add, by an amount |
+
+A part is nothing new in the document: it is a group, its layers and its
+shared masks. A person who never opens Setup can build the same thing by
+hand.
+
+### Setup: what goes where
+
+Setup is a page of its own, beside the workspace. It has three things:
+
+1. **Recipes.** The stock setups that fit the inputs the document has,
+   each with a small picture of its parts: Narrowband; Narrowband with RGB
+   stars; Narrowband into RGB; RGB; LRGB; HaLRGB. One click fills in the
+   rest of the page. “Subtract continuum” is a switch on any recipe that
+   has both a line and a broadband input, not a recipe of its own.
+2. **The routing table.** One row per input. Each row says which tools
+   run on the input and what the input feeds: “Ha → Nebula, as green”,
+   “R → Stars, as red; continuum for Ha and SII”, “L → Luminance”. A
+   destination is added, changed or removed in place. This table is the
+   answer to “what goes where”, and it is the same table whichever recipe
+   filled it.
+3. **The parts.** One card per part: its palette, its tones, its blend and
+   amount, and its order. Reordering the cards reorders the groups.
+
+Changing Setup remakes the layers and masks it made, and keeps a person's
+tweaks to them, as giving a palette slot another input does today.
+
+### Inputs made from inputs
+
+Two things a recipe needs are inputs computed from other inputs:
+
+- **Stars and starless**, from a star removal. Built: the stars of an
+  input are an input of their own.
+- **A line with its continuum subtracted**, such as Ha minus a share of
+  R. PSF Guard has this as its emission step.
+
+Both are listed under the input they come from, and are routed like any
+input.
+
+### Workspace: breaking the steps apart
+
+The workspace is the tree as it is, with the Combine stage grouped by
+part. Everything Setup made is ordinary layers, masks and steps there, so
+“manually breaking apart the steps” needs no conversion: a person opens
+the part and edits it.
+
+What changes is who keeps a part up to date:
+
+- A part Setup made **follows Setup**. Tones, opacity, adjustments, mask
+  reach and touch-ups are a person's tweaks and are kept when Setup
+  remakes the part.
+- Changing a part's structure in the workspace (adding, removing or
+  reordering its layers, or giving a mask other inputs) makes the part
+  **edited by hand**. Setup then shows it as such, stops remaking it, and
+  offers **Reset to the recipe**.
+
+So Setup is the fast way in and stays useful after tweaks, and nothing a
+person builds by hand is overwritten.
+
+### Seeing how it combines
+
+- The Setup page's routing table and part cards are the summary.
+- In the workspace, selecting a part shows it alone or the picture up to
+  it, as a group does today. The Input and picture split shows an input
+  beside the part it feeds.
+
+### What it needs
+
+1. A record of the setup in the document: the recipe's name, the routing
+   table, and each part's options. It takes the place of today's record of
+   one palette and its slots.
+2. Whether a part follows Setup or is edited by hand.
+3. The Setup page.
+4. Stars for more than one input at once, and an RGB palette over stars
+   inputs.
+5. Continuum subtraction as a shared step that Studio's preparation runs,
+   giving a `<line>@continuum` channel. This is the largest piece: PSF
+   Guard runs it after the channels are resampled and normalized together.
+
+Order: 1 to 3 first, for the recipes that need nothing new (narrowband,
+RGB, LRGB, HaLRGB, narrowband into RGB). Then 4, for RGB stars. Then 5.
+
 ## Suggested order of work
 
 1. The investigations listed in the previous section.
