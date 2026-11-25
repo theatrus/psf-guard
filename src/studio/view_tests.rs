@@ -213,9 +213,9 @@ fn a_channel_with_its_own_step_does_not_follow_the_shared_one() {
     );
     // The copy starts with the shared step's settings and sits after it.
     let linear = &document.stage(StageKind::Linear).steps;
-    assert_eq!(linear[0].id, shared);
-    assert_eq!(linear[1].id, own);
-    assert_eq!(linear[1].band.as_deref(), Some("blue"));
+    let at = linear.iter().position(|step| step.id == shared).unwrap();
+    assert_eq!(linear[at + 1].id, own);
+    assert_eq!(linear[at + 1].band.as_deref(), Some("blue"));
 
     document.set_step_settings(own, serde_json::json!({ "strength": 0.25 }));
     assert_eq!(background(&document, "blue"), Some(own));

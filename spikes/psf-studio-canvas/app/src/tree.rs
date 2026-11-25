@@ -7,7 +7,9 @@
 //! layer becomes that layer's own; dropped between layers, it changes every
 //! layer beneath it.
 
-use super::panes::{counted, is_drawn, mask_words, swatch, CONTROL, PANE, QUIET, SELECTED, TEXT};
+use super::panes::{
+    counted, is_drawn, mask_words, swatch, CONTROL, PANE, QUIET, SELECTED, STRETCHES, TEXT,
+};
 use super::{Studio, STEPS_WIDTH};
 use crate::studio_model::{
     channel_label, input_steps, palettes_for, LayerRecord, LayerSource, Row, StageKind, StepKind,
@@ -152,11 +154,22 @@ impl Studio {
                     continue;
                 };
                 let id = listed.id;
-                let applies_to = if listed.shared {
+                let mut applies_to = if listed.shared {
                     "every input".to_string()
                 } else {
                     format!("{label} only")
                 };
+                // Which stretch a Stretch step is, so two of them are told
+                // apart.
+                if let Some((_, stretch)) = super::panes::stretch_model(step)
+                    .and_then(|model| serde_json::to_value(model).ok())
+                    .and_then(|model| {
+                        let kind = model["type"].as_str()?.to_string();
+                        STRETCHES.iter().find(|(name, _)| *name == kind)
+                    })
+                {
+                    applies_to = format!("{stretch} · {applies_to}");
+                }
                 let row = Row::InputStep {
                     channel: channel.clone(),
                     step: id,

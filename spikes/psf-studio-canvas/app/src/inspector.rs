@@ -5,8 +5,8 @@
 //! the whole picture. The controls under it change that and nothing else.
 
 use super::panes::{
-    amount, amount_in, amount_range, is_drawn, mask_words, operation, stretch_target, ADJUSTMENTS,
-    CONTROL, PANE, QUIET,
+    amount, amount_in, amount_range, is_drawn, mask_words, new_stretch, operation,
+    stretch_settings, ADJUSTMENTS, CONTROL, PANE, QUIET, STRETCHES,
 };
 use super::{SliderId, Studio, Tool, PANEL_WIDTH};
 use crate::image_steps::Accepts;
@@ -136,16 +136,12 @@ impl Studio {
         let name = step.kind.name().to_string();
         let masked = step.mask.is_some();
         let slider = match &step.kind {
-            StepKind::Operation { operation, .. } if operation == flow_operations::STRETCH => {
-                let target = stretch_target(step);
-                // The slider covers background targets from 0.05 to 0.5.
-                let position = ((target - 0.05) / 0.45).clamp(0.0, 1.0) as f32;
-                Some(self.labelled_slider(
-                    format!("Background {target:.2}"),
-                    SliderId::Midtone,
-                    position,
-                    cx,
-                ))
+            StepKind::Operation {
+                operation,
+                settings,
+                ..
+            } if operation == flow_operations::STRETCH => {
+                Some(self.stretch_controls(id, settings, cx))
             }
             StepKind::Operation { operation, .. } => amount_range(operation).map(|(low, high)| {
                 let value = amount(step);
@@ -202,6 +198,143 @@ impl Studio {
                     },
                 ))
             })
+    }
+
+    /// A Stretch step's controls: which of Seiza's stretches it is, and
+    /// that stretch's settings. A step that follows another Stretch step
+    /// of the same input stretches what that one left.
+    fn stretch_controls(
+        &self,
+        id: Uuid,
+        settings: &serde_json::Value,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let kind = settings["model"]["type"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        let kinds = STRETCHES
+            .iter()
+            .enumerate()
+            .map(|(index, (name, label))| {
+                let (name, settings) = (*name, settings.clone());
+                Self::act(
+                    *label,
+                    ("stretch-kind", index),
+                    name == kind,
+                    cx,
+                    move |this| {
+                        let mut settings = settings.clone();
+                        if !settings.is_object() {
+                            settings = serde_json::json!({ "color_strategy": "linked" });
+                        }
+                        settings["model"] = new_stretch(name);
+                        this.document.set_step_settings(id, settings);
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        let known = STRETCHES.iter().any(|(name, _)| *name == kind);
+        let mut block = column()
+            .child(Self::heading("Stretch"))
+            .child(wrap().children(kinds))
+            .when(!known, |block| {
+                block.child(Self::note(format!(
+                    "This step holds the stretch “{kind}”, which the canvas does not draw."
+                )))
+            });
+        for (index, (key, label, low, high)) in stretch_settings(&kind).iter().enumerate() {
+            let value = settings["model"][*key].as_f64().unwrap_or(*low);
+            block = block.child(self.labelled_slider(
+                format!("{label} {value:.2}"),
+                SliderId::StretchParam(index),
+                ((value - low) / (high - low)) as f32,
+                cx,
+            ));
+        }
+        block.child(Self::act(
+            "Add another stretch after this one",
+            "stretch-add",
+            false,
+            cx,
+            move |this| {
+                let Some((stage, step)) = this.document.step(id) else {
+                    return;
+                };
+                let band = step.band.clone();
+                let Some(at) = this
+                    .document
+                    .stage(stage)
+                    .steps
+                    .iter()
+                    .position(|other| other.id == id)
+                else {
+                    return;
+                };
+                let mut next = StepRecord::new(StepKind::Operation {
+                    operation: flow_operations::STRETCH.to_string(),
+                    accepts: Accepts::Linear,
+                    settings: serde_json::json!({
+                        "model": new_stretch("ghs"),
+                        "color_strategy": "linked",
+                    }),
+                });
+                next.band = band.clone();
+                let new = next.id;
+                if this.document.insert_step(stage, at + 1, next).is_ok()
+                    && let Row::InputStep { channel, .. } = &this.selected
+                {
+                    this.selected = Row::InputStep {
+                        channel: channel.clone(),
+                        step: new,
+                    };
+                }
+            },
+        ))
+        .child(Self::note(
+            "Stretches of one input apply in order. Each is resolved from what the one before it left.",
+        ))
+    }
+
+    /// The tools an input's tools step ran, for a person to read.
+    fn tools_block(step: &StepRecord) -> Option<gpui::Div> {
+        let StepKind::Operation {
+            operation,
+            settings,
+            ..
+        } = &step.kind
+        else {
+            return None;
+        };
+        if operation != flow_operations::RC_ASTRO_INPUT {
+            return None;
+        }
+        // The providers PSF Guard has today, by their keys.
+        let name = |provider: &str| match provider {
+            "bxt" => "BlurXTerminator (RC-Astro), sharpening".to_string(),
+            "nxt" => "NoiseXTerminator (RC-Astro), noise reduction".to_string(),
+            "sxt" => "StarXTerminator (RC-Astro), star removal".to_string(),
+            "noise-model" => "Seiza noise model, noise reduction".to_string(),
+            other => other.to_string(),
+        };
+        let tools: Vec<String> = settings["steps"]
+            .as_array()
+            .map(|steps| {
+                steps
+                    .iter()
+                    .filter_map(|step| step["provider"].as_str().or(step["tool"].as_str()))
+                    .map(name)
+                    .collect()
+            })
+            .unwrap_or_default();
+        Some(
+            column()
+                .child(Self::heading("Tools, in order"))
+                .children(tools.into_iter().map(|tool| div().text_xs().child(tool)))
+                .child(Self::note(
+                    "The tools run when the store is prepared: psf-guard studio-sources --apply with this document. Their result is kept, so a view before and after them is at hand.",
+                )),
+        )
     }
 
     // ---- one inspector per kind of row ----------------------------------
@@ -273,6 +406,7 @@ impl Studio {
         column()
             .child(Self::title(step.kind.name().to_string(), applies_to))
             .child(self.step_controls(stage, step, cx))
+            .children(Self::tools_block(step))
             .children(own)
             .child(Self::act(
                 if shared {

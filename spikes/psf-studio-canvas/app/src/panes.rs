@@ -14,17 +14,18 @@
 
 use super::{Bands, Drag, Scene, SliderId, Studio, Tool};
 use crate::image_steps::Accepts;
-use crate::store_tiles::BandStretch;
+use crate::store_tiles::{BandState, BandStretch};
 use crate::studio_model::{
     band_layer, channel_label, color_from_hue, document_from_color_setup, flow_operations, hue_of,
-    layer_name, panes, plan, BlendMode, Document, LayerRecord, LayerSource, MaskRecord, MaskShape,
-    Place, PlannedStretch, Row, SharedMask, Split, StackEntry, StageKind, StepKind, StepRecord,
-    Stroke, StrokeMode, Subject, View,
+    layer_name, panes, plan, BlendMode, ChannelPlan, Document, LayerRecord, LayerSource,
+    MaskRecord, MaskShape, Place, PlannedStretch, Row, SharedMask, Split, StackEntry, StageKind,
+    StepKind, StepRecord, Stroke, StrokeMode, Subject, View,
 };
 use gpui::{
     canvas, div, prelude::*, px, relative, rgb, AnyElement, Context, MouseButton, MouseDownEvent,
     Rgba, SharedString, Window,
 };
+use seiza_stretch::StretchModel;
 use std::collections::HashMap;
 use std::sync::Arc;
 use studio_render_spike::{
@@ -181,18 +182,109 @@ fn with_amount(operation: &str, settings: &serde_json::Value, amount: f32) -> se
     serde_json::Value::Object(settings)
 }
 
-/// Where Seiza's automatic stretch places the background when a step
-/// does not say: Seiza's default.
-const DEFAULT_STRETCH_TARGET: f64 = 0.2;
+/// The stretches Seiza has that work on samples alone, as a person
+/// chooses between them: Seiza's name for the stretch, and a label. The
+/// layered stretch is not here: it needs the image, so the engine draws it.
+pub(super) const STRETCHES: [(&str, &str); 8] = [
+    ("auto-mtf", "Automatic midtones"),
+    ("median-anchor", "Median anchor"),
+    ("ghs", "Generalized hyperbolic"),
+    ("linear", "Linear"),
+    ("asinh", "Asinh"),
+    ("percentile-asinh", "Asinh, by percentiles"),
+    ("mtf", "Midtones"),
+    ("identity", "None"),
+];
 
-/// Where a stretch step places the background.
-pub(super) fn stretch_target(step: &StepRecord) -> f64 {
-    let StepKind::Operation { settings, .. } = &step.kind else {
-        return DEFAULT_STRETCH_TARGET;
-    };
-    settings["model"]["target_median"]
-        .as_f64()
-        .unwrap_or(DEFAULT_STRETCH_TARGET)
+/// The settings of one of Seiza's stretches that a slider sets: Seiza's
+/// name for the setting, a label, and the range the slider covers.
+pub(super) fn stretch_settings(kind: &str) -> &'static [(&'static str, &'static str, f64, f64)] {
+    match kind {
+        "auto-mtf" => &[
+            ("target_median", "Background", 0.05, 0.5),
+            ("shadows_clip", "Shadows clip", -5.0, 0.0),
+        ],
+        "median-anchor" => &[
+            ("target_median", "Background", 0.05, 0.5),
+            ("black_point_sigma", "Black point, sigmas", 0.5, 6.0),
+            ("curves_boost", "Curves boost", 0.0, 0.9),
+            ("hdr_amount", "Highlight compression", 0.0, 1.0),
+            ("hdr_knee", "Compression starts at", 0.3, 0.95),
+        ],
+        "ghs" => &[
+            ("stretch_factor", "Stretch factor", 0.0, 10.0),
+            ("local_intensity", "Local intensity", -5.0, 15.0),
+            ("symmetry_point", "Symmetry point", 0.0, 1.0),
+            ("protect_shadows", "Protect shadows below", 0.0, 1.0),
+            ("protect_highlights", "Protect highlights above", 0.0, 1.0),
+            ("black", "Black point", 0.0, 0.5),
+            ("white", "White point", 0.5, 1.0),
+        ],
+        "linear" => &[
+            ("black", "Black point", 0.0, 0.5),
+            ("white", "White point", 0.5, 1.0),
+        ],
+        "asinh" => &[
+            ("black", "Black point", 0.0, 0.5),
+            ("white", "White point", 0.5, 1.0),
+            ("strength", "Strength", 1.0, 500.0),
+        ],
+        "percentile-asinh" => &[
+            ("black_percentile", "Black percentile", 0.0, 0.2),
+            ("white_percentile", "White percentile", 0.9, 1.0),
+            ("strength", "Strength", 1.0, 500.0),
+        ],
+        "mtf" => &[
+            ("shadows", "Shadows", 0.0, 0.5),
+            ("midtone", "Midtone", 0.01, 0.99),
+            ("highlights", "Highlights", 0.5, 1.0),
+        ],
+        _ => &[],
+    }
+}
+
+/// One of Seiza's stretches with the settings a new one starts with.
+pub(super) fn new_stretch(kind: &str) -> serde_json::Value {
+    use serde_json::json;
+    match kind {
+        "auto-mtf" => json!({ "type": kind, "target_median": 0.2, "shadows_clip": -2.8 }),
+        "median-anchor" => json!({
+            "type": kind, "target_median": 0.25, "black_point_sigma": 2.7,
+            "curves_boost": 0.0, "hdr_amount": 0.0, "hdr_knee": 0.75, "normalize": false,
+        }),
+        "ghs" => json!({
+            "type": kind, "stretch_factor": 1.0, "local_intensity": 4.0, "symmetry_point": 0.2,
+            "protect_shadows": 0.0, "protect_highlights": 1.0, "black": 0.0, "white": 1.0,
+        }),
+        "linear" => json!({ "type": kind, "black": 0.0, "white": 1.0 }),
+        "asinh" => json!({ "type": kind, "black": 0.0, "white": 1.0, "strength": 50.0 }),
+        "percentile-asinh" => json!({
+            "type": kind, "black_percentile": 0.001, "white_percentile": 0.999, "strength": 50.0,
+        }),
+        "mtf" => json!({ "type": kind, "shadows": 0.0, "midtone": 0.25, "highlights": 1.0 }),
+        _ => json!({ "type": "identity" }),
+    }
+}
+
+/// Keeps a generalized hyperbolic stretch in the order Seiza asks for after
+/// `changed` moved: shadow protection at or below the symmetry point, and
+/// highlight protection at or above it.
+fn keep_stretch_valid(model: &mut serde_json::Value, changed: &str) {
+    if model["type"] != "ghs" {
+        return;
+    }
+    let value = |model: &serde_json::Value, key: &str| model[key].as_f64().unwrap_or(0.0);
+    let symmetry = value(model, "symmetry_point");
+    match changed {
+        "protect_shadows" => model["protect_shadows"] = value(model, changed).min(symmetry).into(),
+        "protect_highlights" => {
+            model["protect_highlights"] = value(model, changed).max(symmetry).into()
+        }
+        _ => {
+            model["protect_shadows"] = value(model, "protect_shadows").min(symmetry).into();
+            model["protect_highlights"] = value(model, "protect_highlights").max(symmetry).into();
+        }
+    }
 }
 
 /// What the canvas does for an adjustment, by its name.
@@ -208,7 +300,15 @@ pub(super) fn is_drawn(stage: StageKind, step: &StepRecord, bands: &Bands) -> bo
     match (&step.kind, stage) {
         // Drawn when the store holds each band corrected as well.
         (StepKind::Operation { operation, .. }, StageKind::Linear) => {
-            operation == flow_operations::BACKGROUND && bands.has_correction()
+            let band = step.band.as_deref().and_then(|band| bands.band_of(band));
+            (operation == flow_operations::BACKGROUND && bands.has_correction())
+                // An input's tools are drawn when the store holds their
+                // result.
+                || (operation == flow_operations::RC_ASTRO_INPUT
+                    && band.is_some_and(|band| bands.has_tools(band)))
+        }
+        (StepKind::Operation { .. }, StageKind::Stretch) if stretch_model(step).is_some() => {
+            !matches!(stretch_model(step), Some(StretchModel::Layered(_)))
         }
         (StepKind::Operation { operation, .. }, StageKind::Stretch) => {
             operation == flow_operations::STRETCH
@@ -347,6 +447,67 @@ fn push_own_adjustments(
     }
 }
 
+/// The stretch a Stretch step holds, as Seiza reads it. `None` when the
+/// step's settings are not a stretch Seiza knows.
+pub(super) fn stretch_model(step: &StepRecord) -> Option<StretchModel> {
+    let StepKind::Operation { settings, .. } = &step.kind else {
+        return None;
+    };
+    serde_json::from_value(settings.get("model")?.clone()).ok()
+}
+
+/// What one input is drawn from in a view: its state, the tile channel
+/// that holds it in that state, the channel to blend in for the background
+/// correction with how much of it, and its stretches in order.
+///
+/// What the canvas cannot draw is recorded as left out: a background
+/// correction for a view before the input's tools, where the store
+/// corrected the tools' result, and a stretch that needs the engine.
+fn band_source(
+    document: &Document,
+    bands: &Bands,
+    band: usize,
+    plan: &ChannelPlan,
+    omitted: &mut Vec<String>,
+) -> (BandState, usize, Option<(usize, f32)>, Vec<StretchModel>) {
+    let label = channel_label(&plan.channel);
+    let strength = plan
+        .background
+        .and_then(|id| document.step(id))
+        .map_or(0.0, |(_, step)| amount(step));
+    let mut state = BandState {
+        tools: plan.tools.is_some(),
+        background: strength,
+    };
+    let (plane, corrected) = bands.planes(band, state);
+    if corrected.is_none() {
+        if strength > 0.0 && bands.corrected[band].is_some() {
+            omitted.push(format!("the background of {label} without its tools"));
+        }
+        state.background = 0.0;
+    }
+    let stages = match &plan.stretch {
+        PlannedStretch::Preview => Vec::new(),
+        PlannedStretch::Document(steps) => steps
+            .iter()
+            .filter_map(|id| document.step(*id))
+            .filter_map(|(_, step)| match stretch_model(step) {
+                Some(StretchModel::Layered(_)) | None => {
+                    omitted.push(format!("a stretch of {label} that needs the engine"));
+                    None
+                }
+                Some(model) => Some(model),
+            })
+            .collect(),
+    };
+    (
+        state,
+        plane,
+        corrected.map(|corrected| (corrected, state.background)),
+        stages,
+    )
+}
+
 /// Adds a heal of one layer to a scene, or records that it is left out
 /// because the frame has no room for it.
 fn push_heal(
@@ -383,12 +544,12 @@ fn push_heal(
 /// without its stretch analyses, and each band's background strength in it.
 /// What one frame has no room for is listed in the scene, never drawn
 /// without its mask.
-fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scene, Vec<f32>) {
+fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scene, Vec<BandState>) {
     let planned = plan(document, view);
-    let mut strengths = vec![0.0; bands.len()];
+    let mut states = vec![BandState::default(); bands.len()];
     let mut layers: Vec<Layer> = Vec::new();
     let mut layer_bands = Vec::new();
-    let mut layer_targets = Vec::new();
+    let mut layer_stretches: Vec<Vec<StretchModel>> = Vec::new();
     let mut masks: Vec<Vec<Segment>> = Vec::new();
     let mut heals: Vec<LayerHeal> = Vec::new();
     let mut omitted: Vec<String> = Vec::new();
@@ -521,21 +682,12 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
         let Some(band) = bands.band_of(&channel.channel) else {
             continue;
         };
-        let strength = channel
-            .background
-            .and_then(|id| document.step(id))
-            .map_or(0.0, |(_, step)| amount(step));
-        strengths[band] = strength;
-        let target = match &channel.stretch {
-            PlannedStretch::Document(steps) => steps
-                .first()
-                .and_then(|id| document.step(*id))
-                .map_or(DEFAULT_STRETCH_TARGET, |(_, step)| stretch_target(step)),
-            PlannedStretch::Preview => DEFAULT_STRETCH_TARGET,
-        };
+        let (state, plane, blended, stages) =
+            band_source(document, bands, band, channel, &mut omitted);
+        states[band] = state;
         let shown = Layer {
-            band: bands.tile_band[band],
-            blended: bands.corrected[band].map(|corrected| (corrected, strength)),
+            band: plane,
+            blended,
             ..plain_layer()
         };
         // The heals of the input alone change its samples before the
@@ -550,7 +702,7 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
             // A channel on its own is drawn in gray.
             layers.push(shown);
             layer_bands.push(band);
-            layer_targets.push(target);
+            layer_stretches.push(stages.clone());
             for step in input_heals {
                 let mask = mask_for(step_strokes(step));
                 push_heal(&mut heals, &mut omitted, layers.len() - 1, true, step, mask);
@@ -587,7 +739,7 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
             ..shown
         });
         layer_bands.push(band);
-        layer_targets.push(target);
+        layer_stretches.push(stages.clone());
         let shown_at = layers.len() - 1;
         masked.push((shown_at, layer));
         for step in input_heals {
@@ -683,34 +835,25 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
             else {
                 continue;
             };
-            let strength = plan
-                .background
-                .and_then(|id| document.step(id))
-                .map_or(0.0, |(_, step)| amount(step));
-            strengths[band] = strength;
-            let target = match &plan.stretch {
-                PlannedStretch::Document(steps) => steps
-                    .first()
-                    .and_then(|id| document.step(*id))
-                    .map_or(DEFAULT_STRETCH_TARGET, |(_, step)| stretch_target(step)),
-                PlannedStretch::Preview => DEFAULT_STRETCH_TARGET,
-            };
+            let (state, plane, blended, stages) =
+                band_source(document, bands, band, plan, &mut omitted);
+            states[band] = state;
             let known = layer_bands
                 .iter()
-                .zip(&layer_targets)
-                .position(|(row_band, row_target)| *row_band == band && *row_target == target);
+                .zip(&layer_stretches)
+                .position(|(row_band, row_stages)| *row_band == band && *row_stages == stages);
             let row = match known {
                 Some(row) => row,
                 None if layer_bands.len() < MAX_LAYERS => {
                     layer_bands.push(band);
-                    layer_targets.push(target);
+                    layer_stretches.push(stages.clone());
                     layer_bands.len() - 1
                 }
                 None => continue,
             };
             *slot = Some(MaskBand {
-                band: bands.tile_band[band],
-                blended: bands.corrected[band].map(|corrected| (corrected, strength)),
+                band: plane,
+                blended,
                 stretch_row: row,
             });
             found += 1;
@@ -761,7 +904,7 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
         computed,
         layers,
         layer_bands,
-        layer_targets,
+        layer_stretches,
         finish,
         heals,
         masks,
@@ -769,7 +912,7 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
         stretches: Arc::default(),
         version,
     };
-    (scene, strengths)
+    (scene, states)
 }
 
 impl Studio {
@@ -867,13 +1010,13 @@ impl Studio {
 
     /// Each band's stretch analysis at these background strengths. An
     /// analysis is kept, so a pane that returns to a place does not wait.
-    fn analysis(&mut self, strengths: &[f32]) -> Arc<Vec<BandStretch>> {
-        if let Some((_, known)) = self.analysed.iter().find(|(at, _)| at == strengths) {
+    fn analysis(&mut self, states: &[BandState]) -> Arc<Vec<BandStretch>> {
+        if let Some((_, known)) = self.analysed.iter().find(|(at, _)| at == states) {
             return known.clone();
         }
-        let stretches = Arc::new(self.band_info.stretches(strengths).unwrap_or_default());
+        let stretches = Arc::new(self.band_info.stretches(states).unwrap_or_default());
         self.analysed
-            .insert(0, (strengths.to_vec(), stretches.clone()));
+            .insert(0, (states.to_vec(), stretches.clone()));
         self.analysed.truncate(8);
         stretches
     }
@@ -902,7 +1045,7 @@ impl Studio {
         let scenes: Vec<Scene> = places
             .iter()
             .map(|place| {
-                let (mut scene, strengths) = scene(
+                let (mut scene, states) = scene(
                     &self.document,
                     &self.band_info,
                     &place.view(),
@@ -910,7 +1053,7 @@ impl Studio {
                 );
                 // The stretch is applied to the corrected samples, so each
                 // band's analysis follows its background strength.
-                scene.stretches = self.analysis(&strengths);
+                scene.stretches = self.analysis(&states);
                 scene
             })
             .collect();
@@ -999,7 +1142,26 @@ impl Studio {
     /// Applies a slider's new position, from 0 to 1, to the selected row.
     pub(super) fn slider_moved(&mut self, slider: SliderId, position: f32) {
         match slider {
-            SliderId::Midtone | SliderId::Amount => {
+            SliderId::StretchParam(index) => {
+                let Some(id) = self.selected_step() else {
+                    return;
+                };
+                let Some((_, step)) = self.document.step(id) else {
+                    return;
+                };
+                let StepKind::Operation { settings, .. } = &step.kind else {
+                    return;
+                };
+                let kind = settings["model"]["type"].as_str().unwrap_or_default();
+                let Some((key, _, low, high)) = stretch_settings(kind).get(index) else {
+                    return;
+                };
+                let mut settings = settings.clone();
+                settings["model"][*key] = (low + (high - low) * f64::from(position)).into();
+                keep_stretch_valid(&mut settings["model"], key);
+                self.document.set_step_settings(id, settings);
+            }
+            SliderId::Amount => {
                 let Some(id) = self.selected_step() else {
                     return;
                 };
@@ -1018,19 +1180,9 @@ impl Studio {
                 else {
                     return;
                 };
-                let changed = if slider == SliderId::Midtone {
-                    // The slider covers background targets from 0.05 to 0.5.
-                    let mut settings = settings.clone();
-                    if !settings.is_object() {
-                        settings = serde_json::json!({ "model": { "type": "auto-mtf" } });
-                    }
-                    settings["model"]["target_median"] = (0.05 + 0.45 * f64::from(position)).into();
-                    settings
-                } else {
-                    let amount = amount_range(operation)
-                        .map_or(position, |(low, high)| low + (high - low) * position);
-                    with_amount(operation, settings, amount)
-                };
+                let amount = amount_range(operation)
+                    .map_or(position, |(low, high)| low + (high - low) * position);
+                let changed = with_amount(operation, settings, amount);
                 self.document.set_step_settings(id, changed);
             }
             SliderId::LayerAmount => {

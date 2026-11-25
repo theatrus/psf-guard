@@ -104,6 +104,10 @@ pub struct ChannelPlan {
     /// The background step that applies to the channel, if the view has
     /// reached one that is on.
     pub background: Option<Uuid>,
+    /// The step that holds the channel's processing tools, if the view has
+    /// reached one that is on. The channel is then shown as the tools left
+    /// it.
+    pub tools: Option<Uuid>,
     pub stretch: PlannedStretch,
     /// The heals of this channel alone that the view applies, in order.
     /// They change the channel's samples before its stretch.
@@ -252,6 +256,7 @@ pub fn plan(document: &Document, view: &View) -> ViewPlan {
         ChannelPlan {
             channel: channel.to_string(),
             background: step_for(&steps, op::BACKGROUND, channel).map(|step| step.id),
+            tools: step_for(&steps, op::RC_ASTRO_INPUT, channel).map(|step| step.id),
             stretch: if view.stretch == DisplayStretch::Document && !stretches.is_empty() {
                 PlannedStretch::Document(stretches)
             } else {

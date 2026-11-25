@@ -141,16 +141,9 @@ pub fn document_from_color_setup(
         )?;
     }
 
-    // The Linear stage, in the order the pipeline's phases run.
-    if let Some(background) = settings
-        .get("background_extraction")
-        .filter(|v| !v.is_null())
-    {
-        add(
-            StageKind::Linear,
-            operation(op::BACKGROUND, Accepts::Linear, background),
-        )?;
-    }
+    // The Linear stage, in the order the pipeline's phases run: each
+    // input's own tools first, then the background, which is fitted on
+    // their result.
     if let Some(mode) = settings.get("input_processing").filter(|v| !v.is_null()) {
         add(
             StageKind::Linear,
@@ -167,6 +160,15 @@ pub fn document_from_color_setup(
         add(
             StageKind::Linear,
             operation(op::RC_ASTRO_INPUT, Accepts::Linear, config).for_band(channel),
+        )?;
+    }
+    if let Some(background) = settings
+        .get("background_extraction")
+        .filter(|v| !v.is_null())
+    {
+        add(
+            StageKind::Linear,
+            operation(op::BACKGROUND, Accepts::Linear, background),
         )?;
     }
     for (key, name) in [

@@ -210,6 +210,24 @@ fn a_place_before_the_stretch_is_labelled_as_a_preview() {
     );
     let before = stretched.before(&document);
     assert_ne!(before, stretched);
+
+    // A second stretch of the input is told from the first.
+    let mut twice = document.clone();
+    let (stage, first) = twice.step(last).unwrap();
+    let second = StepRecord::new(first.kind.clone()).for_band("ha");
+    let second_id = second.id;
+    twice.insert_step(stage, usize::MAX, second).unwrap();
+    assert_eq!(stretched.label(&twice), "Ha · after Stretch 1");
+    let again = Place::Input {
+        channel: "ha".to_string(),
+        after: Some(second_id),
+    };
+    assert_eq!(again.label(&twice), "Ha · after Stretch 2");
+    assert_eq!(again.before(&twice), stretched);
+    assert_eq!(
+        plan(&twice, &again.view()).channels[0].stretch,
+        PlannedStretch::Document(vec![last, second_id])
+    );
     assert!(before
         .label(&document)
         .ends_with("preview stretch, not saved"));

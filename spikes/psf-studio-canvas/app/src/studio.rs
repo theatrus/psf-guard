@@ -1,5 +1,5 @@
 use crate::bench::Bench;
-use crate::store_tiles::{BandStretch, Bands};
+use crate::store_tiles::{BandState, BandStretch, Bands};
 use crate::studio_model::{Document, Place, Row, Split, Stroke, StrokeMode};
 use gpui::{
     prelude::*, px, rgb, size, App, Bounds, Context, MouseButton, MouseDownEvent, MouseMoveEvent,
@@ -39,6 +39,9 @@ pub struct Options {
     pub working_profile: Option<PathBuf>,
     /// A tile store to open in place of the synthetic document.
     pub open: Option<PathBuf>,
+    /// A PSF-Studio document to open with the store, in place of PSF
+    /// Guard's default flow over the store's inputs.
+    pub document: Option<PathBuf>,
     /// Where the benchmark writes PNG captures of selected frames.
     pub capture_prefix: Option<PathBuf>,
 }
@@ -51,6 +54,7 @@ impl Default for Options {
             vsync: true,
             capture_prefix: None,
             open: None,
+            document: None,
             output: String::new(),
             working_profile: None,
         }
@@ -70,8 +74,9 @@ enum Tool {
 /// A slider in a pane.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum SliderId {
-    /// Where the selected stretch step places the background.
-    Midtone,
+    /// One setting of the selected stretch step, by its place in the list
+    /// of that stretch's settings.
+    StretchParam(usize),
     /// The selected layer's opacity.
     Opacity,
     /// The selected layer's hue.
@@ -95,8 +100,7 @@ enum SliderId {
 }
 
 impl SliderId {
-    const ALL: [SliderId; 8] = [
-        SliderId::Midtone,
+    const ALL: [SliderId; 7] = [
         SliderId::Opacity,
         SliderId::Hue,
         SliderId::Saturation,
@@ -227,15 +231,14 @@ impl CanvasState {
                 scene
                     .layer_bands
                     .iter()
-                    .zip(&scene.layer_targets)
-                    .filter_map(|(band, target)| {
+                    .zip(&scene.layer_stretches)
+                    .filter_map(|(band, stages)| {
                         // The benchmark moves a band's slider to time a
                         // stretch change. A slider at rest, a third of the
                         // way, adds nothing.
                         let moved =
                             f64::from(self.sliders[(*band).min(MAX_LAYERS - 1)] - 1.0 / 3.0);
-                        let target = (*target + 0.45 * moved).clamp(0.05, 0.5);
-                        Some(scene.stretches.get(*band)?.table(target))
+                        Some(scene.stretches.get(*band)?.table(stages, 0.45 * moved))
                     })
                     .collect()
             })
@@ -250,8 +253,9 @@ pub struct Scene {
     layers: Vec<Layer>,
     /// The document band each layer shows, for its stretch.
     layer_bands: Vec<usize>,
-    /// Where each layer's stretch places the background, from 0 to 1.
-    layer_targets: Vec<f64>,
+    /// The stretches of each row of the stretch tables, in order. None is
+    /// a preview stretch.
+    layer_stretches: Vec<Vec<seiza_stretch::StretchModel>>,
     finish: Vec<FinishStep>,
     /// Heals of single layers and inputs.
     heals: Vec<LayerHeal>,
@@ -517,7 +521,7 @@ pub struct Studio {
     /// Where each band is in a tile, and its samples for the stretch.
     band_info: Arc<Bands>,
     /// Stretch analyses already made, by each band's background strength.
-    analysed: Vec<(Vec<f32>, Arc<Vec<BandStretch>>)>,
+    analysed: Vec<(Vec<BandState>, Arc<Vec<BandStretch>>)>,
     /// The levels in the document's pyramid.
     levels: u8,
 }
@@ -559,6 +563,7 @@ impl Studio {
         let workers = std::thread::available_parallelism()
             .map(|count| count.get().saturating_sub(4).max(2))
             .unwrap_or(4);
+        let document_path = options.document.clone();
         let source = crate::store_tiles::source(options.open.as_deref());
         let (source, band_info) = match source {
             Ok((source, bands)) => (Ok(source), Arc::new(bands)),
@@ -614,7 +619,16 @@ impl Studio {
         })
         .detach();
 
-        let document = panes::flow_document(&band_info.names);
+        // A document that cannot be read is reported and the default flow
+        // opens in its place.
+        let opened = document_path.and_then(|path| {
+            std::fs::read_to_string(&path)
+                .map_err(|error| error.to_string())
+                .and_then(|text| Document::from_json(&text).map_err(|error| error.to_string()))
+                .map_err(|error| eprintln!("could not open {}: {error}", path.display()))
+                .ok()
+        });
+        let document = opened.unwrap_or_else(|| panes::flow_document(&band_info.names));
         let mut studio =
             Self {
                 native_view,
@@ -626,6 +640,7 @@ impl Studio {
                     .chain((0..MAX_LAYERS).flat_map(|layer| {
                         [SliderId::ToneHue(layer), SliderId::ToneSaturation(layer)]
                     }))
+                    .chain((0..8).map(SliderId::StretchParam))
                     .map(|id| (id, Rc::default()))
                     .collect(),
                 tool: Tool::Pan,

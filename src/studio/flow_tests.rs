@@ -61,11 +61,12 @@ fn the_default_setup_becomes_psf_guards_flow() {
             "Channel stack (oiii)"
         ]
     );
-    // Background first, then the choice that inputs follow their cards, then
-    // color calibration: the order the pipeline's phases run.
+    // The choice that inputs follow their cards, which decides their tools,
+    // then the background, then color calibration: the order the pipeline's
+    // phases run.
     assert_eq!(
         names(&document, StageKind::Linear),
-        [op::BACKGROUND, op::FOLLOW_CHANNELS, op::COLOR_CALIBRATION]
+        [op::FOLLOW_CHANNELS, op::BACKGROUND, op::COLOR_CALIBRATION]
     );
     // The card's channels first, in its order, then the channels the setup
     // saved that this card lacks.
@@ -151,11 +152,11 @@ fn every_kind_of_setting_survives_the_round_trip() {
     assert_eq!(
         names(&document, StageKind::Linear),
         [
-            op::BACKGROUND.to_string(),
             op::FOLLOW_CHANNELS.to_string(),
             "Deconvolution (ha)".to_string(),
             "RC-Astro tools (ha)".to_string(),
             "RC-Astro tools (oiii)".to_string(),
+            op::BACKGROUND.to_string(),
             op::EMISSION.to_string(),
             op::RC_ASTRO_COLOR.to_string(),
             op::COLOR_CALIBRATION.to_string(),

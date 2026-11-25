@@ -275,7 +275,23 @@ impl Place {
             Place::Input {
                 channel,
                 after: Some(step),
-            } => format!("{} · after {}", channel_label(channel), step_name(step)),
+            } => {
+                // An input may have several steps of one name, such as two
+                // stretches: the label then says which.
+                let name = step_name(step);
+                let alike: Vec<Uuid> = input_steps(document, channel)
+                    .into_iter()
+                    .map(|row| row.id)
+                    .filter(|id| step_name(id) == name)
+                    .collect();
+                let which = alike.iter().position(|id| id == step);
+                match which {
+                    Some(at) if alike.len() > 1 => {
+                        format!("{} · after {name} {}", channel_label(channel), at + 1)
+                    }
+                    _ => format!("{} · after {name}", channel_label(channel)),
+                }
+            }
             Place::Layer { layer, alone: true } => format!("{} · alone", layer_name(layer)),
             Place::Layer {
                 layer,

@@ -1869,6 +1869,33 @@ Not built:
   standing in for Seiza's. Seiza has no exposure, curves or saturation
   step for display samples yet.
 
+## Stretches in Studio (2026-11-25)
+
+An input's stretch is its Stretch steps, in order. Each step holds one of
+Seiza's stretches with its settings, in the JSON Seiza reads
+(`seiza_stretch::StretchModel`): automatic midtones, median anchor,
+generalized hyperbolic (GHS), linear, asinh, asinh by percentiles, midtones
+and none. An input may have several, such as an automatic stretch followed
+by two GHS steps.
+
+- **The canvas resolves the whole chain through Seiza.** Each stage is
+  resolved from the input's samples as the stages before it left them,
+  which is what Seiza's stretch stack does, and the chain becomes one
+  lookup table per input. Nothing here reimplements a stretch.
+- **A Stretch step's controls** choose the stretch and set its settings
+  with sliders. “Add another stretch after this one” adds a GHS step for
+  the same input.
+- **Views.** A row for a Stretch step shows the input after that step and
+  the stretches before it, so Before and after compares one stage with
+  the next. When an input has several, a pane's label numbers them:
+  “Ha · after Stretch 2.”
+- A shared mask reads each input through its whole chain.
+
+Not built: the layered stretch, which needs the image and not samples of
+it, so only the engine can draw it; a row says so. The stretches of the
+combined picture (`output_stretches`) are recorded and not drawn. A GHS
+slider covers stretch factors up to 10, where Seiza allows 20.
+
 ## Processing tools in Studio (2026-11-25, first part)
 
 The tools are the ones PSF Guard's color processing runs: sharpening,
@@ -1901,12 +1928,21 @@ NoiseXTerminator on Ha, OIII and SII, and StarXTerminator on Ha, took 68
 seconds in all. StarXTerminator returned no stars image with its default
 settings, so the store has no `ha@stars`.
 
+In Studio an input's tools are one step of the input, listed before the
+background step, which is the order the pipeline runs them. With a store
+prepared for the document, the canvas shows the input as stacked before
+that step and the tools' result after it, so Before and after and Wipe
+compare the two. The store's corrected channel is the tools' result
+corrected, so a view that leaves the tools out shows the input without
+background correction, and the pane's label says so. The spike opens a
+document with `--document <path>`; the step's controls list the tools that
+ran.
+
 Not built yet:
 
-- The canvas does not show an input before and after its tools, and lists
-  a store's `@tools` planes as if they were inputs.
 - Choosing tools and their settings in Studio, and starting the run from
-  Studio.
+  Studio. Today the document is edited by hand and the store prepared with
+  the command.
 - Stars as a layer of their own.
 - Tools on the combined color image (`color_rc_astro`) and the narrowband
   star steps.

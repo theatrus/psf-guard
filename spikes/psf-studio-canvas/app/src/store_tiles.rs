@@ -3,12 +3,12 @@
 
 use crate::image_steps::{Domain, ImageShape, Region};
 use crate::studio_model::{
-    background_corrected_channel, MemoryBudget, RegionReader, SampleFormat, StoreLevel,
-    StoreOptions, StudioError, TileStore,
+    background_corrected_channel, tools_channel, MemoryBudget, RegionReader, SampleFormat,
+    StoreLevel, StoreOptions, StudioError, TileStore,
 };
 use seiza_stretch::{
     ResolvedSampleDomain, SampleDomain, SampleNormalization, StretchAnalysis, StretchConfig,
-    StretchParams,
+    StretchModel, StretchParams,
 };
 use std::path::Path;
 use std::sync::Arc;
@@ -36,6 +36,9 @@ pub struct BandStretch {
     pub scale: f32,
     domain: ResolvedSampleDomain,
     analysis: StretchAnalysis,
+    /// The analysed samples, from 0 to 1: what a second stretch of a chain
+    /// is resolved from, after the first has been applied to them.
+    unit: Vec<f32>,
 }
 
 /// The samples Seiza analyses per band, at most.
@@ -70,58 +73,103 @@ impl BandStretch {
             scale,
             domain,
             analysis,
+            unit,
         })
     }
 
-    /// The band's stretch as the canvas's table: Seiza's automatic midtones
-    /// stretch with the background placed at `target_median`, evaluated at
-    /// each table entry's sample.
-    pub fn table(&self, target_median: f64) -> Vec<f32> {
-        let config = StretchConfig::auto_mtf(
-            StretchParams {
-                target_median,
-                ..StretchParams::default()
-            },
-            ANALYSIS_SAMPLES,
-        );
+    /// The band's stretch as the canvas's table: the stretches in `stages`
+    /// applied in order, each resolved by Seiza, evaluated at each table
+    /// entry's sample. Each stage after the first is resolved from the
+    /// band's samples as the stages before it left them, as Seiza's stretch
+    /// stack does. With no stage the table is Seiza's automatic midtones
+    /// stretch, for a preview.
+    ///
+    /// `nudge` is added to the background target of every automatic
+    /// midtones stage; the benchmark uses it to time a stretch change.
+    ///
+    /// A stage Seiza refuses is left out. The layered stretch is one: it
+    /// needs the image, not samples of it.
+    pub fn table(&self, stages: &[StretchModel], nudge: f64) -> Vec<f32> {
+        let preview = [StretchModel::AutoMtf(StretchParams::default())];
+        let stages = if stages.is_empty() { &preview } else { stages };
         let last = (STRETCH_TABLE_WIDTH - 1) as f32;
         // Entry i stands for the canvas sample (i / last) squared.
         let samples: Vec<f32> = (0..STRETCH_TABLE_WIDTH)
             .map(|index| (index as f32 / last).powi(2) * self.scale)
             .collect();
-        let resolved = config
-            .resolve(&self.analysis)
-            .ok()
-            .zip(self.domain.apply(&samples, 1).ok());
-        match resolved {
-            Some((plan, unit)) => {
-                let curve = plan.curves()[0];
-                unit.into_iter()
-                    .map(|sample| curve.map(sample).clamp(0.0, 1.0))
-                    .collect()
-            }
-            // Settings Seiza refuses leave the band unstretched.
-            None => (0..STRETCH_TABLE_WIDTH)
+        let mut values = self.domain.apply(&samples, 1).unwrap_or_else(|_| {
+            (0..STRETCH_TABLE_WIDTH)
                 .map(|index| (index as f32 / last).powi(2))
-                .collect(),
+                .collect()
+        });
+        // The band's samples as the stages so far left them. They are only
+        // needed from the second stage on.
+        let mut seen: Option<Vec<f32>> = None;
+        for (at, stage) in stages.iter().enumerate() {
+            let model = match stage {
+                StretchModel::AutoMtf(params) if nudge != 0.0 => {
+                    StretchModel::AutoMtf(StretchParams {
+                        target_median: (params.target_median + nudge).clamp(0.05, 0.5),
+                        ..*params
+                    })
+                }
+                other => other.clone(),
+            };
+            let config = StretchConfig {
+                model,
+                color_strategy: Default::default(),
+                max_analysis_samples: ANALYSIS_SAMPLES,
+            };
+            let plan = match &seen {
+                None => config.resolve(&self.analysis),
+                Some(seen) => config.resolve_for(seen, 1),
+            };
+            let Ok(plan) = plan else { continue };
+            let curve = plan.curves()[0];
+            for value in &mut values {
+                *value = curve.map(*value).clamp(0.0, 1.0);
+            }
+            if at + 1 < stages.len() {
+                let mut next = seen.take().unwrap_or_else(|| self.unit.clone());
+                for sample in &mut next {
+                    *sample = curve.map(*sample).clamp(0.0, 1.0);
+                }
+                seen = Some(next);
+            }
         }
+        values
     }
 }
 
+/// What one band is drawn from at a place in the document's steps.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct BandState {
+    /// Whether the band's processing tools have been applied.
+    pub tools: bool,
+    /// How much of the background correction is applied, from 0 to 1.
+    pub background: f32,
+}
+
 /// The bands of a document, as the canvas needs them: where each is in a
-/// tile, samples to analyse for its stretch, and the tile channel that
-/// holds it with its background corrected in full, when the store has one.
+/// tile, samples to analyse for its stretch, and the tile channels that
+/// hold it after its processing tools and with its background corrected in
+/// full, when the store has them.
 #[derive(Default)]
 pub struct Bands {
     /// Per band: the input's name, as PSF Guard's settings give it, such
     /// as `ha` or `red`.
     pub names: Vec<String>,
-    /// Per band: the tile channel that holds it.
+    /// Per band: the tile channel that holds it as stacked.
     pub tile_band: Vec<usize>,
-    /// Per band: the tile channel that holds it corrected, if any.
+    /// Per band: the tile channel that holds it after its tools, if any.
+    pub tools: Vec<Option<usize>>,
+    /// Per band: the tile channel that holds it corrected, if any. The
+    /// corrected band is the tools' result corrected, where the band has
+    /// tools.
     pub corrected: Vec<Option<usize>>,
-    /// Per band: samples of the band, and of the corrected band.
-    samples: Vec<(Vec<f32>, Option<Vec<f32>>)>,
+    /// Per band: samples of the band as stacked, after its tools, and
+    /// corrected.
+    samples: Vec<[Option<Vec<f32>>; 3]>,
     /// Per band: the value a canvas sample of 1 stands for.
     scales: Vec<f32>,
 }
@@ -168,26 +216,48 @@ impl Bands {
         self.corrected.iter().any(Option::is_some)
     }
 
-    /// Each band's stretch analysis with its correction at the strength
-    /// given for it: the analysis of the blended samples, which are what
-    /// the stretch is applied to. A band with no strength given gets 0.
-    pub fn stretches(&self, strengths: &[f32]) -> Result<Vec<BandStretch>, String> {
+    /// Whether the store holds a band after its processing tools.
+    pub fn has_tools(&self, band: usize) -> bool {
+        self.tools.get(band).is_some_and(Option::is_some)
+    }
+
+    /// The tile channel a band is drawn from in `state`, and the channel
+    /// to blend into it for the background correction, if the store's
+    /// corrected channel is that state's: the store corrects the tools'
+    /// result where a band has tools, so a view before the tools has no
+    /// corrected channel to blend.
+    pub fn planes(&self, band: usize, state: BandState) -> (usize, Option<usize>) {
+        let tools = self.tools[band].filter(|_| state.tools);
+        let matches = tools.is_some() == self.tools[band].is_some();
+        (
+            tools.unwrap_or(self.tile_band[band]),
+            self.corrected[band].filter(|_| matches),
+        )
+    }
+
+    /// Each band's stretch analysis in the state given for it: the
+    /// analysis of the samples the stretch is applied to. A band with no
+    /// state given is as stacked.
+    pub fn stretches(&self, states: &[BandState]) -> Result<Vec<BandStretch>, String> {
         self.samples
             .iter()
             .zip(&self.scales)
             .enumerate()
-            .map(|(band, ((before, after), scale))| {
-                let strength = strengths.get(band).copied().unwrap_or(0.0);
-                match after {
-                    Some(after) if strength > 0.0 => {
-                        let blended: Vec<f32> = before
+            .map(|(band, ([stacked, tools, corrected], scale))| {
+                let state = states.get(band).copied().unwrap_or_default();
+                let stacked = stacked.as_deref().unwrap_or(&[]);
+                let base = tools.as_deref().filter(|_| state.tools).unwrap_or(stacked);
+                let matches = state.tools == tools.is_some();
+                match corrected {
+                    Some(after) if state.background > 0.0 && matches => {
+                        let blended: Vec<f32> = base
                             .iter()
                             .zip(after)
-                            .map(|(a, b)| a + (b - a) * strength)
+                            .map(|(a, b)| a + (b - a) * state.background)
                             .collect();
                         BandStretch::analyse(&blended, Some(*scale))
                     }
-                    _ => BandStretch::analyse(before, Some(*scale)),
+                    _ => BandStretch::analyse(base, Some(*scale)),
                 }
             })
             .collect()
@@ -249,31 +319,48 @@ impl StoreTiles {
                 .filter(|sample| sample.is_finite())
                 .fold(f32::MIN_POSITIVE, f32::max)
         };
-        let twin_of = |channel: usize| {
-            let name = self.names.get(channel)?;
-            let twin = background_corrected_channel(name);
-            self.names.iter().position(|other| *other == twin)
+        // A channel named after another with a suffix holds that channel
+        // in another state, and is not a band of its own.
+        let named = |name: String| self.names.iter().position(|other| *other == name);
+        let is_band = |channel: usize| {
+            self.names
+                .get(channel)
+                .is_none_or(|name| !name.contains('@'))
         };
-        let twins: Vec<usize> = (0..self.bands).filter_map(twin_of).collect();
         let mut bands = Bands::default();
-        for channel in (0..self.bands).filter(|channel| !twins.contains(channel)) {
-            let corrected = twin_of(channel);
-            let mut scale = largest(&channels[channel]);
-            if let Some(twin) = corrected {
-                scale = scale.max(largest(&channels[twin]));
-                self.scales[twin] = scale;
+        for channel in (0..self.bands).filter(|channel| is_band(*channel)) {
+            let name = self.names.get(channel).cloned();
+            let tools = name.as_deref().and_then(|name| named(tools_channel(name)));
+            let corrected = name
+                .as_deref()
+                .and_then(|name| named(background_corrected_channel(name)));
+            // The band's channels share one scale, so the canvas can blend
+            // their samples.
+            let scale = [Some(channel), tools, corrected]
+                .into_iter()
+                .flatten()
+                .map(|plane| largest(&channels[plane]))
+                .fold(f32::MIN_POSITIVE, f32::max);
+            for plane in [Some(channel), tools, corrected].into_iter().flatten() {
+                self.scales[plane] = scale;
             }
-            self.scales[channel] = scale;
             bands.tile_band.push(channel);
-            bands
-                .names
-                .push(self.names.get(channel).cloned().unwrap_or_default());
+            bands.names.push(name.unwrap_or_default());
+            bands.tools.push(tools);
             bands.corrected.push(corrected);
             bands.scales.push(scale);
-            bands.samples.push((
-                std::mem::take(&mut channels[channel]),
-                corrected.map(|twin| channels[twin].clone()),
-            ));
+            bands.samples.push([
+                Some(channels[channel].clone()),
+                tools.map(|plane| channels[plane].clone()),
+                corrected.map(|plane| channels[plane].clone()),
+            ]);
+        }
+        // A channel that is no band and no band's other state, such as the
+        // stars a tool took out, keeps a scale of its own.
+        for channel in 0..self.bands {
+            if !is_band(channel) && self.scales[channel] == 1.0 {
+                self.scales[channel] = largest(&channels[channel]);
+            }
         }
         if self.names.is_empty() {
             bands.names = names_for(bands.len());
@@ -421,8 +508,12 @@ fn analyse_synthetic() -> Bands {
     Bands {
         names: names_for(BANDS),
         tile_band: (0..BANDS).collect(),
+        tools: vec![None; BANDS],
         corrected: vec![None; BANDS],
-        samples: bands.into_iter().map(|samples| (samples, None)).collect(),
+        samples: bands
+            .into_iter()
+            .map(|samples| [Some(samples), None, None])
+            .collect(),
         // The synthetic tiles go to the canvas as they are.
         scales: vec![1.0; BANDS],
     }
