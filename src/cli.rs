@@ -1168,6 +1168,44 @@ pub enum Commands {
         verbose: bool,
     },
 
+    /// Fetch a target's channel stacks from a PSF Guard server, register
+    /// them and write them as a PSF-Studio tile store
+    StudioSources {
+        /// The server's address, such as http://localhost:3000
+        #[arg(long)]
+        server: String,
+
+        /// The database's name in the server's URLs
+        #[arg(long)]
+        db: String,
+
+        /// An API token, when the server asks for one
+        #[arg(long)]
+        token: Option<String>,
+
+        /// The project's ID
+        #[arg(long)]
+        project: i32,
+
+        /// The target's ID
+        #[arg(long)]
+        target: i32,
+
+        /// The channels to take, reference first, such as red,green,blue.
+        /// Without this, every channel the target has
+        #[arg(long, value_delimiter = ',')]
+        channels: Vec<String>,
+
+        /// Also write a document that starts as PSF Guard's default color
+        /// flow to this path
+        #[arg(long)]
+        document: Option<String>,
+
+        /// Output path of the tile store
+        #[arg(short, long)]
+        output: String,
+    },
+
     /// Write a PSF-Studio tile store from a FITS or XISF frame
     StudioStore {
         /// Path to the FITS or XISF frame

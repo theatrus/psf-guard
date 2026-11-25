@@ -1387,6 +1387,30 @@ pub fn main() -> Result<()> {
             };
             screen_fits(&path, &options)?;
         }
+        Commands::StudioSources {
+            server,
+            db,
+            token,
+            project,
+            target,
+            channels,
+            document,
+            output,
+        } => {
+            let runtime = tokio::runtime::Runtime::new()?;
+            runtime.block_on(crate::commands::studio_sources::studio_sources(
+                crate::commands::studio_sources::StudioSourcesOptions {
+                    server,
+                    database: db,
+                    token,
+                    project_id: project,
+                    target_id: target,
+                    channels,
+                    document: document.map(Into::into),
+                    output: output.into(),
+                },
+            ))?;
+        }
         Commands::StudioStore {
             input,
             output,

@@ -262,6 +262,26 @@ its file association. The dialog also links to the Studio download.
 From Studio, a person can sign in to a PSF Guard server, browse its projects
 and stacks, and open one without a link.
 
+#### Follow-up: PSF Guard records Studio documents (asked for 2026-11-25)
+
+The owner asked for this as its own piece of work: PSF Guard records the
+documents Studio makes for a project, and a person opens Studio from PSF
+Guard with one click. What that needs, on top of the steps listed in
+“Launching Studio from PSF Guard”:
+
+- **A record per document in PSF Guard,** below the database slug like
+  other derived data: the document, the color card it started from
+  (project, target, kind, palette, crop and star settings), and the build
+  it last ran. `studio-run` takes the card as options today because the
+  document has no place for it.
+- **A list of a project's Studio documents** on the project's stack page,
+  each with **Open in PSF-Studio**.
+- **Save from Studio** writes the document back to that record. A document
+  whose steps are all PSF Guard's can also be saved as a Color processing
+  setup, since it reads back as one.
+- **One click on the desktop app** starts the bundled Studio with the
+  record. In a browser the link and the link file do the same.
+
 ### Remote use
 
 The server serves tiles; Studio computes locally. For a large remote mosaic,
@@ -1214,10 +1234,9 @@ stage has something to draw.
 
 What this does not do yet:
 
-- **No step runs.** The steps list PSF Guard's flow and hold its settings.
-  The canvas still draws only the stretch, the layers and the Finish
-  stand-ins. Running the flow means wrapping Seiza's operations as steps, or
-  handing the settings to PSF Guard's color pipeline for a full render.
+- **Only the first steps run.** See “Studio runs the flow; PSF Guard
+  shares the steps.” The canvas still draws only the stretch, the layers
+  and the Finish stand-ins.
 - **The order inside a stage is the pipeline's phase order, not a second
   source of truth.** The color pipeline runs its phases in a fixed order.
   Moving a step in Studio does not yet change what the pipeline does.
@@ -1232,6 +1251,72 @@ What this does not do yet:
   `processing-setups.json`; the tests use the built-in default and settings
   written for the tests.
 
+### Studio runs the flow; PSF Guard shares the steps (2026-11-25)
+
+Two directions from the owner settle how the flow runs:
+
+- **Studio does all the color processing. It starts from PSF Guard's
+  channel stacks.** PSF Guard stacks each channel; Studio fetches the
+  stacks and does everything after. A first version sent the document's
+  settings to the server as a color preview request and downloaded the
+  result. That was dropped: it left Studio showing a finished picture with
+  nothing to adjust.
+- **The steps are one piece of code that PSF Guard's color previews also
+  call.** A step holds the order of the Seiza calls and the rules around
+  them, and knows nothing of jobs, caches or progress bars. The caller
+  passes a function that hears what the step is doing and may stop it.
+  For now only Studio gives interactive feedback; PSF Guard runs the same
+  steps inside its jobs.
+
+What is built:
+
+| Piece | Where | State |
+|---|---|---|
+| List and download a target's channel stacks | `studio_sources::Server` | Built. One current stack per channel; a channel with several is refused until a person can choose |
+| Background step: fit each channel in its own frame, choose one model for all, refit, correct | `color_steps::correct_channel_backgrounds` | Built, and `compose_color` now calls it. PSF Guard's progress lines, stop check and recorded fits come from the events |
+| Register channels and place them on the reference grid | `studio_sources::RegisteredChannels::prepare` | Built in Studio with the same Seiza calls. `compose_color` still has its own copy of this order; it moves to `color_steps` next |
+| The channels as one linear image, read by region | `RegisteredChannels` as a `RegionReader` | Built. Channels stay as planes and a region is interleaved when read |
+| `studio-sources` command | `commands::studio_sources` | Fetches, prepares, writes a tile store and the document |
+
+The document decides what runs: `studio-sources` reads the background
+settings from the document's Background extraction step, and a step turned
+off does not run.
+
+Checked on real data, 45 local Sh2-157 frames (15 each of R, G and B),
+stacked by a test server on a scratch copy of the database:
+
+- Registration gave the numbers the server's own color job logged: green
+  0.054 px RMS over 1766 stars, blue 0.080 px over 1656.
+- The three background fits are equal, field for field, to the fits the
+  server's color job recorded: model, coefficients, reference level and
+  every sample.
+- The whole run took 1.5 s and peaked at 574 MB for a 6248 × 4176 image
+  of three channels.
+- The store opens on the canvas with the default flow: stars are white and
+  the background is neutral.
+
+The order to move the rest of `compose_color` into `color_steps`, each
+with the same check against a recorded job: registration and resampling;
+deconvolution and RC-Astro tools on the channels; continuum subtraction;
+color calibration; stretch; narrowband balance and stars; composition;
+output stretch. `color_steps` still takes its settings types from
+`server::stack_preview::color`; they move with the steps.
+
+Not done:
+
+- **Catalog protection.** PSF Guard keeps solved catalog emission out of
+  the background samples. Studio reads no plate solve yet, so it protects
+  nothing. The test stacks had no solve, so the fits still matched.
+- **Interactive background.** A change to the background settings reruns
+  the whole preparation. Correcting only the tiles in view needs
+  theatrus/seiza#509, which is open and not used here yet. It applies when
+  the fit and the view share a grid: the reference channel, a one-shot
+  color image, a mosaic.
+- **Memory for a mosaic.** Every stack is held while the channels are
+  prepared. Seiza registers and resamples whole images.
+- **The stretch on the canvas** is still the spike's Auto-MTF at its own
+  target, not the stretch in the document's steps.
+
 ### Seiza changes this work has found so far
 
 Each is a change to an existing crate.
@@ -1245,6 +1330,9 @@ Each is a change to an existing crate.
 3. `seiza-stretch`: a stretch linked across the channels of a color image,
    resolved once and given per channel. The spike stretches each band on
    its own.
+4. `seiza-background`: correct one rectangle of a fitted image, with the
+   values the whole-image correction gives. Open as theatrus/seiza#509,
+   reviewed; PSF Guard does not depend on it yet.
 
 A real frame was the test: one 6248 × 4176 H-alpha sub of Sh2-157, read by
 `FrameSource`, written to a store in 0.2 s, and shown on the canvas with

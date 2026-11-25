@@ -25,6 +25,7 @@ pub mod show_images;
 pub mod sky_maps;
 pub mod stack_snr;
 pub mod stretch_to_png;
+pub mod studio_sources;
 pub mod studio_store;
 pub mod sync;
 pub mod template_removal;
