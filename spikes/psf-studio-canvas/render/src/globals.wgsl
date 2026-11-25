@@ -13,6 +13,7 @@ struct Layer {
     // x: 0 for a layer that shows a band; 1 exposure, 2 curves, 3 saturation
     // for an adjustment of the layers beneath. y: the adjustment's amount.
     // z: the mask layer that limits the layer, or -1 for everywhere.
+    // w: 1 for an adjustment of the band layer before it alone.
     adjust: vec4f,
 }
 

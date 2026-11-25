@@ -1590,6 +1590,142 @@ are tracked jobs whose results are stores, read as sources.
 Each step that moves an existing pass must keep its output and cache keys,
 as [pipeline parity](#what-to-investigate-first) requires.
 
+## One tree, palettes and split panes (2026-11-25)
+
+The first panes had five separate choices that each changed the canvas: a
+stage rail, a selected step, and three button groups for what to show, up
+to where and with which stretch. Layers were the inputs themselves, named
+by how many bands a store had, so a narrowband store was labelled R, G, B.
+This section records what replaced that. The rules live in
+`src/studio/place.rs` and `src/studio/palette.rs`, which know of no
+toolkit, so a web canvas would lay out the same tree and draw the same
+panes.
+
+Photoshop's and Affinity's layer panels are the guide where they agree:
+the top layer is listed first, each row has its own switch, an edit that
+belongs to one layer is indented under it, and rows move by dragging.
+
+### Inputs and layers are different things
+
+- An **input** is a channel stack, named as the store names it: `ha`,
+  `oiii`, `sii`, `luminance`, `red`, `green`, `blue`. A person reads them
+  as Ha, OIII, SII, L, R, G, B. A store that records no names gets them by
+  its band count.
+- A **layer** shows one input in one color with a blend mode. Several
+  layers may show the same input: Ha as red and Ha as luminance, or RGB
+  stars over a narrowband picture.
+- A **palette** is a starting set of layers for the inputs a document has:
+  RGB, LRGB, SHO, HSO, HOO, and two tonal variants (SHO in gold and teal,
+  HOO in red and teal). A new document gets the palette that uses the most
+  of its inputs. Choosing another palette replaces the layers that show an
+  input, keeps each one's mask and own edits where the input matches, and
+  keeps every other layer above them.
+- A layer's color is **any hue and saturation**, not only pure red, green
+  or blue. The color's brightness is the layer's share of the sum: a
+  palette scales its layers so their sum is full scale in its brightest
+  component, and “Balance the layers' colors” does that again after a
+  person changes hues.
+- `BlendMode::Luminance` takes the layer's brightness and keeps the color
+  beneath it, which is how the L of LRGB goes on.
+
+### One tree
+
+The left pane is one tree, in the order the picture is made:
+
+1. **Inputs.** Each input, with the steps that apply to it indented under
+   it: its own steps, and the shared steps it has no own step in place of.
+   A shared step's row reads “every input”; an own step's reads “Ha only.”
+   An input's steps are folded away until a person opens them or selects
+   one.
+2. **Combine.** The layers, top first. An edit that belongs to one layer
+   (an adjustment or a heal) is indented under that layer and reads
+   “Ha as gold only.” An adjustment layer sits between layers and reads
+   “every layer beneath.” Then a row for the combined picture.
+3. **Finish.** Steps on the whole picture, then the final picture.
+
+A person selects a `Row`. The right pane shows that row's controls, and
+starts with the row's name and one line that says what the row applies to.
+
+### An adjustment applies to one layer or to the stack
+
+- **One layer only:** the adjustment is a step of that layer
+  (`LayerRecord::steps`). It changes the layer before the layer is blended,
+  and moves with the layer.
+- **Every layer beneath:** the adjustment is a layer of the stack
+  (`LayerSource::Adjustment`). It changes the blend of the layers under it.
+
+`Document::attach_adjustment` and `detach_adjustment` turn one into the
+other, keeping the settings and the mask. Dragging does the same: an
+adjustment dropped on a layer becomes that layer's own; dropped between
+layers, it changes every layer beneath. Any layer dropped between layers
+moves there.
+
+A heal belongs to where the selection is: the selected input, the selected
+layer, or the whole picture. The document records all three. The canvas
+draws only the heal of the whole picture; the other two need the engine.
+
+### A pane shows a place
+
+A canvas pane shows a `Place`: the result up to and including a row. A
+pane follows the selected row unless it is pinned, so there is one choice
+to make, not one for what to edit and another for what to look at.
+
+- An input row shows the input as stacked; a step row shows the input
+  after that step.
+- A layer row shows the stack up to that layer, or that layer alone.
+- A place before an input's stretch is drawn with a preview stretch, and
+  the pane's label says so: “Ha · as stacked · preview stretch, not saved.”
+  There is no separate stretch choice.
+
+`Place::view` gives the `View` that `plan` already turned into what a
+canvas draws, so the earlier
+[view rules](#what-the-view-shows-and-how-a-person-picks-it-2026-11-25)
+still decide which steps and stretches apply. Their three button groups
+are gone.
+
+### Split panes
+
+`Split` divides the canvas, and `panes` chooses each pane's place from the
+selection:
+
+| Split | Panes |
+|---|---|
+| One | The selected row. |
+| Before and after | The row before the selected one, and the selected row. |
+| Input and picture | One input, and the picture. With an input selected, that input and the final picture; with a layer selected, the layer's input and the stack up to that layer. |
+| All inputs | Every input after its steps. The selected input stays where the selection put it. |
+
+The panes are columns of one size and share one pan and zoom. Each pane has
+a label over it and a Pin button that keeps its place while the selection
+moves.
+
+On the canvas, the panes share the uniform buffer, the stretch table and
+the mask textures, so the renderer writes and submits each pane in turn
+with a viewport and scissor for its column. Each pane keeps its own stretch
+analyses, because a pane before the background step and a pane after it
+stretch different samples.
+
+### What is built, and what is not
+
+Built in the spike and tried on the Sh2-157 stacks, as RGB and with the
+same stacks renamed SII, Ha and OIII: named inputs, the palettes, hue and
+saturation per layer, layers that share an input, adjustments for one
+layer and for the stack with painted masks, dragging between the two, the
+tree, the row controls, the four splits and pinning.
+
+Not built:
+
+- Before and after for an edit of one layer compares with the layer
+  beneath, not with the layer before the edit.
+- Heals of one input or one layer are recorded and not drawn.
+- Layer groups, and clipping one pixel layer to another.
+- Palettes that mix inputs per pixel, such as Foraxx.
+- More than one row of panes; a wipe divider inside one pane.
+- The limits of one frame stay: 12 layers, counting each adjustment, and
+  7 masks.
+- The adjustment math is still the spike's shader code, standing in for
+  Seiza's.
+
 ## Suggested order of work
 
 1. The investigations listed in the previous section.

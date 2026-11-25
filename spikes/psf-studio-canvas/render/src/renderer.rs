@@ -35,6 +35,8 @@ pub enum Blend {
     Multiply,
     Lighten,
     Darken,
+    /// The layer's brightness with the color beneath it.
+    Luminance,
 }
 
 /// One layer of the Combine stage: a band, stretched, colored and blended.
@@ -54,11 +56,14 @@ pub struct Layer {
     pub blended: Option<(usize, f32)>,
     /// The mask that limits where the layer applies. `None` is everywhere.
     pub mask: Option<usize>,
-    /// For an adjustment layer: what it does to the layers beneath it, and
-    /// by how much. Such a layer has no pixels: `band`, `color`, `blend`,
-    /// `curve` and `blended` are not used. `None` is a layer that shows a
-    /// band.
+    /// For an adjustment: what it does, and by how much. An adjustment has
+    /// no pixels: `band`, `color`, `blend`, `curve` and `blended` are not
+    /// used. `None` is a layer that shows a band.
     pub adjustment: Option<(Adjustment, f32)>,
+    /// For an adjustment: whether it changes only the band layer before it
+    /// in the list, before that layer is blended. Otherwise it changes the
+    /// blend of every layer before it.
+    pub own: bool,
 }
 
 /// What an adjustment layer does.
@@ -110,28 +115,49 @@ pub struct Segment {
     pub _pad: f32,
 }
 
-pub struct Frame<'a> {
-    pub view: View,
+/// What one pane of the canvas draws.
+pub struct Pane<'a> {
     /// The layers, bottom first. At most [`MAX_LAYERS`].
     pub layers: &'a [Layer],
     /// Each layer's stretch, in the layers' order: [`STRETCH_TABLE_WIDTH`]
     /// outputs from 0 to 1. Entry `i` is the stretch of the band sample
     /// `(i / (width - 1))²`, where a band's samples run from 0 to 1.
     pub stretches: &'a [Vec<f32>],
-    /// Changes whenever `stretches` does, so unchanged tables are not
-    /// uploaded again.
-    pub stretches_version: u64,
     /// The Finish steps, in order. At most [`MAX_FINISH_STEPS`].
     pub finish: &'a [FinishStep],
-    /// The masks the Finish steps refer to. At most [`MAX_MASKS`].
+    /// The masks the layers and the Finish steps refer to. At most
+    /// [`MAX_MASKS`].
     pub masks: &'a [Vec<Segment>],
-    /// Changes whenever `masks` does, so unchanged masks are not uploaded
-    /// again.
+}
+
+pub struct Frame<'a> {
+    /// Where the document sits in each pane. The panes share it, so they
+    /// pan and zoom together.
+    pub view: View,
+    /// The panes, left to right, each the same size. At least one.
+    pub panes: &'a [Pane<'a>],
+    /// Changes whenever a pane's stretches do, so a single pane's unchanged
+    /// tables are not uploaded again.
+    pub stretches_version: u64,
+    /// Changes whenever a pane's masks do, so a single pane's unchanged
+    /// masks are not uploaded again.
     pub masks_version: u64,
     /// Strokes shown over the image: a stroke being drawn.
     pub overlay: &'a [Segment],
     /// How strongly the overlay shows, from 0 to 1.
     pub overlay_strength: f32,
+}
+
+/// The pixels between two panes.
+const PANE_GAP: u32 = 2;
+
+/// Where pane `index` of `count` is in a surface: x, y, width and height in
+/// pixels. The panes are columns of one size.
+pub fn pane_rect(index: usize, count: usize, surface: (u32, u32)) -> [u32; 4] {
+    let count = count.max(1) as u32;
+    let width = (surface.0.saturating_sub(PANE_GAP * (count - 1)) / count).max(1);
+    let x = (index as u32 * (width + PANE_GAP)).min(surface.0.saturating_sub(1));
+    [x, 0, width.min(surface.0 - x), surface.1.max(1)]
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -707,9 +733,12 @@ impl Renderer {
         stats.acquire_ms = acquire_started.elapsed().as_secs_f32() * 1000.0;
         let encode_started = Instant::now();
 
-        let (width, height) = (self.config.width as f64, self.config.height as f64);
+        let surface = (self.config.width, self.config.height);
+        let pane_count = frame.panes.len().max(1);
+        // Every pane is the size of the first.
+        let first_rect = pane_rect(0, pane_count, surface);
+        let (width, height) = (first_rect[2] as f64, first_rect[3] as f64);
         let view = frame.view;
-        self.write_globals(frame);
 
         // Tiles: upload what the workers finished, then choose what to draw.
         while stats.tiles_uploaded < self.uploads_per_frame {
@@ -799,32 +828,58 @@ impl Renderer {
         self.queue
             .write_buffer(&self.tile_instances, 0, bytemuck::cast_slice(&instances));
 
-        self.upload_stretches(frame);
-        self.upload_strokes(frame);
+        self.upload_overlay(frame);
 
         let target_view = target
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         let timed = self.timing.as_mut().and_then(GpuTiming::begin);
         let overlay = frame.overlay.len() as u32;
-        self.passes(
-            &mut encoder,
-            &target_view,
-            &sources,
-            overlay,
-            timed.is_some(),
-        );
-
         // Captures are written as 8-bit PNG files, so only an 8-bit surface
         // is captured.
         let eight_bit = self.config.format == wgpu::TextureFormat::Bgra8Unorm;
-        let capture = (std::mem::take(&mut self.capture_next) && eight_bit).then(|| {
-            let texture = self.surface_sized("capture", wgpu::TextureUsages::COPY_SRC);
-            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-            self.finish_pass(&mut encoder, &view, false);
+        let capture_texture = (std::mem::take(&mut self.capture_next) && eight_bit)
+            .then(|| self.surface_sized("capture", wgpu::TextureUsages::COPY_SRC));
+        let capture_view = capture_texture
+            .as_ref()
+            .map(|texture| texture.create_view(&wgpu::TextureViewDescriptor::default()));
+        // Several panes share the uniform buffer, the stretch table and the
+        // mask textures, so each pane is written and submitted in turn.
+        let alone = pane_count == 1;
+        if !alone {
+            self.stretches_version = None;
+            self.masks_version = None;
+        }
+        for (index, pane) in frame.panes.iter().enumerate() {
+            let rect = pane_rect(index, pane_count, surface);
+            self.write_globals(frame, pane, rect);
+            self.upload_stretches(pane, alone.then_some(frame.stretches_version));
+            self.upload_masks(pane, alone.then_some(frame.masks_version));
+            let mut encoder = self
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+            let timed = timed.filter(|_| index == 0);
+            self.passes(
+                &mut encoder,
+                &target_view,
+                &sources,
+                overlay,
+                timed.is_some(),
+                rect,
+                index == 0,
+            );
+            if let Some(view) = &capture_view {
+                self.finish_pass(&mut encoder, view, false, rect, index == 0);
+            }
+            if let (Some(slot), Some(timing)) = (timed, &self.timing) {
+                timing.resolve(&mut encoder, slot);
+            }
+            self.queue.submit([encoder.finish()]);
+        }
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        let capture = capture_texture.map(|texture| {
             let row_bytes = (self.config.width * 4).next_multiple_of(256);
             let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("capture"),
@@ -846,9 +901,6 @@ impl Renderer {
             );
             (buffer, row_bytes as usize)
         });
-        if let (Some(slot), Some(timing)) = (timed, &self.timing) {
-            timing.resolve(&mut encoder, slot);
-        }
         self.queue.submit([encoder.finish()]);
         if let (Some(slot), Some(timing)) = (timed, &self.timing) {
             timing.read_back(slot);
@@ -878,12 +930,14 @@ impl Renderer {
         Ok(stats)
     }
 
-    fn write_globals(&self, frame: &Frame) {
-        let (width, height) = (self.config.width as f64, self.config.height as f64);
+    /// Writes what the shaders read for one pane. `rect` is the pane's place
+    /// in the surface.
+    fn write_globals(&self, frame: &Frame, pane: &Pane, rect: [u32; 4]) {
+        let (width, height) = (rect[2] as f64, rect[3] as f64);
         let view = frame.view;
         let scale = [2.0 * view.zoom / width, -2.0 * view.zoom / height];
-        let layers = &frame.layers[..frame.layers.len().min(MAX_LAYERS)];
-        let finish = &frame.finish[..frame.finish.len().min(MAX_FINISH_STEPS)];
+        let layers = &pane.layers[..pane.layers.len().min(MAX_LAYERS)];
+        let finish = &pane.finish[..pane.finish.len().min(MAX_FINISH_STEPS)];
         let mut globals = Globals {
             view: [
                 scale[0] as f32,
@@ -891,9 +945,11 @@ impl Renderer {
                 (-view.center[0] * scale[0]) as f32,
                 (-view.center[1] * scale[1]) as f32,
             ],
+            // Passes read the masks and the combined image by surface
+            // pixel, so this is the surface's size, not the pane's.
             screen: [
-                width as f32,
-                height as f32,
+                self.config.width as f32,
+                self.config.height as f32,
                 frame.overlay_strength,
                 OVERLAY_LAYER as f32,
             ],
@@ -910,7 +966,7 @@ impl Renderer {
             // A mask the frame does not hold limits nothing.
             let mask = layer
                 .mask
-                .filter(|mask| *mask < frame.masks.len().min(MAX_MASKS))
+                .filter(|mask| *mask < pane.masks.len().min(MAX_MASKS))
                 .map_or(-1.0, |mask| mask as f32);
             let (kind, amount) = layer
                 .adjustment
@@ -935,7 +991,7 @@ impl Renderer {
                 kind,
                 amount,
                 mask,
-                0.0,
+                if layer.own { 1.0 } else { 0.0 },
             ];
             if layer.adjustment.is_none() {
                 row += 1;
@@ -945,7 +1001,7 @@ impl Renderer {
             // A mask the frame does not hold limits nothing.
             let mask = step
                 .mask
-                .filter(|mask| *mask < frame.masks.len().min(MAX_MASKS))
+                .filter(|mask| *mask < pane.masks.len().min(MAX_MASKS))
                 .map_or(-1.0, |mask| mask as f32);
             let (kind, offset, shift) = match step.kind {
                 FinishKind::Curves => (1.0, [0.0; 2], [0.0; 3]),
@@ -972,12 +1028,14 @@ impl Renderer {
             .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
     }
 
-    fn upload_stretches(&mut self, frame: &Frame) {
-        if self.stretches_version == Some(frame.stretches_version) {
+    /// Uploads a pane's stretch tables. With a `version`, tables of a
+    /// version already uploaded are left as they are.
+    fn upload_stretches(&mut self, pane: &Pane, version: Option<u64>) {
+        if version.is_some() && self.stretches_version == version {
             return;
         }
         let mut bits = vec![0u16; STRETCH_TABLE_WIDTH * MAX_LAYERS];
-        for (row, table) in frame.stretches.iter().take(MAX_LAYERS).enumerate() {
+        for (row, table) in pane.stretches.iter().take(MAX_LAYERS).enumerate() {
             let target = &mut bits[row * STRETCH_TABLE_WIDTH..(row + 1) * STRETCH_TABLE_WIDTH];
             for (bits, value) in target.iter_mut().zip(table) {
                 *bits = half::f16::from_f32(*value).to_bits();
@@ -993,10 +1051,10 @@ impl Renderer {
             },
             self.stretch_table.size(),
         );
-        self.stretches_version = Some(frame.stretches_version);
+        self.stretches_version = version;
     }
 
-    fn upload_strokes(&mut self, frame: &Frame) {
+    fn upload_overlay(&mut self, frame: &Frame) {
         // The overlay only grows or resets, so upload its new tail.
         if frame.overlay.len() < self.overlay_uploaded
             || self.overlay.reserve(&self.device, frame.overlay.len())
@@ -1011,11 +1069,15 @@ impl Renderer {
             );
             self.overlay_uploaded = frame.overlay.len();
         }
+    }
 
-        if self.masks_version == Some(frame.masks_version) {
+    /// Uploads a pane's masks. With a `version`, masks of a version already
+    /// uploaded are left as they are.
+    fn upload_masks(&mut self, pane: &Pane, version: Option<u64>) {
+        if version.is_some() && self.masks_version == version {
             return;
         }
-        let masks = &frame.masks[..frame.masks.len().min(MAX_MASKS)];
+        let masks = &pane.masks[..pane.masks.len().min(MAX_MASKS)];
         let all: Vec<Segment> = masks.iter().flatten().copied().collect();
         self.masks.reserve(&self.device, all.len());
         self.queue
@@ -1029,7 +1091,7 @@ impl Renderer {
                 range
             })
             .collect();
-        self.masks_version = Some(frame.masks_version);
+        self.masks_version = version;
     }
 
     /// A texture of the surface's size and format that can be drawn to.
@@ -1050,8 +1112,10 @@ impl Renderer {
         })
     }
 
-    /// Every pass of a frame: the masks, the layers, then the finish steps
-    /// into `target`.
+    /// Every pass of one pane: the masks, the layers, then the finish steps
+    /// into `rect` of `target`. `first` clears the target; later panes keep
+    /// what the panes before them drew.
+    #[allow(clippy::too_many_arguments)]
     fn passes(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -1059,7 +1123,20 @@ impl Renderer {
         sources: &[TileKey],
         overlay: u32,
         timed: bool,
+        rect: [u32; 4],
+        first: bool,
     ) {
+        let within = |pass: &mut wgpu::RenderPass| {
+            pass.set_viewport(
+                rect[0] as f32,
+                rect[1] as f32,
+                rect[2] as f32,
+                rect[3] as f32,
+                0.0,
+                1.0,
+            );
+            pass.set_scissor_rect(rect[0], rect[1], rect[2], rect[3]);
+        };
         let timestamps = |begin: Option<u32>, end: Option<u32>| {
             timed.then(|| wgpu::RenderPassTimestampWrites {
                 query_set: &self.timing.as_ref().expect("timing").set,
@@ -1094,6 +1171,7 @@ impl Renderer {
                 },
                 ..Default::default()
             });
+            within(&mut pass);
             if count > 0 {
                 pass.set_pipeline(&self.stroke_pipeline);
                 pass.set_bind_group(0, &self.common, &[]);
@@ -1121,6 +1199,7 @@ impl Renderer {
                 })],
                 ..Default::default()
             });
+            within(&mut pass);
             pass.set_pipeline(&self.tile_pipeline);
             pass.set_bind_group(0, &self.common, &[]);
             pass.set_bind_group(2, &self.targets.layer_masks, &[]);
@@ -1131,7 +1210,7 @@ impl Renderer {
                 pass.draw(0..4, index as u32..index as u32 + 1);
             }
         }
-        self.finish_pass(encoder, target, timed);
+        self.finish_pass(encoder, target, timed, rect, first);
     }
 
     fn finish_pass(
@@ -1139,6 +1218,8 @@ impl Renderer {
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         timed: bool,
+        rect: [u32; 4],
+        first: bool,
     ) {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("finish"),
@@ -1147,7 +1228,11 @@ impl Renderer {
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    load: if first {
+                        wgpu::LoadOp::Clear(wgpu::Color::BLACK)
+                    } else {
+                        wgpu::LoadOp::Load
+                    },
                     store: wgpu::StoreOp::Store,
                 },
             })],
@@ -1158,6 +1243,15 @@ impl Renderer {
             }),
             ..Default::default()
         });
+        pass.set_viewport(
+            rect[0] as f32,
+            rect[1] as f32,
+            rect[2] as f32,
+            rect[3] as f32,
+            0.0,
+            1.0,
+        );
+        pass.set_scissor_rect(rect[0], rect[1], rect[2], rect[3]);
         pass.set_pipeline(&self.finish_pipeline);
         pass.set_bind_group(0, &self.common, &[]);
         pass.set_bind_group(1, &self.targets.finish_inputs, &[]);
@@ -1187,6 +1281,8 @@ impl Renderer {
                     &self.last_sources,
                     self.last_overlay,
                     false,
+                    [0, 0, self.config.width, self.config.height],
+                    true,
                 );
                 self.queue.submit([encoder.finish()]);
             }

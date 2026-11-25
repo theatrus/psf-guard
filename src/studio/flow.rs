@@ -250,6 +250,13 @@ pub fn document_from_color_setup(
         );
         document.insert_layer(usize::MAX, layer)?;
     }
+    // The layers get the colors of the palette that uses the most of the
+    // card's channels. A card no palette fits keeps one plain layer per
+    // channel.
+    let names: Vec<String> = channels.iter().map(|channel| channel.to_string()).collect();
+    if let Some(palette) = super::default_palette(&names) {
+        document.apply_palette(palette);
+    }
     Ok(document)
 }
 

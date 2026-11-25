@@ -21,7 +21,9 @@ mod document;
 mod error;
 mod flow;
 mod junction;
+mod palette;
 mod pipeline;
+mod place;
 mod source;
 mod step;
 mod store;
@@ -30,6 +32,8 @@ mod view;
 
 #[cfg(test)]
 mod flow_tests;
+#[cfg(test)]
+mod place_tests;
 #[cfg(test)]
 mod store_tests;
 #[cfg(test)]
@@ -50,7 +54,12 @@ pub use flow::{
     flow_operations,
 };
 pub use junction::{open_in_editor_command, FileStamp, Junction, JunctionState, JunctionStatus};
+pub use palette::{
+    balance_colors, band_layer, channel_label, color_from_hue, color_word, default_palette, hue_of,
+    layer_name, palettes_for, Palette, PaletteLayer, PALETTES,
+};
 pub use pipeline::{level_for_zoom, Pipeline, PreviewChain};
+pub use place::{input_steps, panes, InputStep, Place, Row, Split};
 pub use source::{MemoryImage, RegionReader};
 pub use step::{Applied, LevelForm, MaskSource, Masked, Step};
 pub use store::{SampleFormat, StoreLevel, StoreOptions, TileStore};

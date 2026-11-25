@@ -87,7 +87,8 @@ fn the_default_setup_becomes_psf_guards_flow() {
         .iter()
         .map(|layer| layer.name.as_str())
         .collect();
-    assert_eq!(layers, SHO);
+    // The layers are the SHO palette's, whatever order the card lists them in.
+    assert_eq!(layers, ["SII as red", "Ha as green", "OIII as blue"]);
 
     // A step holds PSF Guard's own settings, untouched.
     let stretch = &document.stage(StageKind::Stretch).steps[1];

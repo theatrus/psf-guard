@@ -1,80 +1,52 @@
-//! The staged workflow's panes: a rail of stages across the top, the showing
-//! stage's steps or layers on the left, the canvas in the middle, and the
-//! stage's own controls on the right.
+//! The window's panes.
+//!
+//! - **Left: one tree** of the whole document (`tree.rs`), top to bottom in
+//!   the order the picture is made: each input with its steps, the layers of
+//!   the Combine stage, then the Finish steps. An edit that belongs to one
+//!   input or one layer is indented under it.
+//! - **Middle: the canvas**, split into one or more panes. A pane shows the
+//!   result up to the selected row, unless it is pinned.
+//! - **Right: the selected row's controls** (`inspector.rs`).
+//!
+//! What a row is, what a pane shows and how a split chooses its panes are
+//! decided in `src/studio/place.rs`, which knows of no toolkit. These files
+//! only lay that out with GPUI, and turn a place into what the canvas draws.
 
-use super::{
-    Bands, Drag, Scene, SliderId, Studio, Tool, BAND_COLORS, BAND_NAMES, PANEL_WIDTH, STEPS_WIDTH,
-};
+use super::{Bands, Drag, Scene, SliderId, Studio, Tool};
 use crate::image_steps::Accepts;
+use crate::store_tiles::BandStretch;
 use crate::studio_model::{
-    document_from_color_setup, flow_operations, level_for_zoom, own_step_for_channel, plan,
-    step_shown_for, BlendMode, DisplayStretch, Document, JunctionStatus, LayerRecord, LayerSource,
-    MaskRecord, PlannedStretch, StackEntry, StageKind, StepKind, StepRecord, Stroke, StrokeMode,
-    Subject, UpTo, View,
+    band_layer, color_from_hue, document_from_color_setup, flow_operations, hue_of, layer_name,
+    panes, plan, BlendMode, Document, LayerRecord, LayerSource, MaskRecord, PlannedStretch, Row,
+    Split, StackEntry, StageKind, StepKind, StepRecord, Stroke, StrokeMode, View,
 };
 use gpui::{
     canvas, div, prelude::*, px, relative, rgb, AnyElement, Context, MouseButton, MouseDownEvent,
-    Rgba, Window,
+    Rgba, SharedString, Window,
 };
 use std::sync::Arc;
 use studio_render_spike::{
     Adjustment, Blend, FinishKind, FinishStep, Layer, Segment, MAX_FINISH_STEPS, MAX_LAYERS,
     MAX_MASKS,
 };
+use uuid::Uuid;
 
-const BACKGROUND: u32 = 0x16181c;
-const PANE: u32 = 0x1e2126;
-const CONTROL: u32 = 0x2a2e34;
-const SELECTED: u32 = 0x3b6ea8;
-const TEXT: u32 = 0xd8dee6;
-const QUIET: u32 = 0x8a93a0;
+pub(super) const BACKGROUND: u32 = 0x16181c;
+pub(super) const PANE: u32 = 0x1e2126;
+pub(super) const CONTROL: u32 = 0x2a2e34;
+pub(super) const SELECTED: u32 = 0x3b6ea8;
+pub(super) const TEXT: u32 = 0xd8dee6;
+pub(super) const QUIET: u32 = 0x8a93a0;
 
-/// The steps a reduced view leaves out, because their result depends on
-/// pixel scale. The engine reports these per step; the demo names them.
-const FULL_RESOLUTION_ONLY: [&str; 2] = ["Deconvolution", "Noise reduction"];
+/// The adjustments offered in the Combine stage, for one layer or for the
+/// layers beneath: the name and what the canvas does.
+pub(super) const ADJUSTMENTS: [(&str, Adjustment); 3] = [
+    ("Exposure", Adjustment::Exposure),
+    ("Curves", Adjustment::Curves),
+    ("Saturation", Adjustment::Saturation),
+];
 
-/// The operations offered in each stage, with the samples each works on.
-fn offered(stage: StageKind) -> &'static [(&'static str, Accepts)] {
-    match stage {
-        StageKind::Sources | StageKind::Export | StageKind::Combine => &[],
-        StageKind::Linear => &[
-            ("Background", Accepts::Linear),
-            ("Deconvolution", Accepts::Linear),
-            ("Noise reduction", Accepts::Linear),
-            ("Star separation", Accepts::Either),
-        ],
-        StageKind::Stretch => &[("Stretch", Accepts::Linear)],
-        StageKind::Finish => &[
-            ("Curves", Accepts::Display),
-            ("Saturation", Accepts::Display),
-            ("Local contrast", Accepts::Display),
-        ],
-    }
-}
-
-fn stage_title(stage: StageKind) -> &'static str {
-    match stage {
-        StageKind::Sources => "Sources",
-        StageKind::Linear => "Linear",
-        StageKind::Stretch => "Stretch",
-        StageKind::Combine => "Combine",
-        StageKind::Finish => "Finish",
-        StageKind::Export => "Export",
-    }
-}
-
-fn stage_help(stage: StageKind) -> &'static str {
-    match stage {
-        StageKind::Sources => "Choose stacks or masters and name their bands.",
-        StageKind::Linear => "Work on linear data, before any stretch.",
-        StageKind::Stretch => "Take each band from linear data to a display image.",
-        StageKind::Combine => "Edit each layer on its own, then blend the layers.",
-        StageKind::Finish => "Adjust the combined image as a whole.",
-        StageKind::Export => "Choose the color space and write the file.",
-    }
-}
-
-fn operation(name: &str, accepts: Accepts) -> StepRecord {
+pub(super) fn operation(name: &str, accepts: Accepts) -> StepRecord {
     StepRecord::new(StepKind::Operation {
         operation: name.to_string(),
         accepts,
@@ -82,70 +54,36 @@ fn operation(name: &str, accepts: Accepts) -> StepRecord {
     })
 }
 
-/// A name and a color for each band of a document, up to the layers one
-/// frame draws: the eight synthetic bands, red, green and blue for three,
-/// and gray for one.
-pub(super) fn band_labels(bands: usize) -> Vec<(String, [f32; 3])> {
-    let bright = |color: [f32; 3]| color.map(|channel| (channel * 2.0).min(1.0));
-    match bands {
-        1 => vec![("L".to_string(), [1.0; 3])],
-        3 => ["R", "G", "B"]
-            .iter()
-            .enumerate()
-            .map(|(index, name)| (name.to_string(), bright(BAND_COLORS[index + 1])))
-            .collect(),
-        _ => (0..bands.min(MAX_LAYERS))
-            .map(|index| match BAND_NAMES.get(index) {
-                Some(name) if bands == BAND_NAMES.len() => {
-                    (name.to_string(), bright(BAND_COLORS[index]))
-                }
-                _ => (
-                    format!("Band {}", index + 1),
-                    bright(BAND_COLORS[index % 8]),
-                ),
-            })
-            .collect(),
-    }
-}
-
-/// The name PSF Guard's settings give a band's channel, such as `ha` for
-/// `Ha`. A band PSF Guard has no role for, such as NII, keeps its own name in
-/// lower case.
-pub(super) fn channel_name(band: &str) -> String {
-    match band {
-        "L" => "luminance".to_string(),
-        "R" => "red".to_string(),
-        "G" => "green".to_string(),
-        "B" => "blue".to_string(),
-        other => other.to_lowercase(),
-    }
-}
-
 /// PSF Guard's built-in default color setup.
 const DEFAULT_COLOR_SETUP: &str =
     include_str!("../../../../src/processing_setups/default_color.json");
 
-/// A new document: PSF Guard's default color flow over the bands. The steps
-/// and their settings are the ones PSF Guard's color previews apply. The
-/// layers get a color each, which the settings leave to the palette.
-pub(super) fn flow_document(bands: usize) -> Document {
-    let labels = band_labels(bands);
-    let channels: Vec<String> = labels.iter().map(|(name, _)| channel_name(name)).collect();
-    let channels: Vec<&str> = channels.iter().map(String::as_str).collect();
+/// A new document: PSF Guard's default color flow over the store's inputs.
+/// The steps and their settings are the ones PSF Guard's color previews
+/// apply. The layers are the palette that uses the most of the inputs.
+pub(super) fn flow_document(inputs: &[String]) -> Document {
+    let channels: Vec<&str> = inputs.iter().map(String::as_str).collect();
     let settings = serde_json::from_str(DEFAULT_COLOR_SETUP).expect("the default setup is JSON");
     let mut document = document_from_color_setup("PSF Guard default color", &settings, &channels)
         .expect("the default setup makes a document");
-    // The layers add together, so their colors are scaled until the
-    // brightest channel of their sum is full scale.
-    let brightest = (0..3)
-        .map(|channel| labels.iter().map(|(_, color)| color[channel]).sum::<f32>())
-        .fold(f32::MIN_POSITIVE, f32::max);
-    let ids: Vec<_> = document.layers().iter().map(|layer| layer.id).collect();
-    for (id, (name, color)) in ids.into_iter().zip(labels) {
+    // When no palette fits the inputs, each still gets a layer in a color
+    // of its own, so nothing a store holds is left out of the first picture.
+    let plain: Vec<Uuid> = document
+        .layers()
+        .iter()
+        .filter(|layer| layer.color.is_none())
+        .map(|layer| layer.id)
+        .collect();
+    let count = plain.len() as f32;
+    for (at, id) in plain.into_iter().enumerate() {
         let layer = document.layer_mut(id).expect("the layer was just listed");
-        layer.name = name;
-        layer.blend = BlendMode::Add;
-        layer.color = Some(color.map(|channel| channel / brightest));
+        let LayerSource::Band { band } = &layer.source else {
+            continue;
+        };
+        let fresh = band_layer(band, 360.0 * at as f32 / count, 0.8, BlendMode::Add);
+        layer.name = fresh.name;
+        layer.blend = fresh.blend;
+        layer.color = fresh.color.map(|color| color.map(|part| part / count));
     }
     // Two adjustments PSF Guard's flow does not have, so the Finish stage
     // has something to draw. They stay out of PSF Guard's settings.
@@ -162,7 +100,7 @@ pub(super) fn flow_document(bands: usize) -> Document {
 }
 
 /// A count with its noun: "1 step", "3 steps".
-fn counted(count: usize, noun: &str) -> String {
+pub(super) fn counted(count: usize, noun: &str) -> String {
     if count == 1 {
         format!("1 {noun}")
     } else {
@@ -170,11 +108,14 @@ fn counted(count: usize, noun: &str) -> String {
     }
 }
 
-fn swatch(color: [f32; 3], alpha: f32) -> Rgba {
+/// A layer's color for its swatch. A layer's color is scaled so the layers
+/// sum to full scale; the swatch shows its hue at full brightness.
+pub(super) fn swatch(color: [f32; 3], alpha: f32) -> Rgba {
+    let brightest = color.iter().copied().fold(f32::MIN_POSITIVE, f32::max);
     Rgba {
-        r: color[0],
-        g: color[1],
-        b: color[2],
+        r: color[0] / brightest,
+        g: color[1] / brightest,
+        b: color[2] / brightest,
         a: alpha,
     }
 }
@@ -182,6 +123,7 @@ fn swatch(color: [f32; 3], alpha: f32) -> Rgba {
 /// The range of an operation's amount, for the operations the canvas draws.
 pub(super) fn amount_range(operation: &str) -> Option<(f32, f32)> {
     match operation {
+        "Exposure" => Some((-2.0, 2.0)),
         "Curves" => Some((-1.0, 1.0)),
         "Saturation" => Some((0.0, 2.0)),
         flow_operations::BACKGROUND => Some((0.0, 1.0)),
@@ -199,17 +141,10 @@ fn amount_key(operation: &str) -> &'static str {
     }
 }
 
-/// An operation's amount, or the amount a new one starts with.
-fn amount(step: &StepRecord) -> f32 {
-    let StepKind::Operation {
-        operation,
-        settings,
-        ..
-    } = &step.kind
-    else {
-        return 0.0;
-    };
-    let start = match operation.as_str() {
+/// An operation's amount from its settings, or the amount a new one starts
+/// with.
+pub(super) fn amount_in(operation: &str, settings: &serde_json::Value) -> f32 {
+    let start = match operation {
         "Saturation" => 1.4,
         flow_operations::BACKGROUND => 1.0,
         _ => 0.5,
@@ -220,16 +155,19 @@ fn amount(step: &StepRecord) -> f32 {
         .map_or(start, |amount| amount as f32)
 }
 
-/// A step's settings with its amount changed and the rest kept.
-pub(super) fn with_amount(step: &StepRecord, amount: f32) -> serde_json::Value {
-    let StepKind::Operation {
-        operation,
-        settings,
-        ..
-    } = &step.kind
-    else {
-        return serde_json::Value::Null;
-    };
+pub(super) fn amount(step: &StepRecord) -> f32 {
+    match &step.kind {
+        StepKind::Operation {
+            operation,
+            settings,
+            ..
+        } => amount_in(operation, settings),
+        StepKind::Heal { .. } => 0.0,
+    }
+}
+
+/// Settings with the operation's amount changed and the rest kept.
+fn with_amount(operation: &str, settings: &serde_json::Value, amount: f32) -> serde_json::Value {
     let mut settings = match settings {
         serde_json::Value::Object(settings) => settings.clone(),
         _ => serde_json::Map::new(),
@@ -243,7 +181,7 @@ pub(super) fn with_amount(step: &StepRecord, amount: f32) -> serde_json::Value {
 const DEFAULT_STRETCH_TARGET: f64 = 0.2;
 
 /// Where a stretch step places the background.
-fn stretch_target(step: &StepRecord) -> f64 {
+pub(super) fn stretch_target(step: &StepRecord) -> f64 {
     let StepKind::Operation { settings, .. } = &step.kind else {
         return DEFAULT_STRETCH_TARGET;
     };
@@ -252,31 +190,31 @@ fn stretch_target(step: &StepRecord) -> f64 {
         .unwrap_or(DEFAULT_STRETCH_TARGET)
 }
 
-/// A channel's first stretch step that is on.
-fn stretch_step<'a>(document: &'a Document, channel: &str) -> Option<&'a StepRecord> {
-    document
-        .stage(StageKind::Stretch)
-        .steps
+/// What the canvas does for an adjustment, by its name.
+fn adjustment_kind(operation: &str) -> Option<Adjustment> {
+    ADJUSTMENTS
         .iter()
-        .find(|step| {
-            step.enabled
-                && step.kind.name() == flow_operations::STRETCH
-                && step.band.as_deref() == Some(channel)
-        })
+        .find(|(name, _)| *name == operation)
+        .map(|(_, kind)| *kind)
 }
 
 /// Whether the canvas draws a step, or only keeps it in the document.
-fn is_drawn(stage: StageKind, step: &StepRecord, bands: &Bands) -> bool {
+pub(super) fn is_drawn(stage: StageKind, step: &StepRecord, bands: &Bands) -> bool {
     match (&step.kind, stage) {
         // Drawn when the store holds each band corrected as well.
         (StepKind::Operation { operation, .. }, StageKind::Linear) => {
             operation == flow_operations::BACKGROUND && bands.has_correction()
         }
+        (StepKind::Operation { operation, .. }, StageKind::Stretch) => {
+            operation == flow_operations::STRETCH
+        }
+        (StepKind::Operation { operation, .. }, StageKind::Combine) => {
+            adjustment_kind(operation).is_some()
+        }
         (StepKind::Heal { .. }, StageKind::Finish) => true,
         (StepKind::Operation { operation, .. }, StageKind::Finish) => {
-            amount_range(operation).is_some()
+            operation == "Curves" || operation == "Saturation"
         }
-        (StepKind::Operation { operation, .. }, StageKind::Stretch) => operation == "Stretch",
         _ => false,
     }
 }
@@ -305,64 +243,46 @@ fn segments(stroke: &Stroke) -> Vec<Segment> {
     }
 }
 
-/// The strokes that limit a step: its painted mask, or a heal's own stroke.
-fn step_strokes(step: &StepRecord) -> Vec<Segment> {
-    match (&step.kind, &step.mask) {
-        (StepKind::Heal { stroke, .. }, _) => segments(stroke),
-        (_, Some(MaskRecord::Painted(mask))) => mask.strokes.iter().flat_map(segments).collect(),
-        _ => Vec::new(),
-    }
-}
-
-/// The adjustments a layer can make to the layers beneath it: the name,
-/// what the canvas does, the range of the amount and where it starts.
-const ADJUSTMENTS: [(&str, Adjustment, f32, f32, f32); 3] = [
-    ("Exposure", Adjustment::Exposure, -2.0, 2.0, 0.5),
-    ("Curves", Adjustment::Curves, -1.0, 1.0, 0.5),
-    ("Saturation", Adjustment::Saturation, 0.0, 2.0, 1.4),
-];
-
-/// An adjustment layer's kind, amount and the amount's range. `None` for a
-/// layer that shows pixels, and for an adjustment the canvas does not draw.
-fn adjustment_of(layer: &LayerRecord) -> Option<(Adjustment, f32, (f32, f32))> {
-    let LayerSource::Adjustment {
-        operation,
-        settings,
-    } = &layer.source
-    else {
-        return None;
-    };
-    let (_, kind, low, high, start) = ADJUSTMENTS
-        .iter()
-        .find(|(name, ..)| *name == operation.as_str())?;
-    let amount = settings["amount"]
-        .as_f64()
-        .map_or(*start, |amount| amount as f32);
-    Some((*kind, amount, (*low, *high)))
-}
-
-/// A layer's painted mask as the segments the canvas draws.
-fn layer_strokes(layer: &LayerRecord) -> Vec<Segment> {
-    match &layer.mask {
+fn mask_strokes(mask: &Option<MaskRecord>) -> Vec<Segment> {
+    match mask {
         Some(MaskRecord::Painted(mask)) => mask.strokes.iter().flat_map(segments).collect(),
         _ => Vec::new(),
     }
 }
 
-/// What the document asks the canvas to draw for a view. Returns the scene
-/// and each band's background strength in it.
+/// The strokes that limit a step: its painted mask, or a heal's own stroke.
+fn step_strokes(step: &StepRecord) -> Vec<Segment> {
+    match &step.kind {
+        StepKind::Heal { stroke, .. } => segments(stroke),
+        StepKind::Operation { .. } => mask_strokes(&step.mask),
+    }
+}
+
+/// A mask in a few words, for a row or a note.
+pub(super) fn mask_words(mask: &Option<MaskRecord>) -> Option<String> {
+    match mask {
+        Some(MaskRecord::Painted(mask)) => Some(format!(
+            "painted mask, {}",
+            counted(mask.strokes.len(), "stroke")
+        )),
+        Some(MaskRecord::Range { .. }) => Some("range mask".to_string()),
+        None => None,
+    }
+}
+
+/// What the document asks the canvas to draw for a view. Returns the scene,
+/// without its stretch analyses, and each band's background strength in it.
 fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scene, Vec<f32>) {
     let planned = plan(document, view);
-    let channels = document.channels();
     let mut strengths = vec![0.0; bands.len()];
-    let mut layers = Vec::new();
+    let mut layers: Vec<Layer> = Vec::new();
     let mut layer_bands = Vec::new();
     let mut layer_targets = Vec::new();
     let mut masks: Vec<Vec<Segment>> = Vec::new();
-    // A layer's mask, as a place in `masks`. A layer whose mask does not fit
-    // is left out, so it is never drawn over the whole image by mistake.
-    let mut mask_of = |layer: &LayerRecord| -> Result<Option<usize>, ()> {
-        let strokes = layer_strokes(layer);
+    // Strokes as a place in `masks`. `Err` when the masks are full: what the
+    // mask limits is then left out, so it is never drawn over the whole
+    // image by mistake.
+    let mut mask_for = |strokes: Vec<Segment>| -> Result<Option<usize>, ()> {
         if strokes.is_empty() {
             return Ok(None);
         }
@@ -372,44 +292,64 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
         masks.push(strokes);
         Ok(Some(masks.len() - 1))
     };
-    let find = |id: &uuid::Uuid| document.layers().iter().find(|layer| layer.id == *id);
+    let adjustment = |kind: Adjustment, amount: f32, opacity: f32, mask, own| Layer {
+        band: 0,
+        blended: None,
+        color: [1.0; 3],
+        opacity,
+        blend: Blend::Normal,
+        curve: 0.0,
+        mask,
+        adjustment: Some((kind, amount)),
+        own,
+    };
+    let find = |id: &Uuid| document.layers().iter().find(|layer| layer.id == *id);
     // A channel view draws its channel alone; a blended view draws the stack.
-    let entries: Vec<(usize, Option<&LayerRecord>)> = if planned.stack.is_empty() {
-        (0..planned.channels.len()).map(|at| (at, None)).collect()
+    let entries: Vec<(Option<usize>, Option<&LayerRecord>)> = if planned.stack.is_empty() {
+        (0..planned.channels.len())
+            .map(|at| (Some(at), None))
+            .collect()
     } else {
         planned
             .stack
             .iter()
             .map(|entry| match entry {
-                StackEntry::Band { layer, channel } => (*channel, find(layer)),
-                StackEntry::Adjustment { layer } => (usize::MAX, find(layer)),
+                StackEntry::Band { layer, channel } => (Some(*channel), find(layer)),
+                StackEntry::Adjustment { layer } => (None, find(layer)),
             })
             .collect()
     };
-    for (at, layer) in entries.into_iter().take(MAX_LAYERS) {
-        let Some(channel) = planned.channels.get(at) else {
+    for (at, layer) in entries {
+        if layers.len() >= MAX_LAYERS {
+            break;
+        }
+        let Some(channel) = at.and_then(|at| planned.channels.get(at)) else {
             // An adjustment of the layers beneath it.
             let Some(layer) = layer else { continue };
-            let (Some((kind, amount, _)), Ok(mask)) = (adjustment_of(layer), mask_of(layer)) else {
+            let LayerSource::Adjustment {
+                operation,
+                settings,
+            } = &layer.source
+            else {
                 continue;
             };
-            layers.push(Layer {
-                band: 0,
-                blended: None,
-                color: [1.0; 3],
-                opacity: if layer.visible { layer.opacity } else { 0.0 },
-                blend: Blend::Normal,
-                curve: 0.0,
+            let (Some(kind), Ok(mask)) = (
+                adjustment_kind(operation),
+                mask_for(mask_strokes(&layer.mask)),
+            ) else {
+                continue;
+            };
+            let opacity = if layer.visible { layer.opacity } else { 0.0 };
+            layers.push(adjustment(
+                kind,
+                amount_in(operation, settings),
+                opacity,
                 mask,
-                adjustment: Some((kind, amount)),
-            });
+                false,
+            ));
             continue;
         };
-        let Some(band) = channels
-            .iter()
-            .position(|name| *name == channel.channel)
-            .filter(|band| *band < bands.len())
-        else {
+        let Some(band) = bands.band_of(&channel.channel) else {
             continue;
         };
         let strength = channel
@@ -424,48 +364,59 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
                 .map_or(DEFAULT_STRETCH_TARGET, |(_, step)| stretch_target(step)),
             PlannedStretch::Preview => DEFAULT_STRETCH_TARGET,
         };
-        let shown = match layer {
-            Some(layer) => {
-                let Ok(mask) = mask_of(layer) else { continue };
-                Layer {
-                    band: bands.tile_band[band],
-                    blended: bands.corrected[band].map(|corrected| (corrected, strength)),
-                    color: layer.color.unwrap_or([1.0; 3]),
-                    opacity: if layer.visible { layer.opacity } else { 0.0 },
-                    blend: match layer.blend {
-                        BlendMode::Normal => Blend::Normal,
-                        BlendMode::Screen => Blend::Screen,
-                        BlendMode::Add => Blend::Add,
-                        BlendMode::Multiply => Blend::Multiply,
-                        BlendMode::Lighten => Blend::Lighten,
-                        BlendMode::Darken => Blend::Darken,
-                    },
-                    // A layer's own Curves steps add up to one curve.
-                    curve: layer
-                        .steps
-                        .iter()
-                        .filter(|step| step.enabled && step.kind.name() == "Curves")
-                        .map(amount)
-                        .sum(),
-                    mask,
-                    adjustment: None,
-                }
-            }
-            // A channel on its own is drawn in gray.
-            None => Layer {
-                band: bands.tile_band[band],
-                blended: bands.corrected[band].map(|corrected| (corrected, strength)),
-                color: [1.0; 3],
-                opacity: 1.0,
-                blend: Blend::Normal,
-                curve: 0.0,
-                mask: None,
-                adjustment: None,
-            },
+        let shown = |color, opacity, blend, mask| Layer {
+            band: bands.tile_band[band],
+            blended: bands.corrected[band].map(|corrected| (corrected, strength)),
+            color,
+            opacity,
+            blend,
+            curve: 0.0,
+            mask,
+            adjustment: None,
+            own: false,
         };
-        layers.push(shown);
+        let Some(layer) = layer else {
+            // A channel on its own is drawn in gray.
+            layers.push(shown([1.0; 3], 1.0, Blend::Normal, None));
+            layer_bands.push(band);
+            layer_targets.push(target);
+            continue;
+        };
+        let Ok(mask) = mask_for(mask_strokes(&layer.mask)) else {
+            continue;
+        };
+        layers.push(shown(
+            layer.color.unwrap_or([1.0; 3]),
+            if layer.visible { layer.opacity } else { 0.0 },
+            match layer.blend {
+                BlendMode::Normal => Blend::Normal,
+                BlendMode::Screen => Blend::Screen,
+                BlendMode::Add => Blend::Add,
+                BlendMode::Multiply => Blend::Multiply,
+                BlendMode::Lighten => Blend::Lighten,
+                BlendMode::Darken => Blend::Darken,
+                BlendMode::Luminance => Blend::Luminance,
+            },
+            mask,
+        ));
         layer_bands.push(band);
         layer_targets.push(target);
+        // The layer's own adjustments change it before it is blended.
+        for step in layer.steps.iter().filter(|step| step.enabled) {
+            // A heal on one layer needs the engine.
+            let StepKind::Operation { operation, .. } = &step.kind else {
+                continue;
+            };
+            let (Some(kind), Ok(mask)) = (
+                adjustment_kind(operation),
+                mask_for(mask_strokes(&step.mask)),
+            ) else {
+                continue;
+            };
+            if layers.len() < MAX_LAYERS {
+                layers.push(adjustment(kind, amount(step), 1.0, mask, true));
+            }
+        }
     }
 
     let mut finish = Vec::new();
@@ -476,18 +427,8 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
         {
             continue;
         }
-        let strokes = step_strokes(step);
-        let needs_mask = !strokes.is_empty() || matches!(step.kind, StepKind::Heal { .. });
-        let mask = if needs_mask {
-            // A step whose mask does not fit is left out, so it is never
-            // drawn over the whole image by mistake.
-            if masks.len() == MAX_MASKS {
-                continue;
-            }
-            masks.push(strokes);
-            Some(masks.len() - 1)
-        } else {
-            None
+        let Ok(mask) = mask_for(step_strokes(step)) else {
+            continue;
         };
         let kind = match &step.kind {
             StepKind::Heal { offset, shift, .. } => FinishKind::Heal {
@@ -499,6 +440,10 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
             }
             StepKind::Operation { .. } => FinishKind::Curves,
         };
+        // A heal with no stroke heals nothing.
+        if matches!(kind, FinishKind::Heal { .. }) && mask.is_none() {
+            continue;
+        }
         finish.push(FinishStep {
             kind,
             amount: amount(step),
@@ -511,31 +456,151 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
         layer_targets,
         finish,
         masks,
+        stretches: Arc::default(),
         version,
     };
     (scene, strengths)
 }
 
 impl Studio {
-    /// Ends a brush stroke: a mask stroke joins the selected step's mask,
-    /// and a heal stroke becomes a step of the showing stage.
+    // ---- what the selection is ------------------------------------------
+
+    /// The selected step: an input's, a layer's own, or a Finish step.
+    pub(super) fn selected_step(&self) -> Option<Uuid> {
+        match &self.selected {
+            Row::InputStep { step, .. } | Row::LayerStep { step, .. } | Row::Finish(step) => {
+                Some(*step)
+            }
+            _ => None,
+        }
+    }
+
+    pub(super) fn layer(&self, id: Uuid) -> Option<&LayerRecord> {
+        self.document.layers().iter().find(|layer| layer.id == id)
+    }
+
+    fn selected_layer(&self) -> Option<&LayerRecord> {
+        match &self.selected {
+            Row::Layer(id) => self.layer(*id),
+            _ => None,
+        }
+    }
+
+    /// Whether the mask brush has something to paint: the canvas draws
+    /// masks for layers, for a layer's own adjustments and for Finish steps.
+    pub(super) fn can_mask(&self) -> bool {
+        match &self.selected {
+            Row::Layer(_) | Row::Finish(_) => true,
+            Row::LayerStep { step, .. } => self
+                .document
+                .step(*step)
+                .is_some_and(|(_, step)| matches!(step.kind, StepKind::Operation { .. })),
+            _ => false,
+        }
+    }
+
+    /// The strokes shown over the image while a brush is in hand: the
+    /// selected row's mask.
+    fn selected_strokes(&self) -> Vec<Segment> {
+        if let Some(layer) = self.selected_layer() {
+            return mask_strokes(&layer.mask);
+        }
+        self.selected_step()
+            .and_then(|id| self.document.step(id))
+            .map(|(_, step)| step_strokes(step))
+            .unwrap_or_default()
+    }
+
+    /// Selects a row of the tree. A pane that is not pinned follows.
+    pub(super) fn select(&mut self, row: Row) {
+        self.selected = row;
+        if self.tool == Tool::Brush && !self.can_mask() {
+            self.tool = Tool::Pan;
+        }
+        self.refresh_canvas();
+    }
+
+    /// Divides the canvas another way. No pane stays pinned.
+    pub(super) fn set_split(&mut self, split: Split) {
+        self.split = split;
+        self.pins.clear();
+        self.refresh_canvas();
+        // The panes changed size, so the document is fitted to one again.
+        self.canvas.edit(|canvas| canvas.fit());
+    }
+
+    // ---- the canvas -----------------------------------------------------
+
+    /// Each band's stretch analysis at these background strengths. An
+    /// analysis is kept, so a pane that returns to a place does not wait.
+    fn analysis(&mut self, strengths: &[f32]) -> Arc<Vec<BandStretch>> {
+        if let Some((_, known)) = self.analysed.iter().find(|(at, _)| at == strengths) {
+            return known.clone();
+        }
+        let stretches = Arc::new(self.band_info.stretches(strengths).unwrap_or_default());
+        self.analysed
+            .insert(0, (strengths.to_vec(), stretches.clone()));
+        self.analysed.truncate(8);
+        stretches
+    }
+
+    /// Sends the canvas what the document now asks it to draw: one scene
+    /// per pane.
+    pub(super) fn refresh_canvas(&mut self) {
+        self.scene_version += 1;
+        let selected = self.selected.place(self.alone);
+        let mut places = panes(self.split, &selected, &self.document);
+        self.pins.resize(places.len(), None);
+        for (place, pin) in places.iter_mut().zip(&self.pins) {
+            if let Some(pinned) = pin {
+                *place = pinned.clone();
+            }
+        }
+        let scenes: Vec<Scene> = places
+            .iter()
+            .map(|place| {
+                let (mut scene, strengths) = scene(
+                    &self.document,
+                    &self.band_info,
+                    &place.view(),
+                    self.scene_version,
+                );
+                // The stretch is applied to the corrected samples, so each
+                // band's analysis follows its background strength.
+                scene.stretches = self.analysis(&strengths);
+                scene
+            })
+            .collect();
+        self.places = places;
+        let scenes = Arc::new(scenes);
+        // While a brush is in hand, the selected row's mask shows over the
+        // image, so a person sees what they have painted.
+        let overlay = if self.tool == Tool::Pan {
+            Vec::new()
+        } else {
+            self.selected_strokes()
+        };
+        self.canvas.edit(|canvas| {
+            canvas.scenes = scenes;
+            canvas.strokes = overlay;
+        });
+    }
+
+    /// Ends a brush stroke. A mask stroke joins the selected row's mask. A
+    /// heal stroke becomes a step where the selection is: of the selected
+    /// input, of the selected layer, or of the combined picture.
     pub(super) fn commit_stroke(&mut self, stroke: Stroke) {
         match self.tool {
             Tool::Pan => {}
-            // In the Combine stage the brush paints the selected layer's
-            // mask; elsewhere, the selected step's.
-            Tool::Brush if self.stage == StageKind::Combine => {
-                if let Some(id) = self.selected_layer_id() {
-                    let _ = self.document.paint_layer_mask(id, stroke);
+            Tool::Brush => match &self.selected {
+                Row::Layer(id) => {
+                    let _ = self.document.paint_layer_mask(*id, stroke);
                 }
-            }
-            Tool::Brush => {
-                if let Some(id) = self.selected_step {
-                    let _ = self.document.paint_step_mask(id, stroke);
+                Row::LayerStep { step, .. } | Row::Finish(step) => {
+                    let _ = self.document.paint_step_mask(*step, stroke);
                 }
-            }
-            // A heal is a step of the Finish stage.
-            Tool::Heal if self.stage != StageKind::Finish => {}
+                _ => {}
+            },
             Tool::Heal => {
                 // Copy from three radii to the right until a person can
                 // choose the source. The brightness shift is measured by the
@@ -548,298 +613,124 @@ impl Studio {
                     shift: Vec::new(),
                 });
                 let id = step.id;
-                if self
-                    .document
-                    .insert_step(self.stage, usize::MAX, step)
-                    .is_ok()
-                {
-                    self.selected_step = Some(id);
+                let row = match self.selected.clone() {
+                    Row::Input(channel) | Row::InputStep { channel, .. } => self
+                        .document
+                        .insert_step(StageKind::Linear, usize::MAX, step.for_band(&channel))
+                        .ok()
+                        .map(|()| Row::InputStep { channel, step: id }),
+                    Row::Layer(layer) | Row::LayerStep { layer, .. } => {
+                        let shows_pixels = self.layer(layer).is_some_and(|layer| {
+                            !matches!(layer.source, LayerSource::Adjustment { .. })
+                        });
+                        (shows_pixels && self.document.insert_layer_step(layer, step).is_ok())
+                            .then_some(Row::LayerStep { layer, step: id })
+                    }
+                    Row::Combined | Row::Finish(_) | Row::Final => self
+                        .document
+                        .insert_step(StageKind::Finish, usize::MAX, step)
+                        .ok()
+                        .map(|()| Row::Finish(id)),
+                };
+                if let Some(row) = row {
+                    self.selected = row;
                 }
             }
         }
         self.refresh_canvas();
     }
 
-    /// Sends the canvas what the document now asks it to draw.
-    pub(super) fn refresh_canvas(&mut self) {
-        self.scene_version += 1;
-        let (scene, strengths) = scene(
-            &self.document,
-            &self.band_info,
-            &self.view,
-            self.scene_version,
-        );
-        let scene = Arc::new(scene);
-        // The stretch is applied to the corrected samples, so each band's
-        // analysis follows its background strength.
-        if self.stretched_strength != strengths {
-            if let Ok(stretches) = self.band_info.stretches(&strengths) {
-                let stretches = Arc::new(stretches);
-                self.canvas.edit(|canvas| canvas.stretches = stretches);
-            }
-            self.stretched_strength = strengths;
-        }
-        // While a brush is in hand, the selected step's mask shows over the
-        // image, so a person sees what they have painted.
-        let overlay = if self.tool == Tool::Pan {
-            Vec::new()
-        } else {
-            if self.stage == StageKind::Combine {
-                self.document
-                    .layers()
-                    .get(self.selected_layer)
-                    .map(layer_strokes)
-                    .unwrap_or_default()
-            } else {
-                self.selected_step
-                    .and_then(|id| self.document.step(id))
-                    .map(|(_, step)| step_strokes(step))
-                    .unwrap_or_default()
-            }
-        };
-        self.canvas.edit(|canvas| {
-            canvas.scene = scene;
-            canvas.strokes = overlay;
-        });
-    }
-
-    /// The label of the channel a view shows, or `None` for the combined
-    /// view.
-    fn viewed_channel(&self) -> Option<&str> {
-        match &self.view.subject {
-            Subject::Channel(channel) => Some(channel),
-            _ => None,
-        }
-    }
-
-    /// Writes where a band's stretch places the background into the band's
-    /// own stretch step. Each band has its own; none follows another.
-    pub(super) fn set_stretch_target(&mut self, band: usize, target: f64) {
-        let Some(channel) = self.document.channels().get(band).cloned() else {
-            return;
-        };
-        let Some(step) = stretch_step(&self.document, &channel) else {
-            return;
-        };
-        let id = step.id;
-        let StepKind::Operation { settings, .. } = &step.kind else {
-            return;
-        };
-        let mut settings = settings.clone();
-        if !settings.is_object() {
-            settings = serde_json::json!({ "model": { "type": "auto-mtf" } });
-        }
-        settings["model"]["target_median"] = target.into();
-        self.document.set_step_settings(id, settings);
-    }
-
-    /// Whether the viewed channel has its own step in place of this shared
-    /// one.
-    fn overridden_for_view(&self, step: &StepRecord) -> bool {
-        let Some(channel) = self.viewed_channel() else {
-            return false;
-        };
-        step.band.is_none()
-            && self.document.stage(self.stage).steps.iter().any(|other| {
-                other.kind.name() == step.kind.name() && other.band.as_deref() == Some(channel)
-            })
-    }
-
-    /// For a step shared by every channel, while one channel is viewed: a
-    /// button that gives the channel its own settings.
-    fn own_settings_button(
-        &self,
-        step: &StepRecord,
-        cx: &mut Context<Self>,
-    ) -> Option<gpui::Stateful<gpui::Div>> {
-        let channel = self.viewed_channel()?.to_string();
-        if step.band.is_some() || self.overridden_for_view(step) {
-            return None;
-        }
-        let shared = step.id;
-        let label = format!("Give {channel} its own settings");
-        Some(
-            Self::button(label, "own-settings", false).on_click(cx.listener(
-                move |this, _, _, cx| {
-                    if let Some(own) = own_step_for_channel(&mut this.document, shared, &channel) {
-                        this.selected_step = Some(own);
-                    }
-                    this.refresh_canvas();
-                    cx.notify();
-                },
-            )),
-        )
-    }
-
-    fn selected_layer_id(&self) -> Option<uuid::Uuid> {
-        self.document
-            .layers()
-            .get(self.selected_layer)
-            .map(|layer| layer.id)
-    }
-
-    /// Writes the selected adjustment layer's amount from a slider position.
-    pub(super) fn set_layer_amount(&mut self, position: f32) {
-        let Some(layer) = self.document.layers().get(self.selected_layer) else {
-            return;
-        };
-        let Some((_, _, (low, high))) = adjustment_of(layer) else {
-            return;
-        };
-        let amount = low + (high - low) * position;
-        let id = layer.id;
-        if let Some(layer) = self.document.layer_mut(id)
-            && let LayerSource::Adjustment { settings, .. } = &mut layer.source
-        {
-            *settings = serde_json::json!({ "amount": amount });
-        }
-    }
-
-    /// Puts a new adjustment layer above the selected layer and selects it.
-    fn add_adjustment(&mut self, name: &str) {
-        let above = (self.selected_layer + 1).min(self.document.layers().len());
-        let layer = LayerRecord::new(
-            name,
-            LayerSource::Adjustment {
-                operation: name.to_string(),
-                settings: serde_json::Value::Null,
-            },
-        );
-        if self.document.insert_layer(above, layer).is_ok() {
-            self.selected_layer = above;
-        }
-    }
-
-    /// Changes what the canvas shows.
-    fn set_view(&mut self, change: impl FnOnce(&mut View)) {
-        change(&mut self.view);
-        // A step of another channel is not in the list any more.
-        let listed = self
-            .selected_step
-            .and_then(|id| self.document.step(id))
-            .is_some_and(|(_, step)| step_shown_for(step, &self.view.subject));
-        if !listed {
-            self.selected_step = self
-                .document
-                .stage(self.stage)
-                .steps
-                .iter()
-                .find(|step| step_shown_for(step, &self.view.subject))
-                .map(|step| step.id);
-        }
-        self.refresh_canvas();
-    }
-
-    /// The row under the stages: what the canvas shows, as three choices
-    /// and a sentence.
-    fn view_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let labels = band_labels(self.bands);
-        let channels = self.document.channels();
-        let subjects = channels
-            .iter()
-            .cloned()
-            .zip(labels)
-            .enumerate()
-            .map(|(index, (channel, (label, _)))| {
-                let on = self.viewed_channel() == Some(channel.as_str());
-                Self::button(label, ("view-channel", index), on).on_click(cx.listener(
-                    move |this, _, _, cx| {
-                        let channel = channel.clone();
-                        this.set_view(|view| view.subject = Subject::Channel(channel));
-                        cx.notify();
+    /// Applies a slider's new position, from 0 to 1, to the selected row.
+    pub(super) fn slider_moved(&mut self, slider: SliderId, position: f32) {
+        match slider {
+            SliderId::Midtone | SliderId::Amount => {
+                let Some(id) = self.selected_step() else {
+                    return;
+                };
+                let Some((
+                    _,
+                    StepRecord {
+                        kind:
+                            StepKind::Operation {
+                                operation,
+                                settings,
+                                ..
+                            },
+                        ..
                     },
-                ))
-            })
-            .chain([Self::button(
-                "Combined",
-                "view-combined",
-                self.view.subject == Subject::Combined,
-            )
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.set_view(|view| view.subject = Subject::Combined);
-                cx.notify();
-            }))]);
-
-        let stage = self.stage;
-        let selected = self.selected_step;
-        let mut stops = vec![
-            ("Start of stage", UpTo::StartOf(stage)),
-            ("End of stage", UpTo::EndOf(stage)),
-            ("Final", UpTo::Final),
-        ];
-        if let Some(id) = selected {
-            stops.insert(1, ("Selected step", UpTo::Step(id)));
+                )) = self.document.step(id)
+                else {
+                    return;
+                };
+                let changed = if slider == SliderId::Midtone {
+                    // The slider covers background targets from 0.05 to 0.5.
+                    let mut settings = settings.clone();
+                    if !settings.is_object() {
+                        settings = serde_json::json!({ "model": { "type": "auto-mtf" } });
+                    }
+                    settings["model"]["target_median"] = (0.05 + 0.45 * f64::from(position)).into();
+                    settings
+                } else {
+                    let amount = amount_range(operation)
+                        .map_or(position, |(low, high)| low + (high - low) * position);
+                    with_amount(operation, settings, amount)
+                };
+                self.document.set_step_settings(id, changed);
+            }
+            SliderId::LayerAmount => {
+                let Some(layer) = self.selected_layer() else {
+                    return;
+                };
+                let id = layer.id;
+                let LayerSource::Adjustment {
+                    operation,
+                    settings,
+                } = &layer.source
+                else {
+                    return;
+                };
+                let Some((low, high)) = amount_range(operation) else {
+                    return;
+                };
+                let changed = with_amount(operation, settings, low + (high - low) * position);
+                if let Some(layer) = self.document.layer_mut(id)
+                    && let LayerSource::Adjustment { settings, .. } = &mut layer.source
+                {
+                    *settings = changed;
+                }
+            }
+            SliderId::Opacity | SliderId::Hue | SliderId::Saturation => {
+                let Row::Layer(id) = &self.selected else {
+                    return;
+                };
+                let Some(layer) = self.document.layer_mut(*id) else {
+                    return;
+                };
+                if slider == SliderId::Opacity {
+                    layer.opacity = position;
+                    return;
+                }
+                // The color keeps its brightness, which balances the layers.
+                let (hue, saturation, value) = hue_of(layer.color.unwrap_or([1.0; 3]));
+                let (hue, saturation) = if slider == SliderId::Hue {
+                    (position * 359.9, saturation)
+                } else {
+                    (hue, position)
+                };
+                let color = color_from_hue(hue, saturation, value);
+                layer.color = Some(color);
+                if let LayerSource::Band { band } = &layer.source {
+                    layer.name = layer_name(band, color, layer.blend);
+                }
+            }
         }
-        let stops = stops.into_iter().enumerate().map(|(index, (label, stop))| {
-            Self::button(label, ("view-up-to", index), self.view.up_to == stop).on_click(
-                cx.listener(move |this, _, _, cx| {
-                    this.set_view(|view| view.up_to = stop);
-                    cx.notify();
-                }),
-            )
-        });
-
-        let stretches = [
-            ("Document's", DisplayStretch::Document),
-            ("Preview", DisplayStretch::Preview),
-        ]
-        .into_iter()
-        .enumerate()
-        .map(|(index, (label, stretch))| {
-            Self::button(label, ("view-stretch", index), self.view.stretch == stretch).on_click(
-                cx.listener(move |this, _, _, cx| {
-                    this.set_view(|view| view.stretch = stretch);
-                    cx.notify();
-                }),
-            )
-        });
-
-        let group = |title: &'static str| {
-            div()
-                .flex()
-                .items_center()
-                .gap_1()
-                .child(div().text_xs().text_color(rgb(QUIET)).child(title))
-        };
-        div()
-            .flex_none()
-            .w_full()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .px_3()
-            .py_1()
-            .bg(rgb(PANE))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_4()
-                    .child(group("Show").children(subjects))
-                    .child(group("Up to").children(stops))
-                    .child(group("Stretch").children(stretches)),
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .child(plan(&self.document, &self.view).description),
-            )
     }
 
-    fn show_stage(&mut self, stage: StageKind) {
-        self.stage = stage;
-        // The view follows the stage a person works in.
-        self.view.up_to = UpTo::EndOf(stage);
-        self.selected_step = self.document.stage(stage).steps.first().map(|step| step.id);
-        if !matches!(stage, StageKind::Finish | StageKind::Combine) {
-            self.tool = Tool::Pan;
-        }
-        self.refresh_canvas();
-    }
+    // ---- widgets the panes share ----------------------------------------
 
     /// A text button. `on` draws it as the selected choice.
-    fn button(
-        label: impl Into<gpui::SharedString>,
+    pub(super) fn button(
+        label: impl Into<SharedString>,
         id: impl Into<gpui::ElementId>,
         on: bool,
     ) -> gpui::Stateful<gpui::Div> {
@@ -853,11 +744,36 @@ impl Studio {
             .child(label.into())
     }
 
-    fn heading(text: &'static str) -> gpui::Div {
-        div().pt_2().text_color(rgb(QUIET)).text_xs().child(text)
+    /// A button that changes the document or the view, then redraws.
+    pub(super) fn act(
+        label: impl Into<SharedString>,
+        id: impl Into<gpui::ElementId>,
+        on: bool,
+        cx: &mut Context<Self>,
+        action: impl Fn(&mut Self) + 'static,
+    ) -> gpui::Stateful<gpui::Div> {
+        Self::button(label, id, on).on_click(cx.listener(move |this, _, _, cx| {
+            action(this);
+            this.refresh_canvas();
+            cx.stop_propagation();
+            cx.notify();
+        }))
     }
 
-    fn slider(&self, id: SliderId, value: f32, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn heading(text: impl Into<SharedString>) -> gpui::Div {
+        div()
+            .pt_2()
+            .text_color(rgb(QUIET))
+            .text_xs()
+            .child(text.into())
+    }
+
+    /// A line of quiet small text.
+    pub(super) fn note(text: impl Into<SharedString>) -> gpui::Div {
+        div().text_xs().text_color(rgb(QUIET)).child(text.into())
+    }
+
+    pub(super) fn slider(&self, id: SliderId, value: f32, cx: &mut Context<Self>) -> AnyElement {
         let bounds = self.slider_bounds[&id].clone();
         div()
             .flex_1()
@@ -880,7 +796,7 @@ impl Studio {
                 div()
                     .absolute()
                     .top(px(3.0))
-                    .left(relative(value * 0.96))
+                    .left(relative(value.clamp(0.0, 1.0) * 0.96))
                     .w(px(8.0))
                     .h(px(14.0))
                     .rounded_sm()
@@ -897,36 +813,38 @@ impl Studio {
             .into_any_element()
     }
 
-    // ---- the rail ------------------------------------------------------
+    /// A slider with its label and value in front of it.
+    pub(super) fn labelled_slider(
+        &self,
+        label: String,
+        id: SliderId,
+        value: f32,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(div().w(px(104.0)).text_xs().child(label))
+            .child(self.slider(id, value, cx))
+    }
 
-    fn stage_rail(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let stages = StageKind::ALL
-            .into_iter()
-            .enumerate()
-            .map(|(index, stage)| {
-                let record = self.document.stage(stage);
-                let count = if stage == StageKind::Combine {
-                    counted(record.layers.len(), "layer")
-                } else {
-                    counted(record.steps.len(), "step")
-                };
-                let edited = record.junction.edited_file().is_some();
-                Self::button(stage_title(stage), ("stage", index), stage == self.stage)
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(div().text_xs().text_color(rgb(QUIET)).child(count))
-                    .when(edited, |button| {
-                        button.child(div().text_xs().child("edited"))
-                    })
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.show_stage(stage);
-                        cx.notify();
-                    }))
-            });
+    // ---- the bar over the canvas ----------------------------------------
+
+    /// The document's name and how the canvas is divided.
+    fn top_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let splits = Split::ALL.into_iter().enumerate().map(|(index, split)| {
+            Self::act(
+                split.name(),
+                ("split", index),
+                self.split == split,
+                cx,
+                move |this| this.set_split(split),
+            )
+        });
         div()
             .flex_none()
-            .h(px(48.0))
+            .h(px(44.0))
             .w_full()
             .flex()
             .items_center()
@@ -934,612 +852,57 @@ impl Studio {
             .px_3()
             .bg(rgb(PANE))
             .child(div().pr_3().child(self.document.name.clone()))
-            .children(stages)
+            .child(Self::note("Canvas"))
+            .children(splits)
     }
 
-    // ---- the left pane: steps or layers ---------------------------------
-
-    fn step_rows(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let stage = self.stage;
-        let channels = self.document.channels();
-        self.document
-            .stage(stage)
-            .steps
-            .iter()
-            .enumerate()
-            .filter(|(_, step)| step_shown_for(step, &self.view.subject))
-            // A setup keeps a stretch for channels this document lacks, so
-            // it reads back unchanged. They are not listed.
-            .filter(|(_, step)| {
-                step.band
-                    .as_ref()
-                    .is_none_or(|band| channels.contains(band))
-            })
-            .map(|(index, step)| {
-                let id = step.id;
-                let mask = match &step.mask {
-                    Some(MaskRecord::Painted(mask)) => {
-                        format!("painted mask, {}", counted(mask.strokes.len(), "stroke"))
-                    }
-                    Some(MaskRecord::Range { .. }) => "range mask".to_string(),
-                    None => "everywhere".to_string(),
-                };
-                let drawn = if is_drawn(stage, step, &self.band_info) {
-                    "drawn"
-                } else {
-                    "recorded, not drawn yet"
-                };
-                let mask = format!("{mask} · {drawn}");
-                div()
-                    .id(("step", index))
-                    .px_2()
-                    .py_1()
-                    .rounded_sm()
-                    .cursor_pointer()
-                    .bg(rgb(if self.selected_step == Some(id) {
-                        SELECTED
-                    } else {
-                        CONTROL
-                    }))
-                    .child(format!("{}. {}", index + 1, step.kind.name()))
-                    .child(div().text_xs().text_color(rgb(QUIET)).child(
-                        match (&step.band, self.overridden_for_view(step)) {
-                            (Some(band), _) => format!("{band} only"),
-                            (None, true) => {
-                                "every channel, except this one: it has its own".to_string()
+    /// One label per pane, over the pane: what it shows, and a button that
+    /// keeps it there while the selection moves.
+    fn pane_labels(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let labels = self.places.iter().enumerate().map(|(index, place)| {
+            let pinned = self.pins.get(index).is_some_and(Option::is_some);
+            let place = place.clone();
+            div()
+                .flex_1()
+                .flex()
+                .items_center()
+                .gap_2()
+                .px_2()
+                .overflow_hidden()
+                .child(
+                    div()
+                        .flex_1()
+                        .text_xs()
+                        .overflow_hidden()
+                        .child(place.label(&self.document)),
+                )
+                .child(
+                    Self::act(
+                        if pinned { "Pinned" } else { "Pin" },
+                        ("pin", index),
+                        pinned,
+                        cx,
+                        move |this| {
+                            if let Some(pin) = this.pins.get_mut(index) {
+                                *pin = if pin.is_some() {
+                                    None
+                                } else {
+                                    Some(place.clone())
+                                };
                             }
-                            (None, false) => "every channel".to_string(),
                         },
-                    ))
-                    .child(div().text_xs().text_color(rgb(QUIET)).child(mask))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.selected_step = Some(id);
-                        this.refresh_canvas();
-                        cx.notify();
-                    }))
-                    .into_any_element()
-            })
-            .collect()
-    }
-
-    fn layer_rows(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        // The top layer is listed first, as layer lists are read.
-        self.document
-            .layers()
-            .iter()
-            .enumerate()
-            .rev()
-            .map(|(index, layer)| {
-                let color = layer.color.unwrap_or([0.6; 3]);
-                div()
-                    .id(("layer", index))
-                    .px_2()
-                    .py_1()
-                    .rounded_sm()
-                    .cursor_pointer()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .bg(rgb(if self.selected_layer == index {
-                        SELECTED
-                    } else {
-                        CONTROL
-                    }))
-                    .child(
-                        div()
-                            .w(px(12.0))
-                            .h(px(12.0))
-                            .rounded_sm()
-                            .bg(swatch(color, if layer.visible { 1.0 } else { 0.2 })),
                     )
-                    .child(div().flex_1().child(layer.name.clone()))
-                    .child(div().text_xs().text_color(rgb(QUIET)).child(format!(
-                        "{} · {:.0}%{}{}",
-                        match &layer.source {
-                            LayerSource::Adjustment { .. } => "adjusts beneath".to_string(),
-                            _ => layer.blend.to_string(),
-                        },
-                        layer.opacity * 100.0,
-                        if layer.mask.is_some() {
-                            " · masked"
-                        } else {
-                            ""
-                        },
-                        if layer.visible { "" } else { " · hidden" }
-                    )))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.selected_layer = index;
-                        this.refresh_canvas();
-                        cx.notify();
-                    }))
-                    .into_any_element()
-            })
-            .collect()
-    }
-
-    fn junction_block(&self) -> impl IntoElement {
-        // The key for everything before the junction comes from the engine's
-        // cache keys, which the canvas does not use yet.
-        let status = match self.document.stage(self.stage).junction.status("") {
-            JunctionStatus::Computed => "Later stages use this stage's own result.",
-            JunctionStatus::WaitingForEdit => "A file is open in an external editor.",
-            JunctionStatus::Edited => "Later stages use the file edited outside Studio.",
-            JunctionStatus::EditedFromOlderResult => {
-                "The edited file was made from an older result of this stage."
-            }
-            JunctionStatus::WaitingOnOlderResult => {
-                "The file in the external editor was made from an older result."
-            }
-        };
-        div()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .child(Self::heading("End of this stage"))
-            .child(div().text_xs().child(status))
-            .child(
-                div()
-                    .px_2()
-                    .py_1()
-                    .rounded_sm()
-                    .bg(rgb(CONTROL))
-                    .text_color(rgb(QUIET))
-                    .child("Open in external editor"),
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(rgb(QUIET))
-                    .child("Disabled: Studio cannot write the file for an editor yet."),
-            )
-    }
-
-    fn left_pane(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let stage = self.stage;
-        let rows = if stage == StageKind::Combine {
-            self.layer_rows(cx)
-        } else {
-            self.step_rows(cx)
-        };
-        let empty = rows.is_empty();
-        // The selected step's amount, for the steps the canvas draws.
-        let amount_control = self
-            .selected_step
-            .and_then(|id| self.document.step(id))
-            .filter(|(at, _)| *at == stage)
-            .and_then(|(_, step)| {
-                let (low, high) = amount_range(step.kind.name())?;
-                let value = amount(step);
-                Some(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .child(Self::heading("Selected step"))
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .child(
-                                    div()
-                                        .w(px(96.0))
-                                        .text_xs()
-                                        .child(format!("{} {value:.2}", step.kind.name())),
-                                )
-                                .child(self.slider(
-                                    SliderId::Amount,
-                                    (value - low) / (high - low),
-                                    cx,
-                                )),
-                        )
-                        .children(self.own_settings_button(step, cx)),
+                    .text_xs(),
                 )
-            });
-        let add = offered(stage)
-            .iter()
-            .enumerate()
-            .map(|(index, (name, accepts))| {
-                let (name, accepts) = (*name, *accepts);
-                Self::button(format!("Add {name}"), ("add", index), false).on_click(cx.listener(
-                    move |this, _, _, cx| {
-                        let step = operation(name, accepts);
-                        let id = step.id;
-                        if this
-                            .document
-                            .insert_step(this.stage, usize::MAX, step)
-                            .is_ok()
-                        {
-                            this.selected_step = Some(id);
-                        }
-                        this.refresh_canvas();
-                        cx.notify();
-                    },
-                ))
-            });
+        });
         div()
             .flex_none()
-            .w(px(STEPS_WIDTH))
-            .h_full()
+            .h(px(28.0))
+            .w_full()
             .flex()
-            .flex_col()
-            .gap_1()
-            .p_3()
-            .bg(rgb(PANE))
-            .child(stage_title(stage))
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(rgb(QUIET))
-                    .child(stage_help(stage)),
-            )
-            .child(Self::heading(if stage == StageKind::Combine {
-                "Layers, top first"
-            } else {
-                "Steps, in order"
-            }))
-            .children(rows)
-            .when(empty, |pane| {
-                pane.child(div().text_xs().text_color(rgb(QUIET)).child("None yet."))
-            })
-            .children(amount_control)
-            .child(div().flex().flex_wrap().gap_1().pt_1().children(add))
-            .when(stage == StageKind::Combine, |pane| {
-                pane.child(Self::heading("Add an adjustment above the selected layer"))
-                    .child(div().flex().flex_wrap().gap_1().children(
-                        ADJUSTMENTS.iter().enumerate().map(|(index, (name, ..))| {
-                            let name = *name;
-                            Self::button(name, ("add-adjustment", index), false).on_click(
-                                cx.listener(move |this, _, _, cx| {
-                                    this.add_adjustment(name);
-                                    this.refresh_canvas();
-                                    cx.notify();
-                                }),
-                            )
-                        }),
-                    ))
-            })
-            .child(div().flex_1())
-            .child(self.junction_block())
-    }
-
-    // ---- the right pane: the stage's own controls -----------------------
-
-    fn tools(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let tool = |tool: Tool, label: &'static str| {
-            Self::button(label, label, self.tool == tool).on_click(cx.listener(
-                move |this, _, _, cx| {
-                    this.tool = tool;
-                    this.refresh_canvas();
-                    cx.notify();
-                },
-            ))
-        };
-        div()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .child(Self::heading("Tools"))
-            .child(
-                div()
-                    .flex()
-                    .gap_1()
-                    .child(tool(Tool::Pan, "Pan"))
-                    .child(tool(Tool::Brush, "Mask brush"))
-                    .child(tool(Tool::Heal, "Heal")),
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(rgb(QUIET))
-                    .child(match self.tool {
-                        Tool::Pan => "Drag to move the view.",
-                        Tool::Brush => "Drag to paint the mask of the selected step or layer.",
-                        Tool::Heal => "Drag over a blemish. Each stroke becomes a Heal step.",
-                    }),
-            )
-            .child(
-                Self::button("Clear strokes shown", "clear", false).on_click(
-                    cx.listener(|this, _, _, _| this.canvas.edit(|canvas| canvas.strokes.clear())),
-                ),
-            )
-    }
-
-    /// A row per channel the view shows. With a slider, the row sets where
-    /// that channel's own stretch places the background.
-    fn band_rows(
-        &self,
-        slider: Option<fn(usize) -> SliderId>,
-        cx: &mut Context<Self>,
-    ) -> Vec<AnyElement> {
-        let channels = self.document.channels();
-        band_labels(self.bands)
-            .into_iter()
-            .enumerate()
-            .filter(|(band, _)| match self.viewed_channel() {
-                Some(viewed) => channels.get(*band).map(String::as_str) == Some(viewed),
-                None => true,
-            })
-            .map(|(band, (name, color))| {
-                let target = channels
-                    .get(band)
-                    .and_then(|channel| stretch_step(&self.document, channel))
-                    .map_or(DEFAULT_STRETCH_TARGET, stretch_target);
-                // The slider covers background targets from 0.05 to 0.5.
-                let position = ((target - 0.05) / 0.45).clamp(0.0, 1.0) as f32;
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        div()
-                            .w(px(52.0))
-                            .px_1()
-                            .rounded_sm()
-                            .bg(swatch(color, 1.0))
-                            .text_color(rgb(0xffffff))
-                            .child(name),
-                    )
-                    .when_some(slider, |row, slider| {
-                        row.child(self.slider(slider(band), position, cx))
-                            .child(div().text_xs().child(format!("{target:.2}")))
-                    })
-                    .into_any_element()
-            })
-            .collect()
-    }
-
-    fn linear_notes(&self) -> impl IntoElement {
-        let zoom = self.canvas.read(|shared| shared.canvas.view.zoom);
-        let level = level_for_zoom(zoom, self.levels);
-        let omitted: Vec<&str> = self
-            .document
-            .stage(StageKind::Linear)
-            .steps
-            .iter()
-            .map(|step| step.kind.name())
-            .filter(|name| level > 0 && FULL_RESOLUTION_ONLY.contains(name))
-            .collect();
-        let note = if omitted.is_empty() {
-            "The view shows every step.".to_string()
-        } else {
-            format!(
-                "At this zoom the view leaves out: {}. Zoom to 100% or use a crop preview to see them.",
-                omitted.join(", ")
-            )
-        };
-        div()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .child(Self::heading("What the view shows"))
-            .child(
-                div()
-                    .text_xs()
-                    .child(format!("Zoom {:.0}%, pyramid level {level}", zoom * 100.0)),
-            )
-            .child(div().text_xs().child(note))
-    }
-
-    fn layer_controls(&self, cx: &mut Context<Self>) -> AnyElement {
-        let index = self.selected_layer;
-        let Some(layer) = self.document.layers().get(index) else {
-            return div().child("Select a layer.").into_any_element();
-        };
-        let id = layer.id;
-        let (visible, blend, opacity) = (layer.visible, layer.blend, layer.opacity);
-        let adjustment = adjustment_of(layer);
-        let is_adjustment = matches!(layer.source, LayerSource::Adjustment { .. });
-        let mask = match &layer.mask {
-            Some(MaskRecord::Painted(mask)) => {
-                format!("Painted mask, {}.", counted(mask.strokes.len(), "stroke"))
-            }
-            Some(MaskRecord::Range { .. }) => "Range mask.".to_string(),
-            None => "No mask: the layer applies everywhere.".to_string(),
-        };
-        let masked = layer.mask.is_some();
-        let name = layer.name.clone();
-        // What the canvas shows of the stack, picked from here.
-        let shows = [
-            ("This layer", Subject::Layer(id)),
-            ("Up to this layer", Subject::LayersUpTo(id)),
-            ("All layers", Subject::Combined),
-        ]
-        .into_iter()
-        .enumerate()
-        .map(|(at, (label, subject))| {
-            Self::button(label, ("layer-show", at), self.view.subject == subject).on_click(
-                cx.listener(move |this, _, _, cx| {
-                    let subject = subject.clone();
-                    this.set_view(|view| view.subject = subject);
-                    cx.notify();
-                }),
-            )
-        })
-        .collect::<Vec<_>>();
-        let steps: Vec<String> = layer
-            .steps
-            .iter()
-            .map(|step| step.kind.name().to_string())
-            .collect();
-        div()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .child(Self::heading("Selected layer"))
-            .child(layer.name.clone())
-            .child(
-                div()
-                    .flex()
-                    .gap_1()
-                    .child(
-                        Self::button(if visible { "Shown" } else { "Hidden" }, "visible", visible)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if let Some(layer) = this.document.layer_mut(id) {
-                                    layer.visible = !layer.visible;
-                                    let visible = layer.visible;
-                                    let _ = visible;
-                                    this.refresh_canvas();
-                                }
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        Self::button(format!("Blend: {blend}"), "blend", false).on_click(
-                            cx.listener(move |this, _, _, cx| {
-                                if let Some(layer) = this.document.layer_mut(id) {
-                                    let at = BlendMode::ALL
-                                        .iter()
-                                        .position(|mode| *mode == layer.blend)
-                                        .unwrap_or(0);
-                                    layer.blend = BlendMode::ALL[(at + 1) % BlendMode::ALL.len()];
-                                }
-                                this.refresh_canvas();
-                                cx.notify();
-                            }),
-                        ),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        div()
-                            .w(px(70.0))
-                            .text_xs()
-                            .child(format!("Opacity {:.0}%", opacity * 100.0)),
-                    )
-                    .child(self.slider(SliderId::Opacity(index), opacity, cx)),
-            )
-            .when_some(adjustment, |pane, (_, amount, (low, high))| {
-                pane.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            div()
-                                .w(px(70.0))
-                                .text_xs()
-                                .child(format!("{name} {amount:.2}")),
-                        )
-                        .child(self.slider(
-                            SliderId::LayerAmount,
-                            (amount - low) / (high - low),
-                            cx,
-                        )),
-                )
-            })
-            .child(Self::heading("Show on the canvas"))
-            .child(div().flex().flex_wrap().gap_1().children(shows))
-            .child(Self::heading("Mask"))
-            .child(div().text_xs().child(mask))
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(rgb(QUIET))
-                    .child("Paint with the mask brush to limit where this layer applies."),
-            )
-            .when(masked, |pane| {
-                pane.child(Self::button("Remove mask", "layer-unmask", false).on_click(
-                    cx.listener(move |this, _, _, cx| {
-                        if let Some(layer) = this.document.layer_mut(id) {
-                            layer.mask = None;
-                        }
-                        this.refresh_canvas();
-                        cx.notify();
-                    }),
-                ))
-            })
-            .when(is_adjustment, |pane| {
-                pane.child(
-                    Self::button("Remove this adjustment", "layer-remove", false).on_click(
-                        cx.listener(move |this, _, _, cx| {
-                            this.document.remove_layer(id);
-                            this.selected_layer = this.selected_layer.saturating_sub(1);
-                            this.set_view(|view| view.subject = Subject::Combined);
-                            cx.notify();
-                        }),
-                    ),
-                )
-            })
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(rgb(QUIET))
-                    .child("Layers apply in the order of the list, bottom first."),
-            )
-            // A layer that shows pixels can carry adjustments of its own.
-            .when(!is_adjustment, |pane| {
-                pane.child(Self::heading("This layer's adjustments"))
-                    .children(steps.into_iter().map(|name| div().text_xs().child(name)))
-                    .child(
-                        Self::button("Add Curves to this layer", "layer-curves", false).on_click(
-                            cx.listener(move |this, _, _, cx| {
-                                let _ = this
-                                    .document
-                                    .insert_layer_step(id, operation("Curves", Accepts::Display));
-                                this.refresh_canvas();
-                                cx.notify();
-                            }),
-                        ),
-                    )
-            })
-            .into_any_element()
-    }
-
-    fn right_pane(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let stage = self.stage;
-        let controls: AnyElement = match stage {
-            StageKind::Sources => div()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .child(Self::heading("Bands"))
-                .children(self.band_rows(None, cx))
-                .into_any_element(),
-            StageKind::Linear => self.linear_notes().into_any_element(),
-            StageKind::Stretch => div()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .child(Self::heading("Background level, per channel"))
-                .children(self.band_rows(Some(SliderId::Midtone), cx))
-                .into_any_element(),
-            StageKind::Combine => self.layer_controls(cx),
-            StageKind::Finish => div()
-                .text_xs()
-                .child("Steps here act on every layer at once. A step may still be masked.")
-                .into_any_element(),
-            StageKind::Export => div()
-                .text_xs()
-                .child("The canvas line below shows the surface's format and color space.")
-                .into_any_element(),
-        };
-        div()
-            .flex_none()
-            .w(px(PANEL_WIDTH))
-            .h_full()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .p_3()
-            .bg(rgb(PANE))
-            .child(controls)
-            // The canvas draws masks for Finish steps and for layers, so the
-            // brushes are offered in those two stages and nowhere else yet.
-            .when(
-                matches!(stage, StageKind::Finish | StageKind::Combine),
-                |pane| pane.child(self.tools(cx)),
-            )
-            .child(div().flex_1())
-            .child(Self::heading("Canvas"))
-            .children(
-                self.readout()
-                    .into_iter()
-                    .map(|line| div().text_xs().child(line)),
-            )
+            .items_center()
+            .bg(rgb(BACKGROUND))
+            .children(labels)
     }
 }
 
@@ -1559,63 +922,77 @@ impl Render for Studio {
             .text_sm()
             .on_mouse_move(cx.listener(Self::mouse_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
-            .child(self.stage_rail(cx))
-            .child(self.view_bar(cx))
+            .child(self.top_bar(cx))
             .child(
                 div()
                     .flex_1()
                     .w_full()
                     .flex()
                     .overflow_hidden()
-                    .child(self.left_pane(cx))
+                    .child(self.tree(cx))
                     .child(
                         div()
                             .flex_1()
                             .h_full()
-                            .relative()
-                            .child(self.native_view.clone())
+                            .flex()
+                            .flex_col()
+                            .child(self.pane_labels(cx))
                             .child(
-                                // In front of the native view, so GPUI
-                                // receives the mouse there. It also reports
-                                // the canvas's size.
                                 div()
-                                    .absolute()
-                                    .size_full()
-                                    .top_0()
-                                    .left_0()
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(Self::canvas_down),
-                                    )
-                                    .on_mouse_move(cx.listener(Self::mouse_move))
-                                    .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
-                                    .on_scroll(cx.listener(Self::scroll))
+                                    .flex_1()
+                                    .w_full()
+                                    .relative()
+                                    .child(self.native_view.clone())
                                     .child(
-                                        canvas(
-                                            move |bounds, _, _| {
-                                                canvas_bounds.set(bounds);
-                                                let size = (
-                                                    (f32::from(bounds.size.width) * scale_factor)
-                                                        .round()
-                                                        as u32,
-                                                    (f32::from(bounds.size.height) * scale_factor)
-                                                        .round()
-                                                        as u32,
-                                                );
-                                                let known = handle
-                                                    .read(|shared| shared.canvas.surface_size);
-                                                if known != size {
-                                                    handle
-                                                        .edit(|canvas| canvas.surface_size = size);
-                                                }
-                                            },
-                                            |_, _, _, _| {},
-                                        )
-                                        .size_full(),
+                                        // In front of the native view, so
+                                        // GPUI receives the mouse there. It
+                                        // also reports the canvas's size.
+                                        div()
+                                            .absolute()
+                                            .size_full()
+                                            .top_0()
+                                            .left_0()
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(Self::canvas_down),
+                                            )
+                                            .on_mouse_move(cx.listener(Self::mouse_move))
+                                            .on_mouse_up(
+                                                MouseButton::Left,
+                                                cx.listener(Self::mouse_up),
+                                            )
+                                            .on_scroll(cx.listener(Self::scroll))
+                                            .child(
+                                                canvas(
+                                                    move |bounds, _, _| {
+                                                        canvas_bounds.set(bounds);
+                                                        let size = (
+                                                            (f32::from(bounds.size.width)
+                                                                * scale_factor)
+                                                                .round()
+                                                                as u32,
+                                                            (f32::from(bounds.size.height)
+                                                                * scale_factor)
+                                                                .round()
+                                                                as u32,
+                                                        );
+                                                        let known = handle.read(|shared| {
+                                                            shared.canvas.surface_size
+                                                        });
+                                                        if known != size {
+                                                            handle.edit(|canvas| {
+                                                                canvas.surface_size = size
+                                                            });
+                                                        }
+                                                    },
+                                                    |_, _, _, _| {},
+                                                )
+                                                .size_full(),
+                                            ),
                                     ),
                             ),
                     )
-                    .child(self.right_pane(cx)),
+                    .child(self.inspector(cx)),
             )
     }
 }

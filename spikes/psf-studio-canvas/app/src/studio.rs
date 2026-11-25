@@ -1,8 +1,6 @@
 use crate::bench::Bench;
 use crate::store_tiles::{BandStretch, Bands};
-use crate::studio_model::{
-    DisplayStretch, Document, StageKind, Stroke, StrokeMode, Subject, UpTo, View as DocumentView,
-};
+use crate::studio_model::{Document, Place, Row, Split, Stroke, StrokeMode};
 use gpui::{
     prelude::*, px, rgb, size, App, Bounds, Context, MouseButton, MouseDownEvent, MouseMoveEvent,
     MouseUpEvent, NativeView, Pixels, Point, ScrollDelta, ScrollEvent, Window, WindowBounds,
@@ -17,15 +15,16 @@ use raw_window_handle::{
     AppKitDisplayHandle, AppKitWindowHandle, RawDisplayHandle, RawWindowHandle,
 };
 use std::cell::Cell;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::ptr::NonNull;
 use std::rc::Rc;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 use studio_render_spike::MAX_LAYERS;
-use studio_render_spike::{FinishStep, Frame, FrameStats, Layer, Output, Renderer, Segment, View};
-use uuid::Uuid;
+use studio_render_spike::{
+    pane_rect, FinishStep, Frame, FrameStats, Layer, Output, Pane, Renderer, Segment, View,
+};
 
 pub struct Options {
     pub bench_output: Option<PathBuf>,
@@ -57,19 +56,8 @@ impl Default for Options {
     }
 }
 
-const BAND_NAMES: [&str; 8] = ["L", "R", "G", "B", "Ha", "OIII", "SII", "NII"];
-const BAND_COLORS: [[f32; 3]; 8] = [
-    [0.30, 0.30, 0.30],
-    [0.45, 0.02, 0.02],
-    [0.02, 0.45, 0.02],
-    [0.02, 0.02, 0.45],
-    [0.55, 0.16, 0.04],
-    [0.02, 0.40, 0.42],
-    [0.50, 0.03, 0.08],
-    [0.40, 0.04, 0.38],
-];
 const PANEL_WIDTH: f32 = 320.0;
-const STEPS_WIDTH: f32 = 260.0;
+const STEPS_WIDTH: f32 = 300.0;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Tool {
@@ -81,14 +69,29 @@ enum Tool {
 /// A slider in a pane.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum SliderId {
-    /// A band's midtone, in the Stretch stage.
-    Midtone(usize),
-    /// A layer's opacity, in the Combine stage.
-    Opacity(usize),
+    /// Where the selected stretch step places the background.
+    Midtone,
+    /// The selected layer's opacity.
+    Opacity,
+    /// The selected layer's hue.
+    Hue,
+    /// The selected layer's saturation.
+    Saturation,
     /// The selected step's amount.
     Amount,
-    /// The selected adjustment layer's amount, in the Combine stage.
+    /// The selected adjustment layer's amount.
     LayerAmount,
+}
+
+impl SliderId {
+    const ALL: [SliderId; 6] = [
+        SliderId::Midtone,
+        SliderId::Opacity,
+        SliderId::Hue,
+        SliderId::Saturation,
+        SliderId::Amount,
+        SliderId::LayerAmount,
+    ];
 }
 
 #[derive(Clone, Copy)]
@@ -110,10 +113,9 @@ pub struct CanvasState {
     pub document_size: (u32, u32),
     /// The number of bands in the document.
     pub band_count: usize,
-    /// What the document asks the canvas to draw.
-    scene: Arc<Scene>,
-    /// Each band's stretch analysis.
-    stretches: Arc<Vec<BandStretch>>,
+    /// What the document asks the canvas to draw: one scene per pane, left
+    /// to right.
+    scenes: Arc<Vec<Scene>>,
     /// Strokes shown over the image: a stroke being drawn, or the selected
     /// step's mask.
     pub strokes: Vec<Segment>,
@@ -137,8 +139,7 @@ impl CanvasState {
             sliders: [1.0 / 3.0; MAX_LAYERS],
             document_size: (1, 1),
             band_count: 0,
-            scene: Arc::new(Scene::default()),
-            stretches: Arc::default(),
+            scenes: Arc::new(vec![Scene::default()]),
             strokes: Vec::new(),
             surface_size: (1, 1),
             fitted: false,
@@ -148,8 +149,13 @@ impl CanvasState {
         }
     }
 
+    /// One pane's place in the surface: x, y, width and height in pixels.
+    pub fn pane(&self, index: usize) -> [u32; 4] {
+        pane_rect(index, self.scenes.len(), self.surface_size)
+    }
+
     pub fn fit_zoom(&self) -> f64 {
-        let (width, height) = self.surface_size;
+        let [_, _, width, height] = self.pane(0);
         (width as f64 / self.document_size.0 as f64)
             .min(height as f64 / self.document_size.1 as f64)
     }
@@ -164,19 +170,27 @@ impl CanvasState {
         };
     }
 
-    /// Each layer's stretch table: Seiza's stretch of the layer's band,
-    /// with the background placed where the scene says.
-    fn stretch_tables(&self) -> Vec<Vec<f32>> {
-        self.scene
-            .layer_bands
+    /// Each pane's stretch tables, one per layer that shows a band:
+    /// Seiza's stretch of the layer's band, with the background placed
+    /// where the scene says.
+    fn stretch_tables(&self) -> Vec<Vec<Vec<f32>>> {
+        self.scenes
             .iter()
-            .zip(&self.scene.layer_targets)
-            .filter_map(|(band, target)| {
-                // The benchmark moves a band's slider to time a stretch
-                // change. A slider at rest, a third of the way, adds nothing.
-                let moved = f64::from(self.sliders[(*band).min(MAX_LAYERS - 1)] - 1.0 / 3.0);
-                let target = (*target + 0.45 * moved).clamp(0.05, 0.5);
-                Some(self.stretches.get(*band)?.table(target))
+            .map(|scene| {
+                scene
+                    .layer_bands
+                    .iter()
+                    .zip(&scene.layer_targets)
+                    .filter_map(|(band, target)| {
+                        // The benchmark moves a band's slider to time a
+                        // stretch change. A slider at rest, a third of the
+                        // way, adds nothing.
+                        let moved =
+                            f64::from(self.sliders[(*band).min(MAX_LAYERS - 1)] - 1.0 / 3.0);
+                        let target = (*target + 0.45 * moved).clamp(0.05, 0.5);
+                        Some(scene.stretches.get(*band)?.table(target))
+                    })
+                    .collect()
             })
             .collect()
     }
@@ -193,6 +207,9 @@ pub struct Scene {
     layer_targets: Vec<f64>,
     finish: Vec<FinishStep>,
     masks: Vec<Vec<Segment>>,
+    /// Each band's stretch analysis, at the background strength this scene
+    /// draws the band with.
+    stretches: Arc<Vec<BandStretch>>,
     /// Different for every scene, so the renderer uploads masks once.
     version: u64,
 }
@@ -248,7 +265,7 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
         .is_some()
         .then(|| Bench::new(options.bench_frames));
     let mut last_frame: Option<Instant> = None;
-    let mut stretch_tables: Vec<Vec<f32>> = Vec::new();
+    let mut stretch_tables: Vec<Vec<Vec<f32>>> = Vec::new();
     let mut stretched_for = None;
     let mut stretches_version = 0u64;
     let mut animate = true;
@@ -263,8 +280,7 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
             canvas.surface_size = shared.canvas.surface_size;
             canvas.document_size = shared.canvas.document_size;
             canvas.band_count = shared.canvas.band_count;
-            canvas.scene = shared.canvas.scene.clone();
-            canvas.stretches = shared.canvas.stretches.clone();
+            canvas.scenes = shared.canvas.scenes.clone();
             if !shared.canvas.fitted && canvas.surface_size.0 > 1 {
                 canvas.fit();
                 shared.canvas.view = canvas.view;
@@ -296,20 +312,29 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
             bench.before_frame(&mut canvas);
         }
         // The tables change with a slider or with the scene's layers.
-        let stretch_inputs = (canvas.sliders, canvas.scene.version);
+        let version = canvas.scenes.first().map_or(0, |scene| scene.version);
+        let stretch_inputs = (canvas.sliders, version);
         if stretched_for != Some(stretch_inputs) {
             stretch_tables = canvas.stretch_tables();
             stretched_for = Some(stretch_inputs);
             stretches_version += 1;
         }
+        let panes: Vec<Pane> = canvas
+            .scenes
+            .iter()
+            .zip(&stretch_tables)
+            .map(|(scene, stretches)| Pane {
+                layers: &scene.layers,
+                stretches,
+                finish: &scene.finish,
+                masks: &scene.masks,
+            })
+            .collect();
         let frame = Frame {
             view: canvas.view,
-            layers: &canvas.scene.layers,
-            stretches: &stretch_tables,
+            panes: &panes,
             stretches_version,
-            finish: &canvas.scene.finish,
-            masks: &canvas.scene.masks,
-            masks_version: canvas.scene.version,
+            masks_version: version,
             overlay: &canvas.strokes,
             overlay_strength: 1.0,
         };
@@ -400,26 +425,27 @@ pub struct Studio {
     scale_factor: f32,
     /// The document the panes show and edit.
     document: Document,
-    /// The stage whose panes are showing.
-    stage: StageKind,
-    /// The selected step of the showing stage.
-    selected_step: Option<Uuid>,
-    /// The selected layer of the Combine stage, counted from the bottom.
-    selected_layer: usize,
+    /// The selected row of the tree: what the right pane edits, and what
+    /// a pane that is not pinned shows.
+    selected: Row,
+    /// Whether a selected layer is shown without the layers beneath it.
+    alone: bool,
+    /// How the canvas is divided.
+    split: Split,
+    /// Per pane: the place a pinned pane keeps while the selection moves.
+    pins: Vec<Option<Place>>,
+    /// What each pane shows now, left to right.
+    places: Vec<Place>,
+    /// The inputs whose steps a person opened in the tree.
+    unfolded: HashSet<String>,
     /// The brush stroke being drawn.
     stroke: Option<Stroke>,
     /// Counts the scenes sent to the canvas.
     scene_version: u64,
-    /// The number of bands in the document.
-    bands: usize,
     /// Where each band is in a tile, and its samples for the stretch.
     band_info: Arc<Bands>,
-    /// Each band's background strength the canvas's stretches were
-    /// analysed at.
-    stretched_strength: Vec<f32>,
-    /// What the canvas shows: which channel, up to which step, with what
-    /// stretch.
-    view: DocumentView,
+    /// Stretch analyses already made, by each band's background strength.
+    analysed: Vec<(Vec<f32>, Arc<Vec<BandStretch>>)>,
     /// The levels in the document's pyramid.
     levels: u8,
 }
@@ -467,8 +493,6 @@ impl Studio {
             Err(error) => (Err(error), Arc::<Bands>::default()),
         };
         let bands = band_info.len();
-        // The first scene sets the stretches for the document's strength.
-        let stretches: Arc<Vec<BandStretch>> = Arc::default();
         let mut levels = 1;
         let renderer = surface
             .map_err(|error| error.to_string())
@@ -491,7 +515,6 @@ impl Studio {
                     let mut shared = canvas.0 .0.lock().expect("canvas state");
                     shared.canvas.document_size = (pyramid.width, pyramid.height);
                     shared.canvas.band_count = bands;
-                    shared.canvas.stretches = stretches.clone();
                 }
                 let handle = canvas.clone();
                 std::thread::Builder::new()
@@ -519,46 +542,38 @@ impl Studio {
         })
         .detach();
 
-        let document = panes::flow_document(bands);
+        let document = panes::flow_document(&band_info.names);
         let mut studio = Self {
             native_view,
             _ns_view: ns_view,
             canvas,
             canvas_bounds: Rc::default(),
-            slider_bounds: (0..MAX_LAYERS)
-                .flat_map(|band| [SliderId::Midtone(band), SliderId::Opacity(band)])
-                .chain([SliderId::Amount, SliderId::LayerAmount])
+            slider_bounds: SliderId::ALL
+                .into_iter()
                 .map(|id| (id, Rc::default()))
                 .collect(),
             tool: Tool::Pan,
             drag: None,
             scale_factor: window.scale_factor(),
-            selected_step: document
-                .stage(StageKind::Stretch)
-                .steps
-                .first()
-                .map(|step| step.id),
             document,
-            stage: StageKind::Stretch,
-            selected_layer: 0,
+            selected: Row::Combined,
+            alone: false,
+            split: Split::One,
+            pins: Vec::new(),
+            places: Vec::new(),
+            unfolded: HashSet::new(),
             stroke: None,
             scene_version: 0,
-            bands,
             band_info,
-            // No strength is negative, so the first scene analyses.
-            stretched_strength: vec![-1.0],
-            view: DocumentView {
-                subject: Subject::Combined,
-                up_to: UpTo::EndOf(StageKind::Stretch),
-                stretch: DisplayStretch::Document,
-            },
+            analysed: Vec::new(),
             levels,
         };
         studio.refresh_canvas();
         studio
     }
 
-    /// Converts a window position to document pixels.
+    /// Converts a window position to document pixels, in the pane the
+    /// position is over.
     fn to_document(&self, position: Point<Pixels>) -> [f64; 2] {
         let bounds = self.canvas_bounds.get();
         let scale = self.scale_factor as f64;
@@ -566,10 +581,16 @@ impl Studio {
         let y = f64::from(position.y - bounds.origin.y) * scale;
         self.canvas.read(|shared| {
             let canvas = &shared.canvas;
-            let (width, height) = canvas.surface_size;
+            let count = canvas.scenes.len().max(1);
+            let pane = (0..count)
+                .rev()
+                .map(|index| canvas.pane(index))
+                .find(|pane| x >= pane[0] as f64)
+                .unwrap_or_else(|| canvas.pane(0));
             [
-                canvas.view.center[0] + (x - width as f64 / 2.0) / canvas.view.zoom,
-                canvas.view.center[1] + (y - height as f64 / 2.0) / canvas.view.zoom,
+                canvas.view.center[0]
+                    + (x - pane[0] as f64 - pane[2] as f64 / 2.0) / canvas.view.zoom,
+                canvas.view.center[1] + (y - pane[3] as f64 / 2.0) / canvas.view.zoom,
             ]
         })
     }
@@ -578,38 +599,8 @@ impl Studio {
         let bounds = self.slider_bounds[&id].get();
         let value = (f32::from(x - bounds.origin.x) / f32::from(bounds.size.width).max(1.0))
             .clamp(0.0, 1.0);
-        match id {
-            SliderId::Midtone(band) => {
-                // The slider covers background targets from 0.05 to 0.5, and
-                // writes the channel's own stretch step.
-                let target = 0.05 + 0.45 * f64::from(value);
-                self.set_stretch_target(band, target);
-                self.refresh_canvas();
-            }
-            SliderId::Amount => {
-                if let Some(id) = self.selected_step
-                    && let Some((_, step)) = self.document.step(id)
-                {
-                    let amount = panes::amount_range(step.kind.name())
-                        .map_or(value, |(low, high)| low + (high - low) * value);
-                    let settings = panes::with_amount(step, amount);
-                    self.document.set_step_settings(id, settings);
-                    self.refresh_canvas();
-                }
-            }
-            SliderId::LayerAmount => {
-                self.set_layer_amount(value);
-                self.refresh_canvas();
-            }
-            SliderId::Opacity(band) => {
-                if let Some(id) = self.document.layers().get(band).map(|layer| layer.id)
-                    && let Some(layer) = self.document.layer_mut(id)
-                {
-                    layer.opacity = value;
-                }
-                self.refresh_canvas();
-            }
-        }
+        self.slider_moved(id, value);
+        self.refresh_canvas();
     }
 
     /// The brush's radius in document pixels at the current zoom.
@@ -901,5 +892,9 @@ pub fn run(options: Options) {
     });
 }
 
+#[path = "inspector.rs"]
+mod inspector;
 #[path = "panes.rs"]
 mod panes;
+#[path = "tree.rs"]
+mod tree;

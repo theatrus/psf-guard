@@ -309,7 +309,7 @@ fn a_blended_view_draws_band_layers_and_adjustments_in_order() {
     assert_eq!(up_to.stack.len(), 3);
     assert_eq!(
         up_to.description,
-        "The layers up to green, with every step, drawn with the document's stretch."
+        "The layers up to G as green, with every step, drawn with the document's stretch."
     );
 
     // A band layer alone.
@@ -328,7 +328,9 @@ fn a_blended_view_draws_band_layers_and_adjustments_in_order() {
             channel: 0
         }]
     );
-    assert!(alone.description.starts_with("The layer blue on its own"));
+    assert!(alone
+        .description
+        .starts_with("The layer B as blue on its own"));
 
     // An adjustment alone has nothing to show, so it comes with the layers
     // beneath it.

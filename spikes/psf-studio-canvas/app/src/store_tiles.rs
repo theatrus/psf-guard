@@ -113,6 +113,9 @@ impl BandStretch {
 /// holds it with its background corrected in full, when the store has one.
 #[derive(Default)]
 pub struct Bands {
+    /// Per band: the input's name, as PSF Guard's settings give it, such
+    /// as `ha` or `red`.
+    pub names: Vec<String>,
     /// Per band: the tile channel that holds it.
     pub tile_band: Vec<usize>,
     /// Per band: the tile channel that holds it corrected, if any.
@@ -123,9 +126,41 @@ pub struct Bands {
     scales: Vec<f32>,
 }
 
+/// Names for the bands of a store that records none: by how many it has.
+fn names_for(count: usize) -> Vec<String> {
+    let named: &[&str] = match count {
+        1 => &["luminance"],
+        3 => &["red", "green", "blue"],
+        4 => &["luminance", "red", "green", "blue"],
+        8 => &[
+            "luminance",
+            "red",
+            "green",
+            "blue",
+            "ha",
+            "oiii",
+            "sii",
+            "nii",
+        ],
+        _ => &[],
+    };
+    (0..count)
+        .map(|band| {
+            named
+                .get(band)
+                .map_or_else(|| format!("band {}", band + 1), |name| name.to_string())
+        })
+        .collect()
+}
+
 impl Bands {
     pub fn len(&self) -> usize {
         self.tile_band.len()
+    }
+
+    /// The band that holds an input, by the input's name.
+    pub fn band_of(&self, channel: &str) -> Option<usize> {
+        self.names.iter().position(|name| name == channel)
     }
 
     /// Whether any band has a corrected twin to blend with.
@@ -230,12 +265,18 @@ impl StoreTiles {
             }
             self.scales[channel] = scale;
             bands.tile_band.push(channel);
+            bands
+                .names
+                .push(self.names.get(channel).cloned().unwrap_or_default());
             bands.corrected.push(corrected);
             bands.scales.push(scale);
             bands.samples.push((
                 std::mem::take(&mut channels[channel]),
                 corrected.map(|twin| channels[twin].clone()),
             ));
+        }
+        if self.names.is_empty() {
+            bands.names = names_for(bands.len());
         }
         Ok(bands)
     }
@@ -378,6 +419,7 @@ fn analyse_synthetic() -> Bands {
         }
     }
     Bands {
+        names: names_for(BANDS),
         tile_band: (0..BANDS).collect(),
         corrected: vec![None; BANDS],
         samples: bands.into_iter().map(|samples| (samples, None)).collect(),

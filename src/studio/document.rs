@@ -203,17 +203,21 @@ pub enum BlendMode {
     Lighten,
     /// Keeps the darker of the two at each sample.
     Darken,
+    /// Takes the layer's brightness and keeps the color beneath it: how a
+    /// luminance stack goes onto a color image.
+    Luminance,
 }
 
 impl BlendMode {
     /// Every blend mode, in the order a list shows them.
-    pub const ALL: [BlendMode; 6] = [
+    pub const ALL: [BlendMode; 7] = [
         BlendMode::Normal,
         BlendMode::Screen,
         BlendMode::Add,
         BlendMode::Multiply,
         BlendMode::Lighten,
         BlendMode::Darken,
+        BlendMode::Luminance,
     ];
 
     fn word(self) -> &'static str {
@@ -224,6 +228,7 @@ impl BlendMode {
             BlendMode::Multiply => "multiply",
             BlendMode::Lighten => "lighten",
             BlendMode::Darken => "darken",
+            BlendMode::Luminance => "luminance",
         }
     }
 }
@@ -471,10 +476,15 @@ impl Document {
         Some(layers.remove(index))
     }
 
-    /// A step of any stage, and the stage it is in.
+    /// A step of any stage, and the stage it is in. A step that belongs to
+    /// one layer is in the Combine stage.
     pub fn step(&self, id: Uuid) -> Option<(StageKind, &StepRecord)> {
         self.stages.iter().find_map(|stage| {
-            let step = stage.steps.iter().find(|step| step.id == id)?;
+            let step = stage
+                .steps
+                .iter()
+                .chain(stage.layers.iter().flat_map(|layer| &layer.steps))
+                .find(|step| step.id == id)?;
             Some((stage.kind, step))
         })
     }
@@ -482,9 +492,108 @@ impl Document {
     fn step_mut(&mut self, id: Uuid) -> Option<(StageKind, &mut StepRecord)> {
         self.stages.iter_mut().find_map(|stage| {
             let kind = stage.kind;
-            let step = stage.steps.iter_mut().find(|step| step.id == id)?;
+            let step = stage
+                .steps
+                .iter_mut()
+                .chain(stage.layers.iter_mut().flat_map(|layer| &mut layer.steps))
+                .find(|step| step.id == id)?;
             Some((kind, step))
         })
+    }
+
+    /// The layer a step belongs to, when it is one layer's own step.
+    pub fn layer_of_step(&self, id: Uuid) -> Option<Uuid> {
+        self.layers()
+            .iter()
+            .find(|layer| layer.steps.iter().any(|step| step.id == id))
+            .map(|layer| layer.id)
+    }
+
+    /// Makes an adjustment layer one layer's own: the adjustment then
+    /// changes that layer alone, and moves with it. Returns the id of the
+    /// layer's new step.
+    ///
+    /// The adjustment keeps its settings and its mask. Its opacity is not
+    /// kept: a layer's own step has none.
+    ///
+    /// Refuses a layer that is not an adjustment, and a target that is one.
+    pub fn attach_adjustment(&mut self, adjustment: Uuid, to: Uuid) -> Result<Uuid, StudioError> {
+        let refuse = |why: &str| StudioError::Document(why.to_string());
+        let target = self
+            .layers()
+            .iter()
+            .find(|layer| layer.id == to)
+            .ok_or_else(|| refuse("the layer is not in the document"))?;
+        if matches!(target.source, LayerSource::Adjustment { .. }) {
+            return Err(refuse("an adjustment has no pixels of its own to adjust"));
+        }
+        let is_adjustment = self.layers().iter().any(|layer| {
+            layer.id == adjustment && matches!(layer.source, LayerSource::Adjustment { .. })
+        });
+        if !is_adjustment {
+            return Err(refuse("only an adjustment layer can be given to one layer"));
+        }
+        let layer = self.remove_layer(adjustment).expect("the layer was found");
+        let LayerSource::Adjustment {
+            operation,
+            settings,
+        } = layer.source
+        else {
+            unreachable!("checked above");
+        };
+        let mut step = StepRecord::new(StepKind::Operation {
+            operation,
+            accepts: Accepts::Display,
+            settings,
+        });
+        step.enabled = layer.visible;
+        step.mask = layer.mask;
+        let id = step.id;
+        self.insert_layer_step(to, step)?;
+        Ok(id)
+    }
+
+    /// Makes one layer's own adjustment a layer of the stack, placed right
+    /// above the layer it belonged to, so it changes every layer beneath
+    /// it. Returns the new layer's id.
+    ///
+    /// Refuses a step that is not an operation, such as a heal.
+    pub fn detach_adjustment(&mut self, step: Uuid) -> Result<Uuid, StudioError> {
+        let refuse = |why: &str| StudioError::Document(why.to_string());
+        let layers = &mut self.stages[StageKind::Combine as usize].layers;
+        let at = layers
+            .iter()
+            .position(|layer| layer.steps.iter().any(|own| own.id == step))
+            .ok_or_else(|| refuse("the step does not belong to a layer"))?;
+        let index = layers[at]
+            .steps
+            .iter()
+            .position(|own| own.id == step)
+            .expect("the step was found");
+        if !matches!(layers[at].steps[index].kind, StepKind::Operation { .. }) {
+            return Err(refuse("only an adjustment can become a layer"));
+        }
+        let own = layers[at].steps.remove(index);
+        let StepKind::Operation {
+            operation,
+            settings,
+            ..
+        } = own.kind
+        else {
+            unreachable!("checked above");
+        };
+        let mut layer = LayerRecord::new(
+            &operation.clone(),
+            LayerSource::Adjustment {
+                operation,
+                settings,
+            },
+        );
+        layer.visible = own.enabled;
+        layer.mask = own.mask;
+        let id = layer.id;
+        layers.insert(at + 1, layer);
+        Ok(id)
     }
 
     /// Replaces an operation's settings. Returns whether the document has
@@ -536,6 +645,14 @@ impl Document {
         Ok(())
     }
 
+    /// Removes a step's mask, so the step applies everywhere. Returns
+    /// whether the document has the step.
+    pub fn clear_step_mask(&mut self, id: Uuid) -> bool {
+        self.step_mut(id)
+            .map(|(_, step)| step.mask = None)
+            .is_some()
+    }
+
     /// Adds a stroke to a layer's painted mask. A layer with no mask gets a
     /// painted one. A layer with a computed mask is refused: painting over it
     /// would discard it.
@@ -562,8 +679,13 @@ impl Document {
     /// Takes a step out of the document and returns it.
     pub fn remove_step(&mut self, id: Uuid) -> Option<StepRecord> {
         self.stages.iter_mut().find_map(|stage| {
-            let index = stage.steps.iter().position(|step| step.id == id)?;
-            Some(stage.steps.remove(index))
+            if let Some(index) = stage.steps.iter().position(|step| step.id == id) {
+                return Some(stage.steps.remove(index));
+            }
+            stage.layers.iter_mut().find_map(|layer| {
+                let index = layer.steps.iter().position(|step| step.id == id)?;
+                Some(layer.steps.remove(index))
+            })
         })
     }
 

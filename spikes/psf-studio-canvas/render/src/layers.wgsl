@@ -48,8 +48,12 @@ fn blend(mode: f32, below: vec3f, layer: vec3f) -> vec3f {
         return below * layer;
     } else if mode < 4.5 {
         return max(below, layer);
+    } else if mode < 5.5 {
+        return min(below, layer);
     }
-    return min(below, layer);
+    // Luminance: the layer's brightness with the color beneath it.
+    let weights = vec3f(0.2126, 0.7152, 0.0722);
+    return max(below + dot(layer, weights) - dot(below, weights), vec3f(0.0));
 }
 
 // What an adjustment layer makes of the color beneath it.
@@ -69,7 +73,14 @@ fn adjusted(color: vec3f, adjust: vec4f) -> vec3f {
 
 @fragment
 fn tile_fragment(in: TileVertex) -> @location(0) vec4f {
+    // The layers blended so far.
     var color = vec3f(0.0);
+    // The last band layer, which waits to be blended until its own
+    // adjustments have been applied to it.
+    var waiting = false;
+    var own = vec3f(0.0);
+    var own_cover = 0.0;
+    var own_mode = 0.0;
     let pixel = vec2i(in.position.xy);
     let count = i32(globals.counts.x);
     for (var index = 0; index < count; index++) {
@@ -78,6 +89,17 @@ fn tile_fragment(in: TileVertex) -> @location(0) vec4f {
         var cover = layer.color.a;
         if layer.adjust.z >= 0.0 {
             cover *= textureLoad(layer_masks, pixel, i32(layer.adjust.z), 0).r;
+        }
+        if layer.adjust.x > 0.5 && layer.adjust.w > 0.5 {
+            // An adjustment of the waiting layer alone.
+            if waiting {
+                own = mix(own, adjusted(own, layer.adjust), cover);
+            }
+            continue;
+        }
+        if waiting {
+            color = mix(color, blend(own_mode, color, own), own_cover);
+            waiting = false;
         }
         if layer.adjust.x > 0.5 {
             color = mix(color, adjusted(color, layer.adjust), cover);
@@ -89,8 +111,13 @@ fn tile_fragment(in: TileVertex) -> @location(0) vec4f {
             sample = mix(sample, other, layer.select.w);
         }
         let value = contrast_curve(stretched(sample, layer.stretch.x), layer.stretch.w);
-        let blended = blend(layer.select.y, color, layer.color.rgb * value);
-        color = mix(color, blended, cover);
+        own = layer.color.rgb * value;
+        own_cover = cover;
+        own_mode = layer.select.y;
+        waiting = true;
+    }
+    if waiting {
+        color = mix(color, blend(own_mode, color, own), own_cover);
     }
     return vec4f(color, 1.0);
 }
