@@ -1668,6 +1668,38 @@ the stretched layer before the layer's adjustments. On the canvas a layer
 with heals of its own is first drawn into a surface-sized image of its
 samples, so a heal can copy them from another place.
 
+### Groups and clipping
+
+A **group** is a layer with no pixels of its own (`LayerSource::Group`).
+Its members are the layers directly beneath it that name it in
+`LayerRecord::group`. The members blend together on their own, starting
+from nothing; the result is then treated as one layer, with the group's
+opacity, blend mode, mask and own adjustments. An adjustment layer inside a
+group changes the members beneath it and nothing outside the group.
+
+- **Put in a new group** wraps one layer. The new group takes that layer's
+  blend mode, so grouping one layer does not change the picture.
+- A layer joins a group when it is dragged onto the group's row, or into a
+  gap inside the group. It leaves when it is dragged to a gap outside.
+  `Document::place_layer` does both, and moves a group with its members.
+- **Ungroup** keeps the members where they are. The group's own mask and
+  adjustments go with the group.
+- The document keeps a group's members together after every change to the
+  stack. A group holds no group.
+
+The stack stays one flat list, bottom first, so finding, masking and
+adjusting a layer work the same inside a group as outside. The view plan
+marks where a group's members start and end (`StackEntry::GroupBegin`,
+`GroupEnd`). A view that stops inside a group shows the group as far as it
+goes; one member alone is shown as it is, not as its group blends it.
+
+A layer may be **clipped to the layer beneath it** (`LayerRecord::clipped`).
+It then shows only inside that layer's mask, and not at all while that
+layer is hidden. The layer beneath is the nearest one in the same group
+that is not itself clipped and is not an adjustment; for a layer above a
+group, that is the group. Every layer here covers the whole frame, so
+clipping to a layer with no mask changes nothing.
+
 ### A pane shows a place
 
 A canvas pane shows a `Place`: the result up to and including a row. A
@@ -1730,10 +1762,12 @@ Built in the spike and tried on the Sh2-157 stacks, as RGB and with the
 same stacks renamed SII, Ha and OIII: named inputs, the palettes, hue and
 saturation per layer, layers that share an input, adjustments for one
 layer and for the stack with painted masks and opacity, dragging between
-the two, heals of one input, of one layer and of the whole picture, the
-tree, the row controls, the five splits, pinning and the mask overlay.
+the two, heals of one input, of one layer and of the whole picture, groups
+with their own adjustments, clipping, the tree, the row controls, the five
+splits, pinning and the mask overlay.
 
-One frame draws at most 24 layers, counting each adjustment, 15 masks,
+One frame draws at most 24 layers, counting each adjustment and both ends
+of each group, 15 masks,
 16 heals of single layers on at most 4 layers, and 8 Finish steps. What
 does not fit is listed in the pane's label and is not drawn; nothing is
 drawn without its mask. The engine has no such limits, because it renders
@@ -1741,9 +1775,9 @@ a layer at a time.
 
 Not built:
 
-- Layer groups, and clipping one pixel layer to another. A group needs
-  layers that hold layers, which changes how every layer is found, moved
-  and drawn.
+- Groups inside groups, and a group that passes its members through to
+  the layers beneath one by one, as Photoshop's default group does.
+- Clipping a group to the layer beneath it, and a heal of a group.
 - Palettes that mix inputs per pixel, such as Foraxx. They need a layer
   whose color depends on the samples, not one color per layer.
 - A heal copies samples as they were before any heal of the same layer, so

@@ -44,9 +44,31 @@ pub enum Blend {
     Luminance,
 }
 
+/// What an entry in a pane's list of layers is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Mark {
+    /// A layer: one that shows a band, or an adjustment.
+    #[default]
+    Layer,
+    /// The start of a group. The entries up to the group's end blend
+    /// together on their own, starting from nothing. Only its place in the
+    /// list is used.
+    GroupBegin,
+    /// The end of a group: the members' blend becomes one layer with this
+    /// entry's opacity, blend and mask. Adjustments of the entry's own
+    /// follow it, as they follow a layer.
+    GroupEnd,
+}
+
 /// One layer of the Combine stage: a band, stretched, colored and blended.
 #[derive(Clone, Copy, Debug)]
 pub struct Layer {
+    /// Whether the entry is a layer or one end of a group. Groups do not
+    /// hold groups.
+    pub mark: Mark,
+    /// A second mask that limits the layer: the mask of the layer it is
+    /// clipped to. `None` is not clipped.
+    pub clip: Option<usize>,
     /// The band the layer shows.
     pub band: usize,
     pub color: [f32; 3],
@@ -1051,9 +1073,18 @@ impl Renderer {
                 .mask
                 .filter(|mask| *mask < pane.masks.len().min(MAX_MASKS))
                 .map_or(-1.0, |mask| mask as f32);
-            let (kind, amount) = layer
-                .adjustment
-                .map_or((0.0, 0.0), |(kind, amount)| (kind as u32 as f32, amount));
+            let (kind, amount) = match layer.mark {
+                Mark::GroupBegin => (10.0, 0.0),
+                Mark::GroupEnd => (11.0, 0.0),
+                Mark::Layer => layer
+                    .adjustment
+                    .map_or((0.0, 0.0), |(kind, amount)| (kind as u32 as f32, amount)),
+            };
+            let clip = layer
+                .clip
+                .filter(|mask| *mask < pane.masks.len().min(MAX_MASKS))
+                .map_or(-1.0, |mask| mask as f32);
+            let shows_band = layer.mark == Mark::Layer && layer.adjustment.is_none();
             *slot = [
                 layer.color[0],
                 layer.color[1],
@@ -1062,7 +1093,7 @@ impl Renderer {
                 row as f32,
                 // The layer's place among the healed layers; none yet.
                 -1.0,
-                0.0,
+                clip,
                 layer.curve.clamp(-1.0, 1.0),
                 layer.band.min(self.bands - 1) as f32,
                 layer.blend as u32 as f32,
@@ -1077,7 +1108,7 @@ impl Renderer {
                 mask,
                 if layer.own { 1.0 } else { 0.0 },
             ];
-            if layer.adjustment.is_none() {
+            if shows_band {
                 row += 1;
             }
         }
@@ -1089,7 +1120,7 @@ impl Renderer {
             let known = healed.iter().position(|layer| *layer == heal.layer);
             let Some(layer) = layers
                 .get(heal.layer)
-                .filter(|layer| layer.adjustment.is_none())
+                .filter(|layer| layer.mark == Mark::Layer && layer.adjustment.is_none())
             else {
                 continue;
             };

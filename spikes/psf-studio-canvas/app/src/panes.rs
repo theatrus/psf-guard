@@ -24,9 +24,10 @@ use gpui::{
     canvas, div, prelude::*, px, relative, rgb, AnyElement, Context, MouseButton, MouseDownEvent,
     Rgba, SharedString, Window,
 };
+use std::collections::HashMap;
 use std::sync::Arc;
 use studio_render_spike::{
-    Adjustment, Blend, FinishKind, FinishStep, Layer, LayerHeal, Segment, MAX_FINISH_STEPS,
+    Adjustment, Blend, FinishKind, FinishStep, Layer, LayerHeal, Mark, Segment, MAX_FINISH_STEPS,
     MAX_HEALED_LAYERS, MAX_HEALS, MAX_LAYERS, MAX_MASKS,
 };
 use uuid::Uuid;
@@ -272,6 +273,65 @@ pub(super) fn mask_words(mask: &Option<MaskRecord>) -> Option<String> {
     }
 }
 
+/// A layer that shows nothing yet: what every entry of a scene starts from.
+fn plain_layer() -> Layer {
+    Layer {
+        mark: Mark::Layer,
+        clip: None,
+        band: 0,
+        blended: None,
+        color: [1.0; 3],
+        opacity: 1.0,
+        blend: Blend::Normal,
+        curve: 0.0,
+        mask: None,
+        adjustment: None,
+        own: false,
+    }
+}
+
+fn blend_of(blend: BlendMode) -> Blend {
+    match blend {
+        BlendMode::Normal => Blend::Normal,
+        BlendMode::Screen => Blend::Screen,
+        BlendMode::Add => Blend::Add,
+        BlendMode::Multiply => Blend::Multiply,
+        BlendMode::Lighten => Blend::Lighten,
+        BlendMode::Darken => Blend::Darken,
+        BlendMode::Luminance => Blend::Luminance,
+    }
+}
+
+/// Adds the adjustments that belong to one layer or one group, after the
+/// entry they change. An adjustment the frame has no room for is recorded
+/// as left out.
+fn push_own_adjustments(
+    layers: &mut Vec<Layer>,
+    omitted: &mut Vec<String>,
+    mask_for: &mut impl FnMut(Vec<Segment>) -> Result<Option<usize>, ()>,
+    owner: &LayerRecord,
+    applied: &[Uuid],
+) {
+    for step in owner.steps.iter().filter(|step| applied.contains(&step.id)) {
+        let StepKind::Operation { operation, .. } = &step.kind else {
+            continue;
+        };
+        let Some(kind) = adjustment_kind(operation) else {
+            continue;
+        };
+        match mask_for(mask_strokes(&step.mask)) {
+            Ok(mask) if layers.len() < MAX_LAYERS => layers.push(Layer {
+                opacity: step.opacity,
+                mask,
+                adjustment: Some((kind, amount(step))),
+                own: true,
+                ..plain_layer()
+            }),
+            _ => omitted.push(format!("{} of {}", operation, owner.name)),
+        }
+    }
+}
+
 /// Adds a heal of one layer to a scene, or records that it is left out
 /// because the frame has no room for it.
 fn push_heal(
@@ -330,38 +390,87 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
         masks.push(strokes);
         Ok(Some(masks.len() - 1))
     };
-    let adjustment = |kind: Adjustment, amount: f32, opacity: f32, mask, own| Layer {
-        band: 0,
-        blended: None,
-        color: [1.0; 3],
-        opacity,
-        blend: Blend::Normal,
-        curve: 0.0,
-        mask,
-        adjustment: Some((kind, amount)),
-        own,
-    };
     let find = |id: &Uuid| document.layers().iter().find(|layer| layer.id == *id);
+    // The mask of each layer drawn so far, for the layers clipped to it.
+    let mut mask_of: HashMap<Uuid, Option<usize>> = HashMap::new();
     // A channel view draws its channel alone; a blended view draws the stack.
-    let entries: Vec<(Option<usize>, Option<&LayerRecord>)> = if planned.stack.is_empty() {
+    let entries: Vec<StackEntry> = if planned.stack.is_empty() {
         (0..planned.channels.len())
-            .map(|at| (Some(at), None))
-            .collect()
-    } else {
-        planned
-            .stack
-            .iter()
-            .map(|entry| match entry {
-                StackEntry::Band { layer, channel } => (Some(*channel), find(layer)),
-                StackEntry::Adjustment { layer } => (None, find(layer)),
+            .map(|channel| StackEntry::Band {
+                layer: Uuid::nil(),
+                channel,
+                clip: None,
             })
             .collect()
+    } else {
+        planned.stack.clone()
     };
-    for (at, layer) in entries {
+    for entry in entries {
+        let name = |layer: Option<&LayerRecord>| {
+            layer.map_or("a layer".to_string(), |layer| layer.name.clone())
+        };
         if layers.len() >= MAX_LAYERS {
-            omitted.push(layer.map_or("a layer".to_string(), |layer| layer.name.clone()));
+            let left_out = match entry {
+                StackEntry::Band { layer, .. }
+                | StackEntry::Adjustment { layer }
+                | StackEntry::GroupEnd { group: layer } => name(find(&layer)),
+                StackEntry::GroupBegin { .. } => continue,
+            };
+            omitted.push(left_out);
             continue;
         }
+        let (at, layer, clip) = match entry {
+            StackEntry::GroupBegin { .. } => {
+                layers.push(Layer {
+                    mark: Mark::GroupBegin,
+                    ..plain_layer()
+                });
+                continue;
+            }
+            StackEntry::GroupEnd { group } => {
+                // A group that is gone still has to end, so the layers
+                // after it are not blended into it.
+                let found = find(&group);
+                let mask = found.map_or(Ok(None), |group| mask_for(mask_strokes(&group.mask)));
+                if mask.is_err() {
+                    omitted.push(format!("the mask of {}", name(found)));
+                }
+                let mask = mask.unwrap_or(None);
+                mask_of.insert(group, mask);
+                layers.push(Layer {
+                    mark: Mark::GroupEnd,
+                    opacity: found.map_or(
+                        1.0,
+                        |group| {
+                            if group.visible {
+                                group.opacity
+                            } else {
+                                0.0
+                            }
+                        },
+                    ),
+                    blend: found.map_or(Blend::Normal, |group| blend_of(group.blend)),
+                    mask,
+                    ..plain_layer()
+                });
+                if let Some(group) = found {
+                    push_own_adjustments(
+                        &mut layers,
+                        &mut omitted,
+                        &mut mask_for,
+                        group,
+                        &planned.own_steps,
+                    );
+                }
+                continue;
+            }
+            StackEntry::Adjustment { layer } => (None, find(&layer), None),
+            StackEntry::Band {
+                layer,
+                channel,
+                clip,
+            } => (Some(channel), find(&layer), clip),
+        };
         let Some(channel) = at.and_then(|at| planned.channels.get(at)) else {
             // An adjustment of the layers beneath it.
             let Some(layer) = layer else { continue };
@@ -379,14 +488,12 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
                 omitted.push(layer.name.clone());
                 continue;
             };
-            let opacity = if layer.visible { layer.opacity } else { 0.0 };
-            layers.push(adjustment(
-                kind,
-                amount_in(operation, settings),
-                opacity,
+            layers.push(Layer {
+                opacity: if layer.visible { layer.opacity } else { 0.0 },
                 mask,
-                false,
-            ));
+                adjustment: Some((kind, amount_in(operation, settings))),
+                ..plain_layer()
+            });
             continue;
         };
         let Some(band) = bands.band_of(&channel.channel) else {
@@ -404,16 +511,10 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
                 .map_or(DEFAULT_STRETCH_TARGET, |(_, step)| stretch_target(step)),
             PlannedStretch::Preview => DEFAULT_STRETCH_TARGET,
         };
-        let shown = |color, opacity, blend, mask| Layer {
+        let shown = Layer {
             band: bands.tile_band[band],
             blended: bands.corrected[band].map(|corrected| (corrected, strength)),
-            color,
-            opacity,
-            blend,
-            curve: 0.0,
-            mask,
-            adjustment: None,
-            own: false,
+            ..plain_layer()
         };
         // The heals of the input alone change its samples before the
         // stretch, wherever the input is shown.
@@ -425,7 +526,7 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
             .collect();
         let Some(layer) = layer else {
             // A channel on its own is drawn in gray.
-            layers.push(shown([1.0; 3], 1.0, Blend::Normal, None));
+            layers.push(shown);
             layer_bands.push(band);
             layer_targets.push(target);
             for step in input_heals {
@@ -438,20 +539,31 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
             omitted.push(layer.name.clone());
             continue;
         };
-        layers.push(shown(
-            layer.color.unwrap_or([1.0; 3]),
-            if layer.visible { layer.opacity } else { 0.0 },
-            match layer.blend {
-                BlendMode::Normal => Blend::Normal,
-                BlendMode::Screen => Blend::Screen,
-                BlendMode::Add => Blend::Add,
-                BlendMode::Multiply => Blend::Multiply,
-                BlendMode::Lighten => Blend::Lighten,
-                BlendMode::Darken => Blend::Darken,
-                BlendMode::Luminance => Blend::Luminance,
+        mask_of.insert(layer.id, mask);
+        // A clipped layer shows only inside the mask of the layer it is
+        // clipped to, and not at all while that layer is hidden.
+        let base = clip.and_then(|base| find(&base));
+        let clip_mask = match base {
+            None => None,
+            Some(base) => match mask_of.get(&base.id) {
+                Some(mask) => *mask,
+                // The layer it is clipped to is not in this view.
+                None => {
+                    let mask = mask_for(mask_strokes(&base.mask)).unwrap_or(None);
+                    mask_of.insert(base.id, mask);
+                    mask
+                }
             },
+        };
+        let hidden = !layer.visible || base.is_some_and(|base| !base.visible);
+        layers.push(Layer {
+            color: layer.color.unwrap_or([1.0; 3]),
+            opacity: if hidden { 0.0 } else { layer.opacity },
+            blend: blend_of(layer.blend),
             mask,
-        ));
+            clip: clip_mask,
+            ..shown
+        });
         layer_bands.push(band);
         layer_targets.push(target);
         let shown_at = layers.len() - 1;
@@ -461,27 +573,20 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
         }
         // The layer's own edits change it before it is blended. Its heals
         // change the stretched layer; its adjustments follow.
-        let own = layer
-            .steps
-            .iter()
-            .filter(|step| planned.own_steps.contains(&step.id));
-        for step in own {
-            let StepKind::Operation { operation, .. } = &step.kind else {
-                let mask = mask_for(step_strokes(step));
-                push_heal(&mut heals, &mut omitted, shown_at, false, step, mask);
-                continue;
-            };
-            let Some(kind) = adjustment_kind(operation) else {
-                continue;
-            };
-            let mask = mask_for(mask_strokes(&step.mask));
-            match mask {
-                Ok(mask) if layers.len() < MAX_LAYERS => {
-                    layers.push(adjustment(kind, amount(step), step.opacity, mask, true));
-                }
-                _ => omitted.push(format!("{} of {}", operation, layer.name)),
-            }
+        let own_heals = layer.steps.iter().filter(|step| {
+            planned.own_steps.contains(&step.id) && matches!(step.kind, StepKind::Heal { .. })
+        });
+        for step in own_heals {
+            let mask = mask_for(step_strokes(step));
+            push_heal(&mut heals, &mut omitted, shown_at, false, step, mask);
         }
+        push_own_adjustments(
+            &mut layers,
+            &mut omitted,
+            &mut mask_for,
+            layer,
+            &planned.own_steps,
+        );
     }
 
     let mut finish = Vec::new();
@@ -699,9 +804,9 @@ impl Studio {
                         .ok()
                         .map(|()| Row::InputStep { channel, step: id }),
                     Row::Layer(layer) | Row::LayerStep { layer, .. } => {
-                        let shows_pixels = self.layer(layer).is_some_and(|layer| {
-                            !matches!(layer.source, LayerSource::Adjustment { .. })
-                        });
+                        let shows_pixels = self
+                            .layer(layer)
+                            .is_some_and(|layer| layer.source.shows_pixels());
                         (shows_pixels && self.document.insert_layer_step(layer, step).is_ok())
                             .then_some(Row::LayerStep { layer, step: id })
                     }

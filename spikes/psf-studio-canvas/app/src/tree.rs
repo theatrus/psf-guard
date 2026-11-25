@@ -187,38 +187,22 @@ impl Studio {
 
     // ---- layers ---------------------------------------------------------
 
-    /// Moves a layer to `position`, counted from the bottom as the stack is
-    /// now: the layer lands under the layer that is at `position`.
-    fn move_layer_to(&mut self, id: Uuid, position: usize) {
-        let Some(from) = self
-            .document
-            .layers()
-            .iter()
-            .position(|layer| layer.id == id)
-        else {
-            return;
-        };
-        let to = if from < position {
-            position - 1
-        } else {
-            position
-        };
-        self.document.move_layer(id, to);
-    }
-
-    /// A layer dropped on another layer. An adjustment dropped on a layer
-    /// that shows pixels becomes that layer's own. Any other layer moves to
-    /// just above the layer it was dropped on.
+    /// A layer dropped on another layer.
+    ///
+    /// - An adjustment dropped on a layer or a group becomes that layer's
+    ///   or that group's own.
+    /// - Any other layer dropped on a group joins the group, on top.
+    /// - Any other layer dropped on a layer moves to just above it, in the
+    ///   same group as it.
     fn drop_layer_on(&mut self, dragged: Uuid, target: Uuid) {
         if dragged == target {
             return;
         }
-        let is_adjustment = |studio: &Self, id: Uuid| {
-            studio
-                .layer(id)
-                .is_some_and(|layer| matches!(layer.source, LayerSource::Adjustment { .. }))
-        };
-        if is_adjustment(self, dragged) && !is_adjustment(self, target) {
+        let source = |studio: &Self, id: Uuid| studio.layer(id).map(|layer| layer.source.clone());
+        let is_adjustment = matches!(source(self, dragged), Some(LayerSource::Adjustment { .. }));
+        let target_source = source(self, target);
+        let onto_adjustment = matches!(target_source, Some(LayerSource::Adjustment { .. }));
+        if is_adjustment && !onto_adjustment {
             if let Ok(step) = self.document.attach_adjustment(dragged, target) {
                 self.selected = Row::LayerStep {
                     layer: target,
@@ -227,24 +211,26 @@ impl Studio {
             }
             return;
         }
-        if let Some(at) = self
-            .document
-            .layers()
-            .iter()
-            .position(|layer| layer.id == target)
-        {
-            self.move_layer_to(dragged, at + 1);
-            self.selected = Row::Layer(dragged);
-        }
+        let layers = self.document.layers();
+        let Some(at) = layers.iter().position(|layer| layer.id == target) else {
+            return;
+        };
+        let (position, group) = if target_source == Some(LayerSource::Group) {
+            (at, Some(target))
+        } else {
+            (at + 1, layers[at].group)
+        };
+        self.document.place_layer(dragged, position, group);
+        self.selected = Row::Layer(dragged);
     }
 
-    /// One layer's own edit dropped on another layer: it becomes that
-    /// layer's.
+    /// One layer's own edit dropped on another layer or group: it becomes
+    /// that one's.
     fn drop_step_on(&mut self, step: Uuid, target: Uuid) {
-        let shows_pixels = self
+        let takes_edits = self
             .layer(target)
             .is_some_and(|layer| !matches!(layer.source, LayerSource::Adjustment { .. }));
-        if !shows_pixels || self.document.layer_of_step(step) == Some(target) {
+        if !takes_edits || self.document.layer_of_step(step) == Some(target) {
             return;
         }
         if let Some(moved) = self.document.remove_step(step) {
@@ -259,8 +245,9 @@ impl Studio {
     }
 
     /// One layer's own adjustment dropped between layers: it becomes a
-    /// layer of the stack there, and changes every layer beneath it.
-    fn drop_step_between(&mut self, step: Uuid, position: usize) {
+    /// layer of the stack there, and changes every layer beneath it, or
+    /// every member beneath it when the place is inside a group.
+    fn drop_step_between(&mut self, step: Uuid, position: usize, group: Option<Uuid>) {
         let owner = self.document.layer_of_step(step).and_then(|owner| {
             self.document
                 .layers()
@@ -277,46 +264,81 @@ impl Studio {
         } else {
             position
         };
-        self.move_layer_to(layer, position);
+        self.document.place_layer(layer, position, group);
         self.selected = Row::Layer(layer);
     }
 
-    /// The gap between two layers, where a dragged row can be dropped.
-    fn drop_slot(&self, position: usize, cx: &mut Context<Self>) -> AnyElement {
+    /// The gap between two layers, where a dragged row can be dropped. A
+    /// gap inside a group makes what is dropped a member of the group.
+    fn drop_slot(
+        &self,
+        position: usize,
+        group: Option<Uuid>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let inside = group.is_some();
         div()
-            .id(("slot", position))
+            .id(("slot", position * 2 + usize::from(inside)))
+            .ml(px(if inside { CHILD_INDENT } else { 0.0 }))
             .h(px(6.0))
             .rounded_sm()
             .drag_over::<DragLayer>(|style, _, _, _| style.bg(rgb(SELECTED)))
             .drag_over::<DragStep>(|style, _, _, _| style.bg(rgb(SELECTED)))
             .on_drop(cx.listener(move |this, dragged: &DragLayer, _, cx| {
-                this.move_layer_to(dragged.0, position);
+                this.document.place_layer(dragged.0, position, group);
                 this.selected = Row::Layer(dragged.0);
                 this.refresh_canvas();
                 cx.notify();
             }))
             .on_drop(cx.listener(move |this, dragged: &DragStep, _, cx| {
-                this.drop_step_between(dragged.0, position);
+                this.drop_step_between(dragged.0, position, group);
                 this.refresh_canvas();
                 cx.notify();
             }))
             .into_any_element()
     }
 
+    /// The layer a clipped layer is clipped to: the nearest layer beneath
+    /// it in the same group that is not clipped and not an adjustment.
+    fn clipped_to(&self, index: usize) -> Option<&LayerRecord> {
+        let layers = self.document.layers();
+        let layer = layers.get(index).filter(|layer| layer.clipped)?;
+        layers[..index]
+            .iter()
+            .rev()
+            .filter(|other| other.group == layer.group)
+            .find(|other| !other.clipped && !matches!(other.source, LayerSource::Adjustment { .. }))
+    }
+
     fn layer_row(&self, index: usize, layer: &LayerRecord, cx: &mut Context<Self>) -> AnyElement {
         let id = layer.id;
         let visible = layer.visible;
         let is_adjustment = matches!(layer.source, LayerSource::Adjustment { .. });
-        let mut words = vec![if is_adjustment {
+        let is_group = layer.source == LayerSource::Group;
+        let in_group = layer.group.is_some();
+        let mut words = Vec::new();
+        if is_group {
+            words.push(format!(
+                "group of {}",
+                counted(self.document.group_members(id).count(), "layer")
+            ));
+        }
+        words.push(if is_adjustment && in_group {
+            "every member beneath".to_string()
+        } else if is_adjustment {
             "every layer beneath".to_string()
         } else {
             format!("{} · {:.0}%", layer.blend, layer.opacity * 100.0)
-        }];
+        });
+        if let Some(base) = self.clipped_to(index) {
+            words.push(format!("clipped to {}", base.name));
+        }
         words.extend(mask_words(&layer.mask));
         let name = layer.name.clone();
         let label: SharedString = name.clone().into();
-        self.tree_row(("layer", index), Row::Layer(id), 0.0, cx)
-            .when(!is_adjustment, |row| {
+        let indent = if in_group { CHILD_INDENT } else { 0.0 };
+        self.tree_row(("layer", index), Row::Layer(id), indent, cx)
+            .when(layer.source.shows_pixels(), |row| {
                 row.child(
                     div()
                         .flex_none()
@@ -331,6 +353,9 @@ impl Studio {
             })
             .when(is_adjustment, |row| {
                 row.child(div().w(px(14.0)).text_color(rgb(QUIET)).child("◐"))
+            })
+            .when(is_group, |row| {
+                row.child(div().w(px(14.0)).text_color(rgb(QUIET)).child("▾"))
             })
             .child(Self::named(name, words.join(" · ")))
             .child(Self::switch(
@@ -378,7 +403,12 @@ impl Studio {
         };
         let label: SharedString = step.kind.name().to_string().into();
         let draggable = matches!(step.kind, StepKind::Operation { .. });
-        self.tree_row(("layer-step", index), row, CHILD_INDENT, cx)
+        let indent = if layer.group.is_some() {
+            2.0 * CHILD_INDENT
+        } else {
+            CHILD_INDENT
+        };
+        self.tree_row(("layer-step", index), row, indent, cx)
             .child(Self::child_mark())
             .child(Self::named(
                 step.kind.name().to_string(),
@@ -403,14 +433,34 @@ impl Studio {
 
     fn layer_rows(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let layers = self.document.layers();
-        let mut rows = vec![self.drop_slot(layers.len(), cx)];
-        // The top layer is listed first, as layer lists are read.
+        let mut rows = vec![self.drop_slot(layers.len(), None, cx)];
+        // The top layer is listed first, as layer lists are read. A group
+        // is above its members, so its members follow it, indented.
         for (index, layer) in layers.iter().enumerate().rev() {
             rows.push(self.layer_row(index, layer, cx));
             for (at, step) in layer.steps.iter().enumerate() {
                 rows.push(self.layer_step_row(index * 64 + at, layer, step, cx));
             }
-            rows.push(self.drop_slot(index, cx));
+            let is_group = layer.source == LayerSource::Group;
+            // The group this row is in, or is.
+            let around = if is_group {
+                Some(layer.id)
+            } else {
+                layer.group
+            };
+            // Whether the layer beneath is in the same group.
+            let goes_on = around.is_some()
+                && index
+                    .checked_sub(1)
+                    .is_some_and(|below| layers[below].group == around);
+            if around.is_some() {
+                // Beneath this row, inside the group.
+                rows.push(self.drop_slot(index, around, cx));
+            }
+            if !goes_on {
+                // Beneath this row, or beneath its whole group, outside it.
+                rows.push(self.drop_slot(index, None, cx));
+            }
         }
         rows
     }

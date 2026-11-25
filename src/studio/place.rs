@@ -198,6 +198,13 @@ impl Place {
             Place::Layer { layer, .. } => layers
                 .iter()
                 .position(|other| other.id == *layer)
+                // Before a group is the stack beneath its members.
+                .map(|at| {
+                    layers[..at]
+                        .iter()
+                        .rposition(|other| other.group != Some(*layer))
+                        .map_or(0, |below| below + 1)
+                })
                 .and_then(|at| at.checked_sub(1))
                 .map_or_else(
                     || self.clone(),

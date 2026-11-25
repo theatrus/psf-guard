@@ -6,13 +6,15 @@ struct Layer {
     color: vec4f,
     // x: the row of the stretch table that holds this layer's stretch.
     // y: the layer's place among the healed layers, or -1 when it has no
-    // heals of its own. w: the layer's own curve amount.
+    // heals of its own. z: the mask layer of the layer it is clipped to, or
+    // -1. w: the layer's own curve amount.
     stretch: vec4f,
     // x: the band the layer shows, y: the blend mode. z: a second band
     // blended into the first before the stretch, or -1. w: how much of it.
     select: vec4f,
     // x: 0 for a layer that shows a band; 1 exposure, 2 curves, 3 saturation
-    // for an adjustment of the layers beneath. y: the adjustment's amount.
+    // for an adjustment of the layers beneath; 10 for the start of a group
+    // and 11 for its end. y: the adjustment's amount.
     // z: the mask layer that limits the layer, or -1 for everywhere.
     // w: 1 for an adjustment of the band layer before it alone.
     adjust: vec4f,

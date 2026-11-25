@@ -110,11 +110,24 @@ pub struct ChannelPlan {
 /// One layer of a blended view.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StackEntry {
-    /// A layer that shows a band: the layer, and its place in
-    /// [`ViewPlan::channels`].
-    Band { layer: Uuid, channel: usize },
-    /// A layer that adjusts the layers beneath it.
+    /// A layer that shows a band: the layer, its place in
+    /// [`ViewPlan::channels`], and the layer it is clipped to, if any. A
+    /// clipped layer shows only inside that layer's mask, and not at all
+    /// while that layer is hidden.
+    Band {
+        layer: Uuid,
+        channel: usize,
+        clip: Option<Uuid>,
+    },
+    /// A layer that adjusts the layers beneath it. Inside a group, those
+    /// are the group's members beneath it.
     Adjustment { layer: Uuid },
+    /// The start of a group's members. The entries up to the group's end
+    /// blend together on their own, starting from nothing.
+    GroupBegin { group: Uuid },
+    /// The end of a group: its members' blend is treated as one layer with
+    /// the group's opacity, blend, mask and own steps.
+    GroupEnd { group: Uuid },
 }
 
 /// What a canvas draws for a view.
@@ -262,9 +275,31 @@ pub fn plan(document: &Document, view: &View) -> ViewPlan {
             Some(at) if matches!(layers[at].source, LayerSource::Adjustment { .. }) => {
                 &layers[..=at]
             }
+            // A group alone is its members and itself.
+            Some(at) if layers[at].source == LayerSource::Group => {
+                let low = layers[..at]
+                    .iter()
+                    .rposition(|layer| layer.group != Some(*id))
+                    .map_or(0, |other| other + 1);
+                &layers[low..=at]
+            }
             Some(at) => &layers[at..=at],
             None => &[],
         },
+    };
+    // One member alone is shown as it is, not as its group blends it.
+    let within_groups = drawn.len() != 1 || drawn[0].group.is_none();
+    // The layer a clipped layer is clipped to: the nearest layer beneath it
+    // in the same group that shows pixels or is a group, and is not itself
+    // clipped.
+    let clip_of = |layer: &super::LayerRecord| -> Option<Uuid> {
+        let at = place(&layer.id)?;
+        layers[..at]
+            .iter()
+            .rev()
+            .filter(|other| other.group == layer.group)
+            .find(|other| !other.clipped && !matches!(other.source, LayerSource::Adjustment { .. }))
+            .map(|other| other.id)
     };
     let combined = !matches!(view.subject, Subject::Channel(_));
     let mut channels = Vec::new();
@@ -272,21 +307,46 @@ pub fn plan(document: &Document, view: &View) -> ViewPlan {
     if let Subject::Channel(channel) = &view.subject {
         channels.push(channel_plan(channel));
     }
+    // The group whose members are being listed.
+    let mut open: Option<Uuid> = None;
     for layer in drawn {
+        let belongs_to = if layer.source == LayerSource::Group {
+            Some(layer.id)
+        } else {
+            layer.group.filter(|_| within_groups)
+        };
+        if open != belongs_to {
+            if let Some(group) = open.take() {
+                stack.push(StackEntry::GroupEnd { group });
+            }
+            if let Some(group) = belongs_to {
+                stack.push(StackEntry::GroupBegin { group });
+                open = Some(group);
+            }
+        }
         match &layer.source {
             LayerSource::Band { band } => {
                 stack.push(StackEntry::Band {
                     layer: layer.id,
                     channel: channels.len(),
+                    clip: layer.clipped.then(|| clip_of(layer)).flatten(),
                 });
                 channels.push(channel_plan(band));
             }
             LayerSource::Adjustment { .. } => {
                 stack.push(StackEntry::Adjustment { layer: layer.id })
             }
+            LayerSource::Group => {
+                stack.push(StackEntry::GroupEnd { group: layer.id });
+                open = None;
+            }
             // A layer made from a step's result needs the engine.
             LayerSource::Step { .. } => {}
         }
+    }
+    // A view that stops inside a group shows the group as far as it goes.
+    if let Some(group) = open {
+        stack.push(StackEntry::GroupEnd { group });
     }
     let own_steps: Vec<Uuid> = drawn
         .iter()

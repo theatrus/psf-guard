@@ -248,6 +248,8 @@ impl Document {
                     let old = replaced.remove(at);
                     layer.mask = old.mask;
                     layer.steps = old.steps;
+                    layer.group = old.group;
+                    layer.clipped = old.clipped;
                 }
                 layer
             })

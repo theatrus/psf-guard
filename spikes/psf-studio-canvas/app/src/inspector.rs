@@ -322,28 +322,6 @@ impl Studio {
                 )
             })
             .collect::<Vec<_>>();
-        let blends = BlendMode::ALL
-            .into_iter()
-            .enumerate()
-            .map(|(index, mode)| {
-                Self::act(
-                    mode.to_string(),
-                    ("blend", index),
-                    layer.blend == mode,
-                    cx,
-                    move |this| {
-                        if let Some(layer) = this.document.layer_mut(id) {
-                            layer.blend = mode;
-                            if let LayerSource::Band { band } = &layer.source {
-                                layer.name =
-                                    layer_name(band, layer.color.unwrap_or([1.0; 3]), layer.blend);
-                            }
-                        }
-                    },
-                )
-            })
-            .collect::<Vec<_>>();
-        let alone = self.alone;
         let copy = layer.clone();
         column()
             .child(Self::title(
@@ -373,27 +351,28 @@ impl Studio {
                 layer.opacity,
                 cx,
             ))
-            .child(Self::heading("Blend with the layers beneath"))
-            .child(wrap().children(blends))
-            .child(Self::heading("Canvas shows"))
-            .child(
-                wrap()
-                    .child(Self::act(
-                        "Layers up to this one",
-                        "show-stack",
-                        !alone,
-                        cx,
-                        |this| this.alone = false,
-                    ))
-                    .child(Self::act(
-                        "This layer alone",
-                        "show-alone",
-                        alone,
-                        cx,
-                        |this| this.alone = true,
-                    )),
-            )
+            .child(Self::blend_block(layer, cx))
+            .child(self.shows_block("This layer alone", cx))
             .child(self.mask_block(layer, cx))
+            .child(Self::heading("Clipping"))
+            .child(Self::act(
+                if layer.clipped {
+                    "Clipped to the layer beneath"
+                } else {
+                    "Not clipped"
+                },
+                "clipped",
+                layer.clipped,
+                cx,
+                move |this| {
+                    if let Some(layer) = this.document.layer_mut(id) {
+                        layer.clipped = !layer.clipped;
+                    }
+                },
+            ))
+            .child(Self::note(
+                "A clipped layer shows only inside the mask of the layer beneath it, and not at all while that layer is hidden.",
+            ))
             .child(Self::heading("Add an adjustment to this layer only"))
             .child(Self::adjustment_buttons(
                 "adjust-own",
@@ -443,6 +422,19 @@ impl Studio {
                             }
                         },
                     ))
+                    .when(layer.group.is_none(), |row| {
+                        row.child(Self::act(
+                            "Put in a new group",
+                            "layer-group",
+                            false,
+                            cx,
+                            move |this| {
+                                if let Ok(group) = this.document.group_layer(id) {
+                                    this.selected = Row::Layer(group);
+                                }
+                            },
+                        ))
+                    })
                     .child(Self::act(
                         "Remove",
                         "layer-remove",
@@ -454,6 +446,109 @@ impl Studio {
                         },
                     )),
             )
+            .into_any_element()
+    }
+
+    /// The blend modes, with the layer's own marked.
+    fn blend_block(layer: &LayerRecord, cx: &mut Context<Self>) -> gpui::Div {
+        let id = layer.id;
+        let blends = BlendMode::ALL
+            .into_iter()
+            .enumerate()
+            .map(|(index, mode)| {
+                Self::act(
+                    mode.to_string(),
+                    ("blend", index),
+                    layer.blend == mode,
+                    cx,
+                    move |this| {
+                        if let Some(layer) = this.document.layer_mut(id) {
+                            layer.blend = mode;
+                            if let LayerSource::Band { band } = &layer.source {
+                                layer.name =
+                                    layer_name(band, layer.color.unwrap_or([1.0; 3]), layer.blend);
+                            }
+                        }
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        column()
+            .child(Self::heading("Blend with the layers beneath"))
+            .child(wrap().children(blends))
+    }
+
+    /// Whether the canvas shows the stack up to the selected layer, or the
+    /// selected layer alone.
+    fn shows_block(&self, alone_label: &'static str, cx: &mut Context<Self>) -> gpui::Div {
+        let alone = self.alone;
+        column().child(Self::heading("Canvas shows")).child(
+            wrap()
+                .child(Self::act(
+                    "Layers up to this one",
+                    "show-stack",
+                    !alone,
+                    cx,
+                    |this| this.alone = false,
+                ))
+                .child(Self::act(alone_label, "show-alone", alone, cx, |this| {
+                    this.alone = true
+                })),
+        )
+    }
+
+    fn inspect_group(&self, layer: &LayerRecord, cx: &mut Context<Self>) -> AnyElement {
+        let id = layer.id;
+        let members = self.document.group_members(id).count();
+        column()
+            .child(Self::title(
+                layer.name.clone(),
+                format!(
+                    "A group of {}. Its layers blend together on their own, then with the layers beneath as one layer.",
+                    super::panes::counted(members, "layer")
+                ),
+            ))
+            .child(Self::note(
+                "Drag a layer onto the group, or into the gap under one of its layers, to add it. Drag it out to remove it.",
+            ))
+            .child(self.labelled_slider(
+                format!("Opacity {:.0}%", layer.opacity * 100.0),
+                SliderId::Opacity,
+                layer.opacity,
+                cx,
+            ))
+            .child(Self::blend_block(layer, cx))
+            .child(self.shows_block("This group alone", cx))
+            .child(self.mask_block(layer, cx))
+            .child(Self::heading("Add an adjustment to this group only"))
+            .child(Self::adjustment_buttons(
+                "adjust-own",
+                cx,
+                move |this, name| {
+                    let step = operation(name, Accepts::Display);
+                    let step_id = step.id;
+                    if this.document.insert_layer_step(id, step).is_ok() {
+                        this.selected = Row::LayerStep {
+                            layer: id,
+                            step: step_id,
+                        };
+                    }
+                },
+            ))
+            .child(Self::heading("Add an adjustment above, for every layer beneath"))
+            .child(Self::adjustment_buttons(
+                "adjust-above",
+                cx,
+                move |this, name| this.add_adjustment_above(Some(id), name),
+            ))
+            .child(Self::heading("Group"))
+            .child(Self::act("Ungroup", "ungroup", false, cx, move |this| {
+                this.document.ungroup(id);
+                this.selected = Row::Combined;
+            }))
+            .child(Self::note(
+                "Ungrouping keeps the layers where they are. The group's own mask and adjustments go with it.",
+            ))
             .into_any_element()
     }
 
@@ -769,9 +864,9 @@ impl Studio {
             }
             Row::Layer(layer) | Row::LayerStep { layer, .. } => self
                 .layer(*layer)
-                .filter(|layer| !matches!(layer.source, LayerSource::Adjustment { .. }))
+                .filter(|layer| layer.source.shows_pixels())
                 .map_or_else(
-                    || "nothing: an adjustment has no pixels to heal".to_string(),
+                    || "nothing: an adjustment or a group has no pixels to heal".to_string(),
                     |layer| format!("the layer {} only", layer.name),
                 ),
             Row::Combined | Row::Finish(_) | Row::Final => "the whole picture".to_string(),
@@ -842,6 +937,7 @@ impl Studio {
                 Some(layer) if matches!(layer.source, LayerSource::Adjustment { .. }) => {
                     self.inspect_adjustment_layer(layer, cx)
                 }
+                Some(layer) if layer.source == LayerSource::Group => self.inspect_group(layer, cx),
                 Some(layer) => self.inspect_band_layer(layer, cx),
                 None => Self::note("This layer is gone.").into_any_element(),
             },

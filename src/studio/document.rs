@@ -289,6 +289,19 @@ pub enum LayerSource {
         /// The adjustment's settings.
         settings: serde_json::Value,
     },
+    /// No pixels of its own: the layers beneath it that name it as their
+    /// group, blended together on their own first. The group's opacity,
+    /// blend, mask and own steps then apply to that result as they would to
+    /// one layer.
+    Group,
+}
+
+impl LayerSource {
+    /// Whether a layer with this source shows pixels of its own: a band or
+    /// a step's result, and not an adjustment or a group.
+    pub fn shows_pixels(&self) -> bool {
+        matches!(self, LayerSource::Band { .. } | LayerSource::Step { .. })
+    }
 }
 
 /// One layer of the Combine stage: a source with its own color, mask and
@@ -317,6 +330,14 @@ pub struct LayerRecord {
     pub steps: Vec<StepRecord>,
     /// Where this layer shows. `None` is everywhere.
     pub mask: Option<MaskRecord>,
+    /// The group the layer is a member of. A group's members are directly
+    /// beneath it in the stack. A group is a member of no group.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<Uuid>,
+    /// Whether the layer is clipped to the layer beneath it: it shows only
+    /// inside that layer's mask, and not at all while that layer is hidden.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub clipped: bool,
 }
 
 impl LayerRecord {
@@ -332,6 +353,8 @@ impl LayerRecord {
             color: None,
             steps: Vec::new(),
             mask: None,
+            group: None,
+            clipped: false,
         }
     }
 }
@@ -455,10 +478,127 @@ impl Document {
         }
         let layers = &mut self.stages[StageKind::Combine as usize].layers;
         layers.insert(index.min(layers.len()), layer);
+        self.keep_groups_together();
         Ok(())
     }
 
-    /// Adds a step to one layer, after the layer's other steps.
+    /// Restores what holds for groups after the stack changed: a group's
+    /// members are directly beneath it, in their order; a layer whose group
+    /// is gone is a member of none; a group is a member of none.
+    fn keep_groups_together(&mut self) {
+        let layers = &mut self.stages[StageKind::Combine as usize].layers;
+        let groups: Vec<Uuid> = layers
+            .iter()
+            .filter(|layer| layer.source == LayerSource::Group)
+            .map(|layer| layer.id)
+            .collect();
+        for layer in layers.iter_mut() {
+            let is_group = layer.source == LayerSource::Group;
+            if is_group || layer.group.is_some_and(|group| !groups.contains(&group)) {
+                layer.group = None;
+            }
+        }
+        for group in groups {
+            let (members, mut rest): (Vec<_>, Vec<_>) = std::mem::take(layers)
+                .into_iter()
+                .partition(|layer| layer.group == Some(group));
+            let at = rest
+                .iter()
+                .position(|layer| layer.id == group)
+                .expect("the group was just listed");
+            rest.splice(at..at, members);
+            *layers = rest;
+        }
+    }
+
+    /// The members of a group, bottom first.
+    pub fn group_members(&self, group: Uuid) -> impl Iterator<Item = &LayerRecord> {
+        self.layers()
+            .iter()
+            .filter(move |layer| layer.group == Some(group))
+    }
+
+    /// Puts a layer into a new group of its own, right where the layer is,
+    /// and returns the group's id. Other layers join by being moved into it.
+    /// The group takes the layer's blend mode.
+    ///
+    /// Refuses a layer that is a group, and a layer already in a group:
+    /// groups do not hold groups.
+    pub fn group_layer(&mut self, id: Uuid) -> Result<Uuid, StudioError> {
+        let refuse = |why: &str| StudioError::Document(why.to_string());
+        let layers = &mut self.stages[StageKind::Combine as usize].layers;
+        let at = layers
+            .iter()
+            .position(|layer| layer.id == id)
+            .ok_or_else(|| refuse("the layer is not in the document"))?;
+        if layers[at].source == LayerSource::Group || layers[at].group.is_some() {
+            return Err(refuse("a group does not hold another group"));
+        }
+        // The group blends as the layer did, so grouping one layer does not
+        // change the picture.
+        let mut group = LayerRecord::new("Group", LayerSource::Group);
+        group.blend = layers[at].blend;
+        let group_id = group.id;
+        layers[at].group = Some(group_id);
+        layers.insert(at + 1, group);
+        Ok(group_id)
+    }
+
+    /// Dissolves a group: its members stay where they are, as members of no
+    /// group. The group's own mask and steps go with it. Returns whether
+    /// the document had the group.
+    pub fn ungroup(&mut self, group: Uuid) -> bool {
+        let is_group = self
+            .layers()
+            .iter()
+            .any(|layer| layer.id == group && layer.source == LayerSource::Group);
+        is_group && self.remove_layer(group).is_some()
+    }
+
+    /// Moves a layer so that it lands under the layer that is at `position`
+    /// now, counted from the bottom, as a member of `group` or of none. A
+    /// group moves with its members and joins no group.
+    ///
+    /// Returns whether the document has the layer.
+    pub fn place_layer(&mut self, id: Uuid, position: usize, group: Option<Uuid>) -> bool {
+        let layers = &mut self.stages[StageKind::Combine as usize].layers;
+        let Some(at) = layers.iter().position(|layer| layer.id == id) else {
+            return false;
+        };
+        let is_group = layers[at].source == LayerSource::Group;
+        // A group's members are directly beneath it.
+        let low = if is_group {
+            layers[..at]
+                .iter()
+                .rposition(|layer| layer.group != Some(id))
+                .map_or(0, |other| other + 1)
+        } else {
+            at
+        };
+        let joins = group.filter(|group| {
+            !is_group
+                && layers
+                    .iter()
+                    .any(|layer| layer.id == *group && layer.source == LayerSource::Group)
+        });
+        if !is_group {
+            layers[at].group = joins;
+        }
+        // A place inside the block that moves is where the block is.
+        if !(low..=at + 1).contains(&position) {
+            let block: Vec<LayerRecord> = layers.drain(low..=at).collect();
+            let to = if position > at {
+                position - block.len()
+            } else {
+                position
+            };
+            let to = to.min(layers.len());
+            layers.splice(to..to, block);
+        }
+        self.keep_groups_together();
+        true
+    }
+
     pub fn insert_layer_step(&mut self, layer: Uuid, step: StepRecord) -> Result<(), StudioError> {
         step.kind
             .accepts()
@@ -470,7 +610,9 @@ impl Document {
         Ok(())
     }
 
-    /// Moves a layer to `index`, counted from the bottom.
+    /// Moves one layer to `index`, counted from the bottom. Use
+    /// [`Self::place_layer`] to move a layer into or out of a group, or to
+    /// move a group with its members.
     pub fn move_layer(&mut self, id: Uuid, index: usize) -> bool {
         let layers = &mut self.stages[StageKind::Combine as usize].layers;
         let Some(from) = layers.iter().position(|layer| layer.id == id) else {
@@ -478,6 +620,7 @@ impl Document {
         };
         let layer = layers.remove(from);
         layers.insert(index.min(layers.len()), layer);
+        self.keep_groups_together();
         true
     }
 
@@ -485,7 +628,9 @@ impl Document {
     pub fn remove_layer(&mut self, id: Uuid) -> Option<LayerRecord> {
         let layers = &mut self.stages[StageKind::Combine as usize].layers;
         let index = layers.iter().position(|layer| layer.id == id)?;
-        Some(layers.remove(index))
+        let removed = layers.remove(index);
+        self.keep_groups_together();
+        Some(removed)
     }
 
     /// A step of any stage, and the stage it is in. A step that belongs to

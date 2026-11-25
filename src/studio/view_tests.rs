@@ -277,16 +277,19 @@ fn a_blended_view_draws_band_layers_and_adjustments_in_order() {
         [
             StackEntry::Band {
                 layer: ids[0],
-                channel: 0
+                channel: 0,
+                clip: None
             },
             StackEntry::Adjustment { layer: exposure_id },
             StackEntry::Band {
                 layer: ids[2],
-                channel: 1
+                channel: 1,
+                clip: None
             },
             StackEntry::Band {
                 layer: ids[3],
-                channel: 2
+                channel: 2,
+                clip: None
             },
             StackEntry::Adjustment { layer: curves_id },
         ]
@@ -326,7 +329,8 @@ fn a_blended_view_draws_band_layers_and_adjustments_in_order() {
         alone.stack,
         [StackEntry::Band {
             layer: ids[3],
-            channel: 0
+            channel: 0,
+            clip: None
         }]
     );
     assert!(alone

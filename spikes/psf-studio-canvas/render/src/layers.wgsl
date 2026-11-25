@@ -160,7 +160,10 @@ fn healed_value(index: i32, pixel: vec2i) -> f32 {
 fn tile_fragment(in: TileVertex) -> @location(0) vec4f {
     // The layers blended so far.
     var color = vec3f(0.0);
-    // The last band layer, which waits to be blended until its own
+    // The layers beneath a group, kept while the group's members blend on
+    // their own.
+    var beneath = vec3f(0.0);
+    // The last band layer or group, which waits to be blended until its own
     // adjustments have been applied to it.
     var waiting = false;
     var own = vec3f(0.0);
@@ -170,13 +173,18 @@ fn tile_fragment(in: TileVertex) -> @location(0) vec4f {
     let count = i32(globals.counts.x);
     for (var index = 0; index < count; index++) {
         let layer = globals.layers[index];
-        // How much of the layer applies here: its opacity, within its mask.
+        // How much of the layer applies here: its opacity, within its mask
+        // and within the mask of the layer it is clipped to.
         var cover = layer.color.a;
         if layer.adjust.z >= 0.0 {
             cover *= textureLoad(layer_masks, pixel, i32(layer.adjust.z), 0).r;
         }
-        if layer.adjust.x > 0.5 && layer.adjust.w > 0.5 {
-            // An adjustment of the waiting layer alone.
+        if layer.stretch.z >= 0.0 {
+            cover *= textureLoad(layer_masks, pixel, i32(layer.stretch.z), 0).r;
+        }
+        let kind = layer.adjust.x;
+        if kind > 0.5 && kind < 9.5 && layer.adjust.w > 0.5 {
+            // An adjustment of the waiting layer or group alone.
             if waiting {
                 own = mix(own, adjusted(own, layer.adjust), cover);
             }
@@ -186,7 +194,22 @@ fn tile_fragment(in: TileVertex) -> @location(0) vec4f {
             color = mix(color, blend(own_mode, color, own), own_cover);
             waiting = false;
         }
-        if layer.adjust.x > 0.5 {
+        if kind > 10.5 {
+            // The end of a group: its members' blend is one layer now.
+            own = color;
+            own_cover = cover;
+            own_mode = layer.select.y;
+            waiting = true;
+            color = beneath;
+            continue;
+        }
+        if kind > 9.5 {
+            // The start of a group: its members blend from nothing.
+            beneath = color;
+            color = vec3f(0.0);
+            continue;
+        }
+        if kind > 0.5 {
             color = mix(color, adjusted(color, layer.adjust), cover);
             continue;
         }

@@ -320,3 +320,156 @@ fn before_a_layers_own_edit_is_the_layer_without_it() {
         [second.before(&document), second.clone()]
     );
 }
+
+/// The stack's layers, bottom first, as "name" or "name in group".
+fn stack_of(document: &Document) -> Vec<String> {
+    document
+        .layers()
+        .iter()
+        .map(|layer| match layer.group {
+            Some(_) => format!("{} in group", layer.name),
+            None => layer.name.clone(),
+        })
+        .collect()
+}
+
+#[test]
+fn a_group_keeps_its_members_beneath_it_and_moves_with_them() {
+    let mut document = document(&["red", "green", "blue"]);
+    let ids: Vec<Uuid> = document.layers().iter().map(|layer| layer.id).collect();
+    let group = document.group_layer(ids[1]).unwrap();
+    assert_eq!(
+        stack_of(&document),
+        ["R as red", "G as green in group", "Group", "B as blue"]
+    );
+    // The group blends as the layer it was made around did.
+    assert_eq!(document.layers()[2].blend, BlendMode::Add);
+    // A group does not hold a group.
+    assert!(document.group_layer(group).is_err());
+    assert!(document.group_layer(ids[1]).is_err());
+
+    // Blue joins the group, on top of green.
+    assert!(document.place_layer(ids[2], 2, Some(group)));
+    assert_eq!(
+        stack_of(&document),
+        [
+            "R as red",
+            "G as green in group",
+            "B as blue in group",
+            "Group"
+        ]
+    );
+    assert_eq!(document.group_members(group).count(), 2);
+
+    // The group moves to the bottom with its members.
+    assert!(document.place_layer(group, 0, None));
+    assert_eq!(
+        stack_of(&document),
+        [
+            "G as green in group",
+            "B as blue in group",
+            "Group",
+            "R as red"
+        ]
+    );
+
+    // Green leaves the group for the top of the stack.
+    assert!(document.place_layer(ids[1], 4, None));
+    assert_eq!(
+        stack_of(&document),
+        ["B as blue in group", "Group", "R as red", "G as green"]
+    );
+
+    assert!(document.ungroup(group));
+    assert_eq!(stack_of(&document), ["B as blue", "R as red", "G as green"]);
+    assert!(!document.ungroup(ids[0]));
+    assert_eq!(document.layers().len(), 3);
+}
+
+#[test]
+fn a_view_blends_a_group_on_its_own() {
+    let mut document = document(&["red", "green", "blue"]);
+    let ids: Vec<Uuid> = document.layers().iter().map(|layer| layer.id).collect();
+    let group = document.group_layer(ids[1]).unwrap();
+    document.place_layer(ids[2], 2, Some(group));
+    let entries = |place: Place| -> Vec<&'static str> {
+        plan(&document, &place.view())
+            .stack
+            .iter()
+            .map(|entry| match entry {
+                StackEntry::Band { .. } => "band",
+                StackEntry::Adjustment { .. } => "adjustment",
+                StackEntry::GroupBegin { .. } => "begin",
+                StackEntry::GroupEnd { .. } => "end",
+            })
+            .collect()
+    };
+    assert_eq!(
+        entries(Place::Combined),
+        ["band", "begin", "band", "band", "end"]
+    );
+    // The group alone is its members and itself.
+    let alone = Place::Layer {
+        layer: group,
+        alone: true,
+    };
+    assert_eq!(entries(alone), ["begin", "band", "band", "end"]);
+    // A view that stops inside the group shows the group so far.
+    let part = Place::Layer {
+        layer: ids[1],
+        alone: false,
+    };
+    assert_eq!(entries(part), ["band", "begin", "band", "end"]);
+    // One member alone is shown as it is.
+    let member = Place::Layer {
+        layer: ids[1],
+        alone: true,
+    };
+    assert_eq!(entries(member), ["band"]);
+    // Before the group is the stack beneath its members.
+    let whole = Place::Layer {
+        layer: group,
+        alone: false,
+    };
+    assert_eq!(
+        whole.before(&document),
+        Place::Layer {
+            layer: ids[0],
+            alone: false
+        }
+    );
+}
+
+#[test]
+fn a_clipped_layer_is_clipped_to_the_layer_beneath_it() {
+    let mut document = document(&["red", "green", "blue"]);
+    let ids: Vec<Uuid> = document.layers().iter().map(|layer| layer.id).collect();
+    let clip_of = |document: &Document, layer: Uuid| {
+        plan(document, &Place::Combined.view())
+            .stack
+            .iter()
+            .find_map(|entry| match entry {
+                StackEntry::Band {
+                    layer: own, clip, ..
+                } if *own == layer => Some(*clip),
+                _ => None,
+            })
+            .unwrap()
+    };
+    assert_eq!(clip_of(&document, ids[2]), None);
+
+    // Two clipped layers share the unclipped layer beneath them.
+    document.layer_mut(ids[1]).unwrap().clipped = true;
+    document.layer_mut(ids[2]).unwrap().clipped = true;
+    assert_eq!(clip_of(&document, ids[1]), Some(ids[0]));
+    assert_eq!(clip_of(&document, ids[2]), Some(ids[0]));
+    // The bottom layer has nothing to be clipped to.
+    document.layer_mut(ids[0]).unwrap().clipped = true;
+    assert_eq!(clip_of(&document, ids[0]), None);
+    document.layer_mut(ids[0]).unwrap().clipped = false;
+
+    // A layer above a group is clipped to the group, not to a member.
+    document.layer_mut(ids[1]).unwrap().clipped = false;
+    let group = document.group_layer(ids[1]).unwrap();
+    assert_eq!(clip_of(&document, ids[2]), Some(group));
+}
