@@ -293,9 +293,12 @@ pub fn color_setup_from_document(document: &Document) -> Result<Value, StudioErr
             Ok(())
         };
         match operation.as_str() {
-            op::BACKGROUND => {
+            // PSF Guard's settings hold one background for every channel. A
+            // channel's own background step is Studio's.
+            op::BACKGROUND if step.band.is_none() => {
                 settings.insert("background_extraction".to_string(), value.clone());
             }
+            op::BACKGROUND => {}
             op::FOLLOW_CHANNELS => {
                 settings.insert("input_processing".to_string(), value.clone());
             }

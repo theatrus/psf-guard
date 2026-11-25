@@ -1331,6 +1331,78 @@ is twice the size, 6 channels for 3, and preparation peaked at 811 MB.
 The cost is memory and disk, and it covers one setting. A step whose
 result is not in proportion to its setting cannot be made live this way.
 
+#### What the view shows, and how a person picks it (2026-11-25)
+
+This part is written so the interface can move to another toolkit, a web
+canvas included, without being designed again. The rules live in
+`studio::view`, which knows of no toolkit and no GPU; the GPUI panes only
+draw buttons and hand the result to the canvas.
+
+A person picks three things. Each is a row of buttons under the stages,
+and a sentence under them says what is on screen, such as “green on its
+own, after the Linear stage, drawn with a preview stretch, not saved,
+because the view stops before the stretch.”
+
+| Choice | Options | What it means |
+|---|---|---|
+| Show | One tab per channel, and Combined | A channel is drawn on its own, in gray. Combined blends the layers as the Combine stage does |
+| Up to | Start of stage, Selected step, End of stage, Final | The last step the view applies. This is how a person sees an intermediate result. Changing stage moves it to the end of that stage |
+| Stretch | Document's, Preview | The document's stretch is each channel's own Stretch steps. The preview stretch is automatic, per channel, for looking only, and is never saved. A channel the view has not stretched yet is drawn with the preview stretch, and the sentence says so |
+
+`studio::plan(document, view)` returns what a canvas draws: for each
+channel the background step that applies and the stretch to use, whether
+the layers are blended, which Finish steps apply, and the sentence. A
+channel view applies no Finish step, because those act on the combined
+image.
+
+Channels are not assumed to share settings:
+
+- **A step with a channel applies to that channel. A step without one
+  applies to every channel that has no step of its own of that kind.**
+- **A channel's own step decides for that channel, on or off.** Turning
+  it off turns the step off for that channel; the channel does not fall
+  back to the shared step.
+- **Give a channel its own settings** copies a shared step for the viewed
+  channel, right after the shared one. The shared step's row then says
+  “every channel, except this one: it has its own.”
+- **Stretch is per channel from the start.** Each channel's slider writes
+  that channel's own Stretch step.
+- **The step list follows the view.** A channel tab lists that channel's
+  steps and the shared ones; Combined lists all.
+- **A channel's own Background step is Studio's.** PSF Guard's setup holds
+  one background for every channel, so the settings read back from the
+  document keep the shared step and leave the channel's own out.
+
+Tried on the Sh2-157 stacks: green on its own in the Linear stage, given
+its own Background step and moved to strength 0. The combined view then
+showed green's gradient with red and blue still corrected.
+
+What the canvas needs from a toolkit, for whoever ports it:
+
+1. A surface the canvas renders into, behind the interface, with pointer
+   events reaching the interface first.
+2. Per frame: the view transform, a list of layers (tile channel, color,
+   opacity, blend mode, curve, an optional second tile channel with a
+   blend amount), one stretch table per layer, the Finish steps and the
+   mask strokes. `Frame` in the spike's render crate is that list.
+3. Tiles as array textures with one layer per stored channel, fetched by
+   level and position.
+
+Everything above the frame is `studio::plan` and the document, which are
+plain Rust and compile to WebAssembly.
+
+Not done in the view:
+
+- **A step's result in the middle of a channel's chain** is shown only for
+  the steps the canvas can apply: the background strength, the stretch
+  and the Finish steps. Other steps are recorded and not drawn.
+- **The preview stretch has no controls,** and cannot be linked across
+  channels.
+- **Brushes are offered in the Finish stage only,** where the canvas draws
+  masks and heals. They were shown in every stage and did nothing there.
+- **A channel's own Background step changes its strength only.** The fit
+  is still made with the shared settings.
+
 #### PSF Guard's flow after the moves
 
 The existing flow must not change. After both moves, a color preview
@@ -1407,6 +1479,32 @@ start: one layer per band, a fixed color each, six blend modes.
 - **Masks on a layer,** for the imaging modes that need them.
 - **Palettes that depend on the pixels,** as Foraxx does: the share of each
   band in a color changes with the bands' own values.
+
+### Inspecting layers and adjusting them in place (asked for 2026-11-25)
+
+In the Combine view a person must be able to:
+
+- **Inspect a layer:** see it alone, see it with the layers under it, and
+  see its mask.
+- **Edit a layer:** its color mapping, opacity, blend mode, stretch and
+  mask, as now, with the result on the canvas at once.
+- **Add an adjustment layer at any place in the stack:** exposure,
+  clarity, curves, saturation and the like. It changes what is under it
+  and carries its own mask, painted or computed, so an adjustment applies
+  to one region.
+
+In the model an adjustment layer is a layer with no pixels of its own: an
+operation, its settings, a mask, an opacity and a blend. The view model
+gains a subject for one layer and for the stack up to a layer, beside one
+channel and Combined. Finish steps become adjustment layers at the top of
+the stack, so there is one way to adjust and not two.
+
+On the canvas the layer pass becomes a loop over pixel layers and
+adjustment layers in order, each adjustment reading the image so far and
+a mask layer. The spike's Finish pass already does this for curves,
+saturation and heal with painted masks; it moves into the layer loop.
+Clarity needs a blurred copy of the image so far, which is one more
+target at a reduced size.
 
 ### What it changes in the model
 

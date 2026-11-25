@@ -133,23 +133,27 @@ impl Bands {
         self.corrected.iter().any(Option::is_some)
     }
 
-    /// Each band's stretch analysis with the correction at `strength`: the
-    /// analysis of the blended samples, which are what the stretch is
-    /// applied to.
-    pub fn stretches(&self, strength: f32) -> Result<Vec<BandStretch>, String> {
+    /// Each band's stretch analysis with its correction at the strength
+    /// given for it: the analysis of the blended samples, which are what
+    /// the stretch is applied to. A band with no strength given gets 0.
+    pub fn stretches(&self, strengths: &[f32]) -> Result<Vec<BandStretch>, String> {
         self.samples
             .iter()
             .zip(&self.scales)
-            .map(|((before, after), scale)| match after {
-                Some(after) if strength > 0.0 => {
-                    let blended: Vec<f32> = before
-                        .iter()
-                        .zip(after)
-                        .map(|(a, b)| a + (b - a) * strength)
-                        .collect();
-                    BandStretch::analyse(&blended, Some(*scale))
+            .enumerate()
+            .map(|(band, ((before, after), scale))| {
+                let strength = strengths.get(band).copied().unwrap_or(0.0);
+                match after {
+                    Some(after) if strength > 0.0 => {
+                        let blended: Vec<f32> = before
+                            .iter()
+                            .zip(after)
+                            .map(|(a, b)| a + (b - a) * strength)
+                            .collect();
+                        BandStretch::analyse(&blended, Some(*scale))
+                    }
+                    _ => BandStretch::analyse(before, Some(*scale)),
                 }
-                _ => BandStretch::analyse(before, Some(*scale)),
             })
             .collect()
     }

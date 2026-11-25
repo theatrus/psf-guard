@@ -7,8 +7,9 @@ use super::{
 };
 use crate::image_steps::Accepts;
 use crate::studio_model::{
-    document_from_color_setup, flow_operations, level_for_zoom, BlendMode, Document,
-    JunctionStatus, LayerSource, MaskRecord, StageKind, StepKind, StepRecord, Stroke, StrokeMode,
+    document_from_color_setup, flow_operations, level_for_zoom, own_step_for_channel, plan,
+    step_shown_for, BlendMode, DisplayStretch, Document, JunctionStatus, LayerSource, MaskRecord,
+    PlannedStretch, StageKind, StepKind, StepRecord, Stroke, StrokeMode, Subject, UpTo, View,
 };
 use gpui::{
     canvas, div, prelude::*, px, relative, rgb, AnyElement, Context, MouseButton, MouseDownEvent,
@@ -235,17 +236,31 @@ pub(super) fn with_amount(step: &StepRecord, amount: f32) -> serde_json::Value {
     serde_json::Value::Object(settings)
 }
 
-/// How much of the background correction the document asks for: the
-/// strength of its Background extraction step, or 0 when the step is off
-/// or absent.
-fn background_strength(document: &Document) -> f32 {
+/// Where Seiza's automatic stretch places the background when a step
+/// does not say: Seiza's default.
+const DEFAULT_STRETCH_TARGET: f64 = 0.2;
+
+/// Where a stretch step places the background.
+fn stretch_target(step: &StepRecord) -> f64 {
+    let StepKind::Operation { settings, .. } = &step.kind else {
+        return DEFAULT_STRETCH_TARGET;
+    };
+    settings["model"]["target_median"]
+        .as_f64()
+        .unwrap_or(DEFAULT_STRETCH_TARGET)
+}
+
+/// A channel's first stretch step that is on.
+fn stretch_step<'a>(document: &'a Document, channel: &str) -> Option<&'a StepRecord> {
     document
-        .stage(StageKind::Linear)
+        .stage(StageKind::Stretch)
         .steps
         .iter()
-        .find(|step| step.kind.name() == flow_operations::BACKGROUND)
-        .filter(|step| step.enabled)
-        .map_or(0.0, amount)
+        .find(|step| {
+            step.enabled
+                && step.kind.name() == flow_operations::STRETCH
+                && step.band.as_deref() == Some(channel)
+        })
 }
 
 /// Whether the canvas draws a step, or only keeps it in the document.
@@ -297,30 +312,45 @@ fn step_strokes(step: &StepRecord) -> Vec<Segment> {
     }
 }
 
-/// What the document asks the canvas to draw.
-fn scene(document: &Document, bands: &Bands, version: u64) -> Scene {
-    let labels = band_labels(bands.len());
-    let strength = background_strength(document);
-    let (layers, layer_bands) = document
-        .layers()
-        .iter()
-        .take(MAX_LAYERS)
-        .filter_map(|layer| {
-            let LayerSource::Band { band } = &layer.source else {
-                // A layer made from a step's result needs the engine.
-                return None;
-            };
-            let band = labels
-                .iter()
-                .position(|(name, _)| name == band || &channel_name(name) == band)?;
-            // A layer's own Curves steps add up to one curve.
-            let curve = layer
-                .steps
-                .iter()
-                .filter(|step| step.enabled && step.kind.name() == "Curves")
-                .map(amount)
-                .sum();
-            let shown = Layer {
+/// What the document asks the canvas to draw for a view. Returns the scene
+/// and each band's background strength in it.
+fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scene, Vec<f32>) {
+    let planned = plan(document, view);
+    let channels = document.channels();
+    let mut strengths = vec![0.0; bands.len()];
+    let mut layers = Vec::new();
+    let mut layer_bands = Vec::new();
+    let mut layer_targets = Vec::new();
+    for channel in planned.channels.iter().take(MAX_LAYERS) {
+        let Some(band) = channels
+            .iter()
+            .position(|name| *name == channel.channel)
+            .filter(|band| *band < bands.len())
+        else {
+            continue;
+        };
+        let strength = channel
+            .background
+            .and_then(|id| document.step(id))
+            .map_or(0.0, |(_, step)| amount(step));
+        strengths[band] = strength;
+        let target = match &channel.stretch {
+            PlannedStretch::Document(steps) => steps
+                .first()
+                .and_then(|id| document.step(*id))
+                .map_or(DEFAULT_STRETCH_TARGET, |(_, step)| stretch_target(step)),
+            PlannedStretch::Preview => DEFAULT_STRETCH_TARGET,
+        };
+        // The channel's layer, when the view blends the layers.
+        let layer = document
+            .layers()
+            .iter()
+            .find(|layer| {
+                matches!(&layer.source, LayerSource::Band { band } if *band == channel.channel)
+            })
+            .filter(|_| planned.combined);
+        let shown = match layer {
+            Some(layer) => Layer {
                 band: bands.tile_band[band],
                 blended: bands.corrected[band].map(|corrected| (corrected, strength)),
                 color: layer.color.unwrap_or([1.0; 3]),
@@ -333,16 +363,33 @@ fn scene(document: &Document, bands: &Bands, version: u64) -> Scene {
                     BlendMode::Lighten => Blend::Lighten,
                     BlendMode::Darken => Blend::Darken,
                 },
-                curve,
-            };
-            Some((shown, band))
-        })
-        .unzip();
+                // A layer's own Curves steps add up to one curve.
+                curve: layer
+                    .steps
+                    .iter()
+                    .filter(|step| step.enabled && step.kind.name() == "Curves")
+                    .map(amount)
+                    .sum(),
+            },
+            // A channel on its own is drawn in gray.
+            None => Layer {
+                band: bands.tile_band[band],
+                blended: bands.corrected[band].map(|corrected| (corrected, strength)),
+                color: [1.0; 3],
+                opacity: 1.0,
+                blend: Blend::Normal,
+                curve: 0.0,
+            },
+        };
+        layers.push(shown);
+        layer_bands.push(band);
+        layer_targets.push(target);
+    }
 
     let mut masks: Vec<Vec<Segment>> = Vec::new();
     let mut finish = Vec::new();
     for step in &document.stage(StageKind::Finish).steps {
-        if !step.enabled
+        if !planned.finish.contains(&step.id)
             || !is_drawn(StageKind::Finish, step, bands)
             || finish.len() == MAX_FINISH_STEPS
         {
@@ -377,13 +424,15 @@ fn scene(document: &Document, bands: &Bands, version: u64) -> Scene {
             mask,
         });
     }
-    Scene {
+    let scene = Scene {
         layers,
         layer_bands,
+        layer_targets,
         finish,
         masks,
         version,
-    }
+    };
+    (scene, strengths)
 }
 
 impl Studio {
@@ -424,16 +473,21 @@ impl Studio {
     /// Sends the canvas what the document now asks it to draw.
     pub(super) fn refresh_canvas(&mut self) {
         self.scene_version += 1;
-        let scene = Arc::new(scene(&self.document, &self.band_info, self.scene_version));
-        // The stretch is applied to the corrected samples, so its analysis
-        // follows the background strength.
-        let strength = background_strength(&self.document);
-        if self.stretched_strength != Some(strength) {
-            self.stretched_strength = Some(strength);
-            if let Ok(stretches) = self.band_info.stretches(strength) {
+        let (scene, strengths) = scene(
+            &self.document,
+            &self.band_info,
+            &self.view,
+            self.scene_version,
+        );
+        let scene = Arc::new(scene);
+        // The stretch is applied to the corrected samples, so each band's
+        // analysis follows its background strength.
+        if self.stretched_strength != strengths {
+            if let Ok(stretches) = self.band_info.stretches(&strengths) {
                 let stretches = Arc::new(stretches);
                 self.canvas.edit(|canvas| canvas.stretches = stretches);
             }
+            self.stretched_strength = strengths;
         }
         // While a brush is in hand, the selected step's mask shows over the
         // image, so a person sees what they have painted.
@@ -451,10 +505,196 @@ impl Studio {
         });
     }
 
+    /// The label of the channel a view shows, or `None` for the combined
+    /// view.
+    fn viewed_channel(&self) -> Option<&str> {
+        match &self.view.subject {
+            Subject::Channel(channel) => Some(channel),
+            Subject::Combined => None,
+        }
+    }
+
+    /// Writes where a band's stretch places the background into the band's
+    /// own stretch step. Each band has its own; none follows another.
+    pub(super) fn set_stretch_target(&mut self, band: usize, target: f64) {
+        let Some(channel) = self.document.channels().get(band).cloned() else {
+            return;
+        };
+        let Some(step) = stretch_step(&self.document, &channel) else {
+            return;
+        };
+        let id = step.id;
+        let StepKind::Operation { settings, .. } = &step.kind else {
+            return;
+        };
+        let mut settings = settings.clone();
+        if !settings.is_object() {
+            settings = serde_json::json!({ "model": { "type": "auto-mtf" } });
+        }
+        settings["model"]["target_median"] = target.into();
+        self.document.set_step_settings(id, settings);
+    }
+
+    /// Whether the viewed channel has its own step in place of this shared
+    /// one.
+    fn overridden_for_view(&self, step: &StepRecord) -> bool {
+        let Some(channel) = self.viewed_channel() else {
+            return false;
+        };
+        step.band.is_none()
+            && self.document.stage(self.stage).steps.iter().any(|other| {
+                other.kind.name() == step.kind.name() && other.band.as_deref() == Some(channel)
+            })
+    }
+
+    /// For a step shared by every channel, while one channel is viewed: a
+    /// button that gives the channel its own settings.
+    fn own_settings_button(
+        &self,
+        step: &StepRecord,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::Stateful<gpui::Div>> {
+        let channel = self.viewed_channel()?.to_string();
+        if step.band.is_some() || self.overridden_for_view(step) {
+            return None;
+        }
+        let shared = step.id;
+        let label = format!("Give {channel} its own settings");
+        Some(
+            Self::button(label, "own-settings", false).on_click(cx.listener(
+                move |this, _, _, cx| {
+                    if let Some(own) = own_step_for_channel(&mut this.document, shared, &channel) {
+                        this.selected_step = Some(own);
+                    }
+                    this.refresh_canvas();
+                    cx.notify();
+                },
+            )),
+        )
+    }
+
+    /// Changes what the canvas shows.
+    fn set_view(&mut self, change: impl FnOnce(&mut View)) {
+        change(&mut self.view);
+        // A step of another channel is not in the list any more.
+        let listed = self
+            .selected_step
+            .and_then(|id| self.document.step(id))
+            .is_some_and(|(_, step)| step_shown_for(step, &self.view.subject));
+        if !listed {
+            self.selected_step = self
+                .document
+                .stage(self.stage)
+                .steps
+                .iter()
+                .find(|step| step_shown_for(step, &self.view.subject))
+                .map(|step| step.id);
+        }
+        self.refresh_canvas();
+    }
+
+    /// The row under the stages: what the canvas shows, as three choices
+    /// and a sentence.
+    fn view_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let labels = band_labels(self.bands);
+        let channels = self.document.channels();
+        let subjects = channels
+            .iter()
+            .cloned()
+            .zip(labels)
+            .enumerate()
+            .map(|(index, (channel, (label, _)))| {
+                let on = self.viewed_channel() == Some(channel.as_str());
+                Self::button(label, ("view-channel", index), on).on_click(cx.listener(
+                    move |this, _, _, cx| {
+                        let channel = channel.clone();
+                        this.set_view(|view| view.subject = Subject::Channel(channel));
+                        cx.notify();
+                    },
+                ))
+            })
+            .chain([Self::button(
+                "Combined",
+                "view-combined",
+                self.view.subject == Subject::Combined,
+            )
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.set_view(|view| view.subject = Subject::Combined);
+                cx.notify();
+            }))]);
+
+        let stage = self.stage;
+        let selected = self.selected_step;
+        let mut stops = vec![
+            ("Start of stage", UpTo::StartOf(stage)),
+            ("End of stage", UpTo::EndOf(stage)),
+            ("Final", UpTo::Final),
+        ];
+        if let Some(id) = selected {
+            stops.insert(1, ("Selected step", UpTo::Step(id)));
+        }
+        let stops = stops.into_iter().enumerate().map(|(index, (label, stop))| {
+            Self::button(label, ("view-up-to", index), self.view.up_to == stop).on_click(
+                cx.listener(move |this, _, _, cx| {
+                    this.set_view(|view| view.up_to = stop);
+                    cx.notify();
+                }),
+            )
+        });
+
+        let stretches = [
+            ("Document's", DisplayStretch::Document),
+            ("Preview", DisplayStretch::Preview),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, (label, stretch))| {
+            Self::button(label, ("view-stretch", index), self.view.stretch == stretch).on_click(
+                cx.listener(move |this, _, _, cx| {
+                    this.set_view(|view| view.stretch = stretch);
+                    cx.notify();
+                }),
+            )
+        });
+
+        let group = |title: &'static str| {
+            div()
+                .flex()
+                .items_center()
+                .gap_1()
+                .child(div().text_xs().text_color(rgb(QUIET)).child(title))
+        };
+        div()
+            .flex_none()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .px_3()
+            .py_1()
+            .bg(rgb(PANE))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_4()
+                    .child(group("Show").children(subjects))
+                    .child(group("Up to").children(stops))
+                    .child(group("Stretch").children(stretches)),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .child(plan(&self.document, &self.view).description),
+            )
+    }
+
     fn show_stage(&mut self, stage: StageKind) {
         self.stage = stage;
+        // The view follows the stage a person works in.
+        self.view.up_to = UpTo::EndOf(stage);
         self.selected_step = self.document.stage(stage).steps.first().map(|step| step.id);
-        if !stage.allows_manual_edits() {
+        if stage != StageKind::Finish {
             self.tool = Tool::Pan;
         }
         self.refresh_canvas();
@@ -564,11 +804,20 @@ impl Studio {
 
     fn step_rows(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let stage = self.stage;
+        let channels = self.document.channels();
         self.document
             .stage(stage)
             .steps
             .iter()
             .enumerate()
+            .filter(|(_, step)| step_shown_for(step, &self.view.subject))
+            // A setup keeps a stretch for channels this document lacks, so
+            // it reads back unchanged. They are not listed.
+            .filter(|(_, step)| {
+                step.band
+                    .as_ref()
+                    .is_none_or(|band| channels.contains(band))
+            })
             .map(|(index, step)| {
                 let id = step.id;
                 let mask = match &step.mask {
@@ -595,10 +844,16 @@ impl Studio {
                     } else {
                         CONTROL
                     }))
-                    .child(match &step.band {
-                        Some(band) => format!("{}. {} · {band}", index + 1, step.kind.name()),
-                        None => format!("{}. {}", index + 1, step.kind.name()),
-                    })
+                    .child(format!("{}. {}", index + 1, step.kind.name()))
+                    .child(div().text_xs().text_color(rgb(QUIET)).child(
+                        match (&step.band, self.overridden_for_view(step)) {
+                            (Some(band), _) => format!("{band} only"),
+                            (None, true) => {
+                                "every channel, except this one: it has its own".to_string()
+                            }
+                            (None, false) => "every channel".to_string(),
+                        },
+                    ))
                     .child(div().text_xs().text_color(rgb(QUIET)).child(mask))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.selected_step = Some(id);
@@ -730,7 +985,8 @@ impl Studio {
                                     (value - low) / (high - low),
                                     cx,
                                 )),
-                        ),
+                        )
+                        .children(self.own_settings_button(step, cx)),
                 )
             });
         let add = offered(stage)
@@ -827,18 +1083,28 @@ impl Studio {
             )
     }
 
+    /// A row per channel the view shows. With a slider, the row sets where
+    /// that channel's own stretch places the background.
     fn band_rows(
         &self,
         slider: Option<fn(usize) -> SliderId>,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
+        let channels = self.document.channels();
         band_labels(self.bands)
             .into_iter()
             .enumerate()
+            .filter(|(band, _)| match self.viewed_channel() {
+                Some(viewed) => channels.get(*band).map(String::as_str) == Some(viewed),
+                None => true,
+            })
             .map(|(band, (name, color))| {
-                let (midtone, enabled) = self
-                    .canvas
-                    .read(|shared| (shared.canvas.sliders[band], true));
+                let target = channels
+                    .get(band)
+                    .and_then(|channel| stretch_step(&self.document, channel))
+                    .map_or(DEFAULT_STRETCH_TARGET, stretch_target);
+                // The slider covers background targets from 0.05 to 0.5.
+                let position = ((target - 0.05) / 0.45).clamp(0.0, 1.0) as f32;
                 div()
                     .flex()
                     .items_center()
@@ -848,12 +1114,13 @@ impl Studio {
                             .w(px(52.0))
                             .px_1()
                             .rounded_sm()
-                            .bg(swatch(color, if enabled { 1.0 } else { 0.25 }))
+                            .bg(swatch(color, 1.0))
                             .text_color(rgb(0xffffff))
                             .child(name),
                     )
                     .when_some(slider, |row, slider| {
-                        row.child(self.slider(slider(band), midtone, cx))
+                        row.child(self.slider(slider(band), position, cx))
+                            .child(div().text_xs().child(format!("{target:.2}")))
                     })
                     .into_any_element()
             })
@@ -990,7 +1257,7 @@ impl Studio {
                 .flex()
                 .flex_col()
                 .gap_1()
-                .child(Self::heading("Midtone per band"))
+                .child(Self::heading("Background level, per channel"))
                 .children(self.band_rows(Some(SliderId::Midtone), cx))
                 .into_any_element(),
             StageKind::Combine => self.layer_controls(cx),
@@ -1013,7 +1280,9 @@ impl Studio {
             .p_3()
             .bg(rgb(PANE))
             .child(controls)
-            .when(stage.allows_manual_edits(), |pane| {
+            // The canvas draws masks and heals for Finish steps only, so
+            // the brushes are offered there and nowhere else yet.
+            .when(stage == StageKind::Finish, |pane| {
                 pane.child(self.tools(cx))
             })
             .child(div().flex_1())
@@ -1043,6 +1312,7 @@ impl Render for Studio {
             .on_mouse_move(cx.listener(Self::mouse_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
             .child(self.stage_rail(cx))
+            .child(self.view_bar(cx))
             .child(
                 div()
                     .flex_1()

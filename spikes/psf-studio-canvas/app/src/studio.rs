@@ -1,6 +1,8 @@
 use crate::bench::Bench;
 use crate::store_tiles::{BandStretch, Bands};
-use crate::studio_model::{Document, StageKind, Stroke, StrokeMode};
+use crate::studio_model::{
+    DisplayStretch, Document, StageKind, Stroke, StrokeMode, Subject, UpTo, View as DocumentView,
+};
 use gpui::{
     prelude::*, px, rgb, size, App, Bounds, Context, MouseButton, MouseDownEvent, MouseMoveEvent,
     MouseUpEvent, NativeView, Pixels, Point, ScrollDelta, ScrollEvent, Window, WindowBounds,
@@ -99,7 +101,8 @@ enum Drag {
 /// copy and draws from that, so neither waits for the other.
 pub struct CanvasState {
     pub view: View,
-    /// Slider positions in 0..=1, one per band.
+    /// One per band, in 0..=1: what the benchmark moves to time a stretch
+    /// change. A person's sliders write the document instead.
     pub sliders: [f32; MAX_LAYERS],
     /// The document's size in pixels.
     pub document_size: (u32, u32),
@@ -128,7 +131,7 @@ impl CanvasState {
                 center: [0.0, 0.0],
                 zoom: 1.0,
             },
-            // A third of the way: a background target of 0.2, Seiza's default.
+            // A third of the way is at rest.
             sliders: [1.0 / 3.0; MAX_LAYERS],
             document_size: (1, 1),
             band_count: 0,
@@ -160,15 +163,17 @@ impl CanvasState {
     }
 
     /// Each layer's stretch table: Seiza's stretch of the layer's band,
-    /// with the background placed where the band's slider says.
+    /// with the background placed where the scene says.
     fn stretch_tables(&self) -> Vec<Vec<f32>> {
         self.scene
             .layer_bands
             .iter()
-            .filter_map(|band| {
-                let slider = self.sliders[(*band).min(MAX_LAYERS - 1)];
-                // The slider covers background targets from 0.05 to 0.5.
-                let target = 0.05 + 0.45 * f64::from(slider);
+            .zip(&self.scene.layer_targets)
+            .filter_map(|(band, target)| {
+                // The benchmark moves a band's slider to time a stretch
+                // change. A slider at rest, a third of the way, adds nothing.
+                let moved = f64::from(self.sliders[(*band).min(MAX_LAYERS - 1)] - 1.0 / 3.0);
+                let target = (*target + 0.45 * moved).clamp(0.05, 0.5);
                 Some(self.stretches.get(*band)?.table(target))
             })
             .collect()
@@ -180,8 +185,10 @@ impl CanvasState {
 #[derive(Default)]
 pub struct Scene {
     layers: Vec<Layer>,
-    /// The document band each layer shows, for its stretch and slider.
+    /// The document band each layer shows, for its stretch.
     layer_bands: Vec<usize>,
+    /// Where each layer's stretch places the background, from 0 to 1.
+    layer_targets: Vec<f64>,
     finish: Vec<FinishStep>,
     masks: Vec<Vec<Segment>>,
     /// Different for every scene, so the renderer uploads masks once.
@@ -405,8 +412,12 @@ pub struct Studio {
     bands: usize,
     /// Where each band is in a tile, and its samples for the stretch.
     band_info: Arc<Bands>,
-    /// The background strength the canvas's stretches were analysed at.
-    stretched_strength: Option<f32>,
+    /// Each band's background strength the canvas's stretches were
+    /// analysed at.
+    stretched_strength: Vec<f32>,
+    /// What the canvas shows: which channel, up to which step, with what
+    /// stretch.
+    view: DocumentView,
     /// The levels in the document's pyramid.
     levels: u8,
 }
@@ -532,7 +543,13 @@ impl Studio {
             scene_version: 0,
             bands,
             band_info,
-            stretched_strength: None,
+            // No strength is negative, so the first scene analyses.
+            stretched_strength: vec![-1.0],
+            view: DocumentView {
+                subject: Subject::Combined,
+                up_to: UpTo::EndOf(StageKind::Stretch),
+                stretch: DisplayStretch::Document,
+            },
             levels,
         };
         studio.refresh_canvas();
@@ -560,7 +577,13 @@ impl Studio {
         let value = (f32::from(x - bounds.origin.x) / f32::from(bounds.size.width).max(1.0))
             .clamp(0.0, 1.0);
         match id {
-            SliderId::Midtone(band) => self.canvas.edit(|canvas| canvas.sliders[band] = value),
+            SliderId::Midtone(band) => {
+                // The slider covers background targets from 0.05 to 0.5, and
+                // writes the channel's own stretch step.
+                let target = 0.05 + 0.45 * f64::from(value);
+                self.set_stretch_target(band, target);
+                self.refresh_canvas();
+            }
             SliderId::Amount => {
                 if let Some(id) = self.selected_step
                     && let Some((_, step)) = self.document.step(id)

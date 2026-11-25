@@ -26,6 +26,7 @@ mod source;
 mod step;
 mod store;
 mod stroke;
+mod view;
 
 #[cfg(test)]
 mod flow_tests;
@@ -35,6 +36,8 @@ mod store_tests;
 mod test_steps;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod view_tests;
 
 pub use budget::{read_within, MemoryBudget};
 pub use document::{
@@ -52,3 +55,7 @@ pub use source::{MemoryImage, RegionReader};
 pub use step::{Applied, LevelForm, MaskSource, Masked, Step};
 pub use store::{SampleFormat, StoreLevel, StoreOptions, TileStore};
 pub use stroke::{Heal, PaintedMask, Stroke, StrokeMode};
+pub use view::{
+    own_step_for_channel, plan, step_shown_for, ChannelPlan, DisplayStretch, PlannedStretch,
+    Subject, UpTo, View, ViewPlan,
+};
