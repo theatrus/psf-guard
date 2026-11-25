@@ -24,6 +24,7 @@ mod junction;
 mod palette;
 mod pipeline;
 mod place;
+mod recipe;
 mod source;
 mod step;
 mod store;
@@ -34,6 +35,8 @@ mod view;
 mod flow_tests;
 #[cfg(test)]
 mod place_tests;
+#[cfg(test)]
+mod recipe_tests;
 #[cfg(test)]
 mod store_tests;
 #[cfg(test)]
@@ -60,6 +63,7 @@ pub use palette::{
 };
 pub use pipeline::{level_for_zoom, Pipeline, PreviewChain};
 pub use place::{input_steps, panes, InputStep, Place, Row, Split};
+pub use recipe::{recipes_for, PartKind, Recipe, Route, RECIPES};
 pub use source::{MemoryImage, RegionReader};
 pub use step::{Applied, LevelForm, MaskSource, Masked, Step};
 pub use store::{SampleFormat, StoreLevel, StoreOptions, TileStore};

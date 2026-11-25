@@ -299,37 +299,59 @@ pub fn band_layer(channel: &str, hue: f32, saturation: f32, blend: BlendMode) ->
     layer
 }
 
-/// Whether a layer is one a palette makes and replaces: a layer that shows
-/// one of the document's channel stacks. A layer that shows another state
-/// of an input, such as the stars a tool took out of it, is a person's to
-/// keep and place.
-fn shows_a_palette_input(layer: &LayerRecord) -> bool {
+/// Whether a layer shows an input as prepared, not a state of one such
+/// as its stars.
+fn shows_an_input(layer: &LayerRecord) -> bool {
     matches!(&layer.source, LayerSource::Band { band } if !band.contains('@'))
 }
 
 impl Document {
-    /// Replaces the layers that show an input with the palette's, each
-    /// slot showing the input of the same name, and keeps every other layer
-    /// above them in its order.
-    ///
-    /// A palette layer takes over the painted mask and the own steps of the
-    /// first replaced layer that showed the same input, so choosing another
-    /// palette does not discard that work.
-    ///
-    /// The added layers' colors are scaled together so that their sum is
-    /// full scale in its brightest component.
+    /// Replaces the top-level layers that show an input with the palette's,
+    /// each slot showing the input of the same name. Every other layer
+    /// keeps its place above them. See [`Self::apply_palette_in`].
     pub fn apply_palette(&mut self, palette: &Palette) {
-        self.apply_palette_with(palette, &BTreeMap::new());
+        self.apply_palette_in(None, palette, &BTreeMap::new());
     }
 
-    /// Gives one slot of the document's palette another input, and remakes
-    /// the layers and the masks that show or read that slot. Each layer
-    /// keeps its color, opacity, own steps and place; each shared mask keeps
-    /// its reach and its touch-ups.
-    ///
-    /// Returns whether the document has a palette with that slot.
+    /// Gives one slot of the top-level palette another input. See
+    /// [`Self::set_palette_input_in`].
     pub fn set_palette_input(&mut self, slot: &str, input: &str) -> bool {
-        let Some(used) = self.palette.clone() else {
+        self.set_palette_input_in(None, slot, input)
+    }
+
+    /// Whether the top-level layers were made from this palette and are
+    /// still as many as it makes.
+    pub fn uses_palette(&self, palette: &Palette) -> bool {
+        self.uses_palette_in(None, palette)
+    }
+
+    /// The palette the layers of `part` were made from, with the input each
+    /// slot shows. `None` for `part` is the layers in no group.
+    pub fn palette_in(&self, part: Option<uuid::Uuid>) -> Option<&PaletteUse> {
+        match part {
+            None => self.palette.as_ref(),
+            Some(id) => self
+                .layers()
+                .iter()
+                .find(|layer| layer.id == id)?
+                .palette
+                .as_ref(),
+        }
+    }
+
+    /// Gives one slot of a part's palette another input, and remakes the
+    /// layers and the masks that show or read that slot. Each layer keeps
+    /// its color, opacity, own steps and place; each shared mask keeps its
+    /// reach, smoothing and touch-ups.
+    ///
+    /// Returns whether the part has a palette with that slot.
+    pub fn set_palette_input_in(
+        &mut self,
+        part: Option<uuid::Uuid>,
+        slot: &str,
+        input: &str,
+    ) -> bool {
+        let Some(used) = self.palette_in(part).cloned() else {
             return false;
         };
         let Some(palette) = PALETTES.iter().find(|palette| palette.name == used.name) else {
@@ -340,36 +362,52 @@ impl Document {
         }
         let mut inputs = used.inputs;
         inputs.insert(slot.to_string(), input.to_string());
-        self.apply_palette_with(palette, &inputs);
+        self.apply_palette_in(part, palette, &inputs);
         true
     }
 
-    /// Applies a palette with `inputs` saying which input each slot shows.
-    /// A slot not in `inputs` shows the input of its own name.
-    fn apply_palette_with(&mut self, palette: &Palette, inputs: &BTreeMap<String, String>) {
+    /// Replaces the layers of one part that show an input with the
+    /// palette's. `part` is a group, or `None` for the layers in no group.
+    /// `inputs` says which input each slot shows; a slot it leaves out
+    /// shows the input of its own name.
+    ///
+    /// Only that part's layers are touched, so a document may hold several
+    /// parts with a palette each, and layers a person added by hand beside
+    /// them. Within the part:
+    ///
+    /// - The same palette again, with other inputs, keeps each layer as it
+    ///   was (color, opacity, own steps, painted mask), showing its slot's
+    ///   input as it is now.
+    /// - Another palette gives each new layer the painted mask and own
+    ///   steps of the first replaced layer that showed the same input.
+    /// - Layers no palette made, such as adjustments, stars and an input a
+    ///   person added, stay above the new layers in their order.
+    /// - A shared mask the palette made before is kept, with its reach,
+    ///   smoothing and touch-ups, and reads its slots' inputs as they are
+    ///   now. One no layer uses any more goes.
+    pub fn apply_palette_in(
+        &mut self,
+        part: Option<uuid::Uuid>,
+        palette: &Palette,
+        inputs: &BTreeMap<String, String>,
+    ) {
         let input_of = |slot: &str| {
             inputs
                 .get(slot)
                 .cloned()
                 .unwrap_or_else(|| slot.to_string())
         };
-        // The same palette again, with other inputs: each layer is the one
-        // it was, showing another input.
         let remade = self
-            .palette
-            .as_ref()
+            .palette_in(part)
             .is_some_and(|used| used.name == palette.name);
-        let old: Vec<LayerRecord> = self.layers().to_vec();
-        for layer in &old {
+        let mut replaced: Vec<LayerRecord> =
+            self.palette_layers(part).into_iter().cloned().collect();
+        for layer in &replaced {
             self.remove_layer(layer.id);
         }
-        let (mut replaced, kept): (Vec<_>, Vec<_>) =
-            old.into_iter().partition(shows_a_palette_input);
         let by_place = remade && replaced.len() == palette.layers.len();
 
-        // The palette's masks: one per set of slots. A mask made for the
-        // same slots before is kept, with its reach and touch-ups, and
-        // reads the slots' inputs as they are now.
+        // The palette's masks: one per set of slots, for this part.
         let mut masks: Vec<(&'static [&'static str], uuid::Uuid)> = Vec::new();
         for needed in palette.layers.iter().filter_map(|layer| layer.mask) {
             if masks.iter().any(|(slots, _)| *slots == needed.inputs) {
@@ -380,7 +418,7 @@ impl Document {
             let known = self
                 .masks()
                 .iter()
-                .find(|mask| mask.slots == slots)
+                .find(|mask| mask.slots == slots && mask.part == part)
                 .map(|mask| mask.id);
             let id = match known {
                 Some(id) => {
@@ -391,6 +429,7 @@ impl Document {
                 }
                 None => self.add_mask(SharedMask {
                     slots,
+                    part,
                     ..SharedMask::new(read)
                 }),
             };
@@ -402,7 +441,6 @@ impl Document {
             let input = input_of(entry.channel);
             let mut layer = band_layer(&input, entry.hue, entry.saturation, entry.blend);
             if by_place {
-                // The layer it was, showing the slot's input as it is now.
                 let was = replaced[at].clone();
                 let color = was.color.unwrap_or([1.0; 3]);
                 layer = LayerRecord {
@@ -417,7 +455,6 @@ impl Document {
                 if let Some(earlier) = earlier {
                     let old = replaced.remove(earlier);
                     layer.steps = old.steps;
-                    layer.group = old.group;
                     layer.clipped = old.clipped;
                     layer.mask = old.mask;
                 }
@@ -437,46 +474,89 @@ impl Document {
                     inverted: needed.inverted,
                 });
             }
+            layer.group = part;
+            layer.slot = Some(entry.channel.to_string());
             layers.push(layer);
         }
         if !by_place {
             balance_colors(&mut layers);
         }
-        for layer in layers.into_iter().chain(kept) {
+        // The new layers go at the bottom of their part, in order, so what
+        // else the part holds stays above them.
+        for (at, layer) in layers.into_iter().enumerate() {
+            let id = layer.id;
             self.insert_layer(usize::MAX, layer)
-                .expect("a palette's layers and a document's own layers are valid");
+                .expect("a palette's layers are valid");
+            let bottom = match part {
+                None => 0,
+                Some(group) => {
+                    let stack = self.layers();
+                    stack
+                        .iter()
+                        .position(|other| other.id != id && other.group == Some(group))
+                        .or_else(|| stack.iter().position(|other| other.id == group))
+                        .unwrap_or(0)
+                }
+            };
+            // At the top level the palette's layers go beneath everything.
+            let position = match part {
+                None => at,
+                Some(_) => bottom + at,
+            };
+            self.place_layer(id, position, part);
         }
-        // A mask an earlier palette made, which no layer uses now, goes.
+        // A mask this part's palette made before, which no layer uses now,
+        // goes.
         let unused: Vec<uuid::Uuid> = self
             .masks()
             .iter()
-            .filter(|mask| !mask.slots.is_empty())
+            .filter(|mask| !mask.slots.is_empty() && mask.part == part)
             .filter(|mask| self.layers_using_mask(mask.id).next().is_none())
             .map(|mask| mask.id)
             .collect();
         for id in unused {
             self.remove_mask(id);
         }
-        self.palette = Some(PaletteUse {
+        let used = PaletteUse {
             name: palette.name.to_string(),
             inputs: palette
                 .slots()
                 .into_iter()
                 .map(|slot| (slot.to_string(), input_of(slot)))
                 .collect(),
-        });
+        };
+        match part {
+            None => self.palette = Some(used),
+            Some(id) => {
+                if let Some(group) = self.layer_mut(id) {
+                    group.palette = Some(used);
+                }
+            }
+        }
     }
 
-    /// Whether the document's layers were made from this palette and are
-    /// still as many as it makes.
-    pub fn uses_palette(&self, palette: &Palette) -> bool {
-        let shown = self
-            .layers()
-            .iter()
-            .filter(|layer| shows_a_palette_input(layer))
-            .count();
-        self.palette
-            .as_ref()
+    /// The layers of a part that a palette replaces when it is applied
+    /// there: those a palette made. In a part no palette has made layers
+    /// for, they are the layers that show an input as prepared, so a first
+    /// palette takes over the layers a document starts with.
+    fn palette_layers(&self, part: Option<uuid::Uuid>) -> Vec<&LayerRecord> {
+        let in_part = || {
+            self.layers()
+                .iter()
+                .filter(move |layer| layer.group == part)
+        };
+        if in_part().any(|layer| layer.slot.is_some()) {
+            in_part().filter(|layer| layer.slot.is_some()).collect()
+        } else {
+            in_part().filter(|layer| shows_an_input(layer)).collect()
+        }
+    }
+
+    /// Whether a part's layers were made from this palette and are still as
+    /// many as it makes.
+    pub fn uses_palette_in(&self, part: Option<uuid::Uuid>, palette: &Palette) -> bool {
+        let shown = self.palette_layers(part).len();
+        self.palette_in(part)
             .is_some_and(|used| used.name == palette.name)
             && shown == palette.layers.len()
     }

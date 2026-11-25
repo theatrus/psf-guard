@@ -193,6 +193,9 @@ pub struct SharedMask {
     /// a mask a person made.
     #[serde(default)]
     pub slots: Vec<String>,
+    /// The group whose palette made the mask, when it was a group's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub part: Option<Uuid>,
 }
 
 impl SharedMask {
@@ -207,6 +210,7 @@ impl SharedMask {
             smoothing: Self::default_smoothing(),
             touch_ups: Vec::new(),
             slots: Vec::new(),
+            part: None,
         }
     }
 
@@ -455,6 +459,14 @@ pub struct LayerRecord {
     /// inside that layer's mask, and not at all while that layer is hidden.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub clipped: bool,
+    /// The palette slot the layer fills, when a palette made it. A palette
+    /// replaces only such layers, so one a person added beside them stays.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slot: Option<String>,
+    /// For a group: the palette its layers were made from, if any, and the
+    /// input each of its slots shows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub palette: Option<PaletteUse>,
 }
 
 impl LayerRecord {
@@ -472,6 +484,8 @@ impl LayerRecord {
             mask: None,
             group: None,
             clipped: false,
+            slot: None,
+            palette: None,
         }
     }
 }
