@@ -2112,6 +2112,45 @@ person builds by hand is overwritten.
   it, as a group does today. The Input and picture split shows an input
   beside the part it feeds.
 
+### Layout of the controls
+
+The spike's right pane grew one row of text buttons at a time, and reads
+as a scatter of buttons. The controls follow these rules from here on:
+
+- **Sections that fold.** A row's controls are a few named sections
+  (for a layer: Source, Color, Blend, Mask, Adjustments). Each folds, and
+  the pane remembers which are open per kind of row. The section a person
+  most likely came for is open; the rest are closed.
+- **One control per decision, of the right kind.** A choice between two
+  or three things is one segmented control, not separate buttons. A
+  choice from a longer list (blend mode, stretch, palette, provider) is
+  one menu that shows its current value. An on or off is one switch. A
+  number is a slider with its value beside it, on one line with its
+  label.
+- **Label on the left, control on the right,** in one column, so the eye
+  runs down the labels.
+- **Actions apart from settings.** Things that change the document's
+  structure (Add, Duplicate, Remove, Ungroup, Run the tools) sit in one
+  row at the foot of the section they act on, and are not mixed in with
+  settings.
+- **Help on demand.** A sentence of explanation belongs to a setting's
+  tooltip or a folded “About” line, not under every control. What stays
+  on screen is state a person needs: what a row applies to, and what the
+  canvas leaves out.
+- **Nothing a row cannot use.** A control that does not apply is left
+  out, not shown disabled with a reason, except where a person would
+  look for it and needs the reason.
+
+Setup's routing table and part cards follow the same rules.
+
+### The layered stretch
+
+Seiza's layered stretch treats large and fine structure apart, so it
+needs the image and cannot be one curve per input. It is offered with the
+other stretches. The canvas draws it from a result computed when the
+store is prepared, as it does for a tool, and shows the input with a
+preview stretch until then.
+
 ### What it needs
 
 1. A record of the setup in the document: the recipe's name, the routing
@@ -2125,8 +2164,12 @@ person builds by hand is overwritten.
    giving a `<line>@continuum` channel. This is the largest piece: PSF
    Guard runs it after the channels are resampled and normalized together.
 
-Order: 1 to 3 first, for the recipes that need nothing new (narrowband,
-RGB, LRGB, HaLRGB, narrowband into RGB). Then 4, for RGB stars. Then 5.
+6. The controls laid out by the rules above, and the layered stretch.
+
+Order: the layout first, since every later piece adds controls. Then 1 to
+3, for the recipes that need nothing new (narrowband, RGB, LRGB, HaLRGB,
+narrowband into RGB). Then 4, for RGB stars, and the layered stretch. Then
+5.
 
 ## Suggested order of work
 
