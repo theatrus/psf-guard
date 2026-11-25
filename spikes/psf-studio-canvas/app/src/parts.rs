@@ -311,7 +311,7 @@ impl Studio {
             .collect();
         div()
             .flex()
-            .items_start()
+            .flex_col()
             .gap_1()
             .child(self.menu("recipe", "Recipe", recipes, cx))
             .child(self.menu("add-part", "Add part", kinds, cx))

@@ -110,9 +110,13 @@ impl Studio {
 
     // ---- inputs ---------------------------------------------------------
 
-    fn input_rows(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+    /// The rows of the inputs, or of the stars the tools took out of them.
+    fn input_rows(&self, stars: bool, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let mut rows = Vec::new();
         for (index, channel) in self.document.channels().into_iter().enumerate() {
+            if channel.contains('@') != stars {
+                continue;
+            }
             let label = channel_label(&channel);
             // An input's steps are folded away until a person opens them or
             // selects one, so the layers stay in sight.
@@ -554,7 +558,21 @@ impl Studio {
             .p_3()
             .bg(rgb(PANE))
             .child(Self::heading("Inputs"))
-            .children(self.input_rows(cx))
+            .children(self.input_rows(false, cx))
+            .when(
+                self.document.channels().iter().any(|c| c.contains('@')),
+                |tree| {
+                    tree.child(
+                        self.section("stars", "Stars of inputs", false, cx, |this, cx| {
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .children(this.input_rows(true, cx))
+                        }),
+                    )
+                },
+            )
             .child(Self::heading(format!("Combine · {palette}")))
             .child(self.parts_bar(cx))
             .children(self.layer_rows(cx))
