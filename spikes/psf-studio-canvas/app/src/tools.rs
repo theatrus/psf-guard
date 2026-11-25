@@ -533,7 +533,8 @@ impl Studio {
             .flex()
             .flex_col()
             .gap_1()
-            .child(Self::heading(format!("Processing tools of {label}")));
+            .child(Self::heading("Tools"));
+        let _ = label;
         if let Some(why) = self.cannot_run() {
             block = block.child(Self::note(why));
         } else if self.tools.tools.is_empty() {
@@ -552,12 +553,12 @@ impl Studio {
             let none_chosen = !offered
                 .iter()
                 .any(|tool| chosen.contains(&tool.key.as_str()));
-            let mut row = div().flex().flex_wrap().gap_1().child({
+            let mut picks = vec![{
                 let channel = channel.to_string();
-                Self::act("None", ("tool-none", at), none_chosen, cx, move |this| {
+                Self::pick("None", ("tool-none", at), none_chosen, cx, move |this| {
                     this.set_tool(&channel, category, None)
                 })
-            });
+            }];
             let mut problems = Vec::new();
             for (index, tool) in offered.iter().enumerate() {
                 let on = chosen.contains(&tool.key.as_str());
@@ -566,7 +567,7 @@ impl Studio {
                     continue;
                 }
                 let (channel, key) = (channel.to_string(), tool.key.clone());
-                row = row.child(Self::act(
+                picks.push(Self::pick(
                     tool.name.clone(),
                     ("tool", at * 8 + index),
                     on,
@@ -575,9 +576,11 @@ impl Studio {
                 ));
             }
             block = block
-                .child(div().pt_1().text_xs().child(*title))
-                .child(row)
-                .children(problems.into_iter().map(Self::note));
+                .child(Self::field(
+                    *title,
+                    self.menu(format!("tool-{category}"), "None", picks, cx),
+                ))
+                .children(problems.into_iter().filter_map(Self::help));
         }
         // The chosen tools' settings.
         for (index, (provider, setting, value)) in
@@ -596,7 +599,7 @@ impl Studio {
                     .get(index - 1)
                     .is_none_or(|(before, ..)| *before != provider);
             if first {
-                block = block.child(Self::heading(format!("Settings of {tool}")));
+                block = block.child(Self::heading(tool));
             }
             block = match setting.kind {
                 SettingKind::Float { min, max, .. } => {
@@ -640,27 +643,20 @@ impl Studio {
             .is_some_and(|prepared| *prepared != self.all_chains());
         if self.cannot_run().is_none() {
             block = block
-                .child(Self::heading("Run"))
                 .child(
                     Self::act(
-                        if running {
-                            "The tools are running…"
-                        } else {
-                            "Run the tools"
-                        },
+                        if running { "Running…" } else { "Run tools" },
                         "tools-run",
                         running,
                         cx,
                         |this| this.run_tools(),
                     ),
                 )
-                .child(Self::note(
+                .children(Self::help(
                     "Runs every input's tools and prepares the store again. A tool that ran with these settings before is not run again.",
                 ));
             if changed && !running {
-                block = block.child(div().text_xs().child(
-                    "The tools changed since the store was prepared. The canvas shows the earlier result until they are run.",
-                ));
+                block = block.child(div().text_xs().child("Changed. Run to update."));
             }
         }
         if !self.tools.status.is_empty() {

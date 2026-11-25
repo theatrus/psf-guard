@@ -1813,11 +1813,18 @@ selection:
 
 | Split | Panes |
 |---|---|
-| One | The selected row. |
-| Before and after | The row before the selected one, and the selected row. |
-| Wipe | The same two, in one pane, with a divider a person drags: before on its left, after on its right. |
-| Input and picture | One input, and the picture. With an input selected, that input and the final picture; with a layer selected, the layer's input and the stack up to that layer. |
-| All inputs | Every input after its steps. The selected input stays where the selection put it. |
+| With final (the default) | The selected row, and the final picture. |
+| Before, after, final | The row before the selected one, the selected row, and the final picture. |
+| Wipe | Before and after in one pane, with a divider a person drags: before on its left, after on its right. |
+| Single | The selected row. |
+
+Every split but Single ends with the final picture, so an edit's effect on
+the result is always in view; the panes before it follow the click. A pane
+is not repeated: with the final picture selected, With final is one pane.
+Pinning a pane keeps it on a place of the person's choice, such as a stage
+to compare against. “Input and picture” and “All inputs” are gone: the
+first is With final with an input selected, and the second showed panes
+that did not follow the selection.
 
 The panes are one size and share one pan and zoom: up to three in a row,
 more in two rows. Each pane has a label in its corner and a Pin button that
@@ -2057,12 +2064,16 @@ hand.
 A recipe and a part are ways to start, not a flow a document must stay in.
 The rules that keep it so:
 
-- **Setup is a view of the layers.** The routing table is read from the
-  layers as they are (`Document::routes`), however they were made. Setup
-  stores no plan of its own, so there is no state in which a document has
-  “left” its recipe.
-- **Any input goes into any part.** “Add to” on an input's row, or “Add
-  layer” on a part, adds one layer that shows the input, in the input's
+- **Setup is part of the workspace, not a page.** A separate Setup page
+  was built first and dropped the same day: it hid the tree, so a person
+  lost sight of what they were building. What goes where is now shown in
+  the tree and the inspector.
+- **Routes are read from the layers.** Where an input goes is read from
+  the layers as they are (`Document::routes`), however they were made.
+  No plan is stored beside them, so there is no state in which a document
+  has “left” its recipe.
+- **Any input goes into any part.** “Add to” in an input's controls, or
+  “Add layer” in a part's, adds one layer that shows the input, in the input's
   usual hue, on top of that part's layers. Nothing else changes. Ha joins
   the Color part of an LRGB picture this way, and NII joins a narrowband
   nebula.
@@ -2072,7 +2083,7 @@ The rules that keep it so:
 - **Each part has its own palette and masks.** Two parts may use the same
   palette with different inputs; a Foraxx mask belongs to the part whose
   palette made it.
-- **A recipe replaces only when asked.** “Recipe” in Setup replaces the
+- **A recipe replaces only when asked.** “Recipe” over the layers replaces the
   layers that show inputs, and the groups; adjustment layers stay. It is
   never applied again on its own.
 - **No kind is checked later.** A part's kind decides what it starts
@@ -2081,7 +2092,8 @@ The rules that keep it so:
 
 ### Setup: what goes where
 
-Setup is a page of its own, beside the workspace. It has three things:
+As first proposed, Setup was a page of its own with three things. It is
+now part of the workspace (see “Nothing locks”); the three things remain:
 
 1. **Recipes.** The stock setups that fit the inputs the document has,
    each with a small picture of its parts: Narrowband; Narrowband with RGB
@@ -2188,23 +2200,27 @@ In `src/studio/recipe.rs` and `src/studio/palette.rs`, with tests in
 - palettes per part, slots recorded on layers, masks per part;
 - `routes`, `add_layer_showing`, `add_part`, `use_recipe`.
 
-In the spike app (`setup.rs`, `widgets.rs`):
+In the spike app (`parts.rs`, `widgets.rs`), all in the workspace:
 
-- a Setup page beside the Workspace, with the Recipe menu, the Inputs
-  table with “Add to”, one card per part (Blend, Palette, slots, Layers,
-  Add layer, Open, Remove) and “Add part”, next to the final picture;
+- the tree shows, on each input's row, the parts the input goes to, or
+  “not used”;
+- over the layers, the Recipe and Add part menus;
+- an input's controls show “Goes to” (one chip per layer that shows it; a
+  click selects the layer) and “Add to” (any part, or Top);
+- a part's controls hold Blend, Palette, the slots' inputs, Add layer,
+  Ungroup and Delete;
 - the layout rules below: fields with the label on the left, menus in
   place of rows of buttons, segmented controls for two or three choices,
-  folding sections, and help text hidden until “?” is on.
+  folding sections, and help text hidden until “?” is on. The processing
+  tools use the same fields and menus.
 
 Tried on the Sh2-157 Ha, OIII and SII stacks (recipe “Narrowband with its
 own stars”, then Ha added to the Nebula part) and on the RGB stacks.
 
-Not built: reordering parts in Setup (drag the group in the Workspace),
-tools per input in the routing table, continuum subtraction, the layered
-stretch, groups in groups, and a recipe's small picture of its parts. No
-luminance stack was at hand, so the Luminance part is covered by tests
-only.
+Not built: tools per input in one table, continuum subtraction, the
+layered stretch, groups in groups, and a recipe's small picture of its
+parts. No luminance stack was at hand, so the Luminance part is covered
+by tests only.
 
 ### What it needs
 

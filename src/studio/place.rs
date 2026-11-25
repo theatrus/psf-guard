@@ -19,7 +19,7 @@
 
 use super::palette::channel_label;
 use super::view::{plan, DisplayStretch, OwnUntil, PlannedStretch, Subject, UpTo, View};
-use super::{Document, LayerSource, StageKind};
+use super::{Document, StageKind};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -328,100 +328,59 @@ impl Place {
 }
 
 /// How a canvas is divided into panes.
+///
+/// Every split but [`Split::One`] ends with the final picture, so a person
+/// always sees what an edit does to the result. The panes before it follow
+/// the selected row. A person may pin any pane to a place of their own,
+/// such as a stage to compare against.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Split {
     /// One pane: the selected row.
-    #[default]
     One,
-    /// The row before the selected one, and the selected row.
+    /// The selected row, and the final picture.
+    #[default]
+    WithPicture,
+    /// The row before the selected one, the selected row, and the final
+    /// picture.
     BeforeAndAfter,
     /// Before and after in one pane, with a divider a person moves: the
     /// row before the selected one on its left, the selected row on its
     /// right.
     Wipe,
-    /// One input, and the picture. With a mask selected, the mask and the
-    /// final picture.
-    InputAndPicture,
-    /// Every input, side by side.
-    AllInputs,
 }
 
 impl Split {
     /// Every split, in the order a person is offered them.
-    pub const ALL: [Split; 5] = [
-        Split::One,
+    pub const ALL: [Split; 4] = [
+        Split::WithPicture,
         Split::BeforeAndAfter,
         Split::Wipe,
-        Split::InputAndPicture,
-        Split::AllInputs,
+        Split::One,
     ];
 
     /// The split's name, as a person reads it.
     pub fn name(self) -> &'static str {
         match self {
-            Split::One => "One",
-            Split::BeforeAndAfter => "Before and after",
+            Split::One => "Single",
+            Split::WithPicture => "With final",
+            Split::BeforeAndAfter => "Before, after, final",
             Split::Wipe => "Wipe",
-            Split::InputAndPicture => "Input and picture",
-            Split::AllInputs => "All inputs",
         }
-    }
-}
-
-/// An input after every step that applies to it.
-fn input_finished(document: &Document, channel: &str) -> Place {
-    Place::Input {
-        channel: channel.to_string(),
-        after: input_steps(document, channel).last().map(|step| step.id),
     }
 }
 
 /// The places a split canvas shows, left to right, while `selected` is the
-/// place of the selected row.
+/// place of the selected row. A pane is not repeated: with the final
+/// picture selected, "With final" is one pane.
 pub fn panes(split: Split, selected: &Place, document: &Document) -> Vec<Place> {
-    let channels = document.channels();
-    match split {
+    let mut panes = match split {
         Split::One => vec![selected.clone()],
-        Split::BeforeAndAfter | Split::Wipe => {
-            vec![selected.before(document), selected.clone()]
-        }
-        // A mask beside the picture it shapes.
-        Split::InputAndPicture if matches!(selected, Place::Mask(_)) => {
-            vec![selected.clone(), Place::Final]
-        }
-        Split::InputAndPicture => {
-            let input = match selected {
-                Place::Input { .. } => Some(selected.clone()),
-                // A layer's input, as the layer receives it.
-                Place::Layer { layer, .. } | Place::LayerEdit { layer, .. } => document
-                    .layers()
-                    .iter()
-                    .find(|other| other.id == *layer)
-                    .and_then(|layer| match &layer.source {
-                        LayerSource::Band { band } => Some(input_finished(document, band)),
-                        _ => None,
-                    }),
-                _ => None,
-            }
-            .or_else(|| {
-                channels
-                    .first()
-                    .map(|channel| input_finished(document, channel))
-            });
-            let picture = match selected {
-                Place::Input { .. } => Place::Final,
-                other => other.clone(),
-            };
-            input.into_iter().chain([picture]).collect()
-        }
-        Split::AllInputs => channels
-            .iter()
-            .map(|channel| match selected {
-                // The selected input stays where the selection put it.
-                Place::Input { channel: own, .. } if own == channel => selected.clone(),
-                _ => input_finished(document, channel),
-            })
-            .collect(),
-    }
+        Split::WithPicture => vec![selected.clone(), Place::Final],
+        Split::BeforeAndAfter => vec![selected.before(document), selected.clone(), Place::Final],
+        // A wipe is always its two sides.
+        Split::Wipe => return vec![selected.before(document), selected.clone()],
+    };
+    panes.dedup();
+    panes
 }

@@ -265,32 +265,28 @@ fn splits_choose_their_panes_from_the_selection() {
         std::slice::from_ref(&green)
     );
 
-    let all = panes(Split::AllInputs, &green, &document);
-    assert_eq!(all.len(), 3);
-    assert_eq!(all[1], green);
-    assert!(matches!(&all[0], Place::Input { channel, after: Some(_) } if channel == "red"));
-
-    let pair = panes(Split::InputAndPicture, &green, &document);
-    assert_eq!(pair, [green.clone(), Place::Final]);
-
-    let layer = document.layers()[2].id;
-    let selected = Place::Layer {
-        layer,
-        alone: false,
-    };
-    let pair = panes(Split::InputAndPicture, &selected, &document);
-    assert!(matches!(&pair[0], Place::Input { channel, after: Some(_) } if channel == "blue"));
-    assert_eq!(pair[1], selected);
-
-    // A mask is shown beside the picture it shapes.
+    // The final picture is always the last pane, and is not repeated.
+    assert_eq!(
+        panes(Split::WithPicture, &green, &document),
+        [green.clone(), Place::Final]
+    );
+    assert_eq!(
+        panes(Split::WithPicture, &Place::Final, &document),
+        [Place::Final]
+    );
     let mask = Place::Mask(Uuid::new_v4());
     assert_eq!(
-        panes(Split::InputAndPicture, &mask, &document),
+        panes(Split::WithPicture, &mask, &document),
         [mask.clone(), Place::Final]
     );
-
-    let pair = panes(Split::BeforeAndAfter, &Place::Final, &document);
-    assert_eq!(pair, [Place::Combined, Place::Final]);
+    assert_eq!(
+        panes(Split::BeforeAndAfter, &Place::Final, &document),
+        [Place::Combined, Place::Final]
+    );
+    assert_eq!(
+        panes(Split::BeforeAndAfter, &Place::Combined, &document).last(),
+        Some(&Place::Final)
+    );
 }
 
 #[test]

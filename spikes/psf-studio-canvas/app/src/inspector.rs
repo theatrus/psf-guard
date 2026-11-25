@@ -303,6 +303,7 @@ impl Studio {
                 format!("{label} input"),
                 "The stack as PSF Guard made it, before any step.",
             ))
+            .child(self.routes_block(channel, cx))
             .child(self.tools_block(channel, cx))
             .child(self.zoom_notes(channel))
             .into_any_element()
@@ -589,10 +590,16 @@ impl Studio {
                 move |this, name| this.add_adjustment_above(Some(id), name),
             )))
             .child(Self::heading("Group"))
-            .child(Self::act("Ungroup", "ungroup", false, cx, move |this| {
-                this.document.ungroup(id);
-                this.selected = Row::Combined;
-            }))
+            .child(
+                wrap()
+                    .child(Self::act("Ungroup", "ungroup", false, cx, move |this| {
+                        this.document.ungroup(id);
+                        this.selected = Row::Combined;
+                    }))
+                    .child(Self::act("Delete", "part-delete", false, cx, move |this| {
+                        this.remove_part(id)
+                    })),
+            )
             .children(Self::help(
                 "Ungrouping keeps the layers where they are. The group's own mask and adjustments go with it.",
             ))
@@ -774,7 +781,7 @@ impl Studio {
                     )),
             )
             .children(Self::help(
-                "The Input and picture split shows the mask and the final picture side by side.",
+                "The With final view shows the mask and the final picture side by side.",
             ))
             .child(Self::heading("Used by"))
             .child(div().text_xs().child(if users.is_empty() {

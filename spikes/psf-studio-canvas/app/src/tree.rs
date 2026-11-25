@@ -142,7 +142,10 @@ impl Studio {
                     .child(fold)
                     .child(Self::named(
                         label.clone(),
-                        format!("input · {}", counted(steps.len(), "step")),
+                        match self.goes_to(&channel) {
+                            Some(goes) => format!("{} {goes}", counted(steps.len(), "step")),
+                            None => format!("{} · not used", counted(steps.len(), "step")),
+                        },
                     ))
                     .into_any_element(),
             );
@@ -553,6 +556,7 @@ impl Studio {
             .child(Self::heading("Inputs"))
             .children(self.input_rows(cx))
             .child(Self::heading(format!("Combine · {palette}")))
+            .child(self.parts_bar(cx))
             .children(self.layer_rows(cx))
             .children(self.mask_rows(cx))
             .child(

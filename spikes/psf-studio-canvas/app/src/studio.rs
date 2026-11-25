@@ -492,17 +492,6 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
     }
 }
 
-/// What the window shows.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Page {
-    /// What goes where: the inputs, the parts of the picture and how they
-    /// combine, beside the final picture.
-    Setup,
-    /// The tree of every step and layer, the canvas and the selected row's
-    /// controls.
-    Workspace,
-}
-
 pub struct Studio {
     native_view: NativeView,
     /// Keeps the `NSView` that wgpu draws into alive.
@@ -542,8 +531,6 @@ pub struct Studio {
     open_menu: Option<String>,
     /// The sections a person folded or unfolded, by their keys.
     toggled: HashSet<&'static str>,
-    /// Whether the window shows Setup or the workspace.
-    page: Page,
     /// The brush stroke being drawn.
     stroke: Option<Stroke>,
     /// Counts the scenes sent to the canvas.
@@ -689,13 +676,12 @@ impl Studio {
                 brush_removes: false,
                 mask_shows_picture: false,
                 wipe: 0.5,
-                split: Split::One,
+                split: Split::WithPicture,
                 pins: Vec::new(),
                 places: Vec::new(),
                 unfolded: HashSet::new(),
                 open_menu: None,
                 toggled: HashSet::new(),
-                page: Page::Workspace,
                 stroke: None,
                 scene_version: 0,
                 band_info,
@@ -1057,8 +1043,8 @@ pub fn run(options: Options) {
 mod inspector;
 #[path = "panes.rs"]
 mod panes;
-#[path = "setup.rs"]
-mod setup;
+#[path = "parts.rs"]
+mod parts;
 #[path = "tools.rs"]
 mod tools;
 #[path = "tree.rs"]
