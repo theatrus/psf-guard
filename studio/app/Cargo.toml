@@ -7,8 +7,12 @@ license.workspace = true
 
 [dependencies]
 psf-studio-render = { path = "../render" }
-# What a canvas draws and the math of its steps, shared with PSF Guard.
-psf-studio-canvas = { path = "../../crates/studio-canvas" }
+# Seiza's compositor: the picture the canvas draws, and its CPU render for
+# an export.
+seiza-compose.workspace = true
+# An export is written by Seiza.
+seiza-fits = "0.9.0"
+seiza-image-io = "0.14.0"
 psf-studio-color = { path = "../color" }
 wgpu.workspace = true
 gpui = { git = "https://github.com/zed-industries/zed", rev = "f98c2c100d217ace3ca99564cfc4573612d43d47" }

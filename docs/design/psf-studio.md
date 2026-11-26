@@ -1983,20 +1983,19 @@ the final picture as FITS or TIFF without leaving 16-bit precision.
 | Vibrance | −1 to +1 | Saturation that changes muted colors more than vivid ones. |
 | Saturation | −1 to +1 | Saturation of every color alike. |
 
-The tone controls make one curve of the luminance. Studio applies it as it
-applies a luminance-preserving output stretch: each pixel is scaled by one
-factor, kept in gamut, so the curve changes brightness and not hue. The
-curve is computed on the CPU into a stretch-table row, so the canvas, the
-histogram and an export apply the same curve. Highlights and Shadows are
-global here; Camera Raw's are local, which needs the blurred image that a
-clarity control would also need.
+The tone controls make one curve of the luminance, Seiza's
+`seiza_compose::tone::Tone`. It is applied as a luminance-preserving output
+stretch is: each pixel is scaled by one factor, kept in gamut, so the curve
+changes brightness and not hue. Highlights and Shadows are global here;
+Camera Raw's are local, which needs the blurred image that a clarity
+control would also need.
 
 **Histogram.** The inspector of the Final picture, of a Tone step and of an
 output stretch shows the histogram of the final picture: red, green, blue
 and luminance, with the share of pixels clipped to black and to white.
 Studio computes it from the full-resolution samples of the combined picture
-that output stretches already use, with the Finish steps applied on the
-CPU.
+that output stretches already use, with the Finish steps applied by Seiza's
+CPU render. Masks and heals are left out of the histogram.
 
 **Export.** **Export** in the Final picture's inspector writes the whole
 picture, cropped, at full resolution: TIFF or PNG at 16 bits per channel,
@@ -2004,23 +2003,21 @@ or FITS or XISF as 32-bit floats, through Seiza's `seiza_image_io::save_f32`,
 which replaces the destination only once the file is complete.
 
 The canvas cannot make that file. Its tiles hold half floats, about three
-significant digits, and so do its stretch tables. So a CPU render mirrors
-the canvas's shaders, pass for pass, over the same description of the
-picture the GPU gets (`psf_studio_render::Pane`), with the store's 32-bit
-samples and the stretch tables in 32-bit floats. A table of 4,096 entries
-indexed by square root, interpolated, follows Seiza's curves to about 1e-7,
-well inside a 16-bit step. The CPU render works in tiles with a margin wide
+significant digits, and so do its stretch tables. An export is rendered by
+Seiza's compositor on the CPU, `seiza_compose::render`, from the store's
+32-bit samples. That render is the reference the canvas's GPU render
+follows; see “Where the code lives”. It works in tiles with a margin wide
 enough for mask smoothing and heals, so unlike the canvas's patches it has
 no seams.
 
-The two renders of one picture must agree. `psf-studio --parity-report
-<file>` writes, once the canvas has sampled the picture, how far the CPU's
-combined picture is from the canvas's samples of the same 64 patches. On
-the Sh2-157 store (six inputs, three groups, screened stars, a layered
-stretch) the 3.1 million samples differed by 9e-5 on average, 4e-4 at the
-99.9th percentile and 7e-4 at most: half-float rounding, since a half
-float's step at 0.5 is 4.9e-4. A change to a shader changes its CPU twin in
-the same commit.
+The two renders of one picture must agree. Seiza's tests hold its GPU
+render to its CPU render. `psf-studio --parity-report <file>` also checks
+them on a real store: once the canvas has sampled the picture, it writes
+how far Seiza's CPU render of the combined picture is from the canvas's
+samples of the same 64 patches. On the Sh2-157 store (six inputs, three
+groups, screened stars, a layered stretch) the 3.1 million samples
+differed by 9e-5 on average, 4e-4 at the 99.9th percentile and 7e-4 at
+most: half-float rounding, since a half float's step at 0.5 is 4.9e-4.
 
 Built and tried on that store: Tone and color with every control, the
 histogram following each change, and an export of the whole 6135 × 4038
@@ -2029,23 +2026,27 @@ Camera Raw's local Highlights, Shadows, Texture, Clarity and Dehaze; a
 histogram limited to a masked step's area; choosing an ICC profile for an
 export, which holds the canvas's working-space values without one.
 
-**Where the code lives.** The description of a picture (`Pane` and its
-parts), the CPU render, and the math of the Finish steps (output stretch
-resolution, Tone and color, the histogram) are one crate in this
-repository, `crates/studio-canvas` (`psf-studio-canvas`). It depends only on
-Seiza crates, not on PSF Studio's UI or PSF Guard's server, so PSF Guard
-can call it and it can move to Seiza later. PSF Studio's GPU canvas
-(`studio/render`) takes its types from it and re-exports them; the GPU
-stays the canvas's renderer, and could later speed up the CPU render too.
+**Where the code lives.** Seiza draws the picture. `seiza-compose` holds
+the description of a picture (`Picture`: layers reading inputs through
+transfers, masks, heals and Finish steps), its tiled CPU render, and its
+GPU render with the shaders. PSF Studio keeps its own view of a document
+(`studio/app/src/canvas.rs`): layers that name a band and a stretch the
+document resolves later. Once each band's stretch is known, Studio turns
+that view into a Seiza `Picture`, with each stretch as a Seiza transfer.
+The canvas (`studio/render`) chooses and uploads tiles, draws each pane
+with Seiza's `GpuCompositor`, and applies the display transform as it
+presents. An export and the parity report render the same `Picture` with
+Seiza's CPU render. Studio has no shaders or CPU render of its own. Until
+a Seiza release has `seiza-compose`, Studio's workspace pins Seiza to the
+pull request's commit.
 
 **One renderer, not two.** PSF Guard's color previews and PSF Studio must
-end up drawing a picture the same way. Today they do not: a color preview
-is composed by `compose_color` with Seiza's `combine_rgb`,
-`combine_narrowband` and its stretch stack, and PSF Studio blends layers.
-The next step is for PSF Guard to render a color preview from its document
-(the setup maps to one; see “The default document”) through this crate,
-after parity tests against the previews it makes today, and then to retire
-the second path.
+end up drawing a picture the same way. Seiza's `combine_*` functions now
+build their pictures with the same compositor, with their output
+unchanged. The next step is for PSF Guard, once it moves to a Seiza
+release with `seiza-compose`, to render a color preview from its document
+(the setup maps to one; see “The default document”) through that
+compositor, keyed on `seiza_compose::OUTPUT_VERSION`.
 
 ## Processing tools in Studio (2026-11-25, first part)
 

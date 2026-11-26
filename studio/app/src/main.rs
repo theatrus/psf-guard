@@ -20,10 +20,22 @@ mod studio_model;
 
 #[cfg(target_os = "macos")]
 mod bench;
+/// What the canvas draws, and the Seiza picture it becomes.
+#[cfg(target_os = "macos")]
+mod canvas;
+/// The histogram of the finished picture.
+#[cfg(target_os = "macos")]
+mod histogram;
+/// The output stretches of the combined picture.
+#[cfg(target_os = "macos")]
+mod output_stretch;
 #[cfg(target_os = "macos")]
 mod store_tiles;
 #[cfg(target_os = "macos")]
 mod studio;
+/// The Tone and color step's settings.
+#[cfg(target_os = "macos")]
+mod tone_step;
 
 #[cfg(target_os = "macos")]
 fn main() {

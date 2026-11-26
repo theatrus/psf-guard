@@ -13,6 +13,7 @@
 //! only lay that out with GPUI, and turn a place into what the canvas draws.
 
 use super::{picture_patches, Bands, Drag, PictureRequest, Scene, SliderId, Studio, Tool};
+use crate::canvas::{Adjustment, ComputedMask, Layer, Mark, MaskBand};
 use crate::image_steps::Accepts;
 use crate::store_tiles::{BandState, BandStretch};
 use crate::studio_model::{
@@ -21,16 +22,15 @@ use crate::studio_model::{
     LayerSource, MaskRecord, MaskShape, Place, PlannedStretch, Row, SharedMask, Split, StackEntry,
     StageKind, StepKind, StepRecord, Stroke, StrokeMode, Subject, View,
 };
+use crate::{output_stretch, tone_step};
 use gpui::{
     canvas, div, img, prelude::*, px, relative, rgb, AnyElement, Context, MouseButton,
     MouseDownEvent, Rgba, SharedString, Window,
 };
-use psf_studio_canvas::output_stretch;
-use psf_studio_render::{
-    Adjustment, Blend, ComputedMask, FinishKind, FinishStep, Layer, LayerHeal, Mark, MaskBand,
-    Segment, MAX_COMPUTED_MASKS, MAX_FINISH_STEPS, MAX_HEALED_LAYERS, MAX_HEALS, MAX_LAYERS,
-    MAX_MASKS,
+use seiza_compose::gpu::{
+    MAX_COMPUTED_MASKS, MAX_FINISH_STEPS, MAX_HEALED_LAYERS, MAX_HEALS, MAX_LAYERS, MAX_MASKS,
 };
+use seiza_compose::picture::{Blend, FinishKind, FinishStep, LayerHeal, Segment};
 use seiza_stretch::StretchModel;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -420,7 +420,7 @@ pub(super) fn is_drawn(stage: StageKind, step: &StepRecord, bands: &Bands) -> bo
         ) => {
             operation == "Curves"
                 || operation == "Saturation"
-                || operation == psf_studio_canvas::tone::OPERATION
+                || operation == tone_step::OPERATION
                 // The layered stretch needs the whole image.
                 || (operation == flow_operations::OUTPUT_STRETCH
                     && output_stretch::config_of(settings)
@@ -446,7 +446,6 @@ fn segments(stroke: &Stroke) -> Vec<Segment> {
         } else {
             0.0
         },
-        _pad: 0.0,
     };
     match stroke.points.as_slice() {
         [] => Vec::new(),
@@ -693,8 +692,8 @@ fn push_heal(
     match mask {
         Ok(Some(mask)) if fits => heals.push(LayerHeal {
             layer,
-            before_stretch,
-            offset: [offset[0] as f32, offset[1] as f32],
+            before_transfer: before_stretch,
+            offset: *offset,
             shift: shift.first().copied().unwrap_or(0.0),
             mask,
         }),
@@ -991,7 +990,6 @@ pub(super) fn scene(
         .collect();
     let mut resolved = chains.resolve(&configs, picture_samples).into_iter();
     let mut finish = Vec::new();
-    let mut finish_stretches: Vec<[Vec<f32>; 3]> = Vec::new();
     for step in drawn_finish {
         let stretch = if step.kind.name() == flow_operations::OUTPUT_STRETCH {
             match resolved.next() {
@@ -1023,34 +1021,23 @@ pub(super) fn scene(
             omitted.push(step.kind.name().to_string());
             continue;
         };
-        let tone = match &step.kind {
+        let kind = match &step.kind {
+            _ if let Some(plan) = stretch => FinishKind::Stretch(plan),
             StepKind::Operation {
                 operation,
                 settings,
                 ..
-            } if operation == psf_studio_canvas::tone::OPERATION => {
-                Some(psf_studio_canvas::tone::Tone::from_settings(settings))
+            } if operation == tone_step::OPERATION => {
+                FinishKind::Tone(tone_step::from_settings(settings))
             }
-            _ => None,
-        };
-        let kind = match &step.kind {
-            _ if let Some(tone) = tone => FinishKind::Tone {
-                table: finish_stretches.len(),
-                vibrance: tone.vibrance,
-                saturation: tone.saturation,
-            },
-            _ if stretch.is_some() => FinishKind::Stretch {
-                table: finish_stretches.len(),
-                luminance: stretch.as_ref().is_some_and(|stretch| stretch.luminance),
-            },
             StepKind::Heal { offset, shift, .. } => FinishKind::Heal {
-                offset: [offset[0] as f32, offset[1] as f32],
+                offset: *offset,
                 shift: std::array::from_fn(|channel| shift.get(channel).copied().unwrap_or(0.0)),
             },
             StepKind::Operation { operation, .. } if operation == "Saturation" => {
-                FinishKind::Saturation
+                FinishKind::Saturation(amount(step))
             }
-            StepKind::Operation { .. } => FinishKind::Curves,
+            StepKind::Operation { .. } => FinishKind::Curves(amount(step).clamp(-1.0, 1.0)),
         };
         // A heal with no stroke heals nothing.
         if matches!(kind, FinishKind::Heal { .. }) && mask.is_none() {
@@ -1058,16 +1045,9 @@ pub(super) fn scene(
         }
         finish.push(FinishStep {
             kind,
-            amount: amount(step),
-            opacity: step.opacity,
+            opacity: step.opacity.clamp(0.0, 1.0),
             mask,
         });
-        if let Some(stretch) = stretch {
-            finish_stretches.push(stretch.rows);
-        } else if let Some(tone) = tone {
-            let row = psf_studio_canvas::tone::curve_row(&tone);
-            finish_stretches.push([row.clone(), row.clone(), row]);
-        }
     }
     // The shared masks the entries are behind: the entry's place in
     // `layers`, the mask, whether it is inverted, and a name to report.
@@ -1194,7 +1174,6 @@ pub(super) fn scene(
         layer_bands,
         layer_stretches,
         finish,
-        finish_stretches,
         heals,
         masks,
         omitted,
@@ -1442,7 +1421,6 @@ impl Studio {
                 radius,
                 hardness,
                 value,
-                _pad,
             } = segment;
             for number in [from[0], from[1], to[0], to[1], *radius, *hardness, *value] {
                 std::hash::Hash::hash(&number.to_bits(), &mut hasher);
@@ -1560,7 +1538,7 @@ impl Studio {
             );
             // Every fourth pixel of the samples is plenty for a histogram,
             // and keeps a slider's drag smooth.
-            let mut every: Vec<f32> = samples
+            let every: Vec<f32> = samples
                 .as_chunks::<3>()
                 .0
                 .iter()
@@ -1568,10 +1546,8 @@ impl Studio {
                 .flatten()
                 .copied()
                 .collect();
-            psf_studio_render::cpu::finish_samples(&scene.pane(&[]), &mut every);
-            Some(Arc::new(psf_studio_canvas::histogram::Histogram::of(
-                &every, 1,
-            )))
+            let finished = crate::canvas::finished_samples(&scene.finish, &every);
+            Some(Arc::new(crate::histogram::Histogram::of(&finished, 1)))
         });
         self.resolved_chains = chains;
         self.places = places;
@@ -1678,12 +1654,12 @@ impl Studio {
                 let StepKind::Operation { settings, .. } = &step.kind else {
                     return;
                 };
-                let Some((key, _, low, high)) = psf_studio_canvas::tone::CONTROLS.get(index) else {
+                let Some((key, _, low, high)) = seiza_compose::tone::CONTROLS.get(index) else {
                     return;
                 };
                 let mut settings = settings.clone();
                 if !settings.is_object() {
-                    settings = psf_studio_canvas::tone::Tone::new_settings();
+                    settings = tone_step::new_settings();
                 }
                 settings[*key] = f64::from(low + (high - low) * position).into();
                 self.document.set_step_settings(id, settings);

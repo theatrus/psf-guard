@@ -2,7 +2,8 @@
 //! of frames and records what every frame cost.
 
 use crate::studio::CanvasState;
-use psf_studio_render::{FrameStats, Segment};
+use psf_studio_render::FrameStats;
+use seiza_compose::picture::Segment;
 use serde_json::{json, Value};
 use std::time::Instant;
 
@@ -42,7 +43,6 @@ struct Samples {
     interval_ms: Vec<f32>,
     encode_ms: Vec<f32>,
     acquire_ms: Vec<f32>,
-    gpu_ms: Vec<f32>,
     coarse_frames: u32,
     max_coarse: u32,
     max_blank: u32,
@@ -125,7 +125,6 @@ impl Bench {
                             radius: 14.0,
                             hardness: 0.5,
                             value: 1.0,
-                            _pad: 0.0,
                         });
                     }
                 }
@@ -141,7 +140,6 @@ impl Bench {
                     radius: 24.0,
                     hardness: 0.6,
                     value: 1.0,
-                    _pad: 0.0,
                 });
             }
             Phase::Pan(speed) => {
@@ -175,9 +173,6 @@ impl Bench {
         self.last_frame = Some(now);
         self.samples.encode_ms.push(stats.encode_ms);
         self.samples.acquire_ms.push(stats.acquire_ms);
-        if let Some(gpu) = stats.gpu_ms {
-            self.samples.gpu_ms.push(gpu);
-        }
         if stats.tiles_coarse > 0 {
             self.samples.coarse_frames += 1;
         }
@@ -233,7 +228,6 @@ impl Bench {
             "frame_interval_ms": summary(samples.interval_ms),
             "encode_ms": summary(samples.encode_ms),
             "acquire_ms": summary(samples.acquire_ms),
-            "gpu_ms": summary(samples.gpu_ms),
         });
         if let Phase::Settle(_) = phase {
             // The time from the end of the motion until every visible tile

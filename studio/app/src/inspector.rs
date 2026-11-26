@@ -25,7 +25,7 @@ const FULL_RESOLUTION_ONLY: [&str; 1] = ["Noise reduction"];
 /// The steps offered on the combined picture.
 const FINISH_STEPS: [(&str, Accepts); 5] = [
     (flow_operations::OUTPUT_STRETCH, Accepts::Display),
-    (psf_studio_canvas::tone::OPERATION, Accepts::Display),
+    (crate::tone_step::OPERATION, Accepts::Display),
     ("Curves", Accepts::Display),
     ("Saturation", Accepts::Display),
     ("Local contrast", Accepts::Display),
@@ -108,11 +108,11 @@ impl Studio {
                 Self::pick(name, ("add-finish", index), false, cx, move |this| {
                     let step = if name == flow_operations::OUTPUT_STRETCH {
                         output_stretch_step()
-                    } else if name == psf_studio_canvas::tone::OPERATION {
+                    } else if name == crate::tone_step::OPERATION {
                         StepRecord::new(StepKind::Operation {
                             operation: name.to_string(),
                             accepts,
-                            settings: psf_studio_canvas::tone::Tone::new_settings(),
+                            settings: crate::tone_step::new_settings(),
                         })
                     } else {
                         operation(name, accepts)
@@ -157,9 +157,7 @@ impl Studio {
                 operation,
                 settings,
                 ..
-            } if operation == psf_studio_canvas::tone::OPERATION => {
-                Some(self.tone_controls(settings, cx))
-            }
+            } if operation == crate::tone_step::OPERATION => Some(self.tone_controls(settings, cx)),
             StepKind::Operation { operation, .. } => amount_range(operation).map(|(low, high)| {
                 let value = amount(step);
                 self.labelled_slider(
@@ -342,7 +340,7 @@ impl Studio {
 
     /// A Tone and color step's controls: Camera Raw's Basic sliders.
     fn tone_controls(&self, settings: &serde_json::Value, cx: &mut Context<Self>) -> gpui::Div {
-        let tone = psf_studio_canvas::tone::Tone::from_settings(settings);
+        let tone = crate::tone_step::from_settings(settings);
         let values = [
             tone.exposure,
             tone.contrast,
@@ -354,10 +352,8 @@ impl Studio {
             tone.saturation,
         ];
         let mut block = column();
-        for (index, ((_, label, low, high), value)) in psf_studio_canvas::tone::CONTROLS
-            .iter()
-            .zip(values)
-            .enumerate()
+        for (index, ((_, label, low, high), value)) in
+            seiza_compose::tone::CONTROLS.iter().zip(values).enumerate()
         {
             if index == 6 {
                 block = block.child(Self::heading("Color"));
@@ -1046,7 +1042,7 @@ impl Studio {
             let Some(color) = layer.color.filter(|_| layer.source.shows_pixels()) else {
                 continue;
             };
-            if layer.blend == BlendMode::Luminance || index >= psf_studio_render::MAX_LAYERS {
+            if layer.blend == BlendMode::Luminance || index >= seiza_compose::gpu::MAX_LAYERS {
                 continue;
             }
             let (hue, saturation, _) = hue_of(color);
@@ -1288,8 +1284,7 @@ impl Studio {
             |_, _, _| (),
             move |bounds, (), window, _| {
                 let peak = histogram.peak() as f32;
-                let width =
-                    f32::from(bounds.size.width) / psf_studio_canvas::histogram::BINS as f32;
+                let width = f32::from(bounds.size.width) / crate::histogram::BINS as f32;
                 let height = f32::from(bounds.size.height);
                 // Luminance first, in gray, then each channel over it.
                 let colors = [0x9a9a9aff, 0xe0505080, 0x50d05080, 0x5080f080];

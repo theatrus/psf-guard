@@ -7,13 +7,17 @@ use crate::studio_model::{
     SampleFormat, StoreLevel, StoreOptions, StudioError, TileStore,
 };
 use psf_studio_render::synth::{generate_tile, TileKey, BANDS, DOC_HEIGHT, DOC_WIDTH, TILE};
-use psf_studio_render::{Pyramid, TileSource, STRETCH_TABLE_WIDTH};
+use psf_studio_render::{Pyramid, TileSource};
+use seiza_compose::gpu::GpuInput;
+use seiza_compose::picture::{Transfer, TransferStage};
+use seiza_compose::ReferenceRegion;
 use seiza_stretch::{
     ResolvedSampleDomain, SampleDomain, SampleNormalization, StretchAnalysis, StretchConfig,
     StretchModel, StretchParams,
 };
+use std::collections::VecDeque;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 /// A document read from a tile store.
 pub struct StoreTiles {
@@ -29,40 +33,24 @@ pub struct StoreTiles {
 }
 
 /// What a band's stretch is resolved from: Seiza's analysis of a sample of
-/// the band at full resolution.
-///
-/// The canvas holds each band's samples divided by `scale`, so they run from
-/// 0 to 1 and fit a half float. Seiza works on the samples as they are.
+/// the band at full resolution, as the samples are in the image.
 pub struct BandStretch {
-    /// The value that a band sample of 1 on the canvas stands for.
-    pub scale: f32,
     domain: ResolvedSampleDomain,
     analysis: StretchAnalysis,
     /// The analysed samples, from 0 to 1: what a second stretch of a chain
     /// is resolved from, after the first has been applied to them.
     unit: Vec<f32>,
-    /// Whether the band is already stretched for display, so its table
+    /// Whether the band is already stretched for display, so its stretch
     /// leaves its samples as they are.
     display: bool,
-}
-
-/// The stretch table that leaves a canvas sample as it is, for a plane
-/// that runs from 0 to 1 and is already stretched for display.
-pub fn identity_table() -> Vec<f32> {
-    let last = (STRETCH_TABLE_WIDTH - 1) as f32;
-    (0..STRETCH_TABLE_WIDTH)
-        .map(|index| (index as f32 / last).powi(2))
-        .collect()
 }
 
 /// The samples Seiza analyses per band, at most.
 const ANALYSIS_SAMPLES: usize = 300_000;
 
 impl BandStretch {
-    /// Analyses one band's samples, as they are in the image. `scale` is
-    /// the value a canvas sample of 1 stands for; without one it is the
-    /// largest sample.
-    fn analyse(samples: &[f32], scale: Option<f32>) -> Result<Self, String> {
+    /// Analyses one band's samples, as they are in the image.
+    fn analyse(samples: &[f32]) -> Result<Self, String> {
         let finite: Vec<f32> = samples
             .iter()
             .copied()
@@ -71,8 +59,6 @@ impl BandStretch {
         if finite.is_empty() {
             return Err("a band has no finite samples".to_string());
         }
-        let scale =
-            scale.unwrap_or_else(|| finite.iter().copied().fold(f32::MIN_POSITIVE, f32::max));
         let domain = SampleDomain::PhysicalLinear {
             normalization: SampleNormalization::default(),
         }
@@ -84,7 +70,6 @@ impl BandStretch {
         let analysis = StretchAnalysis::analyze(&unit, 1, ANALYSIS_SAMPLES)
             .map_err(|error| error.to_string())?;
         Ok(Self {
-            scale,
             domain,
             analysis,
             unit,
@@ -92,37 +77,31 @@ impl BandStretch {
         })
     }
 
-    /// The band's stretch as the canvas's table: the stretches in `stages`
-    /// applied in order, each resolved by Seiza, evaluated at each table
-    /// entry's sample. Each stage after the first is resolved from the
+    /// The band's stretch as a transfer of its samples, as they are in the
+    /// image: Seiza's mapping of the band onto the unit range, then the
+    /// stretches in `stages` in order, each resolved by Seiza and kept
+    /// within 0 to 1. Each stage after the first is resolved from the
     /// band's samples as the stages before it left them, as Seiza's stretch
-    /// stack does. With no stage the table is Seiza's automatic midtones
-    /// stretch, for a preview.
+    /// stack does. With no stage it is Seiza's automatic midtones stretch,
+    /// for a preview.
     ///
     /// `nudge` is added to the background target of every automatic
     /// midtones stage; the benchmark uses it to time a stretch change.
     ///
     /// A stage Seiza refuses is left out. The layered stretch is one: it
     /// needs the image, not samples of it.
-    pub fn table(&self, stages: &[StretchModel], nudge: f64) -> Vec<f32> {
+    pub fn transfer(&self, stages: &[StretchModel], nudge: f64) -> Transfer {
+        let unit = TransferStage::Clamp {
+            low: 0.0,
+            high: 1.0,
+        };
+        // A band stretched for display is shown as it is.
         if self.display {
-            let last = (STRETCH_TABLE_WIDTH - 1) as f32;
-            return (0..STRETCH_TABLE_WIDTH)
-                .map(|index| ((index as f32 / last).powi(2) * self.scale).clamp(0.0, 1.0))
-                .collect();
+            return Transfer::of([unit]);
         }
         let preview = [StretchModel::AutoMtf(StretchParams::default())];
         let stages = if stages.is_empty() { &preview } else { stages };
-        let last = (STRETCH_TABLE_WIDTH - 1) as f32;
-        // Entry i stands for the canvas sample (i / last) squared.
-        let samples: Vec<f32> = (0..STRETCH_TABLE_WIDTH)
-            .map(|index| (index as f32 / last).powi(2) * self.scale)
-            .collect();
-        let mut values = self.domain.apply(&samples, 1).unwrap_or_else(|_| {
-            (0..STRETCH_TABLE_WIDTH)
-                .map(|index| (index as f32 / last).powi(2))
-                .collect()
-        });
+        let mut transfer = vec![TransferStage::Domain(self.domain)];
         // The band's samples as the stages so far left them. They are only
         // needed from the second stage on.
         let mut seen: Option<Vec<f32>> = None;
@@ -147,9 +126,7 @@ impl BandStretch {
             };
             let Ok(plan) = plan else { continue };
             let curve = plan.curves()[0];
-            for value in &mut values {
-                *value = curve.map(*value).clamp(0.0, 1.0);
-            }
+            transfer.extend([TransferStage::Curve(curve), unit.clone()]);
             if at + 1 < stages.len() {
                 let mut next = seen.take().unwrap_or_else(|| self.unit.clone());
                 for sample in &mut next {
@@ -158,7 +135,7 @@ impl BandStretch {
                 seen = Some(next);
             }
         }
-        values
+        Transfer::of(transfer)
     }
 }
 
@@ -193,6 +170,8 @@ pub struct Bands {
     samples: Vec<[Option<Vec<f32>>; 3]>,
     /// Per band: the value a canvas sample of 1 stands for.
     scales: Vec<f32>,
+    /// Per tile channel: the value a canvas sample of 1 stands for.
+    plane_scales: Vec<f32>,
     /// The bands whose stretches are resolved together: red, green and
     /// blue once color calibration has balanced them. Empty otherwise.
     linked: Vec<usize>,
@@ -312,6 +291,20 @@ impl Bands {
         self.tile_band.len()
     }
 
+    /// Where each tile channel is on the GPU, as Seiza's compositor reads
+    /// it: its layer in a tile, and the value a canvas sample of 1 stands
+    /// for.
+    pub fn gpu_inputs(&self) -> Vec<GpuInput> {
+        self.plane_scales
+            .iter()
+            .enumerate()
+            .map(|(layer, scale)| GpuInput {
+                layer,
+                scale: *scale,
+            })
+            .collect()
+    }
+
     /// The band that holds an input, by the input's name.
     pub fn band_of(&self, channel: &str) -> Option<usize> {
         self.names.iter().position(|name| name == channel)
@@ -374,13 +367,12 @@ impl Bands {
             .collect();
         samples
             .iter()
-            .zip(&self.scales)
             .enumerate()
-            .map(|(band, (own, scale))| {
+            .map(|(band, own)| {
                 let mut stretch = if self.linked.contains(&band) {
-                    BandStretch::analyse(&together, Some(*scale))
+                    BandStretch::analyse(&together)
                 } else {
-                    BandStretch::analyse(own, Some(*scale))
+                    BandStretch::analyse(own)
                 }?;
                 stretch.display = self.display.contains(&band);
                 Ok(stretch)
@@ -519,6 +511,7 @@ impl StoreTiles {
         if self.names.is_empty() {
             bands.names = names_for(bands.len());
         }
+        bands.plane_scales = self.scales.clone();
         Ok(bands)
     }
 }
@@ -670,6 +663,7 @@ fn analyse_synthetic() -> Bands {
             .collect(),
         // The synthetic tiles go to the canvas as they are.
         scales: vec![1.0; BANDS],
+        plane_scales: vec![1.0; BANDS],
         ..Default::default()
     }
 }
@@ -697,28 +691,83 @@ pub fn open_store(path: &Path) -> Result<(StoreTiles, Bands), String> {
     Ok((store, bands))
 }
 
-/// The CPU render reads the store's full-resolution samples as the canvas's
-/// tiles hold them, but in 32-bit floats: each channel divided by its scale
-/// and kept from 0 to 1, a missing sample as 0.
-impl psf_studio_canvas::cpu::SampleReader for StoreTiles {
-    fn channels(&self) -> usize {
-        self.bands
+/// A store's full-resolution samples as Seiza's compositor reads them for
+/// an export: each tile channel an input, kept within what the canvas's
+/// tiles hold (0 to the channel's scale), with a missing sample as 0, so
+/// the export is the picture the canvas shows.
+pub struct StoreSource {
+    store: StoreTiles,
+    /// The regions read lately, all channels interleaved: a tile reads each
+    /// of its inputs over the same region in turn.
+    recent: Mutex<VecDeque<(ReferenceRegion, Arc<Vec<f32>>)>>,
+}
+
+impl StoreSource {
+    /// The regions kept: a few for each thread that renders tiles.
+    const KEPT: usize = 64;
+
+    pub fn new(store: StoreTiles) -> Self {
+        Self {
+            store,
+            recent: Mutex::new(VecDeque::new()),
+        }
     }
 
-    fn read(&self, rect: [u32; 4]) -> Result<Vec<f32>, String> {
-        let [x, y, width, height] = rect.map(|value| value as usize);
-        let level = self.levels.first().ok_or("the store has no levels")?;
-        let mut samples = level
-            .read(Region::new(x, y, width, height))
-            .map_err(|error| error.to_string())?;
-        for (index, sample) in samples.iter_mut().enumerate() {
-            *sample = if sample.is_finite() {
-                (*sample / self.scales[index % self.bands]).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
+    fn region(&self, rect: ReferenceRegion) -> Result<Arc<Vec<f32>>, seiza_compose::Error> {
+        let known = |recent: &VecDeque<(ReferenceRegion, Arc<Vec<f32>>)>| {
+            recent
+                .iter()
+                .find(|(at, _)| *at == rect)
+                .map(|(_, samples)| samples.clone())
+        };
+        if let Some(samples) = known(&self.recent.lock().expect("recent regions")) {
+            return Ok(samples);
         }
+        let level =
+            self.store.levels.first().ok_or_else(|| {
+                seiza_compose::Error::Color("the store has no levels".to_string())
+            })?;
+        let samples = Arc::new(
+            level
+                .read(Region::new(rect.x, rect.y, rect.width, rect.height))
+                .map_err(|error| seiza_compose::Error::Color(error.to_string()))?,
+        );
+        let mut recent = self.recent.lock().expect("recent regions");
+        recent.push_front((rect, samples.clone()));
+        recent.truncate(Self::KEPT);
         Ok(samples)
+    }
+}
+
+impl seiza_compose::render::Source for StoreSource {
+    fn size(&self) -> (usize, usize) {
+        (
+            self.store.pyramid.width as usize,
+            self.store.pyramid.height as usize,
+        )
+    }
+
+    fn read(&self, input: usize, rect: ReferenceRegion) -> Result<Vec<f32>, seiza_compose::Error> {
+        let bands = self.store.bands;
+        if input >= bands {
+            return Err(seiza_compose::Error::Color(format!(
+                "the store has no channel {input}"
+            )));
+        }
+        let scale = self.store.scales[input];
+        let samples = self.region(rect)?;
+        Ok(samples
+            .iter()
+            .skip(input)
+            .step_by(bands)
+            .map(|sample| {
+                if sample.is_finite() {
+                    sample.clamp(0.0, scale)
+                } else {
+                    0.0
+                }
+            })
+            .collect())
     }
 }
 

@@ -2,11 +2,9 @@
 //! the canvas draws them.
 //!
 //! An output stretch is one of Seiza's stretches of the whole picture after
-//! the layers are combined. Seiza resolves each one, and the canvas draws
-//! it as three stretch-table rows, one per channel: a linked stretch puts
-//! its one curve in all three, an unlinked one a curve per channel, and a
-//! luminance-preserving one its luminance curve in the first, which the
-//! Finish pass applies to the pixel's luminance.
+//! the layers are combined. Seiza resolves each one into a plan, which the
+//! picture's Finish steps carry; Seiza's compositor applies it, on the GPU
+//! for the canvas and on the CPU for an export.
 //!
 //! A stretch with explicit settings, such as a generalized hyperbolic
 //! stretch, resolves without the picture. One that Seiza resolves from the
@@ -14,22 +12,11 @@
 //! samples of the picture as the stretches before it left it. The layered
 //! stretch needs the whole image, so the canvas does not draw it.
 
-use crate::STRETCH_TABLE_WIDTH;
 use seiza_stretch::{ColorStrategy, StretchConfig, StretchModel, StretchPlan};
 use std::borrow::Cow;
 
 /// The samples Seiza analyses per stretch, at most.
 const ANALYSIS_SAMPLES: usize = 300_000;
-
-/// One output stretch as the canvas draws it.
-#[derive(Clone, Debug, PartialEq)]
-pub struct PictureStretch {
-    /// The red, green and blue rows of the stretch table.
-    pub rows: [Vec<f32>; 3],
-    /// Whether the first row maps the pixel's luminance, which scales the
-    /// pixel, in place of one row per channel.
-    pub luminance: bool,
-}
 
 /// Why the canvas cannot draw an output stretch.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -73,14 +60,14 @@ pub fn needs_samples(config: &StretchConfig) -> bool {
 pub fn resolve_chain(
     configs: &[StretchConfig],
     samples: Option<&[f32]>,
-) -> Vec<Result<PictureStretch, NotDrawn>> {
+) -> Vec<Result<StretchPlan, NotDrawn>> {
     // The samples as the stretches so far left them. They are copied only
     // when a stretch changes them for a later one.
     let mut seen: Option<Cow<[f32]>> = samples.map(Cow::Borrowed);
     let mut drawn = Vec::with_capacity(configs.len());
     for (at, config) in configs.iter().enumerate() {
         let plan = resolve(config, seen.as_deref());
-        drawn.push(plan.as_ref().map(stretch_of).map_err(Clone::clone));
+        drawn.push(plan.clone());
         let later_needs_samples = configs[at + 1..].iter().any(needs_samples);
         if let (Ok(plan), Some(samples), true) = (&plan, &seen, later_needs_samples) {
             seen = plan.apply_f32(samples, 3).ok().map(Cow::Owned);
@@ -103,7 +90,7 @@ pub struct ResolvedChains {
 type ResolvedChain = (
     Option<u64>,
     Vec<StretchConfig>,
-    Vec<Result<PictureStretch, NotDrawn>>,
+    Vec<Result<StretchPlan, NotDrawn>>,
 );
 
 impl ResolvedChains {
@@ -117,7 +104,7 @@ impl ResolvedChains {
         &mut self,
         configs: &[StretchConfig],
         samples: Option<(u64, &[f32])>,
-    ) -> Vec<Result<PictureStretch, NotDrawn>> {
+    ) -> Vec<Result<StretchPlan, NotDrawn>> {
         // Explicit stretches do not read the samples, so any samples give
         // the same result.
         let id = samples
@@ -153,32 +140,6 @@ fn resolve(config: &StretchConfig, samples: Option<&[f32]>) -> Result<StretchPla
         .map_err(|error| NotDrawn::Refused(error.to_string()))
 }
 
-/// A resolved plan as stretch-table rows.
-fn stretch_of(plan: &StretchPlan) -> PictureStretch {
-    let row = |curve: seiza_stretch::ResolvedCurve| -> Vec<f32> {
-        let last = (STRETCH_TABLE_WIDTH - 1) as f32;
-        // Entry i stands for the value (i / last) squared, as a layer's row
-        // does.
-        (0..STRETCH_TABLE_WIDTH)
-            .map(|index| curve.map((index as f32 / last).powi(2)).clamp(0.0, 1.0))
-            .collect()
-    };
-    let curves = plan.curves();
-    match plan.color_strategy() {
-        ColorStrategy::Unlinked => PictureStretch {
-            rows: std::array::from_fn(|channel| row(curves[channel.min(curves.len() - 1)])),
-            luminance: false,
-        },
-        strategy => {
-            let one = row(curves[0]);
-            PictureStretch {
-                rows: [one.clone(), one.clone(), one],
-                luminance: strategy == ColorStrategy::LuminancePreserving,
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,14 +149,11 @@ mod tests {
         config_of(&settings).expect("a stretch Seiza knows")
     }
 
-    /// The value a row gives at `value`, read as the shader reads it: by
-    /// the square root of the value, interpolated.
-    fn at(row: &[f32], value: f32) -> f32 {
-        let place = value.clamp(0.0, 1.0).sqrt() * (row.len() - 1) as f32;
-        let low = place.floor() as usize;
-        let high = (low + 1).min(row.len() - 1);
-        let t = place - low as f32;
-        row[low] * (1.0 - t) + row[high] * t
+    /// Dim samples with some spread, red, green and blue alike.
+    fn dim() -> Vec<f32> {
+        (0..30_000)
+            .map(|index| 0.02 + 0.01 * ((index * 7919) % 1000) as f32 / 1000.0)
+            .collect()
     }
 
     #[test]
@@ -209,15 +167,7 @@ mod tests {
         let [drawn] = &resolve_chain(std::slice::from_ref(&ghs), None)[..] else {
             panic!("one stretch");
         };
-        let drawn = drawn.as_ref().expect("drawn");
-        assert!(!drawn.luminance);
-        let plan = ghs.resolve_explicit(3).unwrap();
-        for value in [0.01_f32, 0.1, 0.3, 0.7] {
-            let expected = plan.curves()[0].map(value);
-            for row in &drawn.rows {
-                assert!((at(row, value) - expected).abs() < 2e-3, "{value}");
-            }
-        }
+        assert_eq!(drawn.as_ref(), Ok(&ghs.resolve_explicit(3).unwrap()));
     }
 
     #[test]
@@ -229,20 +179,11 @@ mod tests {
             resolve_chain(std::slice::from_ref(&auto), None),
             [Err(NotDrawn::NeedsSamples)]
         );
-
-        // A dim picture with some spread: the stretch puts its median near
-        // the target, as Seiza's plan of the same samples does.
-        let samples: Vec<f32> = (0..30_000)
-            .map(|index| 0.02 + 0.01 * ((index * 7919) % 1000) as f32 / 1000.0)
-            .collect();
+        let samples = dim();
         let [drawn] = &resolve_chain(std::slice::from_ref(&auto), Some(&samples))[..] else {
             panic!("one stretch");
         };
-        let drawn = drawn.as_ref().expect("drawn");
-        let plan = auto.resolve_for(&samples, 3).unwrap();
-        for value in [0.02_f32, 0.025, 0.03] {
-            assert!((at(&drawn.rows[1], value) - plan.curves()[0].map(value)).abs() < 3e-3);
-        }
+        assert_eq!(drawn.as_ref(), Ok(&auto.resolve_for(&samples, 3).unwrap()));
     }
 
     #[test]
@@ -253,50 +194,14 @@ mod tests {
         let auto = config(json!({
             "model": { "type": "auto-mtf", "target_median": 0.25, "shadows_clip": -2.8 },
         }));
-        let samples: Vec<f32> = (0..30_000)
-            .map(|index| 0.02 + 0.01 * ((index * 7919) % 1000) as f32 / 1000.0)
-            .collect();
+        let samples = dim();
         let drawn = resolve_chain(&[linear.clone(), auto.clone()], Some(&samples));
         let after = linear
             .resolve_explicit(3)
             .unwrap()
             .apply_f32(&samples, 3)
             .unwrap();
-        let expected = auto.resolve_for(&after, 3).unwrap();
-        let second = drawn[1].as_ref().expect("drawn");
-        for value in [0.04_f32, 0.05, 0.06] {
-            assert!((at(&second.rows[0], value) - expected.curves()[0].map(value)).abs() < 3e-3);
-        }
-    }
-
-    #[test]
-    fn channels_follow_the_color_strategy() {
-        let samples: Vec<f32> = (0..30_000)
-            .map(|index| match index % 3 {
-                0 => 0.02,
-                1 => 0.04,
-                _ => 0.08,
-            } + 0.005 * ((index * 7919) % 1000) as f32 / 1000.0)
-            .collect();
-        let unlinked = config(json!({
-            "model": { "type": "auto-mtf", "target_median": 0.25, "shadows_clip": -2.8 },
-            "color_strategy": "unlinked",
-        }));
-        let drawn = resolve_chain(&[unlinked], Some(&samples));
-        let drawn = drawn[0].as_ref().unwrap();
-        // Each channel's median lands near the target on its own row.
-        assert!((at(&drawn.rows[0], 0.0225) - 0.25).abs() < 0.05);
-        assert!((at(&drawn.rows[2], 0.0825) - 0.25).abs() < 0.05);
-        assert!(!drawn.luminance);
-
-        let luminance = config(json!({
-            "model": { "type": "asinh", "black": 0.0, "white": 1.0, "strength": 20.0 },
-            "color_strategy": "luminance-preserving",
-        }));
-        let drawn = resolve_chain(&[luminance], None);
-        let drawn = drawn[0].as_ref().unwrap();
-        assert!(drawn.luminance);
-        assert_eq!(drawn.rows[0], drawn.rows[2]);
+        assert_eq!(drawn[1].as_ref(), Ok(&auto.resolve_for(&after, 3).unwrap()));
     }
 
     #[test]
@@ -304,9 +209,7 @@ mod tests {
         let auto = config(json!({
             "model": { "type": "auto-mtf", "target_median": 0.25, "shadows_clip": -2.8 },
         }));
-        let dim: Vec<f32> = (0..30_000)
-            .map(|index| 0.02 + 0.01 * ((index * 7919) % 1000) as f32 / 1000.0)
-            .collect();
+        let dim = dim();
         let bright: Vec<f32> = dim.iter().map(|sample| sample * 4.0).collect();
         let mut chains = ResolvedChains::default();
         let first = chains.resolve(std::slice::from_ref(&auto), Some((1, &dim)));

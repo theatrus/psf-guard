@@ -1,4 +1,5 @@
 use crate::bench::Bench;
+use crate::canvas::{ComputedMask, Layer, SceneParts};
 use crate::store_tiles::{BandState, BandStretch, Bands};
 use crate::studio_model::{CropRecord, Document, Place, Row, Split, Stroke, StrokeMode};
 use gpui::{
@@ -11,14 +12,12 @@ use objc2::{
     rc::{Allocated, Retained},
     runtime::AnyObject,
 };
-use psf_studio_render::MAX_LAYERS;
-use psf_studio_render::{
-    pane_rect, ComputedMask, FinishStep, Frame, FrameStats, Layer, LayerHeal, Output, Pane,
-    Renderer, Sampled, Segment, View,
-};
+use psf_studio_render::{pane_rect, Frame, FrameStats, Output, Pane, Renderer, Sampled, View};
 use raw_window_handle::{
     AppKitDisplayHandle, AppKitWindowHandle, RawDisplayHandle, RawWindowHandle,
 };
+use seiza_compose::gpu::{GpuInput, GpuScene, MAX_LAYERS};
+use seiza_compose::picture::{FinishStep, LayerHeal, Picture, Segment, Transfer};
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
@@ -101,7 +100,7 @@ enum SliderId {
     /// place in the list of the input's tool settings.
     ToolParam(usize),
     /// One control of the selected Tone and color step, by its place in
-    /// [`psf_studio_canvas::tone::CONTROLS`].
+    /// [`seiza_compose::tone::CONTROLS`].
     FinishParam(usize),
     /// The selected shared mask's reach.
     Reach,
@@ -154,6 +153,8 @@ pub struct CanvasState {
     pub document_size: (u32, u32),
     /// The number of bands in the document.
     pub band_count: usize,
+    /// Where each tile channel is on the GPU, for Seiza's compositor.
+    pub inputs: Arc<Vec<GpuInput>>,
     /// What the document asks the canvas to draw: one scene per pane, left
     /// to right.
     scenes: Arc<Vec<Scene>>,
@@ -223,6 +224,7 @@ impl CanvasState {
             sliders: [1.0 / 3.0; MAX_LAYERS],
             document_size: (1, 1),
             band_count: 0,
+            inputs: Arc::default(),
             scenes: Arc::new(vec![Scene::default()]),
             wipe: None,
             strokes: Vec::new(),
@@ -297,32 +299,22 @@ impl CanvasState {
         };
     }
 
-    /// Each pane's stretch tables, one per layer that shows a band:
-    /// Seiza's stretch of the layer's band, with the background placed
-    /// where the scene says.
-    fn stretch_tables(&self) -> Vec<Vec<Vec<f32>>> {
+    /// Each pane's scene packed for the GPU, with its stretches: Seiza's
+    /// stretch of each layer's band, with the background placed where the
+    /// scene says.
+    fn gpu_scenes(&self) -> Vec<GpuScene> {
         self.scenes
             .iter()
-            .map(|scene| self.scene_tables(scene))
+            .map(|scene| GpuScene::new(&scene.picture(&self.nudges()), &self.inputs))
             .collect()
     }
 
-    /// One scene's stretch tables, as [`Self::stretch_tables`] gives them.
-    fn scene_tables(&self, scene: &Scene) -> Vec<Vec<f32>> {
-        scene
-            .layer_bands
-            .iter()
-            .zip(&scene.layer_stretches)
-            .filter_map(|(band, stages)| {
-                // The benchmark moves a band's slider to time a stretch
-                // change. A slider at rest, a third of the way, adds nothing.
-                let moved = f64::from(self.sliders[(*band).min(MAX_LAYERS - 1)] - 1.0 / 3.0);
-                if *band == panes::DISPLAY_ROW {
-                    return Some(crate::store_tiles::identity_table());
-                }
-                Some(scene.stretches.get(*band)?.table(stages, 0.45 * moved))
-            })
-            .collect()
+    /// What the benchmark adds to each band's background target, to time a
+    /// stretch change: nothing while its slider is at rest, a third of the
+    /// way.
+    fn nudges(&self) -> [f64; MAX_LAYERS] {
+        self.sliders
+            .map(|slider| 0.45 * f64::from(slider - 1.0 / 3.0))
     }
 }
 
@@ -331,14 +323,12 @@ impl CanvasState {
 #[derive(Default)]
 pub struct Scene {
     layers: Vec<Layer>,
-    /// The document band each layer shows, for its stretch.
+    /// The document band each stretch is of, in order: one per layer that
+    /// shows a band, then the ones only computed masks read.
     layer_bands: Vec<usize>,
-    /// The stretches of each row of the stretch tables, in order. None is
-    /// a preview stretch.
+    /// The stretches, in the same order. None is a preview stretch.
     layer_stretches: Vec<Vec<seiza_stretch::StretchModel>>,
     finish: Vec<FinishStep>,
-    /// The curves of the Finish steps that stretch the picture, in order.
-    finish_stretches: Vec<[Vec<f32>; 3]>,
     /// Heals of single layers and inputs.
     heals: Vec<LayerHeal>,
     /// The masks computed from inputs that the layers refer to.
@@ -354,34 +344,48 @@ pub struct Scene {
 }
 
 impl Scene {
-    /// The stretch tables of the layers that show a band, as the canvas
-    /// draws them.
-    pub(super) fn tables(&self) -> Vec<Vec<f32>> {
+    /// The scene's stretches as Seiza transfers, in order, with `nudges`
+    /// added to each band's background target. A stretch whose band has
+    /// no analysis yet draws nothing.
+    fn transfers(&self, nudges: &[f64]) -> Vec<Transfer> {
         self.layer_bands
             .iter()
             .zip(&self.layer_stretches)
-            .filter_map(|(band, stages)| {
+            .map(|(band, stages)| {
+                // A plane the store stretched is shown as it is.
                 if *band == panes::DISPLAY_ROW {
-                    return Some(crate::store_tiles::identity_table());
+                    return Transfer::identity();
                 }
-                Some(self.stretches.get(*band)?.table(stages, 0.0))
+                let nudge = nudges.get(*band).copied().unwrap_or(0.0);
+                self.stretches.get(*band).map_or_else(
+                    || Transfer::of([seiza_compose::picture::TransferStage::Scale(0.0)]),
+                    |stretch| stretch.transfer(stages, nudge),
+                )
             })
             .collect()
     }
 
-    /// The scene as the renderer takes it, with `stretches` as its layers'
-    /// stretch tables, for work away from the screen.
-    pub(super) fn pane<'a>(&'a self, stretches: &'a [Vec<f32>]) -> Pane<'a> {
-        Pane {
-            layers: &self.layers,
-            stretches,
-            finish: &self.finish,
-            finish_stretches: &self.finish_stretches,
-            masks: &self.masks,
-            heals: &self.heals,
-            computed: &self.computed,
-            viewport: [0, 0, 1, 1],
-            scissor: [0, 0, 1, 1],
+    /// The scene as the Seiza picture the canvas draws, with each band's
+    /// stretch moved by `nudges`.
+    pub(super) fn picture(&self, nudges: &[f64]) -> Picture {
+        crate::canvas::picture(
+            &SceneParts {
+                layers: &self.layers,
+                computed: &self.computed,
+                masks: &self.masks,
+                heals: &self.heals,
+                finish: &self.finish,
+            },
+            &self.transfers(nudges),
+        )
+    }
+
+    /// The combined picture, before the Finish steps: what the canvas
+    /// samples for the output stretches resolved from it.
+    pub(super) fn combined(&self, nudges: &[f64]) -> Picture {
+        Picture {
+            finish: Vec::new(),
+            ..self.picture(nudges)
         }
     }
 }
@@ -443,14 +447,14 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
         .is_some()
         .then(|| Bench::new(options.bench_frames));
     let mut last_frame: Option<Instant> = None;
-    let mut stretch_tables: Vec<Vec<Vec<f32>>> = Vec::new();
+    let mut gpu_scenes: Vec<GpuScene> = Vec::new();
     let mut stretched_for = None;
     let mut stretches_version = 0u64;
     let mut animate = true;
-    // The sampling of the combined picture last delivered, and the stretch
-    // tables of the one under way.
+    // The sampling of the combined picture last delivered, and the scene
+    // of the one under way, packed for the GPU.
     let mut sampled: Option<u64> = None;
-    let mut probe_tables: Option<(u64, Vec<Vec<f32>>)> = None;
+    let mut probe_scene: Option<(u64, GpuScene)> = None;
     loop {
         let input_at = {
             let mut shared = lock.lock().expect("canvas state");
@@ -465,6 +469,7 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
             canvas.surface_size = shared.canvas.surface_size;
             canvas.document_size = shared.canvas.document_size;
             canvas.band_count = shared.canvas.band_count;
+            canvas.inputs = shared.canvas.inputs.clone();
             canvas.scenes = shared.canvas.scenes.clone();
             canvas.probe = shared.canvas.probe.clone();
             canvas.wipe = shared.canvas.wipe;
@@ -503,29 +508,24 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
         if let Some(bench) = &mut bench {
             bench.before_frame(&mut canvas);
         }
-        // The tables change with a slider or with the scene's layers.
+        // The scenes are packed again when a slider or the scenes change.
         let version = canvas.scenes.first().map_or(0, |scene| scene.version);
         let stretch_inputs = (canvas.sliders, version);
         if stretched_for != Some(stretch_inputs) {
-            stretch_tables = canvas.stretch_tables();
+            gpu_scenes = canvas.gpu_scenes();
             stretched_for = Some(stretch_inputs);
             stretches_version += 1;
         }
-        let panes: Vec<Pane> = canvas
-            .scenes
+        let panes: Vec<Pane> = gpu_scenes
             .iter()
-            .zip(&stretch_tables)
             .enumerate()
-            .map(|(index, (scene, stretches))| {
+            .map(|(index, scene)| {
                 let (viewport, scissor) = canvas.pane_rects(index);
                 Pane {
-                    layers: &scene.layers,
-                    stretches,
-                    finish: &scene.finish,
-                    finish_stretches: &scene.finish_stretches,
-                    masks: &scene.masks,
-                    heals: &scene.heals,
-                    computed: &scene.computed,
+                    scene,
+                    // Each pane's packing is its own: the compositor uploads
+                    // a pane's tables again only when it changes.
+                    version: Some(stretches_version * 16 + index as u64),
                     viewport,
                     scissor,
                 }
@@ -534,8 +534,6 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
         let frame = Frame {
             view: canvas.view,
             panes: &panes,
-            stretches_version,
-            masks_version: version,
             overlay: &canvas.strokes,
             overlay_strength: 1.0,
             crop: canvas.crop,
@@ -574,7 +572,7 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
         };
         animate = stats.tiles_coarse > 0 || stats.tiles_in_flight > 0 || stats.tiles_uploaded > 0;
         // A sampling no document asks for any more is stopped.
-        if canvas.probe.is_none() && probe_tables.take().is_some() {
+        if canvas.probe.is_none() && probe_scene.take().is_some() {
             renderer.stop_sampling();
             sampled = None;
         }
@@ -583,29 +581,14 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
         if let Some(request) = canvas.probe.clone()
             && sampled != Some(request.id)
         {
-            if probe_tables
-                .as_ref()
-                .is_none_or(|(id, _)| *id != request.id)
-            {
-                probe_tables = Some((request.id, canvas.scene_tables(&request.scene)));
+            if probe_scene.as_ref().is_none_or(|(id, _)| *id != request.id) {
+                let combined = request.scene.combined(&canvas.nudges());
+                probe_scene = Some((request.id, GpuScene::new(&combined, &canvas.inputs)));
             }
-            let tables = &probe_tables.as_ref().expect("the request's tables").1;
-            let scene = &request.scene;
-            let whole = [0, 0, request.size, request.size];
-            let pane = Pane {
-                layers: &scene.layers,
-                stretches: tables,
-                finish: &[],
-                finish_stretches: &[],
-                masks: &scene.masks,
-                heals: &scene.heals,
-                computed: &scene.computed,
-                viewport: whole,
-                scissor: whole,
-            };
+            let scene = &probe_scene.as_ref().expect("the request's scene").1;
             match renderer.sample_picture(
                 request.id,
-                &pane,
+                scene,
                 canvas.crop,
                 &request.patches,
                 request.size,
@@ -722,9 +705,9 @@ pub struct Studio {
     /// that is prepared again.
     source_generation: u64,
     /// Output stretches resolved lately.
-    resolved_chains: psf_studio_canvas::output_stretch::ResolvedChains,
+    resolved_chains: crate::output_stretch::ResolvedChains,
     /// The histogram of the final picture, while the inspector shows it.
-    histogram: Option<Arc<psf_studio_canvas::histogram::Histogram>>,
+    histogram: Option<Arc<crate::histogram::Histogram>>,
     /// The export of the final picture under way, if any.
     export: Option<Arc<export::ExportRun>>,
     /// What the last export said: how far it has got, or how it ended.
@@ -812,6 +795,7 @@ impl Studio {
                     let mut shared = canvas.0 .0.lock().expect("canvas state");
                     shared.canvas.document_size = (pyramid.width, pyramid.height);
                     shared.canvas.band_count = bands;
+                    shared.canvas.inputs = Arc::new(band_info.gpu_inputs());
                 }
                 let handle = canvas.clone();
                 std::thread::Builder::new()
@@ -874,7 +858,7 @@ impl Studio {
                         [SliderId::ToneHue(layer), SliderId::ToneSaturation(layer)]
                     }))
                     .chain((0..8).map(SliderId::StretchParam))
-                    .chain((0..psf_studio_canvas::tone::CONTROLS.len()).map(SliderId::FinishParam))
+                    .chain((0..seiza_compose::tone::CONTROLS.len()).map(SliderId::FinishParam))
                     .chain((0..tools::MAX_TOOL_SETTINGS).map(SliderId::ToolParam))
                     .map(|id| (id, Rc::default()))
                     .collect(),
@@ -1033,7 +1017,6 @@ impl Studio {
                                 radius: line,
                                 hardness: 1.0,
                                 value: 1.0,
-                                _pad: 0.0,
                             })
                             .collect();
                     });
@@ -1055,7 +1038,6 @@ impl Studio {
                         radius,
                         hardness: 0.6,
                         value: 1.0,
-                        _pad: 0.0,
                     }),
                 });
                 if let Some(stroke) = &mut self.stroke {

@@ -1,11 +1,15 @@
-//! Exporting the final picture: the CPU render of what the canvas shows, at
-//! full resolution, saved as a 16-bit TIFF or PNG, or a 32-bit FITS or XISF.
+//! Exporting the final picture: Seiza's CPU render of the picture the canvas
+//! shows, at full resolution, saved as a 16-bit TIFF or PNG, or a 32-bit
+//! FITS or XISF.
 
 use super::panes::scene;
-use super::{Scene, Studio};
+use super::Studio;
+use crate::store_tiles::StoreSource;
 use crate::studio_model::Place;
 use gpui::Context;
-use psf_studio_canvas::cpu;
+use seiza_compose::picture::Picture;
+use seiza_compose::render::{render_image, RenderOptions};
+use seiza_compose::ReferenceRegion;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -99,7 +103,7 @@ impl Studio {
             &mut self.resolved_chains,
         );
         final_scene.stretches = self.analysis(&states);
-        let tables = final_scene.tables();
+        let picture = final_scene.picture(&[]);
         let (width, height) = self.canvas.read(|shared| shared.canvas.document_size);
         let rect = match self.crop_rect() {
             Some([left, top, right, bottom]) => [
@@ -110,6 +114,7 @@ impl Studio {
             ],
             None => [0, 0, width, height],
         };
+        let region = within(rect, (width, height));
         let run = Arc::new(ExportRun {
             path: path.clone(),
             progress: AtomicU32::new(0),
@@ -119,7 +124,7 @@ impl Studio {
         self.export = Some(run.clone());
         self.tell_export(&format!("Exporting {}…", file_name(&path)));
         std::thread::spawn(move || {
-            let result = export(&final_scene, &tables, &store, (width, height), rect, &run);
+            let result = export(&picture, &store, region, &run);
             *run.done.lock().expect("export result") = Some(result);
         });
     }
@@ -148,30 +153,68 @@ impl Studio {
     }
 }
 
+/// `rect`, as x, y, width and height, kept within a document of `size`.
+fn within(rect: [u32; 4], size: (u32, u32)) -> ReferenceRegion {
+    let x = rect[0].min(size.0.saturating_sub(1));
+    let y = rect[1].min(size.1.saturating_sub(1));
+    ReferenceRegion {
+        x: x as usize,
+        y: y as usize,
+        width: rect[2].clamp(1, size.0 - x) as usize,
+        height: rect[3].clamp(1, size.1 - y) as usize,
+    }
+}
+
 /// The export itself: the store read again in 32-bit floats, the picture
-/// rendered on the CPU, and the file written.
+/// rendered by Seiza on the CPU, and the file written.
 fn export(
-    scene: &Scene,
-    tables: &[Vec<f32>],
+    picture: &Picture,
     store: &Path,
-    document: (u32, u32),
-    rect: [u32; 4],
+    region: ReferenceRegion,
     run: &ExportRun,
 ) -> Result<(), String> {
-    let (reader, _) = crate::store_tiles::open_store(store)?;
-    let pane = scene.pane(tables);
-    let image = cpu::render(
-        &pane,
-        &reader,
-        document,
-        rect,
-        &|| run.stop.load(Ordering::Relaxed),
-        &|share| {
-            run.progress
-                .store((share * 1000.0) as u32, Ordering::Relaxed)
+    let (store, _) = crate::store_tiles::open_store(store)?;
+    let source = StoreSource::new(store);
+    let image = render_image(
+        picture,
+        &source,
+        region,
+        &RenderOptions {
+            stop: Some(&|| run.stop.load(Ordering::Relaxed)),
+            progress: Some(&|share| {
+                run.progress
+                    .store((share * 1000.0) as u32, Ordering::Relaxed)
+            }),
+            ..RenderOptions::default()
         },
-    )?;
-    psf_studio_canvas::export::save(&run.path, &image)
+    )
+    .map_err(|error| match error {
+        seiza_compose::Error::Cancelled => "it was stopped".to_string(),
+        error => error.to_string(),
+    })?;
+    save(&run.path, image.width, image.height, &image.data)
+}
+
+/// Writes interleaved RGB to `path` in the format its extension names,
+/// through Seiza: TIFF or PNG at 16 bits per channel, kept within 0 to 1,
+/// or FITS or XISF as 32-bit floats as they are, FITS rows top-down. A
+/// pixel no input covers is written as black.
+fn save(path: &Path, width: usize, height: usize, rgb: &[f32]) -> Result<(), String> {
+    let rgb: Vec<f32> = rgb
+        .iter()
+        .map(|value| if value.is_finite() { *value } else { 0.0 })
+        .collect();
+    seiza_image_io::save_f32(
+        path,
+        width,
+        height,
+        seiza_fits::F32ImageData::RgbInterleaved(&rgb),
+        &seiza_image_io::SaveOptions {
+            fits_top_down: true,
+            ..Default::default()
+        },
+    )
+    .map_err(|error| error.to_string())
 }
 
 fn file_name(path: &Path) -> String {
@@ -196,26 +239,28 @@ impl Studio {
             &Place::Final.view(),
             self.scene_version,
             None,
-            &mut psf_studio_canvas::output_stretch::ResolvedChains::default(),
+            &mut crate::output_stretch::ResolvedChains::default(),
         );
         probe.stretches = self.analysis(&states);
-        let tables = probe.tables();
+        let combined = probe.combined(&[]);
         let (width, height) = self.canvas.read(|shared| shared.canvas.document_size);
         let rect = self
             .crop_rect()
             .unwrap_or([0.0, 0.0, width as f32, height as f32]);
         let (patches, size) = super::picture_patches(rect);
+        let [left, top, right, bottom] = rect.map(|value| value.max(0.0) as u32);
+        let region = within(
+            [
+                left,
+                top,
+                right.saturating_sub(left),
+                bottom.saturating_sub(top),
+            ],
+            (width, height),
+        );
         std::thread::spawn(move || {
-            let text = parity(
-                &probe,
-                &tables,
-                &store,
-                (width, height),
-                &patches,
-                size,
-                &gpu,
-            )
-            .unwrap_or_else(|error| format!("{{\"error\": {error:?}}}"));
+            let text = parity(&combined, &store, region, &patches, size, &gpu)
+                .unwrap_or_else(|error| format!("{{\"error\": {error:?}}}"));
             if let Err(error) = std::fs::write(&report, text) {
                 eprintln!("could not write {}: {error}", report.display());
             }
@@ -223,28 +268,39 @@ impl Studio {
     }
 }
 
-/// How far the CPU's combined picture is from the canvas's samples of the
-/// same patches, as JSON.
+/// How far Seiza's CPU render of the combined picture is from the canvas's
+/// samples of the same patches, as JSON. The CPU renders all of `region`,
+/// as the canvas draws the patches from the tiles around them.
 fn parity(
-    scene: &Scene,
-    tables: &[Vec<f32>],
+    combined: &Picture,
     store: &Path,
-    document: (u32, u32),
+    region: ReferenceRegion,
     patches: &[[u32; 2]],
     size: u32,
     gpu: &[f32],
 ) -> Result<String, String> {
-    let (reader, _) = crate::store_tiles::open_store(store)?;
-    let pane = scene.pane(tables);
+    let (store, _) = crate::store_tiles::open_store(store)?;
+    let source = StoreSource::new(store);
+    let image = render_image(combined, &source, region, &RenderOptions::default())
+        .map_err(|error| error.to_string())?;
+    let size = size as usize;
     let mut differences = Vec::with_capacity(gpu.len());
     for (index, origin) in patches.iter().enumerate() {
-        let cpu =
-            cpu::render_combined(&pane, &reader, document, [origin[0], origin[1], size, size])?;
-        let start = index * (size * size * 3) as usize;
+        let start = index * size * size * 3;
         let canvas = gpu
-            .get(start..start + cpu.len())
+            .get(start..start + size * size * 3)
             .ok_or("the canvas gave fewer samples than the patches")?;
-        differences.extend(cpu.iter().zip(canvas).map(|(a, b)| (a - b).abs()));
+        for row in 0..size {
+            let y = origin[1] as usize + row - region.y;
+            let x = origin[0] as usize - region.x;
+            let from = (y * region.width + x) * 3;
+            let cpu = image
+                .data
+                .get(from..from + size * 3)
+                .ok_or("a patch lies outside the picture")?;
+            let line = &canvas[row * size * 3..(row + 1) * size * 3];
+            differences.extend(cpu.iter().zip(line).map(|(a, b)| (a - b).abs()));
+        }
     }
     differences.sort_by(f32::total_cmp);
     let at = |share: f64| differences[((differences.len() - 1) as f64 * share) as usize];
@@ -261,4 +317,23 @@ fn parity(
         at(0.999),
         at(1.0)
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_tiff_keeps_sixteen_bits() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("picture.tif");
+        // Two values one 16-bit step apart, which 8 bits could not tell apart.
+        let step = 1.0 / 65535.0;
+        let rgb = [0.5, 0.5, 0.5, 0.5 + step, 0.5 + step, 0.5 + step];
+        save(&path, 2, 1, &rgb).unwrap();
+        let read = seiza_image_io::open(&path).unwrap();
+        let samples = &read.samples;
+        assert!((samples[0] - 0.5).abs() < step);
+        assert!(samples[3] > samples[0]);
+    }
 }

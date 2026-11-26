@@ -1004,6 +1004,7 @@ impl Studio {
             let mut shared = self.canvas.0 .0.lock().expect("canvas state");
             shared.canvas.document_size = (pyramid.width, pyramid.height);
             shared.canvas.band_count = self.band_info.len();
+            shared.canvas.inputs = Arc::new(self.band_info.gpu_inputs());
             shared.new_source = Some(source);
         }
         self.take_in_new_inputs();

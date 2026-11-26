@@ -1,0 +1,372 @@
+//! What the canvas is asked to draw, in the document's terms, and the Seiza
+//! picture it becomes.
+//!
+//! A scene lists layers as the document has them: a layer shows an input's
+//! band through a stretch the document resolves later, from each band's
+//! analysis. [`picture`] turns a scene into a [`seiza_compose`] picture once
+//! those stretches are known. Seiza draws that picture: on the GPU for the
+//! canvas, and on the CPU for an export, the parity report and the
+//! histogram.
+
+use seiza_compose::picture::{
+    self, Adjustment as SeizaAdjustment, Blend, FinishStep, InputRead, LayerHeal, LayerKind,
+    Picture, Segment, Transfer,
+};
+use seiza_compose::render::{RenderOptions, Sink, Source};
+use seiza_compose::{Error, ReferenceRegion};
+use std::sync::Mutex;
+
+/// What an entry in a scene's list of layers is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Mark {
+    /// A layer: one that shows a band, or an adjustment.
+    #[default]
+    Layer,
+    /// The start of a group. The entries up to the group's end blend
+    /// together on their own, starting from nothing.
+    GroupBegin,
+    /// The end of a group: the members' blend becomes one layer with this
+    /// entry's opacity, blend and mask. Adjustments of the entry's own
+    /// follow it, as they follow a layer.
+    GroupEnd,
+    /// A layer of one color everywhere, with no band: what a mask is drawn
+    /// with, so the mask itself shows.
+    Solid,
+}
+
+/// What an adjustment layer does. Its amount is the layer's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Adjustment {
+    /// Brightens or darkens by the amount in stops.
+    Exposure,
+    /// A contrast curve. The amount runs from -1 to 1.
+    Curves,
+    /// Saturation. 1 leaves the color unchanged.
+    Saturation,
+}
+
+/// One entry of a scene's layers: a band, stretched, colored and blended,
+/// or an adjustment, or one end of a group.
+#[derive(Clone, Copy, Debug)]
+pub struct Layer {
+    pub mark: Mark,
+    /// A second mask that limits the layer: the mask of the layer it is
+    /// clipped to, as an index into the scene's masks.
+    pub clip: Option<usize>,
+    /// A mask computed from bands that limits the layer, as an index into
+    /// the scene's computed masks.
+    pub computed: Option<usize>,
+    /// The tile channel the layer shows.
+    pub band: usize,
+    pub color: [f32; 3],
+    /// From 0 to 1. A hidden layer has 0.
+    pub opacity: f32,
+    pub blend: Blend,
+    /// The layer's own contrast curve, from -1 to 1. 0 is none.
+    pub curve: f32,
+    /// A second tile channel blended into the first before the stretch, and
+    /// how much of it, from 0 to 1: the band uncorrected and corrected in
+    /// full, for a correction whose strength a person moves.
+    pub blended: Option<(usize, f32)>,
+    /// The painted mask that limits where the layer applies.
+    pub mask: Option<usize>,
+    /// For an adjustment: what it does, and by how much. `None` is a layer
+    /// that shows a band.
+    pub adjustment: Option<(Adjustment, f32)>,
+    /// For an adjustment: whether it changes only the entry before it.
+    pub own: bool,
+}
+
+/// One band a computed mask reads, stretched.
+#[derive(Clone, Copy, Debug)]
+pub struct MaskBand {
+    /// The tile channel read.
+    pub band: usize,
+    /// A second tile channel blended into the first, as for a layer.
+    pub blended: Option<(usize, f32)>,
+    /// The scene's stretch the band is read through, by its place among
+    /// the scene's stretches.
+    pub stretch_row: usize,
+}
+
+/// A mask computed at each pixel from the stretched samples of one or two
+/// bands.
+#[derive(Clone, Copy, Debug)]
+pub struct ComputedMask {
+    pub bands: [Option<MaskBand>; 2],
+    /// Whether the product `p` becomes `p^(1-p)`.
+    pub power_of_inverse: bool,
+    /// The power the shaped product is raised to. 1 leaves it as it is.
+    pub reach: f32,
+    /// The standard deviation of the blur the mask is smoothed with, in
+    /// document pixels. 0 is not smoothed.
+    pub smoothing: f32,
+    /// Strokes that set the mask to 1 under them.
+    pub added: Option<usize>,
+    /// Strokes that set the mask to 0 under them.
+    pub removed: Option<usize>,
+    /// Whether the mask is 1 minus all of the above.
+    pub inverted: bool,
+}
+
+/// What a scene holds besides its stretches.
+pub struct SceneParts<'a> {
+    pub layers: &'a [Layer],
+    pub computed: &'a [ComputedMask],
+    pub masks: &'a [Vec<Segment>],
+    pub heals: &'a [LayerHeal],
+    pub finish: &'a [FinishStep],
+}
+
+/// The scene as a Seiza picture, with `stretches` as its stretches in
+/// order: one per layer that shows a band, then the ones only computed
+/// masks read. A stretch the list does not have draws nothing.
+pub fn picture(parts: &SceneParts, stretches: &[Transfer]) -> Picture {
+    let stretch = |row: usize| {
+        stretches
+            .get(row)
+            .cloned()
+            .unwrap_or_else(|| Transfer::of([picture::TransferStage::Scale(0.0)]))
+    };
+    let mut row = 0;
+    let layers = parts
+        .layers
+        .iter()
+        .map(|layer| {
+            let kind = match (layer.mark, layer.adjustment) {
+                (Mark::GroupBegin, _) => LayerKind::GroupBegin,
+                (Mark::GroupEnd, _) => LayerKind::GroupEnd,
+                (Mark::Solid, _) => LayerKind::Solid { color: layer.color },
+                (Mark::Layer, Some((kind, amount))) => LayerKind::Adjustment(match kind {
+                    Adjustment::Exposure => SeizaAdjustment::Exposure(amount),
+                    Adjustment::Curves => SeizaAdjustment::Curves(amount.clamp(-1.0, 1.0)),
+                    Adjustment::Saturation => SeizaAdjustment::Saturation(amount),
+                }),
+                (Mark::Layer, None) => {
+                    let transfer = stretch(row);
+                    row += 1;
+                    LayerKind::Input {
+                        read: InputRead {
+                            input: layer.band,
+                            blended: layer
+                                .blended
+                                .map(|(band, share)| (band, share.clamp(0.0, 1.0))),
+                            transfer,
+                        },
+                        color: layer.color,
+                        curve: layer.curve.clamp(-1.0, 1.0),
+                    }
+                }
+            };
+            picture::Layer {
+                kind,
+                opacity: layer.opacity.clamp(0.0, 1.0),
+                blend: layer.blend,
+                mask: layer.mask,
+                clip: layer.clip,
+                computed: layer.computed,
+                own: layer.own,
+            }
+        })
+        .collect();
+    let computed = parts
+        .computed
+        .iter()
+        .map(|mask| picture::ComputedMask {
+            reads: mask
+                .bands
+                .iter()
+                .flatten()
+                .map(|band| InputRead {
+                    input: band.band,
+                    blended: band
+                        .blended
+                        .map(|(other, share)| (other, share.clamp(0.0, 1.0))),
+                    transfer: stretch(band.stretch_row),
+                })
+                .collect(),
+            power_of_inverse: mask.power_of_inverse,
+            reach: mask.reach.clamp(0.05, 20.0),
+            smoothing: mask.smoothing.max(0.0),
+            added: mask.added,
+            removed: mask.removed,
+            inverted: mask.inverted,
+        })
+        .collect();
+    Picture {
+        layers,
+        computed,
+        masks: parts.masks.to_vec(),
+        heals: parts.heals.to_vec(),
+        finish: parts.finish.to_vec(),
+    }
+}
+
+/// The picture's samples `rgb`, red, green and blue interleaved, after the
+/// Finish steps that change each pixel alone: what the histogram shows.
+/// Masks and heals, which need the pixels around, are left out. Seiza's CPU
+/// render applies the steps, as it does for an export.
+pub fn finished_samples(finish: &[FinishStep], rgb: &[f32]) -> Vec<f32> {
+    let pixels = rgb.len() / 3;
+    if pixels == 0 {
+        return Vec::new();
+    }
+    let steps: Vec<FinishStep> = finish
+        .iter()
+        .filter(|step| !matches!(step.kind, picture::FinishKind::Heal { .. }))
+        .map(|step| FinishStep {
+            mask: None,
+            ..step.clone()
+        })
+        .collect();
+    // Each channel is an input, added in its own primary over black, which
+    // gives back the samples as they are before the steps.
+    let layers = (0..3)
+        .map(|channel| {
+            let mut color = [0.0; 3];
+            color[channel] = 1.0;
+            picture::Layer::added(InputRead::new(channel, Transfer::identity()), color)
+        })
+        .collect();
+    let picture = Picture {
+        layers,
+        finish: steps,
+        ..Picture::default()
+    };
+    let source = InterleavedSource { rgb, pixels };
+    let region = ReferenceRegion {
+        x: 0,
+        y: 0,
+        width: pixels,
+        height: 1,
+    };
+    let sink = RowSink(Mutex::new(vec![f32::NAN; pixels * 3]));
+    match seiza_compose::render::render(&picture, &source, region, &sink, &RenderOptions::default())
+    {
+        Ok(()) => sink.0.into_inner().unwrap_or_default(),
+        Err(_) => rgb.to_vec(),
+    }
+}
+
+/// Interleaved RGB samples as three inputs one pixel high.
+struct InterleavedSource<'a> {
+    rgb: &'a [f32],
+    pixels: usize,
+}
+
+impl Source for InterleavedSource<'_> {
+    fn size(&self) -> (usize, usize) {
+        (self.pixels, 1)
+    }
+
+    fn read(&self, input: usize, rect: ReferenceRegion) -> Result<Vec<f32>, Error> {
+        Ok((rect.x..rect.x + rect.width)
+            .map(|pixel| self.rgb[pixel * 3 + input])
+            .collect())
+    }
+}
+
+/// A picture one pixel high, kept whole.
+struct RowSink(Mutex<Vec<f32>>);
+
+impl Sink for RowSink {
+    fn put(&self, rect: ReferenceRegion, rgb: &[f32]) -> Result<(), Error> {
+        let mut out = self
+            .0
+            .lock()
+            .map_err(|_| Error::Color("a tile's render panicked".into()))?;
+        out[rect.x * 3..(rect.x + rect.width) * 3].copy_from_slice(rgb);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use seiza_compose::picture::FinishKind;
+    use seiza_compose::tone::Tone;
+
+    fn band_layer(band: usize) -> Layer {
+        Layer {
+            mark: Mark::Layer,
+            clip: None,
+            computed: None,
+            band,
+            color: [1.0, 0.5, 0.25],
+            opacity: 1.0,
+            blend: Blend::Add,
+            curve: 0.0,
+            blended: None,
+            mask: None,
+            adjustment: None,
+            own: false,
+        }
+    }
+
+    #[test]
+    fn each_band_layer_takes_the_next_stretch_and_masks_name_theirs() {
+        let exposure = Layer {
+            adjustment: Some((Adjustment::Exposure, 1.0)),
+            ..band_layer(0)
+        };
+        let layers = [band_layer(3), exposure, band_layer(5)];
+        let computed = [ComputedMask {
+            bands: [
+                Some(MaskBand {
+                    band: 7,
+                    blended: None,
+                    stretch_row: 2,
+                }),
+                None,
+            ],
+            power_of_inverse: true,
+            reach: 1.0,
+            smoothing: 0.0,
+            added: None,
+            removed: None,
+            inverted: false,
+        }];
+        let stretches: Vec<Transfer> = (1..=3)
+            .map(|scale| Transfer::of([picture::TransferStage::Scale(scale as f32)]))
+            .collect();
+        let parts = SceneParts {
+            layers: &layers,
+            computed: &computed,
+            masks: &[],
+            heals: &[],
+            finish: &[],
+        };
+        let picture = picture(&parts, &stretches);
+        let LayerKind::Input { read, .. } = &picture.layers[0].kind else {
+            panic!("a band layer");
+        };
+        assert_eq!((read.input, &read.transfer), (3, &stretches[0]));
+        assert_eq!(
+            picture.layers[1].kind,
+            LayerKind::Adjustment(SeizaAdjustment::Exposure(1.0))
+        );
+        let LayerKind::Input { read, .. } = &picture.layers[2].kind else {
+            panic!("a band layer");
+        };
+        assert_eq!((read.input, &read.transfer), (5, &stretches[1]));
+        assert_eq!(picture.computed[0].reads[0].transfer, stretches[2]);
+    }
+
+    #[test]
+    fn the_histogram_samples_follow_the_finish_steps() {
+        let rgb = [0.1, 0.2, 0.3, 0.5, 0.5, 0.5];
+        assert_eq!(finished_samples(&[], &rgb), rgb);
+        let brighter = [FinishStep {
+            kind: FinishKind::Tone(Tone {
+                exposure: 1.0,
+                ..Tone::default()
+            }),
+            opacity: 1.0,
+            // A mask is left out: the histogram is of the picture's tones.
+            mask: Some(0),
+        }];
+        let finished = finished_samples(&brighter, &rgb);
+        assert!(finished[0] > rgb[0] * 1.5, "{finished:?}");
+        assert!(finished[3] > 0.9, "{finished:?}");
+    }
+}

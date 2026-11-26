@@ -21,6 +21,21 @@ license = "MIT OR Apache-2.0"
 [workspace.dependencies]
 wgpu = "30"
 bytemuck = { version = "1", features = ["derive"] }
+# The compositor the canvas and an export draw with: Seiza's, on the CPU and
+# on the GPU. Pinned to the Seiza pull request that adds it until a release
+# has it.
+seiza-compose = { git = "https://github.com/theatrus/seiza", rev = "09d5d85072148115543c413376525389f2ef82d3" }
+
+# The Seiza crates PSF Guard's source and the app use from crates.io, taken
+# from the same commit as seiza-compose so the two agree on their types.
+[patch.crates-io]
+seiza-core = { git = "https://github.com/theatrus/seiza", rev = "09d5d85072148115543c413376525389f2ef82d3" }
+seiza-fits = { git = "https://github.com/theatrus/seiza", rev = "09d5d85072148115543c413376525389f2ef82d3" }
+seiza-image-io = { git = "https://github.com/theatrus/seiza", rev = "09d5d85072148115543c413376525389f2ef82d3" }
+seiza-imgproc = { git = "https://github.com/theatrus/seiza", rev = "09d5d85072148115543c413376525389f2ef82d3" }
+seiza-stats = { git = "https://github.com/theatrus/seiza", rev = "09d5d85072148115543c413376525389f2ef82d3" }
+seiza-stretch = { git = "https://github.com/theatrus/seiza", rev = "09d5d85072148115543c413376525389f2ef82d3" }
+seiza-xisf = { git = "https://github.com/theatrus/seiza", rev = "09d5d85072148115543c413376525389f2ef82d3" }
 
 [profile.release]
 debug = 1
