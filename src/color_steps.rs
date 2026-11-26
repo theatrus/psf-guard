@@ -354,6 +354,163 @@ pub(crate) fn refit_channel_background(
     Ok(fit)
 }
 
+/// What [`measure_color_gains`] found.
+pub struct ColorGains {
+    /// What the calibration did, with its evidence, or why it did not run.
+    pub outcome: StackColorCalibrationOutcome,
+    /// The multipliers of red, green and blue that calibrate them, when
+    /// the calibration ran. Green's is 1.
+    pub gains: Option<[f32; 3]>,
+}
+
+/// Measures the gains that calibrate registered red, green and blue
+/// channels against Gaia: the step PSF Guard's color previews run, without
+/// its sky offsets.
+///
+/// `solution` is the plate solve of the reference frame of the stack whose
+/// grid the channels are on, and `orientation` that stack's sky layout.
+/// The channels are measured as given and not changed, so a caller applies
+/// the gains to every state of a channel it holds: as stacked, after its
+/// tools, its stars, and with its background corrected. The channels
+/// measured must still have their stars.
+pub fn measure_color_gains(
+    channels: [&LinearImage; 3],
+    solution: &AstrometrySolutionResponse,
+    orientation: &StackSkyOrientation,
+    catalog: &seiza::catalog::PhotometryCatalog,
+    settings: &StackColorCalibration,
+) -> ColorGains {
+    let skipped = |detail: String| ColorGains {
+        outcome: StackColorCalibrationOutcome::Skipped(StackColorCalibrationSkip::new(
+            StackColorCalibrationSkipReason::Failed,
+            detail,
+        )),
+        gains: None,
+    };
+    if (channels[0].width, channels[0].height)
+        != (orientation.output_width, orientation.output_height)
+    {
+        return skipped("the stack's sky layout does not match its pixels".into());
+    }
+    let placement = StarPlacement {
+        wcs: crate::astrometry::wcs_from_response(&solution.wcs),
+        orientation: orientation.clone(),
+    };
+    let wcs = match placement.wcs_on(None) {
+        Ok(wcs) => wcs,
+        Err(error) => return skipped(error),
+    };
+    // Gains alone: a sky offset belongs to one state of a channel, and the
+    // background step already levels the sky of the corrected state.
+    let settings = StackColorCalibration {
+        neutralize_background: false,
+        ..*settings
+    };
+    let [mut red, mut green, mut blue] = channels.map(Clone::clone);
+    let outcome = calibrate_channels(
+        [&mut red, &mut green, &mut blue],
+        &wcs,
+        catalog,
+        &settings,
+        None,
+    );
+    let gains = matches!(outcome, StackColorCalibrationOutcome::Calibrated(_)).then(|| {
+        let ratio = |before: &LinearImage, after: &LinearImage| -> f32 {
+            let (mut was, mut is) = (0.0f64, 0.0f64);
+            for (a, b) in before.data.iter().zip(&after.data) {
+                if a.is_finite() && b.is_finite() {
+                    was += f64::from(*a);
+                    is += f64::from(*b);
+                }
+            }
+            if was.abs() > f64::EPSILON {
+                (is / was) as f32
+            } else {
+                1.0
+            }
+        };
+        let measured = [
+            ratio(channels[0], &red),
+            ratio(channels[1], &green),
+            ratio(channels[2], &blue),
+        ];
+        // Green is the anchor, whatever common scale Seiza applied.
+        let green = if measured[1].abs() > f32::EPSILON {
+            measured[1]
+        } else {
+            1.0
+        };
+        measured.map(|gain| gain / green)
+    });
+    ColorGains { outcome, gains }
+}
+
+/// Stretches the stars of calibrated red, green and blue into one display
+/// layer, with Seiza's star stretch: the step PSF Guard's RGB stars use.
+///
+/// `original` holds the three channels with their stars and `starless` the
+/// same channels after star removal, both linear and with the same
+/// calibration. `amount` is from 0 to 8. The result is each channel's stars
+/// from 0 to 1, ready to screen over a picture; the three share one scale,
+/// so the stars keep their colors.
+pub fn stretch_star_layer(
+    original: [&LinearImage; 3],
+    starless: [&LinearImage; 3],
+    amount: f64,
+) -> Result<[Vec<f32>; 3], String> {
+    let original = interleave(original[0], original[1], original[2])?;
+    let starless = interleave(starless[0], starless[1], starless[2])?;
+    let layer = seiza_stacking::stretch_rgb_stars(&original, &starless, amount)
+        .map_err(|error| error.to_string())?;
+    let pixels = layer.data.len() / 3;
+    let mut channels = [
+        Vec::with_capacity(pixels),
+        Vec::with_capacity(pixels),
+        Vec::with_capacity(pixels),
+    ];
+    for pixel in layer.data.as_chunks::<3>().0 {
+        for (channel, value) in channels.iter_mut().zip(pixel) {
+            channel.push(*value);
+        }
+    }
+    Ok(channels)
+}
+
+/// Runs a chain of stretches over a whole image, with Seiza's stretch
+/// stack, and returns the image stretched for display. A chain with the
+/// layered stretch needs this: that stretch blurs the image, so it cannot
+/// be resolved from samples. `image` has one channel, or three that are
+/// stretched together. Its samples are physical values, as a stack holds
+/// them.
+pub fn stretch_for_display(
+    image: &LinearImage,
+    stages: &[StackStretchRequest],
+) -> Result<LinearImage, String> {
+    use seiza_stretch::{SampleDomain, SampleNormalization};
+
+    // A stack holds physical values. They are brought to the range of 0
+    // to 1 first. Seiza resolves one linked range over every channel and
+    // skips samples that are not finite, so three channels keep their
+    // balance.
+    let domain = SampleDomain::PhysicalLinear {
+        normalization: SampleNormalization::default(),
+    }
+    .resolve(&image.data, image.channels)
+    .map_err(|error| error.to_string())?;
+    let unit = domain
+        .apply(&image.data, image.channels)
+        .map_err(|error| error.to_string())?;
+    let stack =
+        seiza_stretch::StretchStack::new(stages.iter().map(StackStretchRequest::config).collect())
+            .map_err(|error| error.to_string())?;
+    let shape = seiza_stretch::ImageShape::new(image.width, image.height, image.channels);
+    let output = stack
+        .apply_f32_image(&unit, shape)
+        .map_err(|error| error.to_string())?;
+    LinearImage::new(image.width, image.height, image.channels, output.data)
+        .map_err(|error| error.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -486,161 +643,4 @@ mod tests {
         assert_eq!(stopped, Err("stopped".to_string()));
         assert_eq!(image.data, untouched.data);
     }
-}
-
-/// What [`measure_color_gains`] found.
-pub struct ColorGains {
-    /// What the calibration did, with its evidence, or why it did not run.
-    pub outcome: StackColorCalibrationOutcome,
-    /// The multipliers of red, green and blue that calibrate them, when
-    /// the calibration ran. Green's is 1.
-    pub gains: Option<[f32; 3]>,
-}
-
-/// Measures the gains that calibrate registered red, green and blue
-/// channels against Gaia: the step PSF Guard's color previews run, without
-/// its sky offsets.
-///
-/// `solution` is the plate solve of the reference frame of the stack whose
-/// grid the channels are on, and `orientation` that stack's sky layout.
-/// The channels are measured as given and not changed, so a caller applies
-/// the gains to every state of a channel it holds: as stacked, after its
-/// tools, its stars, and with its background corrected. The channels
-/// measured must still have their stars.
-pub fn measure_color_gains(
-    channels: [&LinearImage; 3],
-    solution: &AstrometrySolutionResponse,
-    orientation: &StackSkyOrientation,
-    catalog: &seiza::catalog::PhotometryCatalog,
-    settings: &StackColorCalibration,
-) -> ColorGains {
-    let skipped = |detail: String| ColorGains {
-        outcome: StackColorCalibrationOutcome::Skipped(StackColorCalibrationSkip::new(
-            StackColorCalibrationSkipReason::Failed,
-            detail,
-        )),
-        gains: None,
-    };
-    let placement = StarPlacement {
-        wcs: crate::astrometry::wcs_from_response(&solution.wcs),
-        orientation: orientation.clone(),
-    };
-    let wcs = match placement.wcs_on(None) {
-        Ok(wcs) => wcs,
-        Err(error) => return skipped(error),
-    };
-    // Gains alone: a sky offset belongs to one state of a channel, and the
-    // background step already levels the sky of the corrected state.
-    let settings = StackColorCalibration {
-        neutralize_background: false,
-        ..*settings
-    };
-    let [mut red, mut green, mut blue] = channels.map(Clone::clone);
-    let outcome = calibrate_channels(
-        [&mut red, &mut green, &mut blue],
-        &wcs,
-        catalog,
-        &settings,
-        None,
-    );
-    let gains = matches!(outcome, StackColorCalibrationOutcome::Calibrated(_)).then(|| {
-        let ratio = |before: &LinearImage, after: &LinearImage| -> f32 {
-            let (mut was, mut is) = (0.0f64, 0.0f64);
-            for (a, b) in before.data.iter().zip(&after.data) {
-                if a.is_finite() && b.is_finite() {
-                    was += f64::from(*a);
-                    is += f64::from(*b);
-                }
-            }
-            if was.abs() > f64::EPSILON {
-                (is / was) as f32
-            } else {
-                1.0
-            }
-        };
-        let measured = [
-            ratio(channels[0], &red),
-            ratio(channels[1], &green),
-            ratio(channels[2], &blue),
-        ];
-        // Green is the anchor, whatever common scale Seiza applied.
-        let green = if measured[1].abs() > f32::EPSILON {
-            measured[1]
-        } else {
-            1.0
-        };
-        measured.map(|gain| gain / green)
-    });
-    ColorGains { outcome, gains }
-}
-
-/// Stretches the stars of calibrated red, green and blue into one display
-/// layer, with Seiza's star stretch: the step PSF Guard's RGB stars use.
-///
-/// `original` holds the three channels with their stars and `starless` the
-/// same channels after star removal, both linear and with the same
-/// calibration. `amount` is from 0 to 8. The result is each channel's stars
-/// from 0 to 1, ready to screen over a picture; the three share one scale,
-/// so the stars keep their colors.
-pub fn stretch_star_layer(
-    original: [&LinearImage; 3],
-    starless: [&LinearImage; 3],
-    amount: f64,
-) -> Result<[Vec<f32>; 3], String> {
-    let original = interleave(original[0], original[1], original[2])?;
-    let starless = interleave(starless[0], starless[1], starless[2])?;
-    let layer = seiza_stacking::stretch_rgb_stars(&original, &starless, amount)
-        .map_err(|error| error.to_string())?;
-    let pixels = layer.data.len() / 3;
-    let mut channels = [
-        Vec::with_capacity(pixels),
-        Vec::with_capacity(pixels),
-        Vec::with_capacity(pixels),
-    ];
-    for pixel in layer.data.as_chunks::<3>().0 {
-        for (channel, value) in channels.iter_mut().zip(pixel) {
-            channel.push(*value);
-        }
-    }
-    Ok(channels)
-}
-
-/// Runs a chain of stretches over a whole image, with Seiza's stretch
-/// stack, and returns the image stretched for display. A chain with the
-/// layered stretch needs this: that stretch blurs the image, so it cannot
-/// be resolved from samples. `image` has one channel, or three that are
-/// stretched together. Its samples are physical values, as a stack holds
-/// them.
-pub fn stretch_for_display(
-    image: &LinearImage,
-    stages: &[StackStretchRequest],
-) -> Result<LinearImage, String> {
-    use seiza_stretch::{SampleDomain, SampleNormalization};
-
-    // A stack holds physical values. They are brought to the range of 0
-    // to 1 first, by one scale for every sample, so three channels keep
-    // their balance.
-    let finite: Vec<f32> = image
-        .data
-        .iter()
-        .copied()
-        .filter(|sample| sample.is_finite())
-        .collect();
-    let domain = SampleDomain::PhysicalLinear {
-        normalization: SampleNormalization::default(),
-    }
-    .resolve(&finite, 1)
-    .map_err(|error| error.to_string())?;
-    let unit = domain
-        .apply(&image.data, 1)
-        .map_err(|error| error.to_string())?;
-    let stack =
-        seiza_stretch::StretchStack::new(stages.iter().map(StackStretchRequest::config).collect())
-            .map_err(|error| error.to_string())?;
-    let shape = seiza_stretch::ImageShape::new(image.width, image.height, image.channels);
-    let output = stack
-        .apply_f32_image(&unit, shape)
-        .map_err(|error| error.to_string())?;
-    LinearImage::new(image.width, image.height, image.channels, output.data)
-        .map_err(|error| error.to_string())
 }

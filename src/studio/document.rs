@@ -740,7 +740,23 @@ impl Document {
             .layers()
             .iter()
             .any(|layer| layer.id == group && layer.source == LayerSource::Group);
-        is_group && self.remove_layer(group).is_some()
+        if !is_group {
+            return false;
+        }
+        // The members are no palette's from here on, and the masks the
+        // group's palette made are theirs alone.
+        for layer in &mut self.stages[StageKind::Combine as usize].layers {
+            if layer.group == Some(group) {
+                layer.slot = None;
+            }
+        }
+        for mask in &mut self.masks {
+            if mask.part == Some(group) {
+                mask.part = None;
+                mask.slots.clear();
+            }
+        }
+        self.remove_layer(group).is_some()
     }
 
     /// Moves a layer so that it lands under the layer that is at `position`
@@ -770,6 +786,11 @@ impl Document {
                     .any(|layer| layer.id == *group && layer.source == LayerSource::Group)
         });
         if !is_group {
+            // A layer that leaves its part is no longer one its palette
+            // made: the palette of the part it joins must not replace it.
+            if layers[at].group != joins {
+                layers[at].slot = None;
+            }
             layers[at].group = joins;
         }
         // A place inside the block that moves is where the block is.

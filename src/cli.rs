@@ -1235,6 +1235,38 @@ pub enum Commands {
         output: String,
     },
 
+    /// Register channel stacks from FITS or XISF files on this computer
+    /// and write them as a PSF-Studio tile store. The files are read where
+    /// they are and never changed
+    StudioFiles {
+        /// One channel and its stack file, reference first, such as
+        /// ha=Ha.xisf. Give the option once per channel. The channels are
+        /// PSF Guard's: luminance, red, green, blue, ha, oiii, sii, nii
+        #[arg(long = "channel", value_name = "CHANNEL=FILE", required = true)]
+        channels: Vec<String>,
+
+        /// Also write a document that starts as PSF Guard's default color
+        /// flow to this path
+        #[arg(long)]
+        document: Option<String>,
+
+        /// Prepare the store for this PSF-Studio document in place of the
+        /// default flow
+        #[arg(long, conflicts_with = "document")]
+        apply: Option<String>,
+
+        /// Where the first file points and its pixel scale, to plate solve
+        /// it for color calibration: right ascension and declination in
+        /// degrees, then arcseconds per pixel, such as 349.05,60.11,0.93.
+        /// A stack often keeps neither in its header
+        #[arg(long, value_name = "RA,DEC,SCALE")]
+        pointing: Option<String>,
+
+        /// Output path of the tile store
+        #[arg(short, long)]
+        output: String,
+    },
+
     /// Print the processing tools this computer can run, with their
     /// settings, as JSON
     StudioTools,

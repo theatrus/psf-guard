@@ -490,8 +490,11 @@ impl RegisteredChannels {
                 };
                 self.names.iter().position(|other| *other == wanted)
             };
-            let Some(level) = plane_of(&anchor).and_then(|plane| median(&self.planes[plane]))
-            else {
+            // An anchor without this state, such as green with no tools,
+            // lends its level as stacked.
+            let anchor_plane =
+                plane_of(&anchor).or_else(|| self.names.iter().position(|other| *other == anchor));
+            let Some(level) = anchor_plane.and_then(|plane| median(&self.planes[plane])) else {
                 continue;
             };
             for role in channels {

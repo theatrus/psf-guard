@@ -393,6 +393,19 @@ impl Document {
             self.remove_mask(id);
         }
         self.palette = None;
+        // The Star stretch belongs to the RGB stars part.
+        if !recipe.parts.contains(&PartKind::ColorStars) {
+            let star_stretch: Vec<Uuid> = self
+                .stage(StageKind::Stretch)
+                .steps
+                .iter()
+                .filter(|step| step.kind.name() == flow_operations::STAR_STRETCH)
+                .map(|step| step.id)
+                .collect();
+            for id in star_stretch {
+                self.remove_step(id);
+            }
+        }
         let kept = self.layers().len();
         let mut made = 0;
         for kind in recipe.parts {

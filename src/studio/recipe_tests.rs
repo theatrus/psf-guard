@@ -225,3 +225,102 @@ fn every_kind_of_part_is_made_from_inputs_that_fit_it() {
         .add_part(PartKind::Luminance, &names(&["ha"]))
         .is_none());
 }
+
+#[test]
+fn a_palette_keeps_each_layer_by_its_slot_however_they_are_ordered() {
+    let inputs = names(&["ha", "oiii", "sii", "nii"]);
+    let mut document = document(&["ha", "oiii", "sii", "nii"]);
+    assert!(document.use_recipe(recipe("Narrowband"), &inputs));
+    let part = document.parts()[0].id;
+    let layer_of = |document: &Document, slot: &str| -> LayerRecord {
+        document
+            .group_members(part)
+            .find(|layer| layer.slot.as_deref() == Some(slot))
+            .unwrap()
+            .clone()
+    };
+    // A person reorders the part's layers and changes one's opacity.
+    let ha = layer_of(&document, "ha");
+    let first = document
+        .layers()
+        .iter()
+        .position(|layer| layer.group == Some(part))
+        .unwrap();
+    document.place_layer(ha.id, first, Some(part));
+    document.layer_mut(ha.id).unwrap().opacity = 0.4;
+    let colors = ["ha", "oiii", "sii"].map(|slot| layer_of(&document, slot).color);
+
+    // Giving another slot a new input keeps every layer's color and the
+    // opacity, each with the slot it had.
+    assert!(document.set_palette_input_in(Some(part), "oiii", "nii"));
+    assert_eq!(
+        ["ha", "oiii", "sii"].map(|slot| layer_of(&document, slot).color),
+        colors
+    );
+    assert_eq!(layer_of(&document, "ha").opacity, 0.4);
+    assert!(matches!(
+        &layer_of(&document, "oiii").source,
+        LayerSource::Band { band } if band == "nii"
+    ));
+}
+
+#[test]
+fn a_layer_that_leaves_its_part_is_not_replaced_by_another_palette() {
+    let inputs = names(&["red", "green", "blue", "ha", "oiii"]);
+    let mut document = document(&["red", "green", "blue", "ha", "oiii"]);
+    assert!(document.use_recipe(recipe("RGB"), &inputs));
+    let color = document.parts()[0].id;
+    let nebula = document.add_part(PartKind::Nebula, &inputs).unwrap();
+    let ha = document
+        .group_members(nebula)
+        .find(|layer| layer.slot.as_deref() == Some("ha"))
+        .unwrap()
+        .id;
+    // Ha moves into the Color part, on top of its layers.
+    let top = document
+        .layers()
+        .iter()
+        .position(|layer| layer.id == color)
+        .unwrap();
+    assert!(document.place_layer(ha, top, Some(color)));
+    assert!(document
+        .layers()
+        .iter()
+        .any(|layer| layer.id == ha && layer.slot.is_none()));
+    let red_color = document
+        .group_members(color)
+        .find(|layer| layer.slot.as_deref() == Some("red"))
+        .unwrap()
+        .color;
+
+    // The Color part's palette changes an input: Ha stays, and red keeps
+    // its color.
+    assert!(document.set_palette_input_in(Some(color), "blue", "oiii"));
+    assert!(document.layers().iter().any(|layer| layer.id == ha));
+    assert_eq!(
+        document
+            .group_members(color)
+            .find(|layer| layer.slot.as_deref() == Some("red"))
+            .unwrap()
+            .color,
+        red_color
+    );
+
+    // Ungrouping leaves the layers no palette's.
+    assert!(document.ungroup(color));
+    assert!(document
+        .layers()
+        .iter()
+        .filter(|layer| layer.group.is_none())
+        .all(|layer| layer.slot.is_none()));
+
+    // A recipe without RGB stars has no Star stretch step.
+    let mut stars = document.clone();
+    stars.add_star_stretch();
+    assert!(stars.use_recipe(recipe("RGB"), &inputs));
+    assert!(stars
+        .stage(StageKind::Stretch)
+        .steps
+        .iter()
+        .all(|step| step.kind.name() != flow_operations::STAR_STRETCH));
+}

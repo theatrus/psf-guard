@@ -2267,7 +2267,21 @@ stretch's settings takes effect when the store is prepared again. A star
 layer that was not star-stretched still follows its input's table
 stretches only.
 
-Not built: tools per input in one table, continuum subtraction, groups in groups, and a recipe's small picture of its
+**From stack files, with no server.** `psf-guard studio-files --channel
+ha=Ha.xisf --channel oiii=… --output picture.pgtiles` prepares the same
+store from FITS or XISF stacks a person has. It builds the same list of
+channel stacks `studio-sources` downloads and runs the same preparation,
+so tools, calibration, the star stretch and the layered stretch are the
+same code on both paths. The files are read where they are; the sources
+folder holds their paths (`paths.json`), the plate solve and the tools'
+results. The first file is plate solved on this computer for color
+calibration. A stack often records no pointing, so `--pointing
+RA,DEC,SCALE` gives the solve its start; a blind index would remove the
+need. On the Sh2-157 R, G and B stacks this path gave red x1.028 and blue
+x1.304, against x1.027 and x1.303 through the server.
+
+Not built: opening either source from inside Studio or from a PSF Guard
+page, tools per input in one table, continuum subtraction, groups in groups, and a recipe's small picture of its
 parts. No luminance stack was at hand, so the Luminance part is covered
 by tests only.
 

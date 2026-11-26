@@ -405,7 +405,26 @@ impl Document {
         for layer in &replaced {
             self.remove_layer(layer.id);
         }
-        let by_place = remade && replaced.len() == palette.layers.len();
+        // The same palette again keeps each layer it made: the layer that
+        // fills the same slot, wherever a person has moved it in the part.
+        // Two entries of one slot, as Foraxx has, pair in order.
+        let kept: Option<Vec<LayerRecord>> = remade
+            .then(|| {
+                let mut left = replaced.clone();
+                palette
+                    .layers
+                    .iter()
+                    .map(|entry| {
+                        let at = left
+                            .iter()
+                            .position(|layer| layer.slot.as_deref() == Some(entry.channel))?;
+                        Some(left.remove(at))
+                    })
+                    .collect::<Option<Vec<_>>>()
+                    .filter(|_| left.is_empty())
+            })
+            .flatten();
+        let by_place = kept.is_some();
 
         // The palette's masks: one per set of slots, for this part.
         let mut masks: Vec<(&'static [&'static str], uuid::Uuid)> = Vec::new();
@@ -441,7 +460,7 @@ impl Document {
             let input = input_of(entry.channel);
             let mut layer = band_layer(&input, entry.hue, entry.saturation, entry.blend);
             if by_place {
-                let was = replaced[at].clone();
+                let was = kept.as_ref().expect("checked just above")[at].clone();
                 let color = was.color.unwrap_or([1.0; 3]);
                 layer = LayerRecord {
                     name: layer_name(&input, color, was.blend),
@@ -545,8 +564,20 @@ impl Document {
                 .iter()
                 .filter(move |layer| layer.group == part)
         };
-        if in_part().any(|layer| layer.slot.is_some()) {
-            in_part().filter(|layer| layer.slot.is_some()).collect()
+        // A layer is the part's palette's when it fills one of that
+        // palette's slots.
+        let slots: Vec<&str> = self
+            .palette_in(part)
+            .map(|used| used.inputs.keys().map(String::as_str).collect())
+            .unwrap_or_default();
+        let made = |layer: &&LayerRecord| {
+            layer
+                .slot
+                .as_deref()
+                .is_some_and(|slot| slots.contains(&slot))
+        };
+        if in_part().any(|layer| made(&layer)) {
+            in_part().filter(made).collect()
         } else {
             in_part().filter(|layer| shows_an_input(layer)).collect()
         }

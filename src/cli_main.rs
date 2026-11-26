@@ -1428,6 +1428,34 @@ pub fn main() -> Result<()> {
                 },
             )?;
         }
+        Commands::StudioFiles {
+            channels,
+            document,
+            apply,
+            pointing,
+            output,
+        } => {
+            crate::commands::studio_sources::studio_files(
+                crate::commands::studio_sources::StudioFilesOptions {
+                    channels,
+                    apply: apply.map(Into::into),
+                    document: document.map(Into::into),
+                    pointing: pointing
+                        .map(|text| {
+                            let values = text
+                                .split(',')
+                                .map(|value| value.trim().parse::<f64>())
+                                .collect::<Result<Vec<_>, _>>()?;
+                            match values[..] {
+                                [ra, dec, scale] => Ok((ra, dec, scale)),
+                                _ => anyhow::bail!("--pointing takes three numbers: RA,DEC,SCALE"),
+                            }
+                        })
+                        .transpose()?,
+                    output: output.into(),
+                },
+            )?;
+        }
         Commands::StudioTools => {
             crate::commands::studio_sources::studio_tools()?;
         }

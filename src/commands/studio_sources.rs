@@ -105,9 +105,160 @@ const SOLVE_FILE: &str = "reference-solve.json";
 /// The file in a sources folder that lists the downloaded channel stacks.
 const SOURCES_FILE: &str = "sources.json";
 
+/// The file in a sources folder that says where each stack is, for stacks
+/// that were not downloaded but are read where a person keeps them.
+const PATHS_FILE: &str = "paths.json";
+
 /// The name of a downloaded channel stack in its sources folder.
 fn stack_file(stack: &StackColorSource) -> String {
     format!("{}.fits", stack.job_id)
+}
+
+/// Where one channel's stack is: the file a person named for it, or the
+/// one downloaded to the sources folder.
+fn stack_path(folder: &Path, stack: &StackColorSource) -> PathBuf {
+    std::fs::read_to_string(folder.join(PATHS_FILE))
+        .ok()
+        .and_then(|text| serde_json::from_str::<BTreeMap<String, PathBuf>>(&text).ok())
+        .and_then(|paths| paths.get(&stack.job_id).cloned())
+        .unwrap_or_else(|| folder.join(stack_file(stack)))
+}
+
+pub struct StudioFilesOptions {
+    /// One `channel=file` per channel, reference first.
+    pub channels: Vec<String>,
+    /// A document to prepare the store for, in place of the default flow.
+    pub apply: Option<PathBuf>,
+    /// Where a new default document goes.
+    pub document: Option<PathBuf>,
+    /// Where the first file points, in degrees, and its pixel scale in
+    /// arcseconds per pixel: the hint its plate solve starts from.
+    pub pointing: Option<(f64, f64, f64)>,
+    pub output: PathBuf,
+}
+
+/// Prepares a PSF-Studio tile store from channel stacks a person has as
+/// files: FITS or XISF, one per channel. No server takes part. The files
+/// are read where they are; the sources folder beside the store holds only
+/// a list of them, the plate solve and the tools' results.
+pub fn studio_files(options: StudioFilesOptions) -> Result<()> {
+    let mut stacks = Vec::new();
+    let mut paths = BTreeMap::new();
+    for entry in &options.channels {
+        let Some((name, file)) = entry.split_once('=') else {
+            bail!("{entry} is not CHANNEL=FILE, such as ha=Ha.xisf");
+        };
+        let role: StackColorRole = serde_json::from_value(serde_json::Value::String(name.into()))
+            .with_context(|| format!("{name} is not a channel"))?;
+        if stacks
+            .iter()
+            .any(|stack: &StackColorSource| stack.role == role)
+        {
+            bail!("{name} is given twice");
+        }
+        let path = std::fs::canonicalize(file).with_context(|| format!("finding {file}"))?;
+        if !crate::image_io::is_image_path(&path) {
+            bail!("{} is not a FITS or XISF file", path.display());
+        }
+        let stamp = std::fs::metadata(&path).with_context(|| format!("reading {file}"))?;
+        let modified = stamp
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |since| since.as_nanos());
+        // The file's identity: the tools' results are kept under it, and a
+        // changed file gets a new one.
+        let identity = {
+            use sha2::{Digest, Sha256};
+            let digest = Sha256::digest(format!("{}|{}|{modified}", path.display(), stamp.len()));
+            digest
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        };
+        paths.insert(identity.clone(), path.clone());
+        stacks.push(StackColorSource {
+            role,
+            filter_name: name.to_string(),
+            label: path.file_name().map_or_else(
+                || name.to_string(),
+                |file| file.to_string_lossy().into_owned(),
+            ),
+            exposure_group: None,
+            job_id: identity,
+            group_index: 0,
+            artifact_revision: format!("{}-{modified}", stamp.len()),
+            accepted_frames: 0,
+            wbpp: false,
+            total_exposure_seconds: None,
+            reference_image_id: None,
+            sky_orientation: None,
+            registration_transform: None,
+        });
+    }
+    let folder = options.output.with_extension("sources");
+    std::fs::create_dir_all(&folder).with_context(|| format!("creating {}", folder.display()))?;
+
+    // The first file is the grid every channel is registered to. Its own
+    // pixels are solved, so color calibration can find Gaia's stars on it.
+    let first = paths[&stacks[0].job_id].clone();
+    let frame = crate::image_io::open_linear_frame(&first)
+        .with_context(|| format!("reading {}", first.display()))?;
+    stacks[0].sky_orientation = Some(crate::server::stack_preview::StackSkyOrientation {
+        convention: crate::server::stack_preview::SOURCE_ORIENTATION_NAME.into(),
+        version: seiza_stacking::SKY_ORIENTATION_VERSION,
+        source: "file".into(),
+        output_width: frame.image.width,
+        output_height: frame.image.height,
+        source_to_output: seiza_stacking::AffineTransform::IDENTITY,
+    });
+    drop(frame);
+    let solver = crate::astrometry::AstrometryContext::new(Default::default());
+    let hint = options
+        .pointing
+        .map(|(ra, dec, scale)| crate::astrometry::PixelSolveHint {
+            center: (ra, dec),
+            scale_arcsec_per_pixel: scale,
+            source: "command_line",
+        });
+    match solver.solve_stack(0, &first, None, hint) {
+        Ok(analysis) => match analysis.solution {
+            Some(solution) => {
+                let solve_file = folder.join(SOLVE_FILE);
+                std::fs::write(&solve_file, serde_json::to_string(&solution)?)
+                    .with_context(|| format!("writing {}", solve_file.display()))?;
+                println!(
+                    "Plate solve of {}: {} stars, {:.2} arcsec RMS",
+                    stacks[0].label, solution.matched_stars, solution.rms_arcsec
+                );
+            }
+            None => println!(
+                "{} could not be plate solved{}; colors stay uncalibrated. \
+                 Give --pointing when the file records no pointing",
+                stacks[0].label,
+                analysis
+                    .error
+                    .map_or_else(String::new, |error| format!(" ({error})"))
+            ),
+        },
+        Err(error) => println!("No plate solve of {}: {error}", stacks[0].label),
+    }
+
+    std::fs::write(
+        folder.join(PATHS_FILE),
+        serde_json::to_string_pretty(&paths)?,
+    )
+    .with_context(|| format!("writing {}", folder.join(PATHS_FILE).display()))?;
+    let listing = folder.join(SOURCES_FILE);
+    std::fs::write(&listing, serde_json::to_string_pretty(&stacks)?)
+        .with_context(|| format!("writing {}", listing.display()))?;
+    prepare_store(
+        &stacks,
+        &folder,
+        options.apply.as_deref(),
+        options.document.as_deref(),
+        &options.output,
+    )
 }
 
 pub struct StudioPrepareOptions {
@@ -156,7 +307,7 @@ fn prepare_store(
     }
     let files: Vec<(StackColorRole, PathBuf)> = stacks
         .iter()
-        .map(|stack| (stack.role, folder.join(stack_file(stack))))
+        .map(|stack| (stack.role, stack_path(folder, stack)))
         .collect();
 
     // The document decides what runs: a new one is PSF Guard's default flow.
@@ -233,12 +384,23 @@ fn prepare_store(
     match &calibration {
         Calibration::NotAsked => {}
         Calibration::Skipped { why } => println!("  Colors not calibrated: {why}"),
-        Calibration::Done { gains, stars } => println!(
+        Calibration::Done { gains, stars, .. } => println!(
             "  Colors calibrated against Gaia from {stars} stars: red x{:.3}, blue x{:.3}",
             gains[0], gains[2]
         ),
     }
+    // The stars are stretched before the sky is levelled: the star stretch
+    // needs a channel with and without its stars at one sky level.
     let (mut display, star_stretch) = stretch_stars(&mut prepared, &document);
+    if let Calibration::Done {
+        neutral_sky: true, ..
+    } = calibration
+    {
+        prepared.level_sky(
+            StackColorRole::Green,
+            &[StackColorRole::Red, StackColorRole::Blue],
+        );
+    }
     let calibrated = matches!(calibration, Calibration::Done { .. });
     for name in stretch_whole_images(&mut prepared, &processing.input_stretches, calibrated) {
         println!("  {name}: stretched for display");
@@ -380,6 +542,9 @@ enum Calibration {
         why: String,
     },
     Done {
+        /// Whether the sky of red and blue is to be levelled to green's.
+        #[serde(skip)]
+        neutral_sky: bool,
         /// The multipliers applied to every state of red, green and blue.
         gains: [f32; 3],
         /// The Gaia stars behind the weaker of the two color fits.
@@ -415,16 +580,23 @@ fn calibrate_colors(
     let [Some(red), Some(green), Some(blue)] = RGB.map(|role| prepared.stacked(role)) else {
         return Calibration::NotAsked;
     };
-    let settings = step
-        .and_then(|step| match &step.kind {
-            crate::studio::StepKind::Operation { settings, .. } => {
-                serde_json::from_value(settings.clone()).ok()
+    let settings: crate::server::stack_preview::color_calibration::StackColorCalibration =
+        match step.map(|step| &step.kind) {
+            Some(crate::studio::StepKind::Operation { settings, .. }) if !settings.is_null() => {
+                match serde_json::from_value(settings.clone()) {
+                    Ok(settings) => settings,
+                    Err(error) => {
+                        return Calibration::Skipped {
+                            why: format!("the Color calibration step's settings: {error}"),
+                        }
+                    }
+                }
             }
-            _ => None,
-        })
-        .unwrap_or_default();
-    let settings: crate::server::stack_preview::color_calibration::StackColorCalibration = settings;
-    let neutral_sky = settings.neutralize_background;
+            _ => Default::default(),
+        };
+    if !settings.enabled {
+        return Calibration::NotAsked;
+    }
     let Some(orientation) = stacks[0].sky_orientation.as_ref() else {
         return Calibration::Skipped {
             why: "the first stack records no sky layout".into(),
@@ -436,7 +608,7 @@ fn calibrate_colors(
         .and_then(|text| serde_json::from_str(&text).ok())
     else {
         return Calibration::Skipped {
-            why: "the sources have no plate solve; fetch them again with studio-sources".into(),
+            why: "the sources have no plate solve of the first stack".into(),
         };
     };
     let service = crate::astrometry::AstrometryContext::new(Default::default());
@@ -460,13 +632,8 @@ fn calibrate_colors(
             for (role, gain) in RGB.into_iter().zip(gains) {
                 prepared.scale_channel(role, gain);
             }
-            if neutral_sky {
-                prepared.level_sky(
-                    StackColorRole::Green,
-                    &[StackColorRole::Red, StackColorRole::Blue],
-                );
-            }
             Calibration::Done {
+                neutral_sky: settings.neutralize_background,
                 gains,
                 stars: report.stars_used,
             }
@@ -510,12 +677,42 @@ fn stretch_stars(
     {
         return (Vec::new(), None);
     }
-    let [Some(red), Some(green), Some(blue)] = names.map(|name| prepared.plane(name)) else {
+    // A star removal that unscreens its stars gives stars that do not add
+    // back to the image, so there is no image with stars to stretch from.
+    let unscreened = prepared.tools.iter().any(|(_, chain)| {
+        chain.steps.iter().any(|step| {
+            step.parameters
+                .get("unscreen")
+                .and_then(|value| serde_json::to_value(value).ok())
+                == Some(serde_json::Value::Bool(true))
+        })
+    });
+    if unscreened {
+        println!("  The stars were not stretched: turn Unscreen Stars off for red, green and blue");
         return (Vec::new(), None);
-    };
+    }
     let [Some(red_less), Some(green_less), Some(blue_less)] =
         names.map(|name| prepared.plane(&tools_channel(name)))
     else {
+        return (Vec::new(), None);
+    };
+    // The image with its stars is the starless image plus the stars the
+    // tool took out: the image as it entered star removal, after any
+    // sharpening or noise reduction before it. The stack as it came would
+    // put those tools' changes into the stars.
+    let with_stars = |starless: &seiza_stacking::LinearImage, name: &str| {
+        let mut image = starless.clone();
+        let stars = prepared.plane(&stars_channel(name))?;
+        for (sample, star) in image.data.iter_mut().zip(&stars.data) {
+            *sample += *star;
+        }
+        Some(image)
+    };
+    let (Some(red), Some(green), Some(blue)) = (
+        with_stars(&red_less, "red"),
+        with_stars(&green_less, "green"),
+        with_stars(&blue_less, "blue"),
+    ) else {
         return (Vec::new(), None);
     };
     match crate::color_steps::stretch_star_layer(
