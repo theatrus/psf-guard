@@ -102,9 +102,10 @@ pub async fn studio_sources(options: StudioSourcesOptions) -> Result<()> {
 /// A picture's name from its sources folder: the folder's name without
 /// `.sources`.
 fn title_of_sources(folder: &Path) -> String {
-    folder
-        .file_stem()
-        .map_or_else(|| "Picture".to_string(), |stem| stem.to_string_lossy().into_owned())
+    folder.file_stem().map_or_else(
+        || "Picture".to_string(),
+        |stem| stem.to_string_lossy().into_owned(),
+    )
 }
 
 /// The file in a sources folder that holds the plate solve of the first
@@ -218,9 +219,10 @@ pub fn studio_files(options: StudioFilesOptions) -> Result<()> {
         .map(|object| object.trim().to_string())
         .filter(|object| !object.is_empty())
         .unwrap_or_else(|| {
-            first
-                .file_stem()
-                .map_or_else(|| "Picture".to_string(), |stem| stem.to_string_lossy().into_owned())
+            first.file_stem().map_or_else(
+                || "Picture".to_string(),
+                |stem| stem.to_string_lossy().into_owned(),
+            )
         });
     stacks[0].sky_orientation = Some(crate::server::stack_preview::StackSkyOrientation {
         convention: crate::server::stack_preview::SOURCE_ORIENTATION_NAME.into(),
