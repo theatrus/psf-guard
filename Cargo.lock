@@ -5599,8 +5599,9 @@ dependencies = [
 
 [[package]]
 name = "seiza-download"
-version = "0.12.0"
-source = "git+https://github.com/theatrus/seiza?rev=b16f18d5d33134db0c73d88f09b8d1d872ef50ed#b16f18d5d33134db0c73d88f09b8d1d872ef50ed"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "913a8203f781bc808e7161d8dcc1af78d6d99d501416da9830d50ec627bd6d1f"
 dependencies = [
  "async-compression",
  "directories",
