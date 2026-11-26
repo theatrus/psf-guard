@@ -566,18 +566,43 @@ impl Document {
 
     /// The layers that use a shared mask, or its inverse.
     pub fn layers_using_mask(&self, id: Uuid) -> impl Iterator<Item = &LayerRecord> {
-        self.layers().iter().filter(
-            move |layer| matches!(layer.mask, Some(MaskRecord::Shared { mask, .. }) if mask == id),
-        )
+        let uses = move |record: &Option<MaskRecord>| matches!(record, Some(MaskRecord::Shared { mask, .. }) if *mask == id);
+        // A layer uses the mask itself, or through one of its own steps.
+        self.layers().iter().filter(move |layer| {
+            uses(&layer.mask) || layer.steps.iter().any(|step| uses(&step.mask))
+        })
+    }
+
+    /// Whether anything uses a shared mask: a layer, a layer's own step, or
+    /// a step of a stage.
+    pub fn mask_in_use(&self, id: Uuid) -> bool {
+        let uses = |record: &Option<MaskRecord>| matches!(record, Some(MaskRecord::Shared { mask, .. }) if *mask == id);
+        self.layers_using_mask(id).next().is_some()
+            || self
+                .stages
+                .iter()
+                .flat_map(|stage| &stage.steps)
+                .any(|step| uses(&step.mask))
     }
 
     /// Takes a shared mask out of the document. The layers that used it
     /// then show everywhere.
     pub fn remove_mask(&mut self, id: Uuid) -> Option<SharedMask> {
         let at = self.masks.iter().position(|mask| mask.id == id)?;
-        for layer in &mut self.stages[StageKind::Combine as usize].layers {
-            if matches!(layer.mask, Some(MaskRecord::Shared { mask, .. }) if mask == id) {
-                layer.mask = None;
+        let clear = |record: &mut Option<MaskRecord>| {
+            if matches!(record, Some(MaskRecord::Shared { mask, .. }) if *mask == id) {
+                *record = None;
+            }
+        };
+        for stage in &mut self.stages {
+            for step in &mut stage.steps {
+                clear(&mut step.mask);
+            }
+            for layer in &mut stage.layers {
+                clear(&mut layer.mask);
+                for step in &mut layer.steps {
+                    clear(&mut step.mask);
+                }
             }
         }
         Some(self.masks.remove(at))
@@ -625,7 +650,7 @@ impl Document {
             step.kind.is_manual_edit() || matches!(step.mask, Some(MaskRecord::Painted(_)));
         if manual && !stage.allows_manual_edits() {
             return Err(StudioError::Document(format!(
-                "the {stage} stage takes no manual edits"
+                "manual edits are not allowed in the {stage} stage"
             )));
         }
         let steps = &mut self.stages[stage as usize].steps;
@@ -670,7 +695,7 @@ impl Document {
         Ok(())
     }
 
-    /// Restores what holds for groups after the stack changed: a group's
+    /// Restores the rules of groups after the stack changed: a group's
     /// members are directly beneath it, in their order; a layer whose group
     /// is gone is a member of none; a group is a member of none.
     fn keep_groups_together(&mut self) {
@@ -728,6 +753,8 @@ impl Document {
         group.blend = layers[at].blend;
         let group_id = group.id;
         layers[at].group = Some(group_id);
+        // The layer leaves the part whose palette made it.
+        layers[at].slot = None;
         layers.insert(at + 1, group);
         Ok(group_id)
     }
@@ -958,8 +985,16 @@ impl Document {
         layer.visible = own.enabled;
         layer.mask = own.mask;
         layer.opacity = own.opacity.clamp(0.0, 1.0);
+        // Above its owner, in the owner's group: a group's own step becomes
+        // a layer above the group, a member's stays in the member's group.
+        layer.group = if layers[at].source == LayerSource::Group {
+            None
+        } else {
+            layers[at].group
+        };
         let id = layer.id;
         layers.insert(at + 1, layer);
+        self.keep_groups_together();
         Ok(id)
     }
 
@@ -991,22 +1026,27 @@ impl Document {
     /// Adds a stroke to a step's painted mask, starting the mask if the step
     /// has none. A mask of another kind is replaced by the painted one.
     ///
-    /// Refuses a step in a stage that takes no manual edits.
+    /// Refuses a step in a stage that allows no manual edits.
     pub fn paint_step_mask(&mut self, id: Uuid, stroke: Stroke) -> Result<(), StudioError> {
         let (stage, step) = self
             .step_mut(id)
             .ok_or_else(|| StudioError::Document("the step is not in the document".to_string()))?;
         if !stage.allows_manual_edits() {
             return Err(StudioError::Document(format!(
-                "the {stage} stage takes no manual edits"
+                "manual edits are not allowed in the {stage} stage"
             )));
         }
         match &mut step.mask {
             Some(MaskRecord::Painted(mask)) => mask.strokes.push(stroke),
-            mask => {
+            mask @ None => {
                 *mask = Some(MaskRecord::Painted(PaintedMask {
                     strokes: vec![stroke],
                 }));
+            }
+            Some(_) => {
+                return Err(StudioError::Document(
+                    "the step has another kind of mask; remove it before painting one".to_string(),
+                ))
             }
         }
         Ok(())

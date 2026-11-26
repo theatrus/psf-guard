@@ -61,7 +61,10 @@ impl Server {
     ) -> Result<Option<crate::astrometry::AstrometrySolutionResponse>> {
         let url = format!("{}/images/{image_id}/astrometry", self.database_url);
         let known: serde_json::Value = self.data(url.clone()).await?;
-        let analysis = if known["solution"].is_null() {
+        // Only a solve of the pixels shows where the stars are; a WCS from
+        // the file's header may describe other pixels.
+        let pixel_solve = !known["solution"].is_null() && known["mode"] != "embedded_wcs";
+        let analysis = if !pixel_solve {
             let request = self.client.post(url);
             let request = match &self.token {
                 Some(token) => request.bearer_auth(token),

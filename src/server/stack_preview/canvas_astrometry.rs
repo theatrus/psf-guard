@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 // artifact's private cache, never an ID in the acquisition database.
 const CANVAS_ID: i32 = 0;
 
-pub(super) fn is_mosaic(orientation: Option<&StackSkyOrientation>) -> bool {
+pub(crate) fn is_mosaic(orientation: Option<&StackSkyOrientation>) -> bool {
     orientation.is_some_and(|orientation| orientation.source == "mosaic canvas")
 }
 

@@ -2317,6 +2317,11 @@ The link carries no token, so a server with user accounts refuses Studio's
 requests; Studio has no sign-in yet. Nothing runs on the server for the
 button: the page only makes the link.
 
+Input deconvolution is not run when a store is prepared: the preparation
+says so for each input whose setup has one. A mosaic is not color
+calibrated, because PSF Guard calibrates a mosaic with a solve of its
+canvas, which Studio does not make yet.
+
 Not built: choosing a server target from a list inside Studio, sign-in, tools per input in one table, continuum subtraction, groups in groups, and a recipe's small picture of its
 parts. No luminance stack was at hand, so the Luminance part is covered
 by tests only.

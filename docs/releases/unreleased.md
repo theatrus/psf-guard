@@ -30,8 +30,10 @@
 - The noise model shows as ready as soon as its download ends. Before, the
   page could keep showing it as not installed until you reopened it.
 - A project's color stacks have **Open *target* in PSF Studio** for each
-  target that has channel stacks. The link opens PSF Studio, the separate
+  target there that has channel stacks. The link opens PSF Studio, the separate
   editor for color processing, which fetches the target's stacks from this
   server. PSF Studio must be installed on the computer you browse from, and
-  it is still experimental. The link carries no sign-in, so it works with a
-  server that needs none.
+  it is still experimental. The link carries no sign-in, so PSF Guard shows
+  it only on a server that needs none. For a server that needs sign-in, run
+  `psf-guard studio` with `--token` on the computer you browse from; see
+  the stacking guide.

@@ -495,6 +495,7 @@ pub fn own_step_for_channel(document: &mut Document, shared: Uuid, channel: &str
     let mut own = StepRecord::new(step.kind.clone()).for_band(channel);
     own.enabled = step.enabled;
     own.mask = step.mask.clone();
+    own.opacity = step.opacity;
     let id = own.id;
     document.insert_step(stage, index + 1, own).ok()?;
     Some(id)

@@ -319,9 +319,11 @@ pub fn color_setup_from_document(document: &Document) -> Result<Value, StudioErr
             continue;
         };
         let channel = || {
-            step.band
-                .clone()
-                .ok_or_else(|| refuse(format!("{operation} applies to one channel and names none")))
+            step.band.clone().ok_or_else(|| {
+                refuse(format!(
+                    "{operation} applies to one channel, but no channel is set"
+                ))
+            })
         };
         let mut into_channel_map = |key: &str| -> Result<(), StudioError> {
             let map = per_channel

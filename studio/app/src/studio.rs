@@ -588,7 +588,12 @@ impl Studio {
         let workers = std::thread::available_parallelism()
             .map(|count| count.get().saturating_sub(4).max(2))
             .unwrap_or(4);
-        let document_path = options.document.clone();
+        // The document the picture keeps: the one given, or the one beside
+        // the store. It is read from, and saved to, the same path.
+        let document_path = options
+            .document
+            .clone()
+            .or_else(|| Some(options.open.as_ref()?.with_extension("json")));
         let tools = tools::Tools::new(&options);
         let source = crate::store_tiles::source(options.open.as_deref());
         let (source, band_info) = match source {
@@ -651,14 +656,20 @@ impl Studio {
         .detach();
 
         // A document that cannot be read is reported and the default flow
-        // opens in its place.
-        let opened = document_path.and_then(|path| {
-            std::fs::read_to_string(&path)
+        // opens in its place, unsaved, so the file is left as it is. A
+        // picture with no document yet gets one.
+        let mut unreadable = None;
+        let opened = document_path.as_ref().and_then(|path| {
+            if !path.exists() {
+                return None;
+            }
+            std::fs::read_to_string(path)
                 .map_err(|error| error.to_string())
                 .and_then(|text| Document::from_json(&text).map_err(|error| error.to_string()))
-                .map_err(|error| eprintln!("could not open {}: {error}", path.display()))
+                .map_err(|error| unreadable = Some(format!("{}: {error}", path.display())))
                 .ok()
         });
+        let was_opened = opened.is_some();
         let document = opened.unwrap_or_else(|| panes::flow_document(&band_info.names));
         let mut studio =
             Self {
@@ -701,6 +712,14 @@ impl Studio {
             };
         // The store was prepared for the document it is opened with, and
         // may hold inputs the document has not listed yet.
+        if was_opened {
+            studio.document_is_saved();
+        }
+        if let Some(why) = unreadable {
+            studio.keep_document_unsaved(format!(
+                "Not saved: the document could not be read ({why})"
+            ));
+        }
         studio.take_in_new_inputs();
         studio.tools_are_prepared();
         studio.refresh_canvas();

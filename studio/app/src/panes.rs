@@ -1577,7 +1577,7 @@ impl Studio {
         let tool = match (self.tool, &self.selected) {
             (Tool::Pan, _) => None,
             (Tool::Brush, Row::Mask(_)) if self.brush_removes => {
-                Some("The mask brush takes away from this mask.".to_string())
+                Some("The mask brush subtracts from this mask.".to_string())
             }
             (Tool::Brush, Row::Mask(_)) => Some("The mask brush adds to this mask.".to_string()),
             (Tool::Brush, _) => Some("The mask brush paints where this applies.".to_string()),
@@ -1650,13 +1650,17 @@ impl Studio {
                     .px_2()
                     .py_1()
                     .rounded_sm()
-                    .cursor_pointer()
                     .bg(rgb(CONTROL))
                     .child("Open")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.pick_files(cx);
-                        cx.notify();
-                    })),
+                    // Disabled while a picture is prepared or tools run.
+                    .when(self.is_running(), |open| open.text_color(rgb(QUIET)))
+                    .when(!self.is_running(), |open| {
+                        open.cursor_pointer()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.pick_files(cx);
+                                cx.notify();
+                            }))
+                    }),
             )
             .child(div().pl_3().child(Self::note("View")))
             .child(Self::segmented().children(splits))
@@ -1671,7 +1675,7 @@ impl Studio {
                         status.child(self.run_status().to_string())
                     })
                     .when(
-                        !self.is_running() && self.run_status().starts_with("Not finished"),
+                        !self.is_running() && self.run_status().starts_with("Not "),
                         |status| status.child(self.run_status().to_string()),
                     ),
             )
@@ -1704,12 +1708,8 @@ impl Studio {
             .map(|(index, ((place, rect), omitted))| {
                 let pinned = self.pins.get(index).is_some_and(Option::is_some);
                 let place = place.clone();
-                let left_out = (!omitted.is_empty()).then(|| {
-                    format!(
-                        "Not drawn, because one frame has no room for more: {}.",
-                        omitted.join(", ")
-                    )
-                });
+                let left_out = (!omitted.is_empty())
+                    .then(|| format!("Not drawn here: {}.", omitted.join(", ")));
                 div()
                     .absolute()
                     .left(px(rect[0] as f32 / scale + 6.0))

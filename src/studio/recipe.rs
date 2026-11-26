@@ -227,6 +227,33 @@ impl Document {
             .collect()
     }
 
+    /// Removes a part: its layers, the group, and the masks its palette
+    /// made. Returns whether `part` was a group.
+    pub fn remove_part(&mut self, part: Uuid) -> bool {
+        if !self
+            .layers()
+            .iter()
+            .any(|layer| layer.id == part && layer.source == LayerSource::Group)
+        {
+            return false;
+        }
+        let members: Vec<Uuid> = self.group_members(part).map(|layer| layer.id).collect();
+        for layer in members {
+            self.remove_layer(layer);
+        }
+        self.remove_layer(part);
+        let masks: Vec<Uuid> = self
+            .masks()
+            .iter()
+            .filter(|mask| mask.part == Some(part))
+            .map(|mask| mask.id)
+            .collect();
+        for mask in masks {
+            self.remove_mask(mask);
+        }
+        true
+    }
+
     /// Adds an empty group on top of the layers and returns its id.
     pub fn add_group(&mut self, name: &str, blend: BlendMode) -> Uuid {
         let mut group = LayerRecord::new(name, LayerSource::Group);

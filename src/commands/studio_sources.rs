@@ -66,12 +66,12 @@ pub async fn studio_sources(options: StudioSourcesOptions) -> Result<()> {
     }
     // The plate solve of the first stack's reference frame, which color
     // calibration needs to find Gaia's stars on the stacks' shared grid.
-    let solve_file = folder.join(SOLVE_FILE);
+    // A solve kept from an earlier run is not this stack's.
+    let _ = std::fs::remove_file(folder.join(SOLVE_FILE));
     match stacks[0].reference_image_id {
         Some(image_id) => match server.frame_solve(image_id).await {
             Ok(Some(solution)) => {
-                std::fs::write(&solve_file, serde_json::to_string(&solution)?)
-                    .with_context(|| format!("writing {}", solve_file.display()))?;
+                write_solve(&folder, &stacks[0], &solution)?;
                 println!(
                     "Plate solve of the reference frame: {} stars, {:.2} arcsec RMS",
                     solution.matched_stars, solution.rms_arcsec
@@ -87,8 +87,7 @@ pub async fn studio_sources(options: StudioSourcesOptions) -> Result<()> {
     // What was downloaded, so the store can be prepared again without the
     // server: for other tools, or other settings.
     let listing = folder.join(SOURCES_FILE);
-    std::fs::write(&listing, serde_json::to_string_pretty(&stacks)?)
-        .with_context(|| format!("writing {}", listing.display()))?;
+    write_atomically(&listing, serde_json::to_string_pretty(&stacks)?)?;
     prepare_store(
         &title,
         &stacks,
@@ -97,6 +96,17 @@ pub async fn studio_sources(options: StudioSourcesOptions) -> Result<()> {
         options.document.as_deref(),
         &options.output,
     )
+}
+
+/// Writes a file through a temporary file beside it, renamed over it, so a
+/// crash or a kill never leaves half a file.
+fn write_atomically(path: &Path, contents: impl AsRef<[u8]>) -> Result<()> {
+    let mut temporary = path.as_os_str().to_owned();
+    temporary.push(".writing");
+    let temporary = PathBuf::from(temporary);
+    std::fs::write(&temporary, contents)
+        .with_context(|| format!("writing {}", temporary.display()))?;
+    std::fs::rename(&temporary, path).with_context(|| format!("writing {}", path.display()))
 }
 
 /// The names documents had when they were named after the setup they
@@ -113,8 +123,41 @@ fn title_of_sources(folder: &Path) -> String {
 }
 
 /// The file in a sources folder that holds the plate solve of the first
-/// stack's reference frame.
+/// stack's reference frame, with the stack it solves.
 const SOLVE_FILE: &str = "reference-solve.json";
+
+/// The identity of a stack as a solve records it: a solve is used only for
+/// the stack it was made for.
+fn stack_identity(stack: &StackColorSource) -> String {
+    format!(
+        "{}:{}:{}",
+        stack.job_id, stack.group_index, stack.artifact_revision
+    )
+}
+
+/// Keeps the plate solve of `stack`, the first stack, for color
+/// calibration.
+fn write_solve(
+    folder: &Path,
+    stack: &StackColorSource,
+    solution: &crate::astrometry::AstrometrySolutionResponse,
+) -> Result<()> {
+    let record = serde_json::json!({ "stack": stack_identity(stack), "solution": solution });
+    write_atomically(&folder.join(SOLVE_FILE), serde_json::to_string(&record)?)
+}
+
+/// The plate solve kept for `stack`, if one was made for it.
+fn read_solve(
+    folder: &Path,
+    stack: &StackColorSource,
+) -> Option<crate::astrometry::AstrometrySolutionResponse> {
+    let text = std::fs::read_to_string(folder.join(SOLVE_FILE)).ok()?;
+    let record: serde_json::Value = serde_json::from_str(&text).ok()?;
+    if record["stack"].as_str() != Some(stack_identity(stack).as_str()) {
+        return None;
+    }
+    serde_json::from_value(record["solution"].clone()).ok()
+}
 
 /// The file in a sources folder that lists the downloaded channel stacks.
 const SOURCES_FILE: &str = "sources.json";
@@ -123,9 +166,10 @@ const SOURCES_FILE: &str = "sources.json";
 /// that were not downloaded but are read where a person keeps them.
 const PATHS_FILE: &str = "paths.json";
 
-/// The name of a downloaded channel stack in its sources folder.
+/// The name of a downloaded channel stack in its sources folder. One stack
+/// job can hold several channels, one per group.
 fn stack_file(stack: &StackColorSource) -> String {
-    format!("{}.fits", stack.job_id)
+    format!("{}-{}.fits", stack.job_id, stack.group_index)
 }
 
 /// Where one channel's stack is: the file a person named for it, or the
@@ -135,7 +179,16 @@ fn stack_path(folder: &Path, stack: &StackColorSource) -> PathBuf {
         .ok()
         .and_then(|text| serde_json::from_str::<BTreeMap<String, PathBuf>>(&text).ok())
         .and_then(|paths| paths.get(&stack.job_id).cloned())
-        .unwrap_or_else(|| folder.join(stack_file(stack)))
+        .unwrap_or_else(|| {
+            let path = folder.join(stack_file(stack));
+            // A folder downloaded before the group was in the name.
+            let before = folder.join(format!("{}.fits", stack.job_id));
+            if !path.exists() && before.exists() {
+                before
+            } else {
+                path
+            }
+        })
 }
 
 pub struct StudioFilesOptions {
@@ -245,12 +298,11 @@ pub fn studio_files(options: StudioFilesOptions) -> Result<()> {
             scale_arcsec_per_pixel: scale,
             source: "command_line",
         });
+    let _ = std::fs::remove_file(folder.join(SOLVE_FILE));
     match solver.solve_stack(0, &first, None, hint) {
         Ok(analysis) => match analysis.solution {
             Some(solution) => {
-                let solve_file = folder.join(SOLVE_FILE);
-                std::fs::write(&solve_file, serde_json::to_string(&solution)?)
-                    .with_context(|| format!("writing {}", solve_file.display()))?;
+                write_solve(&folder, &stacks[0], &solution)?;
                 println!(
                     "Plate solve of {}: {} stars, {:.2} arcsec RMS",
                     stacks[0].label, solution.matched_stars, solution.rms_arcsec
@@ -268,14 +320,12 @@ pub fn studio_files(options: StudioFilesOptions) -> Result<()> {
         Err(error) => println!("No plate solve of {}: {error}", stacks[0].label),
     }
 
-    std::fs::write(
-        folder.join(PATHS_FILE),
+    write_atomically(
+        &folder.join(PATHS_FILE),
         serde_json::to_string_pretty(&paths)?,
-    )
-    .with_context(|| format!("writing {}", folder.join(PATHS_FILE).display()))?;
+    )?;
     let listing = folder.join(SOURCES_FILE);
-    std::fs::write(&listing, serde_json::to_string_pretty(&stacks)?)
-        .with_context(|| format!("writing {}", listing.display()))?;
+    write_atomically(&listing, serde_json::to_string_pretty(&stacks)?)?;
     prepare_store(
         &title,
         &stacks,
@@ -348,8 +398,7 @@ fn prepare_store(
             // were before, takes its picture's name, and is saved with it.
             if SETUP_NAMES.contains(&document.name.as_str()) && title != document.name {
                 document.name = title.to_string();
-                std::fs::write(path, document.to_json())
-                    .with_context(|| format!("writing {}", path.display()))?;
+                write_atomically(path, document.to_json())?;
             }
             document
         }
@@ -362,6 +411,13 @@ fn prepare_store(
         }
     };
     let processing = processing_from_document(&document)?;
+    for role in processing.input_deconvolutions.keys() {
+        println!(
+            "  The deconvolution of {} is not run in Studio yet: the store has {} without it",
+            role.label(),
+            role.label()
+        );
+    }
     let background = processing.background_extraction;
 
     // Each channel's processing tools, resolved against the tools this
@@ -443,17 +499,6 @@ fn prepare_store(
     if let Some(amount) = star_stretch {
         println!("  Stars of red, green and blue stretched as one layer, amount {amount:.2}");
     }
-    // Beside the store, so whatever opens it knows whether red, green and
-    // blue are balanced and may share one stretch, and which planes are
-    // already stretched for display.
-    let record = output.with_extension("prepared.json");
-    let prepared_record = serde_json::json!({
-        "calibration": calibration,
-        "display": display,
-        "star_stretch": star_stretch,
-    });
-    std::fs::write(&record, serde_json::to_string(&prepared_record)?)
-        .with_context(|| format!("writing {}", record.display()))?;
     for (role, chain) in &prepared.tools {
         let ran: Vec<&str> = chain
             .steps
@@ -485,8 +530,7 @@ fn prepare_store(
         println!("  {role:?} background: {model}");
     }
     let backgrounds = folder.join("backgrounds.json");
-    std::fs::write(&backgrounds, serde_json::to_string(&prepared.backgrounds)?)
-        .with_context(|| format!("writing {}", backgrounds.display()))?;
+    write_atomically(&backgrounds, serde_json::to_string(&prepared.backgrounds)?)?;
     println!("Prepared in {:.1} s", started.elapsed().as_secs_f64());
     let registered = prepared;
 
@@ -533,9 +577,19 @@ fn prepare_store(
         started.elapsed().as_secs_f64()
     );
 
+    // Beside the store, so whatever opens it knows whether red, green and
+    // blue are balanced and may share one stretch, and which planes are
+    // already stretched for display.
+    // Written after the store, so it never describes another store.
+    let record = output.with_extension("prepared.json");
+    let prepared_record = serde_json::json!({
+        "calibration": calibration,
+        "display": display,
+        "star_stretch": star_stretch,
+    });
+    write_atomically(&record, serde_json::to_string(&prepared_record)?)?;
     if let Some(path) = document_out {
-        std::fs::write(path, document.to_json())
-            .with_context(|| format!("writing {}", path.display()))?;
+        write_atomically(path, document.to_json())?;
         println!("Wrote the document to {}", path.display());
     }
     Ok(())
@@ -636,11 +690,15 @@ fn calibrate_colors(
             why: "the first stack records no sky layout".into(),
         };
     };
-    let solve = folder.join(SOLVE_FILE);
-    let Some(solution) = std::fs::read_to_string(&solve)
-        .ok()
-        .and_then(|text| serde_json::from_str(&text).ok())
-    else {
+    // A mosaic's grid is the canvas, which its reference frame's solve
+    // does not cover; PSF Guard calibrates a mosaic with the canvas's own
+    // solve, which Studio does not make yet.
+    if crate::server::stack_preview::canvas_astrometry::is_mosaic(Some(orientation)) {
+        return Calibration::Skipped {
+            why: "a mosaic needs a solve of its canvas, which Studio does not make yet".into(),
+        };
+    }
+    let Some(solution) = read_solve(folder, &stacks[0]) else {
         return Calibration::Skipped {
             why: "the sources have no plate solve of the first stack".into(),
         };
@@ -906,9 +964,13 @@ pub struct StudioOptions {
 /// in the folder. A document that is there already is the picture's: the
 /// store is prepared for it, so its tools and stretches are kept. Without
 /// one, a new document is written from Studio's default flow.
-pub fn studio(options: StudioOptions) -> Result<()> {
+pub fn studio(mut options: StudioOptions) -> Result<()> {
     std::fs::create_dir_all(&options.folder)
         .with_context(|| format!("creating {}", options.folder.display()))?;
+    // An application opened through the system starts in another folder,
+    // so it is given whole paths.
+    options.folder = std::path::absolute(&options.folder)
+        .with_context(|| format!("finding {}", options.folder.display()))?;
     let store = options.folder.join(format!("{}.pgtiles", options.name));
     let document = options.folder.join(format!("{}.json", options.name));
     let known = document.is_file();

@@ -22,7 +22,7 @@ pub mod journal;
 mod line_work;
 mod live;
 pub use live::LiveStackPreview;
-mod canvas_astrometry;
+pub(crate) mod canvas_astrometry;
 pub mod method;
 mod mono_build;
 mod mosaic;

@@ -641,7 +641,7 @@ fn a_step_is_edited_in_place() {
     };
     assert_eq!(mask.strokes.len(), 2);
 
-    // Sources takes no manual edits, and an unknown step is refused.
+    // Sources allows no manual edits, and an unknown step is refused.
     let refused = document.paint_step_mask(source_id, dab(1.0, 1.0, 1.0, StrokeMode::Add));
     assert!(matches!(refused, Err(StudioError::Document(_))));
     assert!(!document.set_step_settings(Uuid::new_v4(), serde_json::Value::Null));

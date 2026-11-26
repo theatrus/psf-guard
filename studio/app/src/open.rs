@@ -130,7 +130,20 @@ impl Studio {
 
     /// Opens a target's channel stacks from a PSF Guard server.
     pub(super) fn open_target(&mut self, link: &TargetLink) {
-        let name = format!("{}-p{}-t{}", link.database, link.project, link.target);
+        // The server and the database as given are part of the picture's
+        // identity, so two servers' targets never share one picture.
+        let identity = {
+            use sha2::{Digest, Sha256};
+            let hash = Sha256::digest(format!("{}\0{}", link.server, link.database));
+            hash.iter()
+                .take(4)
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        };
+        let name = format!(
+            "{}-p{}-t{}-{identity}",
+            link.database, link.project, link.target
+        );
         self.prepare_and_open(
             &name,
             vec![
@@ -204,11 +217,20 @@ impl Studio {
         if self.is_running() {
             return;
         }
-        let Some(link) = LINKS.lock().expect("links").pop() else {
+        // The newest link wins: links clicked while a picture was being
+        // prepared would otherwise replace the picture one after another.
+        let link = {
+            let mut links = LINKS.lock().expect("links");
+            let newest = links.pop();
+            links.clear();
+            newest
+        };
+        let Some(link) = link else {
             return;
         };
-        if let Some(target) = target_link(&link) {
-            self.open_target(&target);
+        match target_link(&link) {
+            Some(target) => self.open_target(&target),
+            None => self.say("Not opened: the link does not name a target on a server"),
         }
     }
 }

@@ -324,3 +324,76 @@ fn a_layer_that_leaves_its_part_is_not_replaced_by_another_palette() {
         .iter()
         .all(|step| step.kind.name() != flow_operations::STAR_STRETCH));
 }
+
+#[test]
+fn edits_keep_groups_whole_and_masks_with_what_uses_them() {
+    let inputs = names(&["ha", "oiii", "sii"]);
+    let mut document = document(&["ha", "oiii", "sii"]);
+    assert!(document.use_recipe(recipe("Narrowband"), &inputs));
+    let part = document.parts()[0].id;
+    let member = document.group_members(part).next().unwrap().id;
+    let curves = StepRecord::new(StepKind::Operation {
+        operation: "Curves".to_string(),
+        accepts: crate::image_steps::Accepts::Display,
+        settings: serde_json::json!({}),
+    });
+    let step = curves.id;
+    document.insert_layer_step(member, curves).unwrap();
+
+    // A member's adjustment made a layer stays in the member's group, and
+    // the group stays one block.
+    let made = document.detach_adjustment(step).unwrap();
+    let layers = document.layers();
+    let group_at = layers.iter().position(|layer| layer.id == part).unwrap();
+    let made_at = layers.iter().position(|layer| layer.id == made).unwrap();
+    assert_eq!(layers[made_at].group, Some(part));
+    assert!(made_at < group_at);
+    assert!(layers[made_at..group_at]
+        .iter()
+        .all(|layer| layer.group == Some(part)));
+
+    // A kept palette layer keeps its place when a slot changes input.
+    let ha = document
+        .group_members(part)
+        .find(|layer| layer.slot.as_deref() == Some("ha"))
+        .unwrap()
+        .id;
+    let top_of_part = group_at - 1;
+    document.place_layer(ha, top_of_part + 1, Some(part));
+    let before = document.layers().iter().position(|layer| layer.id == ha);
+    assert!(document.set_palette_input_in(Some(part), "sii", "oiii"));
+    assert_eq!(
+        document.layers().iter().position(|layer| layer.id == ha),
+        before
+    );
+
+    // A shared mask used only by a layer's own step is in use, and removing
+    // it clears the step's mask.
+    let mask = document.add_mask(SharedMask::new(names(&["ha"])));
+    let own = StepRecord::new(StepKind::Operation {
+        operation: "Curves".to_string(),
+        accepts: crate::image_steps::Accepts::Display,
+        settings: serde_json::json!({}),
+    });
+    let own_id = own.id;
+    let mut own = own;
+    own.mask = Some(MaskRecord::Shared {
+        mask,
+        inverted: false,
+    });
+    document.insert_layer_step(ha, own).unwrap();
+    assert!(document.mask_in_use(mask));
+    document.remove_mask(mask);
+    assert!(document.step(own_id).unwrap().1.mask.is_none());
+
+    // Removing the part removes its layers and the masks its palette made.
+    let foraxx = PALETTES
+        .iter()
+        .find(|palette| palette.name == "SHO, Foraxx")
+        .unwrap();
+    document.apply_palette_in(Some(part), foraxx, &Default::default());
+    assert!(!document.masks().is_empty());
+    assert!(document.remove_part(part));
+    assert!(document.parts().is_empty());
+    assert!(document.masks().iter().all(|mask| mask.part != Some(part)));
+}

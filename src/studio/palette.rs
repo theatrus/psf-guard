@@ -402,6 +402,18 @@ impl Document {
             .is_some_and(|used| used.name == palette.name);
         let mut replaced: Vec<LayerRecord> =
             self.palette_layers(part).into_iter().cloned().collect();
+        // Where each replaced layer is in the stack, so a layer the palette
+        // keeps goes back to the same place.
+        let places: Vec<(uuid::Uuid, usize)> = replaced
+            .iter()
+            .filter_map(|layer| {
+                let at = self
+                    .layers()
+                    .iter()
+                    .position(|other| other.id == layer.id)?;
+                Some((layer.id, at))
+            })
+            .collect();
         for layer in &replaced {
             self.remove_layer(layer.id);
         }
@@ -478,10 +490,16 @@ impl Document {
                     layer.mask = old.mask;
                 }
             }
-            // A painted mask is the person's work and is kept. A shared one
-            // belongs to the palette it came from.
-            if matches!(layer.mask, Some(MaskRecord::Shared { .. })) {
-                layer.mask = None;
+            // A painted mask, or a shared mask a person chose, is the
+            // person's work and is kept. A mask this part's palette made
+            // belongs to the palette.
+            if let Some(MaskRecord::Shared { mask, .. }) = layer.mask {
+                let made_here = self
+                    .mask(mask)
+                    .is_some_and(|mask| mask.part == part && !mask.slots.is_empty());
+                if made_here || self.mask(mask).is_none() {
+                    layer.mask = None;
+                }
             }
             if let Some(needed) = entry.mask {
                 let (_, mask) = masks
@@ -499,6 +517,26 @@ impl Document {
         }
         if !by_place {
             balance_colors(&mut layers);
+        }
+        if by_place {
+            // Each kept layer goes back where it was. Put back from the
+            // lowest place up, the places are those of the stack before.
+            let mut back: Vec<(usize, LayerRecord)> = layers
+                .into_iter()
+                .map(|layer| {
+                    let at = places
+                        .iter()
+                        .find(|(id, _)| *id == layer.id)
+                        .map_or(usize::MAX, |(_, at)| *at);
+                    (at, layer)
+                })
+                .collect();
+            back.sort_by_key(|(at, _)| *at);
+            for (at, layer) in back {
+                self.insert_layer(at, layer)
+                    .expect("a palette's layers are valid");
+            }
+            layers = Vec::new();
         }
         // The new layers go at the bottom of their part, in order, so what
         // else the part holds stays above them.
@@ -530,7 +568,7 @@ impl Document {
             .masks()
             .iter()
             .filter(|mask| !mask.slots.is_empty() && mask.part == part)
-            .filter(|mask| self.layers_using_mask(mask.id).next().is_none())
+            .filter(|mask| !self.mask_in_use(mask.id))
             .map(|mask| mask.id)
             .collect();
         for id in unused {

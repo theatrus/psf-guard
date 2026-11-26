@@ -319,15 +319,7 @@ impl Studio {
 
     /// Removes a part with its layers.
     pub(super) fn remove_part(&mut self, part: Uuid) {
-        let members: Vec<Uuid> = self
-            .document
-            .group_members(part)
-            .map(|layer| layer.id)
-            .collect();
-        for layer in members {
-            self.document.remove_layer(layer);
-        }
-        self.document.remove_layer(part);
+        self.document.remove_part(part);
         self.selected = Row::Combined;
     }
 }

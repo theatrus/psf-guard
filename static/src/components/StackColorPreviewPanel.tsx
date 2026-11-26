@@ -42,6 +42,7 @@ import { withRetainedColorExposureSets } from './colorExposureCards';
 import { fetchDefaultColorFor } from './defaultColorSetup';
 import './StackColorSources.css';
 import { studioLink, useServerOrigin } from '../utils/studioLink';
+import { useAccess } from '../auth/access';
 
 /** A channel's frame count, or that WBPP made it and recorded none. */
 function sourceFramesText(source: Pick<StackColorSource, 'accepted_frames' | 'wbpp'>): string {
@@ -602,6 +603,10 @@ export default function StackColorPreviewPanel({
 }: StackColorPreviewPanelProps) {
   const queryClient = useQueryClient();
   const serverOrigin = useServerOrigin();
+  // PSF Studio asks the server as an anonymous caller, so a server that
+  // needs sign-in refuses it.
+  const { status: accessStatus } = useAccess();
+  const studioReachable = !accessStatus.authentication_required;
   const [watchedJobIds, setWatchedJobIds] = useState<string[]>([]);
   // The card that asked for each composition still being prepared, which
   // names no channel stacks yet to match a card by, and whether it came
@@ -1109,7 +1114,7 @@ export default function StackColorPreviewPanel({
           {error instanceof Error ? error.message : 'Color preview failed'}
         </div>
       )}
-      {serverOrigin && targets.some((target) => (target.source_candidates ?? []).length > 0) && (
+      {serverOrigin && studioReachable && targets.some((target) => (target.source_candidates ?? []).length > 0) && (
         <div className="stack-color-studio">
           {targets.filter((target) => (target.source_candidates ?? []).length > 0).map((target) => (
             <a

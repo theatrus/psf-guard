@@ -243,7 +243,7 @@ impl Studio {
             ))
             .when(!known, |block| {
                 block.child(Self::note(format!(
-                    "This step holds the stretch “{kind}”, which the canvas does not draw."
+                    "This step uses the stretch “{kind}”, which the canvas does not draw."
                 )))
             });
         for (index, (key, label, low, high)) in stretch_settings(&kind).iter().enumerate() {
@@ -485,6 +485,9 @@ impl Studio {
                         move |this| {
                             let mut copy = copy.clone();
                             copy.id = Uuid::new_v4();
+                            // The copy is a person's layer, not the
+                            // palette's: the palette fills each slot once.
+                            copy.slot = None;
                             for step in &mut copy.steps {
                                 step.id = Uuid::new_v4();
                             }
@@ -606,7 +609,7 @@ impl Studio {
                     })),
             )
             .children(Self::help(
-                "Ungrouping keeps the layers where they are. The group's own mask and adjustments go with it.",
+                "Ungrouping keeps the layers where they are and removes the group's own mask and adjustments.",
             ))
             .into_any_element()
     }

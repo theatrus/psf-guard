@@ -8,14 +8,15 @@
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 psf_guard=${1:-}
-out=${2:-"$here/target/release"}
+out=${2:-"${CARGO_TARGET_DIR:-$here/target}/release"}
 app="$out/PSF Studio.app"
 
 (cd "$here" && cargo build --release -p psf-studio)
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$here/icons/icon.icns" "$app/Contents/Resources/psf-studio.icns"
-cp "$here/target/release/psf-studio" "$app/Contents/MacOS/psf-studio"
+target="${CARGO_TARGET_DIR:-$here/target}"
+cp "$target/release/psf-studio" "$app/Contents/MacOS/psf-studio"
 if [ -n "$psf_guard" ]; then
     # Studio looks for psf-guard beside itself first.
     cp "$psf_guard" "$app/Contents/MacOS/psf-guard"

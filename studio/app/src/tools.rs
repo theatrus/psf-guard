@@ -96,6 +96,9 @@ struct Run {
     done: Option<Result<(), String>>,
     /// For a run that prepares a picture to open: its store and document.
     opens: Option<(PathBuf, PathBuf)>,
+    /// For a run of the tools: each input's tools as the run was given
+    /// them, which the store holds once it ends.
+    chains: Option<serde_json::Value>,
 }
 
 /// The processing tools of the app.
@@ -374,7 +377,8 @@ impl Studio {
                 ((value * 100.0).round() / 100.0).into()
             }
             SettingKind::Int { min, max, .. } => {
-                (min + ((max - min) as f64 * f64::from(position)).round() as i64).into()
+                ((min as f64 + (max as f64 - min as f64) * f64::from(position)).round() as i64)
+                    .into()
             }
             SettingKind::Bool { .. } | SettingKind::Other => return,
         };
@@ -421,7 +425,11 @@ impl Studio {
             .arg(&document)
             .arg("--output")
             .arg(&store);
+        let chains = self.all_chains();
         self.start_run(command, None);
+        if let Some(run) = &self.tools.run {
+            run.lock().expect("tool run").chains = Some(chains);
+        }
     }
 
     /// Saves the document where the picture keeps it, when it changed
@@ -446,6 +454,13 @@ impl Studio {
         }
     }
 
+    /// Stops saving the document, and says why: the file on disk could not
+    /// be read, and is left as it is.
+    pub(super) fn keep_document_unsaved(&mut self, why: String) {
+        self.tools.document = None;
+        self.tools.status = why;
+    }
+
     /// Takes the document as saved on disk: what a picture opened with.
     pub(super) fn document_is_saved(&mut self) {
         self.tools.saved = self.document.to_json();
@@ -454,6 +469,11 @@ impl Studio {
     /// The open picture's store, if any.
     pub(super) fn store_path(&self) -> Option<&std::path::Path> {
         self.tools.store.as_deref()
+    }
+
+    /// Shows a message in the top bar.
+    pub(super) fn say(&mut self, message: &str) {
+        self.tools.status = message.to_string();
     }
 
     /// Whether a run of `psf-guard` is in hand.
@@ -482,6 +502,7 @@ impl Studio {
             line: "Starting…".to_string(),
             done: None,
             opens,
+            chains: None,
         }));
         self.tools.run = Some(run.clone());
         std::thread::spawn(move || {
@@ -493,18 +514,26 @@ impl Studio {
             let outcome = match child {
                 Err(error) => Err(format!("{program} did not start: {error}")),
                 Ok(mut child) => {
+                    // Both pipes are read at once: a program that fills one
+                    // while the other is read would wait forever.
+                    let errors = child.stderr.take().map(|stderr| {
+                        std::thread::spawn(move || {
+                            BufReader::new(stderr)
+                                .lines()
+                                .map_while(Result::ok)
+                                .filter(|line| !line.trim().is_empty())
+                                .last()
+                        })
+                    });
                     if let Some(stdout) = child.stdout.take() {
                         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
                             run.lock().expect("tool run").line = line.trim().to_string();
                         }
                     }
-                    match child.wait_with_output() {
-                        Ok(output) if output.status.success() => Ok(()),
-                        Ok(output) => Err(String::from_utf8_lossy(&output.stderr)
-                            .lines()
-                            .last()
-                            .unwrap_or("it failed")
-                            .to_string()),
+                    let last_error = errors.and_then(|reader| reader.join().ok()).flatten();
+                    match child.wait() {
+                        Ok(status) if status.success() => Ok(()),
+                        Ok(_) => Err(last_error.unwrap_or_else(|| "it failed".to_string())),
                         Err(error) => Err(error.to_string()),
                     }
                 }
@@ -523,9 +552,14 @@ impl Studio {
         let Some(run) = self.tools.run.clone() else {
             return;
         };
-        let (line, done, opens) = {
+        let (line, done, opens, chains) = {
             let mut run = run.lock().expect("tool run");
-            (run.line.clone(), run.done.take(), run.opens.clone())
+            (
+                run.line.clone(),
+                run.done.take(),
+                run.opens.clone(),
+                run.chains.clone(),
+            )
         };
         self.tools.status = line;
         match done {
@@ -538,6 +572,11 @@ impl Studio {
                         self.tools.status =
                             "The tools ran. The canvas shows their result.".to_string();
                         self.reload_store();
+                        // The store holds the tools the run was given, not
+                        // any changed while it ran.
+                        if chains.is_some() {
+                            self.tools.prepared = chains;
+                        }
                     }
                 }
             }
@@ -551,25 +590,42 @@ impl Studio {
     /// Draws the store again from its file, after a run prepared it.
     /// Shows a picture a run prepared: its document, then its store.
     fn show_picture(&mut self, store: PathBuf, document: PathBuf) {
-        match std::fs::read_to_string(&document)
+        // The picture on screen keeps its last edits.
+        self.save_document();
+        let opened = std::fs::read_to_string(&document)
             .map_err(|error| error.to_string())
             .and_then(|text| {
                 crate::studio_model::Document::from_json(&text).map_err(|error| error.to_string())
-            }) {
-            Ok(opened) => {
-                self.document = opened;
-                self.document_is_saved();
-            }
+            });
+        let opened = match opened {
+            Ok(opened) => opened,
             Err(error) => {
-                self.tools.status = format!("The document could not be opened: {error}");
+                self.tools.status = format!("Not opened: the document could not be read ({error})");
                 return;
             }
-        }
+        };
+        // The store is opened first, so a store that cannot be opened
+        // leaves the picture on screen as it was.
+        let (source, bands) = match crate::store_tiles::source(Some(&store)) {
+            Ok(source) => source,
+            Err(error) => {
+                self.tools.status = format!("Not opened: the store could not be read ({error})");
+                return;
+            }
+        };
+        self.document = opened;
+        self.document_is_saved();
         self.tools.store = Some(store);
         self.tools.document = Some(document);
         self.tools.status = String::new();
         self.selected = crate::studio_model::Row::Combined;
-        self.reload_store();
+        self.pins.clear();
+        self.open_menu = None;
+        self.stroke = None;
+        self.drag = None;
+        self.alone = false;
+        self.mask_shown = false;
+        self.show_source(source, bands);
         self.canvas.edit(|canvas| canvas.fit());
     }
 
@@ -580,10 +636,19 @@ impl Studio {
         let (source, bands) = match crate::store_tiles::source(Some(&path)) {
             Ok(opened) => opened,
             Err(error) => {
-                self.tools.status = format!("The new store could not be opened: {error}");
+                self.tools.status = format!("Not opened: the store could not be read ({error})");
                 return;
             }
         };
+        self.show_source(source, bands);
+    }
+
+    /// Draws a store's tiles from now on.
+    fn show_source(
+        &mut self,
+        source: Arc<dyn psf_studio_render::TileSource>,
+        bands: crate::store_tiles::Bands,
+    ) {
         let pyramid = source.pyramid();
         self.band_info = Arc::new(bands);
         self.analysed.clear();
@@ -675,7 +740,7 @@ impl Studio {
                 let (channel, key) = (channel.to_string(), tool.key.clone());
                 picks.push(Self::pick(
                     tool.name.clone(),
-                    ("tool", at * 8 + index),
+                    ("tool", at * 1000 + index),
                     on,
                     cx,
                     move |this| this.set_tool(&channel, category, Some(&key)),
@@ -684,7 +749,7 @@ impl Studio {
             block = block
                 .child(Self::field(
                     *title,
-                    self.menu(format!("tool-{category}"), "None", picks, cx),
+                    self.menu(format!("tool-{channel}-{category}"), "None", picks, cx),
                 ))
                 .children(problems.into_iter().filter_map(Self::help));
         }
@@ -722,7 +787,8 @@ impl Studio {
                     block.child(self.labelled_slider(
                         format!("{} {now}", setting.label),
                         SliderId::ToolParam(index),
-                        (now - min) as f32 / ((max - min).max(1)) as f32,
+                        (now as f64 - min as f64) as f32
+                            / (max as f64 - min as f64).max(1.0) as f32,
                         cx,
                     ))
                 }

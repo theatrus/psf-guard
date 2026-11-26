@@ -487,6 +487,10 @@ impl Renderer {
                 label: Some("studio canvas"),
                 required_features: adapter.features()
                     & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::FLOAT32_FILTERABLE),
+                // The adapter's own limits: the default caps a texture at
+                // 8192 pixels, which a window across two large displays
+                // passes.
+                required_limits: adapter.limits(),
                 ..Default::default()
             })
             .await
@@ -918,7 +922,9 @@ impl Renderer {
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
-        let (width, height) = (width.max(1), height.max(1));
+        // No texture may be larger than the device allows.
+        let largest = self.device.limits().max_texture_dimension_2d;
+        let (width, height) = (width.clamp(1, largest), height.clamp(1, largest));
         if (width, height) == self.size() {
             return;
         }
