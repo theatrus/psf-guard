@@ -6,6 +6,12 @@
 
 ## Changes
 
+- PSF Guard now uses Seiza 0.56. Seiza's stacking output changed, so stacks
+  and color previews made before this update are stacked again the next
+  time they are needed. When an expanded mosaic is reintegrated, its panel
+  backgrounds now match. Update every remote worker to this release too: a
+  worker running an older PSF Guard is not given stacking work until it is
+  updated, though it still runs processing tools.
 - **Processing tools** has its own page, **Settings › Processing ›
   Processing tools**, instead of sitting at the bottom of **Stacking**.
   **Reference catalogs** links to it, since the noise model and ONNX

@@ -53,16 +53,16 @@ quick-xml = "0.42"
 globset = "0.4"
 semver = "1"
 byteorder = "1.5"
-seiza = "0.52.0"
-seiza-download = "0.10.0"
+seiza = "0.56.0"
+seiza-download = "0.12.0"
 # The learned noise model. It links nothing native: ONNX Runtime is found and
 # opened at run time, and only after a person asked PSF Guard to download it.
-seiza-model = "0.3.0"
+seiza-model = "0.7.0"
 seiza-imgproc = { version = "0.3.2", features = ["parallel"] }
 seiza-fits = "=0.8.1"
 seiza-image-io = "0.13.1"
-seiza-satellites = { version = "0.23.0", features = ["serde"] }
-seiza-stacking = "0.60.0"
+seiza-satellites = { version = "0.26.0", features = ["serde"] }
+seiza-stacking = "0.64.0"
 seiza-stretch = "0.3.3"
 # XISF reading. Already in the tree through seiza-stacking, which decodes both
 # containers into the same `seiza_fits::FitsImage`.

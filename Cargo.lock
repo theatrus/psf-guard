@@ -151,6 +151,9 @@ name = "arbitrary"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3bc62ac97cc33321f50863d514c3bc38a453947a8f9e781137e47c7401020aed"
+dependencies = [
+ "derive_arbitrary",
+]
 
 [[package]]
 name = "arg_enum_proc_macro"
@@ -1250,7 +1253,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d045de693cb712d0b22c6a64be5b953f67b3ce00ab5ad3dd5d8b441886ab8e1a"
 dependencies = [
  "quote",
- "syn 2.0.119",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -1351,6 +1354,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e9de72ce2ad1f90dc62fa25f0f430ef85eb4b0d8fa0be4f30373bc40a21d28e"
 dependencies = [
  "serde_core",
+]
+
+[[package]]
+name = "derive_arbitrary"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b034bd7d5f032402a2479444dcc6f74e36a03f31854d41680fb240ef682a1ac"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -4578,7 +4592,7 @@ dependencies = [
  "uuid",
  "windows-service",
  "windows-sys 0.61.2",
- "zip",
+ "zip 9.8.2",
 ]
 
 [[package]]
@@ -5525,9 +5539,9 @@ dependencies = [
 
 [[package]]
 name = "seiza"
-version = "0.52.0"
+version = "0.56.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9019e249bc7abbc426e6bb620f5414215a6117cb5b77bdd508054456731a8d61"
+checksum = "f26af5e953d0102741644d05ec24a1fbf34e544875c3c4b777daca589a3fff83"
 dependencies = [
  "directories",
  "image",
@@ -5599,21 +5613,25 @@ dependencies = [
 
 [[package]]
 name = "seiza-download"
-version = "0.10.0"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b974122540fd520a5897e1ea139403df24862be7f6ad293fa4aac00edd53ddf7"
+checksum = "b0610a025bad36a9481e541e2ffbf56ffa0a11032c50818d3978d6cd81c1291c"
 dependencies = [
  "async-compression",
  "directories",
+ "flate2",
  "fs2",
  "futures-util",
  "reqwest",
  "serde",
  "serde_json",
  "sha2 0.11.1",
+ "tar",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "tokio-util",
+ "zip 4.6.1",
 ]
 
 [[package]]
@@ -5659,9 +5677,9 @@ dependencies = [
 
 [[package]]
 name = "seiza-model"
-version = "0.3.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "61fe6c7d75ef0930c187e8478dc956dd5d1e6218675e3e280efa118e194e9097"
+checksum = "24ce1f6164c4a814bd83839224e1f35aebb66c365905a75b2cbcb33736922cde"
 dependencies = [
  "directories",
  "half",
@@ -5678,9 +5696,9 @@ dependencies = [
 
 [[package]]
 name = "seiza-satellites"
-version = "0.23.0"
+version = "0.26.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "74e065bc0ceb13ed6eb552c219ef97309b97388530ecb181a246e3fd1d580cc6"
+checksum = "3c49ce97f60547e52301550ab8b259be3967c4e3c7cfa94533f76e6d5da8317a"
 dependencies = [
  "directories",
  "fs2",
@@ -5696,9 +5714,9 @@ dependencies = [
 
 [[package]]
 name = "seiza-stacking"
-version = "0.60.0"
+version = "0.64.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b116b356bf9f9064b37e7fa1f7c8f4e693bac4bdb29f8829b0b3bb36729038b4"
+checksum = "0808295440964a78bccf9ec393c961b738b9af14e4bfcbfa4020b4809126cb80"
 dependencies = [
  "bytemuck",
  "fs2",
@@ -6749,7 +6767,7 @@ dependencies = [
  "tokio",
  "url",
  "windows-sys 0.61.2",
- "zip",
+ "zip 9.8.2",
 ]
 
 [[package]]
@@ -8601,9 +8619,23 @@ dependencies = [
 
 [[package]]
 name = "zip"
-version = "9.5.1"
+version = "4.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e3476fd497ac8af5b1ec7b51acab7bef380f7e8dd8e0487595bafd839417a302"
+checksum = "caa8cd6af31c3b31c6631b8f483848b91589021b28fffe50adada48d4f4d2ed1"
+dependencies = [
+ "arbitrary",
+ "crc32fast",
+ "flate2",
+ "indexmap 2.14.2",
+ "memchr",
+ "zopfli",
+]
+
+[[package]]
+name = "zip"
+version = "9.8.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d8dbe089cf6b0448b78f5fc50139ab5aaa40d08ac07cdc1baf2c13add35fcce"
 dependencies = [
  "constant_time_eq",
  "crc32fast",
