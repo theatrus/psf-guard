@@ -302,6 +302,8 @@ pub(super) fn is_drawn(stage: StageKind, step: &StepRecord, bands: &Bands) -> bo
         (StepKind::Operation { operation, .. }, StageKind::Linear) => {
             let band = step.band.as_deref().and_then(|band| bands.band_of(band));
             (operation == flow_operations::BACKGROUND && bands.has_correction())
+                // The store's red, green and blue hold the calibration.
+                || (operation == flow_operations::COLOR_CALIBRATION && bands.is_calibrated())
                 // An input's tools are drawn when the store holds their
                 // result.
                 || (operation == flow_operations::RC_ASTRO_INPUT

@@ -174,6 +174,11 @@ impl Studio {
                     ))
                 },
             )
+            .when(
+                name == flow_operations::COLOR_CALIBRATION
+                    && !self.band_info.calibration.is_empty(),
+                |pane| pane.child(Self::note(self.band_info.calibration.clone())),
+            )
             .when(!is_drawn(stage, step, &self.band_info), |pane| {
                 pane.children(Self::help(
                     "The document records this step. The canvas does not draw it yet.",

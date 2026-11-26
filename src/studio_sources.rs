@@ -52,6 +52,43 @@ impl Server {
         }
     }
 
+    /// The plate solve of one frame: the one the server has, or a new one
+    /// when it has none. `None` when the frame cannot be solved; the reason
+    /// is the server's.
+    pub async fn frame_solve(
+        &self,
+        image_id: i32,
+    ) -> Result<Option<crate::astrometry::AstrometrySolutionResponse>> {
+        let url = format!("{}/images/{image_id}/astrometry", self.database_url);
+        let known: serde_json::Value = self.data(url.clone()).await?;
+        let analysis = if known["solution"].is_null() {
+            let request = self.client.post(url);
+            let request = match &self.token {
+                Some(token) => request.bearer_auth(token),
+                None => request,
+            };
+            let response = request.send().await?;
+            let status = response.status();
+            let body: serde_json::Value = response
+                .json()
+                .await
+                .with_context(|| format!("reading the server's reply ({status})"))?;
+            if !status.is_success() {
+                let reason = body["error"].as_str().unwrap_or("no reason given");
+                bail!("the server could not solve the frame ({status}): {reason}");
+            }
+            body["data"].clone()
+        } else {
+            known
+        };
+        if analysis["solution"].is_null() {
+            return Ok(None);
+        }
+        serde_json::from_value(analysis["solution"].clone())
+            .map(Some)
+            .context("reading the frame's plate solve")
+    }
+
     /// Reads the `data` of the server's reply to a GET.
     async fn data<T: DeserializeOwned>(&self, url: String) -> Result<T> {
         let response = self.get(url).send().await?;
@@ -341,6 +378,96 @@ impl RegisteredChannels {
             backgrounds,
             tools: tool_runs,
         })
+    }
+}
+
+impl RegisteredChannels {
+    /// One channel as stacked, on the reference grid.
+    pub fn stacked(&self, role: StackColorRole) -> Option<LinearImage> {
+        let name = role_name(role).ok()?;
+        let plane = self.names.iter().position(|other| *other == name)?;
+        LinearImage::new(
+            self.shape.width,
+            self.shape.height,
+            1,
+            self.planes[plane].clone(),
+        )
+        .ok()
+    }
+
+    /// Multiplies every state of one channel by `gain`: the channel as
+    /// stacked, after its tools, its stars, and with its background
+    /// corrected. Color calibration's gains are applied this way, so every
+    /// state of red, green and blue keeps the same balance.
+    pub fn scale_channel(&mut self, role: StackColorRole, gain: f32) {
+        let Ok(name) = role_name(role) else {
+            return;
+        };
+        let state = format!("{name}@");
+        for (plane, plane_name) in self.planes.iter_mut().zip(&self.names) {
+            if *plane_name == name || plane_name.starts_with(&state) {
+                for sample in plane.iter_mut() {
+                    *sample *= gain;
+                }
+            }
+        }
+    }
+}
+
+impl RegisteredChannels {
+    /// Gives the sky of `channels` the level it has in `anchor`, in every
+    /// state that still has a sky: as stacked, after the tools, and with
+    /// the background corrected. A channel's stars have no sky and are
+    /// left alone.
+    ///
+    /// Color calibration's gains scale each channel's sky with it, so
+    /// without this the sky takes the color of the largest gain. The sky's
+    /// level is the median of a sample of the plane.
+    pub fn level_sky(&mut self, anchor: StackColorRole, channels: &[StackColorRole]) {
+        let median = |plane: &[f32]| -> Option<f32> {
+            let step = (plane.len() / 500_000).max(1);
+            let mut sample: Vec<f32> = plane
+                .iter()
+                .step_by(step)
+                .copied()
+                .filter(|value| value.is_finite())
+                .collect();
+            if sample.is_empty() {
+                return None;
+            }
+            let middle = sample.len() / 2;
+            sample.select_nth_unstable_by(middle, f32::total_cmp);
+            Some(sample[middle])
+        };
+        let Ok(anchor) = role_name(anchor) else {
+            return;
+        };
+        for state in ["", "@tools", "@background"] {
+            let plane_of = |name: &str| {
+                let wanted = match state {
+                    "" => name.to_string(),
+                    "@tools" => tools_channel(name),
+                    _ => background_corrected_channel(name),
+                };
+                self.names.iter().position(|other| *other == wanted)
+            };
+            let Some(level) = plane_of(&anchor).and_then(|plane| median(&self.planes[plane]))
+            else {
+                continue;
+            };
+            for role in channels {
+                let Ok(name) = role_name(*role) else { continue };
+                let Some(plane) = plane_of(&name) else {
+                    continue;
+                };
+                let Some(own) = median(&self.planes[plane]) else {
+                    continue;
+                };
+                for sample in self.planes[plane].iter_mut() {
+                    *sample += level - own;
+                }
+            }
+        }
     }
 }
 

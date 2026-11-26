@@ -64,6 +64,26 @@ pub async fn studio_sources(options: StudioSourcesOptions) -> Result<()> {
             bytes as f64 / (1 << 20) as f64
         );
     }
+    // The plate solve of the first stack's reference frame, which color
+    // calibration needs to find Gaia's stars on the stacks' shared grid.
+    let solve_file = folder.join(SOLVE_FILE);
+    match stacks[0].reference_image_id {
+        Some(image_id) => match server.frame_solve(image_id).await {
+            Ok(Some(solution)) => {
+                std::fs::write(&solve_file, serde_json::to_string(&solution)?)
+                    .with_context(|| format!("writing {}", solve_file.display()))?;
+                println!(
+                    "Plate solve of the reference frame: {} stars, {:.2} arcsec RMS",
+                    solution.matched_stars, solution.rms_arcsec
+                );
+            }
+            Ok(None) => {
+                println!("The reference frame has no plate solve; colors stay uncalibrated")
+            }
+            Err(error) => println!("No plate solve of the reference frame: {error}"),
+        },
+        None => println!("The first stack records no reference frame; colors stay uncalibrated"),
+    }
     // What was downloaded, so the store can be prepared again without the
     // server: for other tools, or other settings.
     let listing = folder.join(SOURCES_FILE);
@@ -77,6 +97,10 @@ pub async fn studio_sources(options: StudioSourcesOptions) -> Result<()> {
         &options.output,
     )
 }
+
+/// The file in a sources folder that holds the plate solve of the first
+/// stack's reference frame.
+const SOLVE_FILE: &str = "reference-solve.json";
 
 /// The file in a sources folder that lists the downloaded channel stacks.
 const SOURCES_FILE: &str = "sources.json";
@@ -195,12 +219,26 @@ fn prepare_store(
         .iter()
         .map(|(role, path)| (*role, path.as_path()))
         .collect();
-    let prepared = RegisteredChannels::prepare(
+    let mut prepared = RegisteredChannels::prepare(
         &inputs,
         (!tools.chains.is_empty()).then_some(&tools),
         background.as_ref(),
         &seiza_stacking::GpuOptions::cpu(),
     )?;
+    let calibration = calibrate_colors(&mut prepared, stacks, folder, &document);
+    match &calibration {
+        Calibration::NotAsked => {}
+        Calibration::Skipped { why } => println!("  Colors not calibrated: {why}"),
+        Calibration::Done { gains, stars } => println!(
+            "  Colors calibrated against Gaia from {stars} stars: red x{:.3}, blue x{:.3}",
+            gains[0], gains[2]
+        ),
+    }
+    // Beside the store, so whatever opens it knows whether red, green and
+    // blue are balanced and may share one stretch.
+    let record = output.with_extension("calibration.json");
+    std::fs::write(&record, serde_json::to_string(&calibration)?)
+        .with_context(|| format!("writing {}", record.display()))?;
     for (role, chain) in &prepared.tools {
         let ran: Vec<&str> = chain
             .steps
@@ -310,4 +348,113 @@ pub fn studio_tools() -> Result<()> {
         .collect();
     println!("{}", serde_json::to_string_pretty(&tools)?);
     Ok(())
+}
+
+/// What color calibration did while a store was prepared.
+#[derive(serde::Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum Calibration {
+    /// The document has no red, green and blue, or its Color calibration
+    /// step is off.
+    NotAsked,
+    Skipped {
+        why: String,
+    },
+    Done {
+        /// The multipliers applied to every state of red, green and blue.
+        gains: [f32; 3],
+        /// The Gaia stars behind the weaker of the two color fits.
+        stars: usize,
+    },
+}
+
+/// Runs the document's Color calibration step: measures the gains of red,
+/// green and blue against Gaia on the stacks as registered, and applies
+/// them to every state of the three channels.
+fn calibrate_colors(
+    prepared: &mut RegisteredChannels,
+    stacks: &[StackColorSource],
+    folder: &Path,
+    document: &Document,
+) -> Calibration {
+    use crate::server::stack_preview::color_calibration::StackColorCalibrationOutcome as Outcome;
+    use crate::studio::{flow_operations, StageKind};
+
+    const RGB: [StackColorRole; 3] = [
+        StackColorRole::Red,
+        StackColorRole::Green,
+        StackColorRole::Blue,
+    ];
+    let step = document
+        .stage(StageKind::Linear)
+        .steps
+        .iter()
+        .find(|step| step.kind.name() == flow_operations::COLOR_CALIBRATION);
+    if step.is_some_and(|step| !step.enabled) {
+        return Calibration::NotAsked;
+    }
+    let [Some(red), Some(green), Some(blue)] = RGB.map(|role| prepared.stacked(role)) else {
+        return Calibration::NotAsked;
+    };
+    let settings = step
+        .and_then(|step| match &step.kind {
+            crate::studio::StepKind::Operation { settings, .. } => {
+                serde_json::from_value(settings.clone()).ok()
+            }
+            _ => None,
+        })
+        .unwrap_or_default();
+    let settings: crate::server::stack_preview::color_calibration::StackColorCalibration = settings;
+    let neutral_sky = settings.neutralize_background;
+    let Some(orientation) = stacks[0].sky_orientation.as_ref() else {
+        return Calibration::Skipped {
+            why: "the first stack records no sky layout".into(),
+        };
+    };
+    let solve = folder.join(SOLVE_FILE);
+    let Some(solution) = std::fs::read_to_string(&solve)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+    else {
+        return Calibration::Skipped {
+            why: "the sources have no plate solve; fetch them again with studio-sources".into(),
+        };
+    };
+    let service = crate::astrometry::AstrometryContext::new(Default::default());
+    let catalog = match service.gaia_photometry_catalog() {
+        Ok((catalog, _)) => catalog,
+        Err(error) => {
+            return Calibration::Skipped {
+                why: format!("Gaia colors: {error}"),
+            }
+        }
+    };
+    let measured = crate::color_steps::measure_color_gains(
+        [&red, &green, &blue],
+        &solution,
+        orientation,
+        &catalog,
+        &settings,
+    );
+    match (measured.outcome, measured.gains) {
+        (Outcome::Calibrated(report), Some(gains)) => {
+            for (role, gain) in RGB.into_iter().zip(gains) {
+                prepared.scale_channel(role, gain);
+            }
+            if neutral_sky {
+                prepared.level_sky(
+                    StackColorRole::Green,
+                    &[StackColorRole::Red, StackColorRole::Blue],
+                );
+            }
+            Calibration::Done {
+                gains,
+                stars: report.stars_used,
+            }
+        }
+        (Outcome::Skipped(skip), _) => Calibration::Skipped { why: skip.detail },
+        (Outcome::Calibrated(_), None) => Calibration::Skipped {
+            why: "no gains were measured".into(),
+        },
+    }
 }

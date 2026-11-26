@@ -172,6 +172,12 @@ pub struct Bands {
     samples: Vec<[Option<Vec<f32>>; 3]>,
     /// Per band: the value a canvas sample of 1 stands for.
     scales: Vec<f32>,
+    /// The bands whose stretches are resolved together: red, green and
+    /// blue once color calibration has balanced them. Empty otherwise.
+    linked: Vec<usize>,
+    /// What color calibration did when the store was prepared, in words.
+    /// Empty when it was not asked for.
+    pub calibration: String,
 }
 
 /// Names for the bands of a store that records none: by how many it has.
@@ -202,6 +208,46 @@ fn names_for(count: usize) -> Vec<String> {
 }
 
 impl Bands {
+    /// Reads what color calibration did when the store was prepared, from
+    /// the record beside the store. When red, green and blue were
+    /// calibrated, their stretches are resolved together from then on: a
+    /// stretch of each channel on its own pulls each toward its own median
+    /// and undoes the balance.
+    fn read_calibration(&mut self, store: &Path) {
+        let record = store.with_extension("calibration.json");
+        let Some(record) = std::fs::read_to_string(record)
+            .ok()
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        else {
+            return;
+        };
+        self.calibration = match record["status"].as_str() {
+            Some("done") => {
+                let rgb: Vec<usize> = ["red", "green", "blue"]
+                    .iter()
+                    .filter_map(|name| self.band_of(name))
+                    .collect();
+                if rgb.len() == 3 {
+                    self.linked = rgb;
+                }
+                format!(
+                    "Calibrated on {} Gaia stars",
+                    record["stars"].as_u64().unwrap_or(0)
+                )
+            }
+            Some("skipped") => format!(
+                "Not calibrated: {}",
+                record["why"].as_str().unwrap_or("no reason given")
+            ),
+            _ => String::new(),
+        };
+    }
+
+    /// Whether red, green and blue were calibrated and share one stretch.
+    pub fn is_calibrated(&self) -> bool {
+        !self.linked.is_empty()
+    }
+
     pub fn len(&self) -> usize {
         self.tile_band.len()
     }
@@ -238,26 +284,43 @@ impl Bands {
     /// Each band's stretch analysis in the state given for it: the
     /// analysis of the samples the stretch is applied to. A band with no
     /// state given is as stacked.
+    ///
+    /// The bands in `linked` are analysed as one set of samples, so one
+    /// stretch serves them all and their balance is kept.
     pub fn stretches(&self, states: &[BandState]) -> Result<Vec<BandStretch>, String> {
-        self.samples
+        let samples: Vec<Vec<f32>> = self
+            .samples
             .iter()
-            .zip(&self.scales)
             .enumerate()
-            .map(|(band, ([stacked, tools, corrected], scale))| {
+            .map(|(band, [stacked, tools, corrected])| {
                 let state = states.get(band).copied().unwrap_or_default();
                 let stacked = stacked.as_deref().unwrap_or(&[]);
                 let base = tools.as_deref().filter(|_| state.tools).unwrap_or(stacked);
                 let matches = state.tools == tools.is_some();
                 match corrected {
-                    Some(after) if state.background > 0.0 && matches => {
-                        let blended: Vec<f32> = base
-                            .iter()
-                            .zip(after)
-                            .map(|(a, b)| a + (b - a) * state.background)
-                            .collect();
-                        BandStretch::analyse(&blended, Some(*scale))
-                    }
-                    _ => BandStretch::analyse(base, Some(*scale)),
+                    Some(after) if state.background > 0.0 && matches => base
+                        .iter()
+                        .zip(after)
+                        .map(|(a, b)| a + (b - a) * state.background)
+                        .collect(),
+                    _ => base.to_vec(),
+                }
+            })
+            .collect();
+        let together: Vec<f32> = self
+            .linked
+            .iter()
+            .flat_map(|band| samples[*band].iter().copied())
+            .collect();
+        samples
+            .iter()
+            .zip(&self.scales)
+            .enumerate()
+            .map(|(band, (own, scale))| {
+                if self.linked.contains(&band) {
+                    BandStretch::analyse(&together, Some(*scale))
+                } else {
+                    BandStretch::analyse(own, Some(*scale))
                 }
             })
             .collect()
@@ -524,6 +587,7 @@ fn analyse_synthetic() -> Bands {
             .collect(),
         // The synthetic tiles go to the canvas as they are.
         scales: vec![1.0; BANDS],
+        ..Default::default()
     }
 }
 
@@ -532,7 +596,8 @@ pub fn source(open: Option<&Path>) -> Result<(Arc<dyn TileSource>, Bands), Strin
     match open {
         Some(path) => {
             let mut store = StoreTiles::open(path).map_err(|error| error.to_string())?;
-            let bands = store.analyse()?;
+            let mut bands = store.analyse()?;
+            bands.read_calibration(path);
             Ok((Arc::new(store), bands))
         }
         None => Ok((

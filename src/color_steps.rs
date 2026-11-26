@@ -5,12 +5,18 @@
 //! them. It knows nothing of jobs, caches or progress bars: a caller passes
 //! a function that hears what the step is doing, and may stop it.
 //!
-//! Registration, the processing tools of one channel and the background
-//! step are here. The rest of the color pipeline still lives in
+//! Registration, the processing tools of one channel, the background step
+//! and the measuring of color calibration gains are here. The rest of the color pipeline still lives in
 //! `server::stack_preview::color` and moves here step by step.
 
+use crate::astrometry::AstrometrySolutionResponse;
 use crate::server::stack_preview::color::{StackBackgroundExtraction, StackColorRole};
+use crate::server::stack_preview::color_calibration::{
+    calibrate_channels, StackColorCalibration, StackColorCalibrationOutcome,
+    StackColorCalibrationSkip, StackColorCalibrationSkipReason, StarPlacement,
+};
 use crate::server::stack_preview::rc_astro::{self, ProcessingChain, RcAstroOutcome};
+use crate::server::stack_preview::StackSkyOrientation;
 use crate::server::workers::rc_astro::RcAstroRunner;
 use crate::server::workers::Workers;
 use seiza_background::{BackgroundFit, FittedModel, ModelConfig, ProtectedRegion};
@@ -479,4 +485,90 @@ mod tests {
         assert_eq!(stopped, Err("stopped".to_string()));
         assert_eq!(image.data, untouched.data);
     }
+}
+
+/// What [`measure_color_gains`] found.
+pub struct ColorGains {
+    /// What the calibration did, with its evidence, or why it did not run.
+    pub outcome: StackColorCalibrationOutcome,
+    /// The multipliers of red, green and blue that calibrate them, when
+    /// the calibration ran. Green's is 1.
+    pub gains: Option<[f32; 3]>,
+}
+
+/// Measures the gains that calibrate registered red, green and blue
+/// channels against Gaia: the step PSF Guard's color previews run, without
+/// its sky offsets.
+///
+/// `solution` is the plate solve of the reference frame of the stack whose
+/// grid the channels are on, and `orientation` that stack's sky layout.
+/// The channels are measured as given and not changed, so a caller applies
+/// the gains to every state of a channel it holds: as stacked, after its
+/// tools, its stars, and with its background corrected. The channels
+/// measured must still have their stars.
+pub fn measure_color_gains(
+    channels: [&LinearImage; 3],
+    solution: &AstrometrySolutionResponse,
+    orientation: &StackSkyOrientation,
+    catalog: &seiza::catalog::PhotometryCatalog,
+    settings: &StackColorCalibration,
+) -> ColorGains {
+    let skipped = |detail: String| ColorGains {
+        outcome: StackColorCalibrationOutcome::Skipped(StackColorCalibrationSkip::new(
+            StackColorCalibrationSkipReason::Failed,
+            detail,
+        )),
+        gains: None,
+    };
+    let placement = StarPlacement {
+        wcs: crate::astrometry::wcs_from_response(&solution.wcs),
+        orientation: orientation.clone(),
+    };
+    let wcs = match placement.wcs_on(None) {
+        Ok(wcs) => wcs,
+        Err(error) => return skipped(error),
+    };
+    // Gains alone: a sky offset belongs to one state of a channel, and the
+    // background step already levels the sky of the corrected state.
+    let settings = StackColorCalibration {
+        neutralize_background: false,
+        ..*settings
+    };
+    let [mut red, mut green, mut blue] = channels.map(Clone::clone);
+    let outcome = calibrate_channels(
+        [&mut red, &mut green, &mut blue],
+        &wcs,
+        catalog,
+        &settings,
+        None,
+    );
+    let gains = matches!(outcome, StackColorCalibrationOutcome::Calibrated(_)).then(|| {
+        let ratio = |before: &LinearImage, after: &LinearImage| -> f32 {
+            let (mut was, mut is) = (0.0f64, 0.0f64);
+            for (a, b) in before.data.iter().zip(&after.data) {
+                if a.is_finite() && b.is_finite() {
+                    was += f64::from(*a);
+                    is += f64::from(*b);
+                }
+            }
+            if was.abs() > f64::EPSILON {
+                (is / was) as f32
+            } else {
+                1.0
+            }
+        };
+        let measured = [
+            ratio(channels[0], &red),
+            ratio(channels[1], &green),
+            ratio(channels[2], &blue),
+        ];
+        // Green is the anchor, whatever common scale Seiza applied.
+        let green = if measured[1].abs() > f32::EPSILON {
+            measured[1]
+        } else {
+            1.0
+        };
+        measured.map(|gain| gain / green)
+    });
+    ColorGains { outcome, gains }
 }
