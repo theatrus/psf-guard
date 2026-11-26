@@ -12,8 +12,8 @@ use super::{SliderId, Studio, Tool, PANEL_WIDTH};
 use crate::image_steps::Accepts;
 use crate::studio_model::{
     balance_colors, channel_label, flow_operations, hue_of, input_steps, layer_name,
-    level_for_zoom, own_step_for_channel, BlendMode, JunctionStatus, LayerRecord, LayerSource,
-    MaskRecord, MaskShape, Row, SharedMask, StageKind, StepKind, StepRecord,
+    level_for_zoom, own_step_for_channel, BlendMode, CropRecord, JunctionStatus, LayerRecord,
+    LayerSource, MaskRecord, MaskShape, Row, SharedMask, StageKind, StepKind, StepRecord,
 };
 use gpui::{div, prelude::*, px, rgb, AnyElement, Context};
 use uuid::Uuid;
@@ -1148,9 +1148,61 @@ impl Studio {
     fn inspect_final(&self, cx: &mut Context<Self>) -> AnyElement {
         column()
             .child(Self::title("Final picture", "Every step of the document."))
+            .child(self.crop_block(cx))
             .child(self.finish_menu(cx))
             .child(self.junction_block())
             .into_any_element()
+    }
+
+    /// What the picture keeps: the automatic crop, the whole image, or a
+    /// rectangle drawn with the Crop tool.
+    fn crop_block(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let crop = self.document.crop;
+        let drawn = matches!(crop, CropRecord::Region { .. });
+        column()
+            .child(Self::field(
+                "Crop",
+                Self::segmented()
+                    .child(Self::act(
+                        "Auto",
+                        "crop-auto",
+                        crop == CropRecord::Automatic,
+                        cx,
+                        |this| {
+                            this.document.crop = CropRecord::Automatic;
+                            this.refresh_canvas();
+                            this.canvas.edit(|canvas| canvas.fit());
+                        },
+                    ))
+                    .child(Self::act(
+                        "Whole",
+                        "crop-whole",
+                        crop == CropRecord::Whole,
+                        cx,
+                        |this| {
+                            this.document.crop = CropRecord::Whole;
+                            this.refresh_canvas();
+                            this.canvas.edit(|canvas| canvas.fit());
+                        },
+                    ))
+                    .child(Self::act("Drawn", "crop-drawn", drawn, cx, |this| {
+                        this.tool = Tool::Crop;
+                    })),
+            ))
+            .when_some(
+                match crop {
+                    CropRecord::Region { width, height, .. } => Some((width, height)),
+                    _ => self
+                        .band_info
+                        .automatic_crop
+                        .filter(|_| crop == CropRecord::Automatic)
+                        .map(|[_, _, width, height]| (width, height)),
+                },
+                |block, (width, height)| block.child(Self::note(format!("{width} × {height} pixels"))),
+            )
+            .children(Self::help(
+                "Auto keeps the largest rectangle every input covers, which cuts the empty edges registration leaves. Drawn uses a rectangle drawn with the Crop tool.",
+            ))
     }
 
     // ---- blocks under the row's controls --------------------------------
@@ -1251,7 +1303,14 @@ impl Studio {
                 "Drag over a blemish. Each stroke becomes a Heal step of {}.",
                 self.heal_target()
             ),
+            Tool::Crop => "Drag a rectangle over the picture. The picture keeps what is inside it."
+                .to_string(),
         };
+        let brushing = matches!(self.tool, Tool::Brush | Tool::Heal);
+        let painting = self.tool == Tool::Brush && can_mask;
+        let removes = self.brush_removes;
+        let target = self.mask_target();
+        let blur = self.mask_blur();
         column()
             .child(Self::heading("Tools"))
             .child(
@@ -1260,9 +1319,51 @@ impl Studio {
                     .when(can_mask, |row| {
                         row.child(tool(Tool::Brush, "Brush", cx))
                     })
-                    .child(tool(Tool::Heal, "Heal", cx)),
+                    .child(tool(Tool::Heal, "Heal", cx))
+                    .child(tool(Tool::Crop, "Crop", cx)),
             )
             .children(Self::help(help))
+            .when(brushing, |pane| {
+                pane.child(self.labelled_slider(
+                    format!("Size {:.0}", self.brush_size),
+                    SliderId::BrushSize,
+                    ((self.brush_size - 2.0) / 198.0).max(0.0).sqrt(),
+                    cx,
+                ))
+            })
+            .when(painting, |pane| {
+                pane.child(Self::field(
+                    "Brush",
+                    Self::segmented()
+                        .child(Self::act("Paint", "brush-paints", !removes, cx, |this| {
+                            this.brush_removes = false
+                        }))
+                        .child(Self::act("Erase", "brush-erases", removes, cx, |this| {
+                            this.brush_removes = true
+                        })),
+                ))
+            })
+            .when(can_mask && self.has_strokes(), |pane| {
+                pane.child(Self::field(
+                    "",
+                    Self::act("Undo stroke", "undo-stroke", false, cx, move |this| {
+                        if let Some(target) = target {
+                            this.document.remove_last_stroke(target);
+                        }
+                    }),
+                ))
+            })
+            .when_some(blur, |pane, blur| {
+                pane.child(self.labelled_slider(
+                    format!("Blur {blur:.0} px"),
+                    SliderId::MaskBlur,
+                    (blur / 64.0).sqrt(),
+                    cx,
+                ))
+                .children(Self::help(
+                    "Blur softens the edge of every stroke of this mask. The strokes are kept as painted.",
+                ))
+            })
             .when(can_mask || self.has_strokes(), |pane| {
                 let shown = self.mask_shown;
                 pane.child(Self::act(

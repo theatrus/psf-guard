@@ -17,9 +17,9 @@ use crate::image_steps::Accepts;
 use crate::store_tiles::{BandState, BandStretch};
 use crate::studio_model::{
     band_layer, channel_label, color_from_hue, document_from_color_setup, flow_operations, hue_of,
-    layer_name, panes, plan, BlendMode, ChannelPlan, Document, LayerRecord, LayerSource,
-    MaskRecord, MaskShape, Place, PlannedStretch, Row, SharedMask, Split, StackEntry, StageKind,
-    StepKind, StepRecord, Stroke, StrokeMode, Subject, View,
+    layer_name, panes, plan, BlendMode, ChannelPlan, CropRecord, Document, LayerRecord,
+    LayerSource, MaskRecord, MaskShape, Place, PlannedStretch, Row, SharedMask, Split, StackEntry,
+    StageKind, StepKind, StepRecord, Stroke, StrokeMode, Subject, View,
 };
 use gpui::{
     canvas, div, img, prelude::*, px, relative, rgb, AnyElement, Context, MouseButton,
@@ -413,7 +413,10 @@ fn segments(stroke: &Stroke) -> Vec<Segment> {
 
 fn mask_strokes(mask: &Option<MaskRecord>) -> Vec<Segment> {
     match mask {
-        Some(MaskRecord::Painted(mask)) => mask.strokes.iter().flat_map(segments).collect(),
+        Some(MaskRecord::Painted(mask)) => mask
+            .drawn_strokes()
+            .flat_map(|stroke| segments(&stroke))
+            .collect(),
         _ => Vec::new(),
     }
 }
@@ -1112,6 +1115,51 @@ impl Studio {
 
     /// The strokes shown over the image while a brush is in hand: the
     /// selected row's mask.
+    /// What the brush paints: the layer, the step, or the shared mask the
+    /// selected row is.
+    pub(super) fn mask_target(&self) -> Option<Uuid> {
+        match &self.selected {
+            Row::Layer(id) | Row::Mask(id) => Some(*id),
+            Row::LayerStep { step, .. } | Row::Finish(step) => Some(*step),
+            _ => None,
+        }
+    }
+
+    /// The blur of the selected row's painted mask, when it has one.
+    pub(super) fn mask_blur(&self) -> Option<f32> {
+        let painted = |record: &Option<MaskRecord>| match record {
+            Some(MaskRecord::Painted(mask)) => Some(mask.blur),
+            _ => None,
+        };
+        if let Some(layer) = self.selected_layer() {
+            return painted(&layer.mask);
+        }
+        self.selected_step()
+            .and_then(|id| self.document.step(id))
+            .and_then(|(_, step)| painted(&step.mask))
+    }
+
+    /// The part of the document the picture keeps, as left, top, right and
+    /// bottom: the person's rectangle, the store's automatic crop, or all.
+    pub(super) fn crop_rect(&self) -> Option<[f32; 4]> {
+        let rect = |x: u32, y: u32, width: u32, height: u32| {
+            [x as f32, y as f32, (x + width) as f32, (y + height) as f32]
+        };
+        match self.document.crop {
+            CropRecord::Whole => None,
+            CropRecord::Region {
+                x,
+                y,
+                width,
+                height,
+            } => Some(rect(x, y, width, height)),
+            CropRecord::Automatic => self
+                .band_info
+                .automatic_crop
+                .map(|[x, y, width, height]| rect(x, y, width, height)),
+        }
+    }
+
     fn selected_strokes(&self) -> Vec<Segment> {
         if let Some(layer) = self.selected_layer() {
             return mask_strokes(&layer.mask);
@@ -1211,10 +1259,13 @@ impl Studio {
             Vec::new()
         };
         let wipe = (self.split == Split::Wipe).then_some(self.wipe);
+        let crop = self.crop_rect();
         self.canvas.edit(|canvas| {
             canvas.scenes = scenes;
             canvas.strokes = overlay;
+            canvas.strokes_replaced += 1;
             canvas.wipe = wipe;
+            canvas.crop = crop;
         });
     }
 
@@ -1223,27 +1274,29 @@ impl Studio {
     /// input, of the selected layer, or of the combined picture.
     pub(super) fn commit_stroke(&mut self, stroke: Stroke) {
         match self.tool {
-            Tool::Pan => {}
-            Tool::Brush => match &self.selected {
-                Row::Layer(id) => {
-                    let _ = self.document.paint_layer_mask(*id, stroke);
+            Tool::Pan | Tool::Crop => {}
+            Tool::Brush => {
+                // The brush adds to a mask, or erases from it, as the
+                // person chose.
+                let mode = if self.brush_removes {
+                    StrokeMode::Subtract
+                } else {
+                    StrokeMode::Add
+                };
+                let stroke = Stroke { mode, ..stroke };
+                match &self.selected {
+                    Row::Layer(id) => {
+                        let _ = self.document.paint_layer_mask(*id, stroke);
+                    }
+                    Row::LayerStep { step, .. } | Row::Finish(step) => {
+                        let _ = self.document.paint_step_mask(*step, stroke);
+                    }
+                    Row::Mask(mask) => {
+                        self.document.touch_up_mask(*mask, stroke);
+                    }
+                    _ => {}
                 }
-                Row::LayerStep { step, .. } | Row::Finish(step) => {
-                    let _ = self.document.paint_step_mask(*step, stroke);
-                }
-                Row::Mask(mask) => {
-                    // The brush adds to a shared mask, or takes away from
-                    // it, as the person chose.
-                    let mode = if self.brush_removes {
-                        StrokeMode::Subtract
-                    } else {
-                        StrokeMode::Add
-                    };
-                    self.document
-                        .touch_up_mask(*mask, Stroke { mode, ..stroke });
-                }
-                _ => {}
-            },
+            }
             Tool::Heal => {
                 // Copy from three radii to the right until a person can
                 // choose the source. The brightness shift is measured by the
@@ -1359,6 +1412,16 @@ impl Studio {
                     && let Some(mask) = self.document.mask_mut(*id)
                 {
                     mask.reach = 2f32.powf(position * 4.0 - 2.0);
+                }
+            }
+            SliderId::BrushSize => {
+                // From a fine brush to a broad one, in points on screen.
+                self.brush_size = 2.0 + position * position * 198.0;
+            }
+            SliderId::MaskBlur => {
+                // From none to 64 document pixels.
+                if let Some(id) = self.mask_target() {
+                    self.document.set_mask_blur(id, position * position * 64.0);
                 }
             }
             SliderId::Smoothing => {
@@ -1577,12 +1640,13 @@ impl Studio {
         let on_a_mask = matches!(self.selected, Row::Mask(_));
         let tool = match (self.tool, &self.selected) {
             (Tool::Pan, _) => None,
-            (Tool::Brush, Row::Mask(_)) if self.brush_removes => {
+            (Tool::Brush, _) if self.brush_removes => {
                 Some("The mask brush subtracts from this mask.".to_string())
             }
             (Tool::Brush, Row::Mask(_)) => Some("The mask brush adds to this mask.".to_string()),
             (Tool::Brush, _) => Some("The mask brush paints where this applies.".to_string()),
             (Tool::Heal, _) => Some("Heal adds a step here.".to_string()),
+            (Tool::Crop, _) => Some("Crop sets what the picture keeps.".to_string()),
         };
         let marked = on_a_mask || self.tool == Tool::Brush;
         div()

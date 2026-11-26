@@ -2317,6 +2317,22 @@ The link carries no token, so a server with user accounts refuses Studio's
 requests; Studio has no sign-in yet. Nothing runs on the server for the
 button: the page only makes the link.
 
+**Cropping.** The document records what the picture keeps
+(`Document.crop`): **Auto**, the largest rectangle every input covers,
+which the preparation measures with Seiza's `crop_report` (the crop PSF
+Guard's previews call "Inscribed") and records in `<store>.prepared.json`;
+**Whole**, the full grid with the empty edges registration leaves; or a
+rectangle drawn with the **Crop** tool, which stays inside the automatic
+one. The canvas draws only inside the crop (`Frame::crop`), and a fit fits
+the crop. Set it on the Final picture.
+
+**Mask editing.** The brush has a size, and paints or erases on any mask:
+a layer's, a step's, or a shared mask's touch-ups. **Undo stroke** removes
+a mask's newest stroke (`Document::remove_last_stroke`). A painted mask has
+a **Blur**, in document pixels, that softens the edge of every stroke
+without changing them (`PaintedMask::blur`, drawn by `Stroke::blurred` on
+the canvas and in the engine alike).
+
 **Continuum subtraction** runs when a store is prepared, when the document
 has the step "Subtract continuum" (Continuum › Subtract on an Ha, OIII or
 SII input). The fit is `color_steps::fit_continuum_line`, which PSF Guard's

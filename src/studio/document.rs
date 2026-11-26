@@ -520,6 +520,49 @@ pub struct Document {
     /// The palette the layers were made from, if any.
     #[serde(default)]
     pub palette: Option<PaletteUse>,
+    /// What part of the image the picture keeps.
+    #[serde(default, skip_serializing_if = "CropRecord::is_automatic")]
+    pub crop: CropRecord,
+}
+
+/// What part of the image a picture keeps.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CropRecord {
+    /// The largest rectangle every input covers, which the store records
+    /// when it is prepared. The empty edges registration leaves are cut.
+    #[default]
+    Automatic,
+    /// The whole image, empty edges included.
+    Whole,
+    /// A rectangle a person drew, in document pixels.
+    Region {
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+    },
+}
+
+impl CropRecord {
+    pub fn is_automatic(&self) -> bool {
+        *self == CropRecord::Automatic
+    }
+
+    /// The rectangle a person drew from one corner to another, inside an
+    /// image of `size`. `None` when it is less than 8 pixels across, too
+    /// small to be meant.
+    pub fn from_corners(a: [f64; 2], b: [f64; 2], size: (u32, u32)) -> Option<CropRecord> {
+        let clamp = |value: f64, limit: u32| value.round().clamp(0.0, f64::from(limit)) as u32;
+        let (x0, x1) = (clamp(a[0].min(b[0]), size.0), clamp(a[0].max(b[0]), size.0));
+        let (y0, y1) = (clamp(a[1].min(b[1]), size.1), clamp(a[1].max(b[1]), size.1));
+        (x1 - x0 >= 8 && y1 - y0 >= 8).then_some(CropRecord::Region {
+            x: x0,
+            y: y0,
+            width: x1 - x0,
+            height: y1 - y0,
+        })
+    }
 }
 
 impl Document {
@@ -539,6 +582,7 @@ impl Document {
                 .collect(),
             masks: Vec::new(),
             palette: None,
+            crop: CropRecord::Automatic,
         }
     }
 
@@ -1027,6 +1071,74 @@ impl Document {
     /// has none. A mask of another kind is replaced by the painted one.
     ///
     /// Refuses a step in a stage that allows no manual edits.
+    /// Removes the newest stroke from a painted mask: of a layer, of a step
+    /// (an input's, a layer's own, or a Finish step's), or the newest
+    /// touch-up of a shared mask. `id` names the layer, the step or the
+    /// shared mask. Returns whether a stroke was removed.
+    pub fn remove_last_stroke(&mut self, id: Uuid) -> bool {
+        if let Some(mask) = self.masks.iter_mut().find(|mask| mask.id == id) {
+            return mask.touch_ups.pop().is_some();
+        }
+        let pop = |record: &mut Option<MaskRecord>| match record {
+            Some(MaskRecord::Painted(mask)) => {
+                let removed = mask.strokes.pop().is_some();
+                if mask.strokes.is_empty() {
+                    *record = None;
+                }
+                removed
+            }
+            _ => false,
+        };
+        for stage in &mut self.stages {
+            for step in &mut stage.steps {
+                if step.id == id {
+                    return pop(&mut step.mask);
+                }
+            }
+            for layer in &mut stage.layers {
+                if layer.id == id {
+                    return pop(&mut layer.mask);
+                }
+                for step in &mut layer.steps {
+                    if step.id == id {
+                        return pop(&mut step.mask);
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// Sets how far a painted mask's strokes are softened: of the layer or
+    /// the step `id`. Returns whether it has a painted mask.
+    pub fn set_mask_blur(&mut self, id: Uuid, blur: f32) -> bool {
+        let set = |record: &mut Option<MaskRecord>| match record {
+            Some(MaskRecord::Painted(mask)) => {
+                mask.blur = blur.max(0.0);
+                true
+            }
+            _ => false,
+        };
+        for stage in &mut self.stages {
+            for step in &mut stage.steps {
+                if step.id == id {
+                    return set(&mut step.mask);
+                }
+            }
+            for layer in &mut stage.layers {
+                if layer.id == id {
+                    return set(&mut layer.mask);
+                }
+                for step in &mut layer.steps {
+                    if step.id == id {
+                        return set(&mut step.mask);
+                    }
+                }
+            }
+        }
+        false
+    }
+
     pub fn paint_step_mask(&mut self, id: Uuid, stroke: Stroke) -> Result<(), StudioError> {
         let (stage, step) = self
             .step_mut(id)
@@ -1041,6 +1153,7 @@ impl Document {
             mask @ None => {
                 *mask = Some(MaskRecord::Painted(PaintedMask {
                     strokes: vec![stroke],
+                    blur: 0.0,
                 }));
             }
             Some(_) => {
@@ -1086,6 +1199,7 @@ impl Document {
             mask @ None => {
                 *mask = Some(MaskRecord::Painted(PaintedMask {
                     strokes: vec![stroke],
+                    blur: 0.0,
                 }));
             }
         }

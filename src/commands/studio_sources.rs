@@ -532,6 +532,10 @@ fn prepare_store(
     }
     // The stars are stretched before the sky is levelled: the star stretch
     // needs a channel with and without its stars at one sky level.
+    // The largest rectangle every input covers: what the picture keeps
+    // unless a person crops it otherwise. Registration leaves empty edges
+    // where the inputs do not overlap.
+    let crop = automatic_crop(&prepared);
     let (mut display, star_stretch) = stretch_stars(&mut prepared, &document);
     if let Calibration::Done {
         neutral_sky: true, ..
@@ -646,6 +650,7 @@ fn prepare_store(
         "calibration": calibration,
         "display": display,
         "star_stretch": star_stretch,
+        "crop": crop,
     });
     write_atomically(&record, serde_json::to_string(&prepared_record)?)?;
     if let Some(path) = document_out {
@@ -1151,4 +1156,25 @@ mod tests {
         assert_eq!(of("M31-L"), Some(StackColorRole::Luminance));
         assert_eq!(of("integration"), None);
     }
+}
+
+/// The largest rectangle in which every input, as stacked, covers every
+/// pixel, with Seiza's crop: what PSF Guard's color previews keep with the
+/// crop "Inscribed". As x, y, width and height, or `None` when the inputs
+/// share no such rectangle.
+fn automatic_crop(prepared: &RegisteredChannels) -> Option<[usize; 4]> {
+    let inputs: Vec<(String, seiza_stacking::LinearImage)> = prepared
+        .names
+        .iter()
+        .filter(|name| !name.contains('@'))
+        .filter_map(|name| Some((name.clone(), prepared.plane(name)?)))
+        .collect();
+    let samples: Vec<seiza_stacking::ChannelSamples<'_>> = inputs
+        .iter()
+        .map(|(name, image)| seiza_stacking::ChannelSamples::new(name, image))
+        .collect();
+    let report =
+        seiza_stacking::crop_report(&samples, seiza_stacking::ColorCrop::Inscribed).ok()?;
+    let region = report.region;
+    Some([region.x, region.y, region.width, region.height])
 }
