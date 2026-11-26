@@ -348,6 +348,9 @@ impl Studio {
             tone.shadows,
             tone.whites,
             tone.blacks,
+            tone.texture,
+            tone.clarity,
+            tone.dehaze,
             tone.vibrance,
             tone.saturation,
         ];
@@ -355,8 +358,10 @@ impl Studio {
         for (index, ((_, label, low, high), value)) in
             seiza_compose::tone::CONTROLS.iter().zip(values).enumerate()
         {
+            // Camera Raw's Presence group: Texture, Clarity and Dehaze, then
+            // Vibrance and Saturation.
             if index == 6 {
-                block = block.child(Self::heading("Color"));
+                block = block.child(Self::heading("Presence"));
             }
             block = block.child(self.labelled_slider(
                 format!("{label} {value:+.2}"),
@@ -366,7 +371,7 @@ impl Studio {
             ));
         }
         block.children(Self::help(
-            "Exposure, Contrast, Highlights, Shadows, Whites and Blacks change the brightness and keep each pixel's color. Whites up and Blacks down clip more of the picture to white and to black.",
+            "Exposure, Contrast, Highlights, Shadows, Whites and Blacks change the brightness and keep each pixel's color. Whites up and Blacks down clip more of the picture to white and to black. Highlights and Shadows move the tones of each area and keep the detail in it, so a star stays as bright above a lifted sky. Texture raises or lowers fine detail, Clarity the contrast of larger structures in the midtones, and Dehaze takes away a gray veil such as sky glow while keeping colored nebulae.",
         ))
     }
 
