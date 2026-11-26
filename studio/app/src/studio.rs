@@ -532,6 +532,8 @@ pub struct Studio {
     unfolded: HashSet<String>,
     /// The menu that is open, by its key.
     open_menu: Option<String>,
+    /// The window's title as last set.
+    window_title: String,
     /// The sections a person folded or unfolded, by their keys.
     toggled: HashSet<&'static str>,
     /// The brush stroke being drawn.
@@ -685,6 +687,7 @@ impl Studio {
                 places: Vec::new(),
                 unfolded: HashSet::new(),
                 open_menu: None,
+                window_title: String::new(),
                 toggled: HashSet::new(),
                 stroke: None,
                 scene_version: 0,

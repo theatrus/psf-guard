@@ -1,5 +1,6 @@
 #!/bin/sh
-# Builds PSF Studio.app from the release build: the psf-studio program, the
+# Builds PSF Studio.app from the release build: the psf-studio program, its
+# icon (see generate-icons.sh), the
 # psf-guard program beside it when one is given, and an Info.plist that
 # makes the app the handler of psf-studio:// links.
 #
@@ -12,7 +13,8 @@ app="$out/PSF Studio.app"
 
 (cd "$here" && cargo build --release -p psf-studio)
 rm -rf "$app"
-mkdir -p "$app/Contents/MacOS"
+mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+cp "$here/icons/icon.icns" "$app/Contents/Resources/psf-studio.icns"
 cp "$here/target/release/psf-studio" "$app/Contents/MacOS/psf-studio"
 if [ -n "$psf_guard" ]; then
     # Studio looks for psf-guard beside itself first.
@@ -25,6 +27,8 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 <key>CFBundleExecutable</key><string>psf-studio</string>
 <key>CFBundleIdentifier</key><string>com.psfguard.studio</string>
 <key>CFBundleName</key><string>PSF Studio</string>
+<key>CFBundleDisplayName</key><string>PSF Studio</string>
+<key>CFBundleIconFile</key><string>psf-studio</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>0.0.0</string>
 <key>NSHighResolutionCapable</key><true/>

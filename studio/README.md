@@ -28,6 +28,14 @@ The script prints where it wrote `PSF Studio.app`. The application answers
 color stacks reaches it. Move it to `/Applications` so macOS registers the
 link; an application in a temporary folder is not registered.
 
+The application's icon comes from `icons/psf-studio.svg`, PSF Guard's mark
+redrawn for an editor: the same frame and star over three channels of
+color. Regenerate the icons after changing it:
+
+```bash
+./generate-icons.sh
+```
+
 Open a picture in any of three ways:
 
 - In PSF Guard, open a project's stacks and click **Open *target* in PSF

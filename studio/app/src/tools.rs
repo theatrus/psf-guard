@@ -420,6 +420,11 @@ impl Studio {
         self.start_run(command, None);
     }
 
+    /// The open picture's store, if any.
+    pub(super) fn store_path(&self) -> Option<&std::path::Path> {
+        self.tools.store.as_deref()
+    }
+
     /// Whether a run of `psf-guard` is in hand.
     pub(super) fn is_running(&self) -> bool {
         self.tools.run.is_some()

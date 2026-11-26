@@ -22,8 +22,8 @@ use crate::studio_model::{
     StepKind, StepRecord, Stroke, StrokeMode, Subject, View,
 };
 use gpui::{
-    canvas, div, prelude::*, px, relative, rgb, AnyElement, Context, MouseButton, MouseDownEvent,
-    Rgba, SharedString, Window,
+    canvas, div, img, prelude::*, px, relative, rgb, AnyElement, Context, MouseButton,
+    MouseDownEvent, Rgba, SharedString, Window,
 };
 use psf_studio_render::{
     Adjustment, Blend, ComputedMask, FinishKind, FinishStep, Layer, LayerHeal, Mark, MaskBand,
@@ -69,7 +69,7 @@ const DEFAULT_COLOR_SETUP: &str = include_str!("../../../src/processing_setups/d
 pub(super) fn flow_document(inputs: &[String]) -> Document {
     let channels: Vec<&str> = inputs.iter().map(String::as_str).collect();
     let settings = serde_json::from_str(DEFAULT_COLOR_SETUP).expect("the default setup is JSON");
-    let mut document = document_from_color_setup("PSF Guard default color", &settings, &channels)
+    let mut document = document_from_color_setup("Untitled", &settings, &channels)
         .expect("the default setup makes a document");
     // Studio starts from the layered stretch.
     document.use_layered_stretch();
@@ -104,6 +104,38 @@ pub(super) fn flow_document(inputs: &[String]) -> Document {
             .expect("a Finish step fits its stage");
     }
     document
+}
+
+/// PSF Studio's mark, from the application icon.
+pub(super) fn brand_mark() -> Arc<gpui::Image> {
+    static MARK: std::sync::OnceLock<Arc<gpui::Image>> = std::sync::OnceLock::new();
+    MARK.get_or_init(|| {
+        Arc::new(gpui::Image::from_bytes(
+            gpui::ImageFormat::Png,
+            include_bytes!("../../icons/128x128.png").to_vec(),
+        ))
+    })
+    .clone()
+}
+
+/// The names documents had before they were named after their picture.
+const SETUP_NAMES: [&str; 2] = ["PSF Guard default color", "Default"];
+
+impl Studio {
+    /// The picture's name: the document's, or for a document named after
+    /// the setup it started from, the name of its store.
+    pub(super) fn picture_name(&self) -> String {
+        let named = &self.document.name;
+        if !SETUP_NAMES.contains(&named.as_str()) {
+            return named.clone();
+        }
+        self.store_path()
+            .and_then(|store| store.file_stem())
+            .map_or_else(
+                || "Untitled".to_string(),
+                |stem| stem.to_string_lossy().into_owned(),
+            )
+    }
 }
 
 /// A count with its noun: "1 step", "3 steps".
@@ -1597,7 +1629,21 @@ impl Studio {
             .gap_2()
             .px_3()
             .bg(rgb(PANE))
-            .child(div().pr_3().child(self.document.name.clone()))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .pr_2()
+                    .child(img(brand_mark()).size(px(22.0)))
+                    .child(
+                        div()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child("PSF Studio"),
+                    ),
+            )
+            .child(div().w(px(1.0)).h(px(20.0)).bg(rgb(CONTROL)))
+            .child(div().px_2().child(self.picture_name()))
             .child(
                 div()
                     .id("open-files")
@@ -1711,6 +1757,11 @@ impl Studio {
 impl Render for Studio {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.scale_factor = window.scale_factor();
+        let title = format!("{} — PSF Studio", self.picture_name());
+        if self.window_title != title {
+            window.set_window_title(&title);
+            self.window_title = title;
+        }
         let scale_factor = self.scale_factor;
         let handle = self.canvas.clone();
         let canvas_bounds = self.canvas_bounds.clone();

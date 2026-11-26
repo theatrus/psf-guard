@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-label="PSF Studio logo">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#5eead4"/>
+      <stop offset="1" stop-color="#8b5cf6"/>
+    </linearGradient>
+    <radialGradient id="core" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.55" stop-color="#fdf4dc"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="gold" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#fbbf24" stop-opacity="0.85"/>
+      <stop offset="1" stop-color="#f59e0b" stop-opacity="0.25"/>
+    </radialGradient>
+    <radialGradient id="teal" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#5eead4" stop-opacity="0.85"/>
+      <stop offset="1" stop-color="#14b8a6" stop-opacity="0.25"/>
+    </radialGradient>
+    <radialGradient id="violet" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#a78bfa" stop-opacity="0.85"/>
+      <stop offset="1" stop-color="#7c3aed" stop-opacity="0.25"/>
+    </radialGradient>
+  </defs>
+  <!-- Canvas: PSF Guard's frame, squared for an editor -->
+  <rect x="10" y="10" width="108" height="108" rx="26"
+        fill="#0b1120" stroke="url(#g)" stroke-width="5"/>
+  <!-- Three channels as layers of color: the palette -->
+  <circle cx="64" cy="50" r="25" fill="url(#gold)"/>
+  <circle cx="50" cy="74" r="25" fill="url(#teal)"/>
+  <circle cx="78" cy="74" r="25" fill="url(#violet)"/>
+  <!-- The star, as in PSF Guard's mark -->
+  <g fill="#ffffff">
+    <path d="M64 30 L66 58 L64 64 L62 58 Z" opacity="0.9"/>
+    <path d="M64 98 L66 70 L64 64 L62 70 Z" opacity="0.9"/>
+    <path d="M30 64 L58 62 L64 64 L58 66 Z" opacity="0.9"/>
+    <path d="M98 64 L70 62 L64 64 L70 66 Z" opacity="0.9"/>
+  </g>
+  <circle cx="64" cy="64" r="11" fill="url(#core)"/>
+  <circle cx="64" cy="64" r="4.5" fill="#ffffff"/>
+</svg>

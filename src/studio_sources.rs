@@ -104,14 +104,14 @@ impl Server {
         serde_json::from_value(body["data"].clone()).context("reading the server's reply")
     }
 
-    /// A target's current channel stacks, one per channel, in the server's
-    /// order. A channel with several current stacks is refused: the caller
-    /// must say which stack it means.
+    /// A target's name and its current channel stacks, one per channel, in
+    /// the server's order. A channel with several current stacks is
+    /// refused: the caller must say which stack it means.
     pub async fn channel_stacks(
         &self,
         project_id: i32,
         target_id: i32,
-    ) -> Result<Vec<StackColorSource>> {
+    ) -> Result<(String, Vec<StackColorSource>)> {
         let catalog: serde_json::Value = self
             .data(format!(
                 "{}/projects/{project_id}/stack-previews/color",
@@ -141,7 +141,10 @@ impl Server {
             }
             one_each.push(stack);
         }
-        Ok(one_each)
+        let name = target["target_name"]
+            .as_str()
+            .map_or_else(|| format!("Target {target_id}"), str::to_string);
+        Ok((name, one_each))
     }
 
     /// Downloads a channel stack's FITS to `path`, a piece at a time.

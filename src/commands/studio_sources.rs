@@ -32,7 +32,7 @@ pub struct StudioSourcesOptions {
 /// document that starts as PSF Guard's default color flow.
 pub async fn studio_sources(options: StudioSourcesOptions) -> Result<()> {
     let server = Server::new(&options.server, &options.database, options.token);
-    let mut stacks = server
+    let (title, mut stacks) = server
         .channel_stacks(options.project_id, options.target_id)
         .await?;
     if !options.channels.is_empty() {
@@ -90,12 +90,21 @@ pub async fn studio_sources(options: StudioSourcesOptions) -> Result<()> {
     std::fs::write(&listing, serde_json::to_string_pretty(&stacks)?)
         .with_context(|| format!("writing {}", listing.display()))?;
     prepare_store(
+        &title,
         &stacks,
         &folder,
         options.apply.as_deref(),
         options.document.as_deref(),
         &options.output,
     )
+}
+
+/// A picture's name from its sources folder: the folder's name without
+/// `.sources`.
+fn title_of_sources(folder: &Path) -> String {
+    folder
+        .file_stem()
+        .map_or_else(|| "Picture".to_string(), |stem| stem.to_string_lossy().into_owned())
 }
 
 /// The file in a sources folder that holds the plate solve of the first
@@ -204,6 +213,15 @@ pub fn studio_files(options: StudioFilesOptions) -> Result<()> {
     let first = paths[&stacks[0].job_id].clone();
     let frame = crate::image_io::open_linear_frame(&first)
         .with_context(|| format!("reading {}", first.display()))?;
+    // The picture is named after what the first file shows, or the file.
+    let title = crate::image_io::header_text(&frame.headers, "OBJECT")
+        .map(|object| object.trim().to_string())
+        .filter(|object| !object.is_empty())
+        .unwrap_or_else(|| {
+            first
+                .file_stem()
+                .map_or_else(|| "Picture".to_string(), |stem| stem.to_string_lossy().into_owned())
+        });
     stacks[0].sky_orientation = Some(crate::server::stack_preview::StackSkyOrientation {
         convention: crate::server::stack_preview::SOURCE_ORIENTATION_NAME.into(),
         version: seiza_stacking::SKY_ORIENTATION_VERSION,
@@ -253,6 +271,7 @@ pub fn studio_files(options: StudioFilesOptions) -> Result<()> {
     std::fs::write(&listing, serde_json::to_string_pretty(&stacks)?)
         .with_context(|| format!("writing {}", listing.display()))?;
     prepare_store(
+        &title,
         &stacks,
         &folder,
         options.apply.as_deref(),
@@ -285,6 +304,7 @@ pub fn studio_prepare(options: StudioPrepareOptions) -> Result<()> {
     let stacks: Vec<StackColorSource> =
         serde_json::from_str(&text).with_context(|| format!("reading {}", listing.display()))?;
     prepare_store(
+        &title_of_sources(&options.sources),
         &stacks,
         &options.sources,
         options.apply.as_deref(),
@@ -296,6 +316,7 @@ pub fn studio_prepare(options: StudioPrepareOptions) -> Result<()> {
 /// Registers downloaded channel stacks, runs the document's processing
 /// tools on them, fits the backgrounds and writes the store.
 fn prepare_store(
+    title: &str,
     stacks: &[StackColorSource],
     folder: &Path,
     apply: Option<&Path>,
@@ -320,8 +341,7 @@ fn prepare_store(
         }
         None => {
             let processing = serde_json::from_str(DEFAULT_COLOR_SETTINGS)?;
-            let mut document =
-                document_from_processing("PSF Guard default color", &processing, &roles)?;
+            let mut document = document_from_processing(title, &processing, &roles)?;
             // Studio starts from the layered stretch.
             document.use_layered_stretch();
             document
