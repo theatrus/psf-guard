@@ -54,4 +54,10 @@
   **Luminance** for the channels. Studio resolves a stretch that depends on
   the picture, such as the automatic midtones stretch, from samples of the
   picture at full resolution. PixInsight's histogram transformation is
-  among the stretches.
+  among the stretches. **Finish › Add step › Tone and color** has Camera Raw's
+  Exposure, Contrast, Highlights, Shadows, Whites, Blacks, Vibrance and
+  Saturation. The Final picture and each Finish step show the picture's
+  histogram with the share clipped to black and to white. **Export…** on the
+  Final picture saves the whole picture at full resolution as a 16-bit TIFF
+  or PNG, or a 32-bit FITS or XISF, rendered on the CPU from the stacks'
+  32-bit samples so it keeps more precision than the screen.

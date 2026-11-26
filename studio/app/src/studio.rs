@@ -47,6 +47,9 @@ pub struct Options {
     pub psf_guard: Option<PathBuf>,
     /// Where the benchmark writes PNG captures of selected frames.
     pub capture_prefix: Option<PathBuf>,
+    /// Where to write how far the CPU render of the picture's sampled
+    /// patches is from the canvas's, once the canvas has sampled them.
+    pub parity_report: Option<PathBuf>,
 }
 
 impl Default for Options {
@@ -61,6 +64,7 @@ impl Default for Options {
             psf_guard: None,
             output: String::new(),
             working_profile: None,
+            parity_report: None,
         }
     }
 }
@@ -350,6 +354,21 @@ pub struct Scene {
 }
 
 impl Scene {
+    /// The stretch tables of the layers that show a band, as the canvas
+    /// draws them.
+    pub(super) fn tables(&self) -> Vec<Vec<f32>> {
+        self.layer_bands
+            .iter()
+            .zip(&self.layer_stretches)
+            .filter_map(|(band, stages)| {
+                if *band == panes::DISPLAY_ROW {
+                    return Some(crate::store_tiles::identity_table());
+                }
+                Some(self.stretches.get(*band)?.table(stages, 0.0))
+            })
+            .collect()
+    }
+
     /// The scene as the renderer takes it, with `stretches` as its layers'
     /// stretch tables, for work away from the screen.
     pub(super) fn pane<'a>(&'a self, stretches: &'a [Vec<f32>]) -> Pane<'a> {
@@ -706,6 +725,12 @@ pub struct Studio {
     resolved_chains: psf_studio_canvas::output_stretch::ResolvedChains,
     /// The histogram of the final picture, while the inspector shows it.
     histogram: Option<Arc<psf_studio_canvas::histogram::Histogram>>,
+    /// The export of the final picture under way, if any.
+    export: Option<Arc<export::ExportRun>>,
+    /// What the last export said: how far it has got, or how it ended.
+    export_line: String,
+    /// Where to write the parity report, until it is written.
+    parity_report: Option<PathBuf>,
     /// The levels in the document's pyramid.
     levels: u8,
     /// The processing tools: which this computer has, and the run in hand.
@@ -714,6 +739,7 @@ pub struct Studio {
 
 impl Studio {
     fn new(options: Options, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let parity_report = options.parity_report.clone();
         // SAFETY: `NSView` is an AppKit class, windows are opened on the main
         // thread, and the new view is in no other view hierarchy.
         let (native_view, ns_view) = unsafe {
@@ -805,6 +831,7 @@ impl Studio {
                 this.follow_tools();
                 this.follow_links();
                 this.follow_picture();
+                this.follow_export();
                 // Every change is kept: the document is saved as soon as it
                 // differs from the file.
                 this.save_document();
@@ -879,6 +906,9 @@ impl Studio {
                 source_generation: 0,
                 resolved_chains: Default::default(),
                 histogram: None,
+                export: None,
+                export_line: String::new(),
+                parity_report,
                 levels,
                 tools,
             };
@@ -1294,6 +1324,8 @@ pub fn run(options: Options) {
     });
 }
 
+#[path = "export.rs"]
+mod export;
 #[path = "inspector.rs"]
 mod inspector;
 #[path = "open.rs"]

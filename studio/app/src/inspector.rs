@@ -1321,10 +1321,39 @@ impl Studio {
             )))
     }
 
+    /// Export: the final picture at full resolution, to a file.
+    fn export_block(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let running = self.export.clone();
+        column()
+            .child(Self::field(
+                "Export",
+                match running {
+                    Some(run) => Self::act("Stop export", "export-stop", false, cx, move |_| {
+                        run.stop()
+                    }),
+                    None => Self::button("Export…", "export", false).on_click(cx.listener(
+                        |this, _, _, cx| {
+                            this.open_menu = None;
+                            this.pick_export(cx);
+                            cx.stop_propagation();
+                            cx.notify();
+                        },
+                    )),
+                },
+            ))
+            .when(!self.export_line.is_empty(), |block| {
+                block.child(Self::note(self.export_line.clone()))
+            })
+            .children(Self::help(
+                "Saves the picture as the canvas shows it, cropped, at full resolution: TIFF or PNG at 16 bits per channel, or FITS or XISF as 32-bit floats. Name the file with the extension you want.",
+            ))
+    }
+
     fn inspect_final(&self, cx: &mut Context<Self>) -> AnyElement {
         column()
             .child(Self::title("Final picture", "Every step of the document."))
             .child(self.histogram_block())
+            .child(self.export_block(cx))
             .child(self.crop_block(cx))
             .child(self.finish_menu(cx))
             .child(self.junction_block())

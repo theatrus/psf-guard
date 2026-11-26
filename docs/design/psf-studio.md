@@ -2013,10 +2013,21 @@ well inside a 16-bit step. The CPU render works in tiles with a margin wide
 enough for mask smoothing and heals, so unlike the canvas's patches it has
 no seams.
 
-The two renders of one picture must agree. A parity check draws the
-sampling patches both ways and compares them; the differences allowed are
-those of half floats. A change to a shader changes its CPU twin in the same
-commit.
+The two renders of one picture must agree. `psf-studio --parity-report
+<file>` writes, once the canvas has sampled the picture, how far the CPU's
+combined picture is from the canvas's samples of the same 64 patches. On
+the Sh2-157 store (six inputs, three groups, screened stars, a layered
+stretch) the 3.1 million samples differed by 9e-5 on average, 4e-4 at the
+99.9th percentile and 7e-4 at most: half-float rounding, since a half
+float's step at 0.5 is 4.9e-4. A change to a shader changes its CPU twin in
+the same commit.
+
+Built and tried on that store: Tone and color with every control, the
+histogram following each change, and an export of the whole 6135 × 4038
+picture to a 16-bit TIFF of 148.6 MB, which matches the canvas. Not built:
+Camera Raw's local Highlights, Shadows, Texture, Clarity and Dehaze; a
+histogram limited to a masked step's area; choosing an ICC profile for an
+export, which holds the canvas's working-space values without one.
 
 **Where the code lives.** The description of a picture (`Pane` and its
 parts), the CPU render, and the math of the Finish steps (output stretch
