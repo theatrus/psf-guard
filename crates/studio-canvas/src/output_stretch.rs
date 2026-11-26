@@ -14,7 +14,7 @@
 //! samples of the picture as the stretches before it left it. The layered
 //! stretch needs the whole image, so the canvas does not draw it.
 
-use psf_studio_render::STRETCH_TABLE_WIDTH;
+use crate::STRETCH_TABLE_WIDTH;
 use seiza_stretch::{ColorStrategy, StretchConfig, StretchModel, StretchPlan};
 use std::borrow::Cow;
 

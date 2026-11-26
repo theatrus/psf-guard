@@ -23,8 +23,9 @@ use uuid::Uuid;
 const FULL_RESOLUTION_ONLY: [&str; 1] = ["Noise reduction"];
 
 /// The steps offered on the combined picture.
-const FINISH_STEPS: [(&str, Accepts); 4] = [
+const FINISH_STEPS: [(&str, Accepts); 5] = [
     (flow_operations::OUTPUT_STRETCH, Accepts::Display),
+    (psf_studio_canvas::tone::OPERATION, Accepts::Display),
     ("Curves", Accepts::Display),
     ("Saturation", Accepts::Display),
     ("Local contrast", Accepts::Display),
@@ -107,6 +108,12 @@ impl Studio {
                 Self::pick(name, ("add-finish", index), false, cx, move |this| {
                     let step = if name == flow_operations::OUTPUT_STRETCH {
                         output_stretch_step()
+                    } else if name == psf_studio_canvas::tone::OPERATION {
+                        StepRecord::new(StepKind::Operation {
+                            operation: name.to_string(),
+                            accepts,
+                            settings: psf_studio_canvas::tone::Tone::new_settings(),
+                        })
                     } else {
                         operation(name, accepts)
                     };
@@ -145,6 +152,13 @@ impl Studio {
                 || operation == flow_operations::OUTPUT_STRETCH =>
             {
                 Some(self.stretch_controls(id, settings, cx))
+            }
+            StepKind::Operation {
+                operation,
+                settings,
+                ..
+            } if operation == psf_studio_canvas::tone::OPERATION => {
+                Some(self.tone_controls(settings, cx))
             }
             StepKind::Operation { operation, .. } => amount_range(operation).map(|(low, high)| {
                 let value = amount(step);
@@ -324,6 +338,40 @@ impl Studio {
         } else {
             "Stretches of one input apply in order. Each is resolved from what the one before it left."
         }))
+    }
+
+    /// A Tone and color step's controls: Camera Raw's Basic sliders.
+    fn tone_controls(&self, settings: &serde_json::Value, cx: &mut Context<Self>) -> gpui::Div {
+        let tone = psf_studio_canvas::tone::Tone::from_settings(settings);
+        let values = [
+            tone.exposure,
+            tone.contrast,
+            tone.highlights,
+            tone.shadows,
+            tone.whites,
+            tone.blacks,
+            tone.vibrance,
+            tone.saturation,
+        ];
+        let mut block = column();
+        for (index, ((_, label, low, high), value)) in psf_studio_canvas::tone::CONTROLS
+            .iter()
+            .zip(values)
+            .enumerate()
+        {
+            if index == 6 {
+                block = block.child(Self::heading("Color"));
+            }
+            block = block.child(self.labelled_slider(
+                format!("{label} {value:+.2}"),
+                SliderId::FinishParam(index),
+                (value - low) / (high - low),
+                cx,
+            ));
+        }
+        block.children(Self::help(
+            "Exposure, Contrast, Highlights, Shadows, Whites and Blacks change the brightness and keep each pixel's color. Whites up and Blacks down clip more of the picture to white and to black.",
+        ))
     }
 
     /// How an output stretch treats the channels: one curve for all three,
@@ -1214,6 +1262,7 @@ impl Studio {
                 step.kind.name().to_string(),
                 "A step on the whole picture, after the layers are combined.",
             ))
+            .child(self.histogram_block())
             .child(self.step_controls(stage, step, cx))
             .children(Self::help(
                 "Paint with the mask brush to limit where this step applies.",
@@ -1226,9 +1275,56 @@ impl Studio {
             .into_any_element()
     }
 
+    /// The histogram of the final picture: red, green and blue over the
+    /// luminance, with the share of pixels clipped to black and to white.
+    fn histogram_block(&self) -> gpui::Div {
+        let Some(histogram) = self.histogram.clone() else {
+            return column()
+                .child(Self::heading("Histogram"))
+                .child(Self::note("Reading the picture…"));
+        };
+        let (black, white) = (histogram.black * 100.0, histogram.white * 100.0);
+        let chart = gpui::canvas(
+            |_, _, _| (),
+            move |bounds, (), window, _| {
+                let peak = histogram.peak() as f32;
+                let width =
+                    f32::from(bounds.size.width) / psf_studio_canvas::histogram::BINS as f32;
+                let height = f32::from(bounds.size.height);
+                // Luminance first, in gray, then each channel over it.
+                let colors = [0x9a9a9aff, 0xe0505080, 0x50d05080, 0x5080f080];
+                for (channel, color) in [3, 0, 1, 2].into_iter().zip(colors) {
+                    for (index, count) in histogram.bins[channel].iter().enumerate() {
+                        let tall = (*count as f32 / peak).min(1.0) * height;
+                        if tall <= 0.0 {
+                            continue;
+                        }
+                        let origin = gpui::point(
+                            bounds.origin.x + gpui::px(index as f32 * width),
+                            bounds.origin.y + gpui::px(height - tall),
+                        );
+                        window.paint_quad(gpui::fill(
+                            gpui::Bounds::new(origin, gpui::size(gpui::px(width), gpui::px(tall))),
+                            gpui::rgba(color),
+                        ));
+                    }
+                }
+            },
+        )
+        .w_full()
+        .h(gpui::px(80.0));
+        column()
+            .child(Self::heading("Histogram"))
+            .child(div().bg(gpui::rgb(0x111316)).child(chart))
+            .child(Self::note(format!(
+                "Clipped: {black:.2}% to black, {white:.2}% to white"
+            )))
+    }
+
     fn inspect_final(&self, cx: &mut Context<Self>) -> AnyElement {
         column()
             .child(Self::title("Final picture", "Every step of the document."))
+            .child(self.histogram_block())
             .child(self.crop_block(cx))
             .child(self.finish_menu(cx))
             .child(self.junction_block())

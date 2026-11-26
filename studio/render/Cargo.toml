@@ -10,8 +10,8 @@ description = "The tiled wgpu canvas of PSF-Studio. No dependency on a UI toolki
 wgpu.workspace = true
 bytemuck.workspace = true
 half = "2"
-# The CPU render of a picture for export works on its tiles in parallel.
-rayon = "1"
+# What a canvas draws, shared with PSF Guard, and its CPU render.
+psf-studio-canvas = { path = "../../crates/studio-canvas" }
 
 [dev-dependencies]
 # Checks the shaders in tests, as wgpu does when the canvas starts.

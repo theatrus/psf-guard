@@ -2018,6 +2018,24 @@ sampling patches both ways and compares them; the differences allowed are
 those of half floats. A change to a shader changes its CPU twin in the same
 commit.
 
+**Where the code lives.** The description of a picture (`Pane` and its
+parts), the CPU render, and the math of the Finish steps (output stretch
+resolution, Tone and color, the histogram) are one crate in this
+repository, `crates/studio-canvas` (`psf-studio-canvas`). It depends only on
+Seiza crates, not on PSF Studio's UI or PSF Guard's server, so PSF Guard
+can call it and it can move to Seiza later. PSF Studio's GPU canvas
+(`studio/render`) takes its types from it and re-exports them; the GPU
+stays the canvas's renderer, and could later speed up the CPU render too.
+
+**One renderer, not two.** PSF Guard's color previews and PSF Studio must
+end up drawing a picture the same way. Today they do not: a color preview
+is composed by `compose_color` with Seiza's `combine_rgb`,
+`combine_narrowband` and its stretch stack, and PSF Studio blends layers.
+The next step is for PSF Guard to render a color preview from its document
+(the setup maps to one; see “The default document”) through this crate,
+after parity tests against the previews it makes today, and then to retire
+the second path.
+
 ## Processing tools in Studio (2026-11-25, first part)
 
 The tools are the ones PSF Guard's color processing runs: sharpening,

@@ -4666,6 +4666,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "psf-studio-canvas"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "rayon",
+ "seiza-stretch",
+ "serde_json",
+]
+
+[[package]]
 name = "pulp"
 version = "0.22.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -3683,6 +3683,7 @@ dependencies = [
  "objc2 0.6.5",
  "png 0.17.16",
  "pollster",
+ "psf-studio-canvas",
  "psf-studio-color",
  "psf-studio-render",
  "raw-window-handle",
@@ -3694,6 +3695,16 @@ dependencies = [
  "thiserror",
  "uuid",
  "wgpu 30.0.2",
+]
+
+[[package]]
+name = "psf-studio-canvas"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "rayon",
+ "seiza-stretch",
+ "serde_json",
 ]
 
 [[package]]
@@ -3716,7 +3727,7 @@ dependencies = [
  "bytemuck",
  "half",
  "naga 30.0.2",
- "rayon",
+ "psf-studio-canvas",
  "wgpu 30.0.2",
 ]
 
