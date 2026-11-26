@@ -53,24 +53,24 @@ quick-xml = "0.42"
 globset = "0.4"
 semver = "1"
 byteorder = "1.5"
-seiza = "0.52.0"
-seiza-download = "0.10.0"
+seiza = { git = "https://github.com/theatrus/seiza", rev = "c69a3787cc6b5f581d21b1299cedf43e845fdae4" }
+seiza-download = { git = "https://github.com/theatrus/seiza", rev = "c69a3787cc6b5f581d21b1299cedf43e845fdae4" }
 # The learned noise model. It links nothing native: ONNX Runtime is found and
 # opened at run time, and only after a person asked PSF Guard to download it.
-seiza-model = "0.3.0"
-seiza-imgproc = { version = "0.3.2", features = ["parallel"] }
-seiza-fits = "=0.8.1"
-seiza-image-io = "0.13.1"
-seiza-satellites = { version = "0.23.0", features = ["serde"] }
-seiza-stacking = "0.60.0"
-seiza-stretch = "0.3.3"
+seiza-model = { git = "https://github.com/theatrus/seiza", rev = "c69a3787cc6b5f581d21b1299cedf43e845fdae4" }
+seiza-imgproc = { git = "https://github.com/theatrus/seiza", rev = "c69a3787cc6b5f581d21b1299cedf43e845fdae4", features = ["parallel"] }
+seiza-fits = { git = "https://github.com/theatrus/seiza", rev = "c69a3787cc6b5f581d21b1299cedf43e845fdae4" }
+seiza-image-io = { git = "https://github.com/theatrus/seiza", rev = "c69a3787cc6b5f581d21b1299cedf43e845fdae4" }
+seiza-satellites = { git = "https://github.com/theatrus/seiza", rev = "c69a3787cc6b5f581d21b1299cedf43e845fdae4", features = ["serde"] }
+seiza-stacking = { git = "https://github.com/theatrus/seiza", rev = "c69a3787cc6b5f581d21b1299cedf43e845fdae4" }
+seiza-stretch = { git = "https://github.com/theatrus/seiza", rev = "c69a3787cc6b5f581d21b1299cedf43e845fdae4" }
 # XISF reading. Already in the tree through seiza-stacking, which decodes both
 # containers into the same `seiza_fits::FitsImage`.
-seiza-xisf = "0.9.1"
-seiza-background = "0.3.2"
-seiza-calibration = "0.12.2"
-seiza-deconvolution = "0.2.0"
-seiza-stars = "0.6.0"
+seiza-xisf = { git = "https://github.com/theatrus/seiza", rev = "c69a3787cc6b5f581d21b1299cedf43e845fdae4" }
+seiza-background = { git = "https://github.com/theatrus/seiza", rev = "c69a3787cc6b5f581d21b1299cedf43e845fdae4" }
+seiza-calibration = { git = "https://github.com/theatrus/seiza", rev = "c69a3787cc6b5f581d21b1299cedf43e845fdae4" }
+seiza-deconvolution = { git = "https://github.com/theatrus/seiza", rev = "c69a3787cc6b5f581d21b1299cedf43e845fdae4" }
+seiza-stars = { git = "https://github.com/theatrus/seiza", rev = "c69a3787cc6b5f581d21b1299cedf43e845fdae4" }
 sha2 = "0.11"
 base64 = "0.23"
 rayon = "1"

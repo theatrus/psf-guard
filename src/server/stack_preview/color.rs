@@ -7307,6 +7307,9 @@ mod tests {
 
         // The stand-in returns its input, so each channel comes back where
         // it went in and the composition matches the one without tools.
+        // Seiza's exchange (version 4) hands an image on 0 to 1 to a tool
+        // with the few samples above 1 at 1, as PixInsight clamps them, so
+        // those come back at 1.
         let read = |job: &StackColorJob| {
             crate::image_io::open_linear_frame(color_fits_path(root, &job.job_id))
                 .unwrap()
@@ -7315,8 +7318,9 @@ mod tests {
         let (without, with) = (read(&plain), read(&first));
         assert_eq!(without.data.len(), with.data.len());
         for (left, right) in without.data.iter().zip(&with.data) {
+            let expected = left.min(1.0);
             assert!(
-                (left.is_nan() && right.is_nan()) || (left - right).abs() <= 1e-5,
+                (left.is_nan() && right.is_nan()) || (expected - right).abs() <= 1e-5,
                 "{left} != {right}"
             );
         }
@@ -7559,10 +7563,12 @@ mod tests {
         .unwrap();
         // The id this build gives. With the bytes above unchanged it is the
         // id the earlier release gave; a change here recomposes every
-        // color build that has steps of its own.
+        // color build that has steps of its own. It also hashes Seiza's
+        // stacking output version, so it was recorded again for Seiza 0.56
+        // (seiza-stacking output 0.62.0), which recomposes every color build.
         assert_eq!(
             id,
-            "2314f687907b3fb935b6bcb930e732e63f121bfcd52f7aae0346fa73b4c1fa4b"
+            "8445ea211ae64a0ab542a08a31221e40ae422e43b772a4d57953d5dd736114d1"
         );
     }
 

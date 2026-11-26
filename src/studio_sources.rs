@@ -602,35 +602,9 @@ impl RegisteredChannels {
                 let borrowed: Vec<&LinearImage> = stacked[1..].iter().collect();
                 let mask_slices: Vec<Option<&[u8]>> =
                     masks.iter().map(|mask| mask.as_deref()).collect();
-                let outcome = crate::color_steps::fit_continuum_line(
-                    &stacked[0],
-                    &borrowed,
-                    &sources,
-                    &mask_slices,
-                    &continuum.config,
-                    settings,
-                    role.label(),
-                )
-                .map_err(|error| anyhow!("the continuum of {}: {error}", role.label()))?;
-                let plan = match outcome {
-                    ContinuumFitOutcome::Fitted { plan } => plan,
-                    ContinuumFitOutcome::Skipped { detail, .. } => {
-                        continuum_results.push((*role, format!("not subtracted: {detail}")));
-                        continue;
-                    }
-                };
-                // Each input in its last linear state: with its background
-                // corrected, else after its tools, else as stacked. The
-                // inputs must agree on their stars: all starless, or all
-                // with their stars, or the line keeps or loses the stars
-                // of its references.
-                let last_state = |input: usize| -> Option<LinearImage> {
-                    let name = &channel_names[input];
-                    [background_corrected_channel(name), tools_channel(name)]
-                        .iter()
-                        .find_map(|wanted| names.iter().position(|other| other == wanted))
-                        .and_then(|at| image(planes[at].clone()).ok())
-                };
+                // The inputs must agree on their stars: all starless, or all
+                // with their stars, or the line keeps or loses the stars of
+                // its references.
                 let starless: Vec<bool> = inputs
                     .iter()
                     .map(|input| {
@@ -646,6 +620,40 @@ impl RegisteredChannels {
                     ));
                     continue;
                 }
+                // The fit measures the stars of the stacks either way. When
+                // the line is subtracted starless, no star can keep a core
+                // or halo, so Seiza's check of the stars' profiles is
+                // reported and does not refuse the fit.
+                let mut config = continuum.config.clone();
+                if starless[0] {
+                    config.photometry.target = seiza_stacking::ContinuumTarget::Starless;
+                }
+                let outcome = crate::color_steps::fit_continuum_line(
+                    &stacked[0],
+                    &borrowed,
+                    &sources,
+                    &mask_slices,
+                    &config,
+                    settings,
+                    role.label(),
+                )
+                .map_err(|error| anyhow!("the continuum of {}: {error}", role.label()))?;
+                let plan = match outcome {
+                    ContinuumFitOutcome::Fitted { plan } => plan,
+                    ContinuumFitOutcome::Skipped { detail, .. } => {
+                        continuum_results.push((*role, format!("not subtracted: {detail}")));
+                        continue;
+                    }
+                };
+                // Each input in its last linear state: with its background
+                // corrected, else after its tools, else as stacked.
+                let last_state = |input: usize| -> Option<LinearImage> {
+                    let name = &channel_names[input];
+                    [background_corrected_channel(name), tools_channel(name)]
+                        .iter()
+                        .find_map(|wanted| names.iter().position(|other| other == wanted))
+                        .and_then(|at| image(planes[at].clone()).ok())
+                };
                 let latest: Vec<LinearImage> = inputs
                     .iter()
                     .zip(&stacked)

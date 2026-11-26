@@ -2396,10 +2396,20 @@ The fit needs to know where each stack clipped. `studio-sources` downloads
 the clipping map the stacker wrote (`…/stack-previews/{job}/{group}/clipped`,
 added for this). A map cannot be made from a finished stack, because only
 the stacker sees which frames clipped, so stack files from elsewhere need an
-explicit saturation level per input in the step's settings. Seiza refuses a
-fit whose held-out stars leave large residuals; on the Sh2-157 stacks it
-refused all three lines until its pixel-residual check was turned off,
-which PSF Guard's previews would do as well.
+explicit saturation level per input in the step's settings.
+
+Seiza checks the profiles of held-out stars after the fit and refuses a fit
+whose stars would keep cores or halos. On the Sh2-157 stacks it refused all
+three lines, with and without PSF matching, although the photometric checks
+passed. The worst stars were bright ones, and their residual came mostly
+from sub-pixel registration offsets and non-Gaussian profile differences
+between the narrowband and broadband stacks. Those show only on stars. So
+when the line and its references are starless, Studio fits with Seiza's
+`ContinuumTarget::Starless` (theatrus/seiza#524): the check still runs and
+is reported, and the photometric checks decide. Starless, the three lines
+are subtracted with the check on (weights Ha 0.264, OIII 0.187 and 0.306,
+SII 0.337); with their stars kept they are still refused. PSF Guard's
+previews still fit for images with stars.
 
 Input deconvolution runs when a store is prepared, before the input's
 tools, with the step PSF Guard's color previews run
