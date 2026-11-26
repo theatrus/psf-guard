@@ -698,14 +698,13 @@ pub fn open_store(path: &Path) -> Result<(StoreTiles, Bands), String> {
 pub struct StoreSource {
     store: StoreTiles,
     /// The regions read lately, all channels interleaved: a tile reads each
-    /// of its inputs over the same region in turn.
+    /// of its inputs over the same region in turn, so a couple per thread
+    /// that renders tiles is enough. Each is a tile and its margin in every
+    /// channel, tens of megabytes.
     recent: Mutex<VecDeque<(ReferenceRegion, Arc<Vec<f32>>)>>,
 }
 
 impl StoreSource {
-    /// The regions kept: a few for each thread that renders tiles.
-    const KEPT: usize = 64;
-
     pub fn new(store: StoreTiles) -> Self {
         Self {
             store,
@@ -734,7 +733,8 @@ impl StoreSource {
         );
         let mut recent = self.recent.lock().expect("recent regions");
         recent.push_front((rect, samples.clone()));
-        recent.truncate(Self::KEPT);
+        let kept = 2 * std::thread::available_parallelism().map_or(8, |count| count.get());
+        recent.truncate(kept);
         Ok(samples)
     }
 }

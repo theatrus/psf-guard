@@ -1062,11 +1062,15 @@ pub(super) fn scene(
         .collect();
     // A view of a mask draws white behind that mask, so the mask shows.
     if let Subject::Mask(id) = &view.subject {
-        layers.push(Layer {
-            mark: Mark::Solid,
-            ..plain_layer()
-        });
-        wanted.push((layers.len() - 1, *id, false, "the mask".to_string()));
+        if layers.len() < MAX_LAYERS {
+            layers.push(Layer {
+                mark: Mark::Solid,
+                ..plain_layer()
+            });
+            wanted.push((layers.len() - 1, *id, false, "the mask".to_string()));
+        } else {
+            omitted.push("the mask".to_string());
+        }
     }
     // Each input of a mask is read with the stretch the view gives it,
     // from a row of the stretch tables: a layer's row when a layer shows

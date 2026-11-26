@@ -523,8 +523,10 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
                 let (viewport, scissor) = canvas.pane_rects(index);
                 Pane {
                     scene,
-                    // Each pane's packing is its own: the compositor uploads
-                    // a pane's tables again only when it changes.
+                    // Each pane's packing is its own. The compositor keeps
+                    // one pane's tables and masks, so a single pane uploads
+                    // them only when they change; with several panes they
+                    // go up for each pane every frame.
                     version: Some(stretches_version * 16 + index as u64),
                     viewport,
                     scissor,

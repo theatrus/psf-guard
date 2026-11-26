@@ -2008,7 +2008,9 @@ Seiza's compositor on the CPU, `seiza_compose::render`, from the store's
 32-bit samples. That render is the reference the canvas's GPU render
 follows; see “Where the code lives”. It works in tiles with a margin wide
 enough for mask smoothing and heals, so unlike the canvas's patches it has
-no seams.
+no seams. A cropped picture ends at the crop: smoothing and heals near
+its edge see the picture reflected there, not the document beyond it,
+which the automatic crop leaves out because some input does not cover it.
 
 The two renders of one picture must agree. Seiza's tests hold its GPU
 render to its CPU render. `psf-studio --parity-report <file>` also checks

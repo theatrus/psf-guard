@@ -161,6 +161,8 @@ struct ChosenTile {
 #[derive(Default)]
 struct LastFrame {
     scene: Option<GpuScene>,
+    /// The first pane's version, so an unchanged scene is not copied again.
+    version: Option<u64>,
     view: Option<View>,
     tiles: Vec<ChosenTile>,
     overlay: Vec<Segment>,
@@ -710,8 +712,18 @@ impl Renderer {
             }
         }
 
+        // The first pane's scene is copied only when it changed.
+        let first = frame.panes.first();
+        let kept = first.and_then(|pane| pane.version).is_some()
+            && first.map(|pane| pane.version) == Some(self.last.version);
+        let scene = if kept {
+            self.last.scene.take()
+        } else {
+            first.map(|pane| pane.scene.clone())
+        };
         self.last = LastFrame {
-            scene: frame.panes.first().map(|pane| pane.scene.clone()),
+            scene,
+            version: first.and_then(|pane| pane.version),
             view: Some(view),
             tiles: chosen,
             overlay: frame.overlay.to_vec(),
