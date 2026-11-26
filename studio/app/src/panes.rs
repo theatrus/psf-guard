@@ -355,6 +355,18 @@ pub(super) fn is_drawn(stage: StageKind, step: &StepRecord, bands: &Bands) -> bo
                 || ((operation == flow_operations::RC_ASTRO_INPUT
                     || operation == flow_operations::DECONVOLUTION)
                     && band.is_some_and(|band| bands.has_tools(band)))
+                // A color group's tools are drawn when the store holds
+                // their result for the group's inputs.
+                || (operation == flow_operations::RC_ASTRO_COLOR
+                    && crate::studio_model::COLOR_GROUPS
+                        .iter()
+                        .find(|(group, _)| step.band.as_deref() == Some(*group))
+                        .is_some_and(|(_, inputs)| {
+                            inputs
+                                .iter()
+                                .filter_map(|input| bands.band_of(input))
+                                .any(|band| bands.has_tools(band))
+                        }))
         }
         (StepKind::Operation { .. }, StageKind::Stretch) if stretch_model(step).is_some() => {
             // The layered stretch is drawn when the store stretched the

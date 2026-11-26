@@ -374,7 +374,8 @@ impl Studio {
             .child(Self::title(step.kind.name().to_string(), applies_to))
             .child(self.step_controls(stage, step, cx))
             .when(
-                step.kind.name() == flow_operations::RC_ASTRO_INPUT,
+                step.kind.name() == flow_operations::RC_ASTRO_INPUT
+                    || (step.kind.name() == flow_operations::RC_ASTRO_COLOR && step.band.is_some()),
                 |pane| pane.child(self.tools_block(&channel, cx)),
             )
             .children(own)

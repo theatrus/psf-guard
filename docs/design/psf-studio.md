@@ -2000,6 +2000,32 @@ picture.
 - PSF Guard's settings have no place for a stars input, so it stays out
   of them.
 
+#### Star removal on a color group (2026-11-25)
+
+Star removal runs on each input alone, or on a color group together:
+red, green and blue, or the narrowband lines SII, Ha and OIII. The
+person chooses. In the Tools block of an input with a star removal tool,
+**Run on** offers **This input** or the group's inputs together. The
+choice moves the tool and its settings between each input's Processing
+tools step and one step for the group.
+
+- The group's step is “Processing tools on color” with the group's band,
+  `rgb` or `lines`. That step with no band is still PSF Guard's color
+  tools (`color_rc_astro`).
+- When the store is prepared, each input's own tools run first. Then the
+  group's registered inputs are combined into one color image, the
+  group's chain runs on it, and the result is split back into each
+  input's `@tools` and `@stars`. A group of two inputs repeats the last
+  one to make three channels. The background is fitted after that, on the
+  reference grid.
+- PSF Guard refuses star removal among its color tools (“Star removal runs
+  on channel stacks, not on the color channels together”), so the group
+  steps stay out of the exported color setup. A setup exported from such a
+  document has no star removal.
+- The cache key of a group's result includes each input's stack and the
+  last tool that ran on it, so a change to an input's own tools runs the
+  group's tools again.
+
 ### Tried
 
 On the Sh2-157 stacks on this Mac:

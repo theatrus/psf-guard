@@ -13,8 +13,8 @@ use super::panes::operation;
 use super::{Options, SliderId, Studio};
 use crate::image_steps::Accepts;
 use crate::studio_model::{
-    channel_label, flow_operations, BlendMode, LayerRecord, LayerSource, Row, StageKind, StepKind,
-    StepRecord,
+    channel_label, color_group_of, flow_operations, BlendMode, LayerRecord, LayerSource, Row,
+    StageKind, StepKind, StepRecord,
 };
 use gpui::{div, prelude::*, Context};
 use serde::Deserialize;
@@ -31,8 +31,11 @@ pub(super) const MAX_TOOL_SETTINGS: usize = 24;
 const CATEGORIES: [(&str, &str); 3] = [
     ("sharpen", "Sharpen"),
     ("denoise", "Denoise"),
-    ("star_removal", "Stars"),
+    (STARS, "Stars"),
 ];
+
+/// The kind of tool that removes stars.
+const STARS: &str = "star_removal";
 
 /// One tool `psf-guard studio-tools` lists.
 #[derive(Clone, Debug, Deserialize)]
@@ -242,6 +245,13 @@ impl Studio {
                 chains.insert(format!("{band}:deconvolution"), settings.clone());
             }
         }
+        // Tools that run on a color group are prepared with the store too.
+        for (band, _) in crate::studio_model::COLOR_GROUPS {
+            let chain = self.group_chain(band);
+            if !chain.is_empty() {
+                chains.insert(format!("{band}:together"), chain.into());
+            }
+        }
         // Continuum subtraction is prepared with the store as well.
         chains.insert(
             "continuum".to_string(),
@@ -346,23 +356,186 @@ impl Studio {
         }
     }
 
+    /// Whether a tool is of one kind, such as star removal.
+    fn is_of(&self, key: &str, category: &str) -> bool {
+        self.tools
+            .tools
+            .iter()
+            .any(|tool| tool.key == key && tool.category == category)
+    }
+
     /// Chooses the provider of one kind of tool for an input, or none.
+    /// When the input's stars are removed with its group, the choice is
+    /// the group's.
     fn set_tool(&mut self, channel: &str, category: &str, provider: Option<&str>) {
-        let in_category = |key: &str| {
-            self.tools
-                .tools
-                .iter()
-                .any(|tool| tool.key == key && tool.category == category)
+        let together = (category == STARS)
+            .then(|| self.stars_together(channel))
+            .flatten();
+        let chain = match together {
+            Some(band) => self.group_chain(band),
+            None => self.chain(channel),
         };
-        let mut chain: Vec<serde_json::Value> = self
-            .chain(channel)
+        let mut chain: Vec<serde_json::Value> = chain
             .into_iter()
-            .filter(|step| !in_category(Self::provider_of(step)))
+            .filter(|step| !self.is_of(Self::provider_of(step), category))
             .collect();
         if let Some(provider) = provider {
             chain.push(serde_json::json!({ "provider": provider, "parameters": {} }));
         }
-        self.set_chain(channel, chain);
+        match together {
+            Some(band) => self.set_group_chain(band, chain),
+            None => self.set_chain(channel, chain),
+        }
+    }
+
+    // ---- star removal on a color group ----------------------------------
+
+    /// The color group an input belongs to, when the document has at least
+    /// two of the group's inputs: its band and those inputs.
+    fn group_of(&self, channel: &str) -> Option<(&'static str, Vec<String>)> {
+        let (band, inputs) = color_group_of(channel)?;
+        let present: Vec<String> = self
+            .document
+            .channels()
+            .into_iter()
+            .filter(|other| inputs.contains(&other.as_str()))
+            .collect();
+        (present.len() >= 2).then_some((band, present))
+    }
+
+    /// The step that holds a color group's tools.
+    fn group_step(&self, band: &str) -> Option<&StepRecord> {
+        self.document
+            .stage(StageKind::Linear)
+            .steps
+            .iter()
+            .find(|step| {
+                step.kind.name() == flow_operations::RC_ASTRO_COLOR
+                    && step.band.as_deref() == Some(band)
+            })
+    }
+
+    /// A color group's tools in order.
+    fn group_chain(&self, band: &str) -> Vec<serde_json::Value> {
+        match self.group_step(band).map(|step| &step.kind) {
+            Some(StepKind::Operation { settings, .. }) => {
+                settings["steps"].as_array().cloned().unwrap_or_default()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// Writes a color group's tools into the document. A group with no
+    /// tool has no step.
+    fn set_group_chain(&mut self, band: &str, chain: Vec<serde_json::Value>) {
+        let existing = self.group_step(band).map(|step| step.id);
+        if chain.is_empty() {
+            if let Some(id) = existing {
+                self.document.remove_step(id);
+            }
+            return;
+        }
+        let settings = serde_json::json!({ "steps": chain });
+        match existing {
+            Some(id) => {
+                self.document.set_step_settings(id, settings);
+            }
+            None => {
+                // A group's tools run after its inputs' own and before the
+                // background is fitted.
+                let steps = &self.document.stage(StageKind::Linear).steps;
+                let before = steps
+                    .iter()
+                    .position(|step| step.kind.name() == flow_operations::BACKGROUND)
+                    .unwrap_or(steps.len());
+                let mut step =
+                    operation(flow_operations::RC_ASTRO_COLOR, Accepts::Linear).for_band(band);
+                if let StepKind::Operation { settings: own, .. } = &mut step.kind {
+                    *own = settings;
+                }
+                let _ = self.document.insert_step(StageKind::Linear, before, step);
+            }
+        }
+    }
+
+    /// The band of the group an input's stars are removed with, when they
+    /// are removed with its group rather than on the input alone.
+    fn stars_together(&self, channel: &str) -> Option<&'static str> {
+        let (band, _) = self.group_of(channel)?;
+        self.group_chain(band)
+            .iter()
+            .any(|step| self.is_of(Self::provider_of(step), STARS))
+            .then_some(band)
+    }
+
+    /// Moves star removal between each input of a group and the group
+    /// together. The tool and its settings move with it.
+    fn set_stars_together(&mut self, channel: &str, together: bool) {
+        let Some((band, inputs)) = self.group_of(channel) else {
+            return;
+        };
+        let is_stars =
+            |this: &Self, step: &serde_json::Value| this.is_of(Self::provider_of(step), STARS);
+        if together {
+            // This input's star tool, or the first another input has.
+            let tool = std::iter::once(channel.to_string())
+                .chain(inputs.iter().cloned())
+                .find_map(|input| {
+                    self.chain(&input)
+                        .into_iter()
+                        .find(|step| is_stars(self, step))
+                });
+            let Some(tool) = tool else {
+                return;
+            };
+            for input in &inputs {
+                let chain: Vec<_> = self
+                    .chain(input)
+                    .into_iter()
+                    .filter(|step| !is_stars(self, step))
+                    .collect();
+                self.set_chain(input, chain);
+            }
+            let mut chain: Vec<_> = self
+                .group_chain(band)
+                .into_iter()
+                .filter(|step| !is_stars(self, step))
+                .collect();
+            chain.push(tool);
+            self.set_group_chain(band, chain);
+        } else {
+            let (tools, rest): (Vec<_>, Vec<_>) = self
+                .group_chain(band)
+                .into_iter()
+                .partition(|step| is_stars(self, step));
+            let Some(tool) = tools.into_iter().next() else {
+                return;
+            };
+            self.set_group_chain(band, rest);
+            for input in &inputs {
+                let mut chain: Vec<_> = self
+                    .chain(input)
+                    .into_iter()
+                    .filter(|step| !is_stars(self, step))
+                    .collect();
+                chain.push(tool.clone());
+                self.set_chain(input, chain);
+            }
+        }
+    }
+
+    /// The tools an input's Tools block shows: its own, and its group's
+    /// star removal when its stars are removed with the group.
+    fn shown_chain(&self, channel: &str) -> Vec<serde_json::Value> {
+        let mut chain = self.chain(channel);
+        if let Some(band) = self.stars_together(channel) {
+            chain.extend(
+                self.group_chain(band)
+                    .into_iter()
+                    .filter(|step| self.is_of(Self::provider_of(step), STARS)),
+            );
+        }
+        chain
     }
 
     /// Sets one setting of one of an input's tools.
@@ -373,7 +546,13 @@ impl Studio {
         name: &str,
         value: serde_json::Value,
     ) {
-        let mut chain = self.chain(channel);
+        let together = self
+            .stars_together(channel)
+            .filter(|_| self.is_of(provider, STARS));
+        let mut chain = match together {
+            Some(band) => self.group_chain(band),
+            None => self.chain(channel),
+        };
         for step in &mut chain {
             if Self::provider_of(step) == provider {
                 if !step["parameters"].is_object() {
@@ -382,14 +561,17 @@ impl Studio {
                 step["parameters"][name] = value.clone();
             }
         }
-        self.set_chain(channel, chain);
+        match together {
+            Some(band) => self.set_group_chain(band, chain),
+            None => self.set_chain(channel, chain),
+        }
     }
 
     /// The settings of an input's tools that a person can set, in the
     /// order they are listed: the tool, the setting, and its value now.
     fn tool_settings(&self, channel: &str) -> Vec<(String, Setting, serde_json::Value)> {
         let mut listed = Vec::new();
-        for step in self.chain(channel) {
+        for step in self.shown_chain(channel) {
             let provider = Self::provider_of(&step).to_string();
             let Some(schema) = self
                 .tools
@@ -847,7 +1029,7 @@ impl Studio {
     /// settings, and the button that runs them.
     pub(super) fn tools_block(&self, channel: &str, cx: &mut Context<Self>) -> gpui::Div {
         let label = channel_label(channel);
-        let chain = self.chain(channel);
+        let chain = self.shown_chain(channel);
         let chosen: Vec<&str> = chain.iter().map(Self::provider_of).collect();
         let mut block = div()
             .flex()
@@ -901,6 +1083,44 @@ impl Studio {
                     self.menu(format!("tool-{channel}-{category}"), "None", picks, cx),
                 ))
                 .children(problems.into_iter().filter_map(Self::help));
+            // Star removal runs on this input alone or on its color group.
+            if *category == STARS
+                && !none_chosen
+                && let Some((_, inputs)) = self.group_of(channel)
+            {
+                let together = self.stars_together(channel).is_some();
+                let group = inputs
+                    .iter()
+                    .map(|input| channel_label(input))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let picks = vec![
+                    {
+                        let channel = channel.to_string();
+                        Self::pick("This input", "stars-alone", !together, cx, move |this| {
+                            this.set_stars_together(&channel, false)
+                        })
+                    },
+                    {
+                        let channel = channel.to_string();
+                        Self::pick(
+                            format!("{group} together"),
+                            "stars-together",
+                            together,
+                            cx,
+                            move |this| this.set_stars_together(&channel, true),
+                        )
+                    },
+                ];
+                block = block
+                    .child(Self::field(
+                        "Run on",
+                        self.menu(format!("stars-on-{channel}"), "This input", picks, cx),
+                    ))
+                    .children(Self::help(
+                        "On this input alone, after its own tools, or on the group's registered inputs combined into one color image, as PSF Guard's color tools run.",
+                    ));
+            }
         }
         // The chosen tools' settings.
         for (index, (provider, setting, value)) in

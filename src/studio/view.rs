@@ -267,6 +267,15 @@ pub fn plan(document: &Document, view: &View) -> ViewPlan {
             // tools together, so either step reached shows that state.
             tools: step_for(&steps, op::RC_ASTRO_INPUT, channel)
                 .or_else(|| step_for(&steps, op::DECONVOLUTION, channel))
+                .or_else(|| {
+                    // A color group's tools step has the group's band only.
+                    let (group, _) = super::flow::color_group_of(channel)?;
+                    steps.iter().map(|(_, step)| *step).rfind(|step| {
+                        step.enabled
+                            && step.kind.name() == op::RC_ASTRO_COLOR
+                            && step.band.as_deref() == Some(group)
+                    })
+                })
                 .map(|step| step.id),
             stretch: if view.stretch == DisplayStretch::Document && !stretches.is_empty() {
                 PlannedStretch::Document(stretches)

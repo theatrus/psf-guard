@@ -43,4 +43,7 @@
   clipping map from PSF Guard), and crops the picture to the area every
   input covers, or to a rectangle drawn with its new Crop tool. Mask
   editing gains a brush size, Erase, Undo stroke and Blur, and a run that
-  prepares a picture can be stopped.
+  prepares a picture can be stopped. A progress bar shows the tool that is
+  running and how far it has got. Star removal can run on each input alone,
+  or after registration on R, G and B together or on the narrowband lines
+  together.

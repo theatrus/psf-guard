@@ -32,7 +32,10 @@ pub mod flow_operations {
     pub const RC_ASTRO_INPUT: &str = "Processing tools";
     /// Continuum subtraction and emission amounts.
     pub const EMISSION: &str = "Subtract continuum";
-    /// The processing tools of the color channels together.
+    /// The processing tools of the color channels together. With no band
+    /// they are PSF Guard's color tools. With the band of a color group
+    /// ([`super::COLOR_GROUPS`]) they are Studio's, and run on the group's
+    /// registered channels combined into one color image.
     pub const RC_ASTRO_COLOR: &str = "Processing tools on color";
     /// Photometric color calibration against Gaia.
     pub const COLOR_CALIBRATION: &str = "Color calibration";
@@ -64,6 +67,23 @@ pub fn background_corrected_channel(channel: &str) -> String {
 /// tools' result with its background corrected.
 pub fn tools_channel(channel: &str) -> String {
     format!("{channel}@tools")
+}
+
+/// The groups whose inputs' tools can run together, as one color image:
+/// the band of the group's tools step and its inputs in the order the
+/// color image holds them. PSF Guard removes stars on each channel stack
+/// alone, so these steps are Studio's only.
+pub const COLOR_GROUPS: [(&str, [&str; 3]); 2] = [
+    ("rgb", ["red", "green", "blue"]),
+    ("lines", ["sii", "ha", "oiii"]),
+];
+
+/// The color group an input belongs to, if any.
+pub fn color_group_of(channel: &str) -> Option<(&'static str, [&'static str; 3])> {
+    COLOR_GROUPS
+        .iter()
+        .find(|(_, inputs)| inputs.contains(&channel))
+        .copied()
 }
 
 /// The name of the channel that holds `channel` after its stretches, for a
@@ -349,9 +369,11 @@ pub fn color_setup_from_document(document: &Document) -> Result<Value, StudioErr
             op::EMISSION => {
                 settings.insert("emission".to_string(), value.clone());
             }
-            op::RC_ASTRO_COLOR => {
+            // A color group's tools together are Studio's.
+            op::RC_ASTRO_COLOR if step.band.is_none() => {
                 settings.insert("color_rc_astro".to_string(), value.clone());
             }
+            op::RC_ASTRO_COLOR => {}
             op::COLOR_CALIBRATION => {
                 settings.insert("color_calibration".to_string(), value.clone());
             }

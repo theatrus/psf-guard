@@ -405,6 +405,86 @@ impl RegisteredChannels {
             }
         }
 
+        // Each group's tools, on its registered channels together. The
+        // results replace each channel's tools state and stars, already on
+        // the reference grid.
+        let mut on_grid: Vec<Option<LinearImage>> = vec![None; roles.len()];
+        if let Some(tools) = tools {
+            let (width, height) = (reference.1, reference.2);
+            for group in &tools.groups {
+                let members: Vec<usize> = group
+                    .roles
+                    .iter()
+                    .filter_map(|role| roles.iter().position(|other| other == role))
+                    .collect();
+                if members.len() < 2 {
+                    continue;
+                }
+                // Each member in its state after its own tools, or as stacked.
+                let latest = |channel: usize| -> Result<LinearImage> {
+                    let wanted = tools_channel(&channel_names[channel]);
+                    let at = names
+                        .iter()
+                        .position(|other| *other == wanted)
+                        .unwrap_or(channel);
+                    Ok(LinearImage::new(width, height, 1, planes[at].clone())?)
+                };
+                let mut images = members
+                    .iter()
+                    .map(|channel| latest(*channel))
+                    .collect::<Result<Vec<_>>>()?;
+                // A color image has three channels: a group of two repeats
+                // its last.
+                while images.len() < 3 {
+                    images.push(images[images.len() - 1].clone());
+                }
+                let combined = crate::server::stack_preview::color_calibration::interleave(
+                    &images[0], &images[1], &images[2],
+                )
+                .map_err(anyhow::Error::msg)?;
+                let outcome = run_tool_chain(
+                    RcAstroRunner {
+                        workers: tools.workers,
+                        person: true,
+                    },
+                    tools.cache,
+                    &group.chain,
+                    &combined,
+                    &frames[0].headers,
+                    None,
+                    |ToolEvent::Running {
+                         label: tool,
+                         fraction,
+                     }| (tools.progress)(&group.name, tool, fraction),
+                    &mut || Ok(()),
+                )
+                .map_err(|error| anyhow!("the tools of {}: {error}", group.name))?;
+                let split = |image: &LinearImage, at: usize| -> Vec<f32> {
+                    image.data.iter().skip(at).step_by(3).copied().collect()
+                };
+                let mut set = |name: String, samples: Vec<f32>| match names
+                    .iter()
+                    .position(|other| *other == name)
+                {
+                    Some(at) => planes[at] = samples,
+                    None => {
+                        names.push(name);
+                        planes.push(samples);
+                    }
+                };
+                for (at, channel) in members.iter().enumerate() {
+                    let label = &channel_names[*channel];
+                    let starless = split(&outcome.image, at);
+                    on_grid[*channel] = Some(LinearImage::new(width, height, 1, starless.clone())?);
+                    set(tools_channel(label), starless);
+                    if let Some(stars) = &outcome.stars {
+                        set(stars_channel(label), split(stars, at));
+                    }
+                    tool_runs.push((roles[*channel], group.chain.config.clone()));
+                }
+            }
+        }
+
         let mut backgrounds = Vec::new();
         if let Some(extraction) = background {
             // Corrected in full: the strength is applied when the two
@@ -413,6 +493,12 @@ impl RegisteredChannels {
                 strength: 1.0,
                 ..extraction.clone()
             };
+            // A channel a group's tools ran on is corrected on the grid.
+            for (channel, image) in on_grid.iter().enumerate() {
+                if let Some(image) = image {
+                    processed[channel] = image.clone();
+                }
+            }
             let mut channels: Vec<(StackColorRole, &mut LinearImage)> =
                 roles.iter().copied().zip(processed.iter_mut()).collect();
             // Catalog protection needs a plate solve of the stack, which
@@ -431,7 +517,11 @@ impl RegisteredChannels {
             .map_err(anyhow::Error::msg)?;
             for (channel, corrected) in processed.into_iter().enumerate() {
                 names.push(background_corrected_channel(&channel_names[channel]));
-                planes.push(place(channel, corrected)?);
+                if on_grid[channel].is_some() {
+                    planes.push(corrected.data);
+                } else {
+                    planes.push(place(channel, corrected)?);
+                }
             }
         }
 
@@ -748,9 +838,22 @@ pub struct ChannelTools<'a> {
     /// The deconvolution of each channel that has one. It runs before the
     /// channel's chain.
     pub deconvolutions: BTreeMap<StackColorRole, crate::color_steps::ChannelDeconvolution>,
+    /// Chains that run on a group of channels together, after each
+    /// channel's own: on the group's registered channels combined into one
+    /// color image, as PSF Guard's color tools run.
+    pub groups: Vec<GroupTools>,
     /// Hears the channel, the tool running on it, and how far the channel's
     /// chain has got, from 0 to 1.
     pub progress: &'a dyn Fn(&str, &str, f32),
+}
+
+/// A chain that runs on a group of channels together.
+pub struct GroupTools {
+    /// The group's name, for progress.
+    pub name: String,
+    /// The group's channels, in the order the color image holds them.
+    pub roles: Vec<StackColorRole>,
+    pub chain: ToolChain,
 }
 
 fn open_mono(path: &Path) -> Result<seiza_stacking::FitsFrame> {

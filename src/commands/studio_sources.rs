@@ -474,6 +474,73 @@ fn prepare_store(
             deconvolutions.insert(stack.role, deconvolution);
         }
     }
+    // The tools of a color group together: red, green and blue, or the
+    // narrowband lines.
+    let mut groups = Vec::new();
+    for (group, members) in crate::studio::COLOR_GROUPS {
+        let config: Option<crate::server::stack_preview::rc_astro::ProcessingChain> = document
+            .stage(crate::studio::StageKind::Linear)
+            .steps
+            .iter()
+            .filter(|step| step.enabled && step.band.as_deref() == Some(group))
+            .find_map(|step| match &step.kind {
+                crate::studio::StepKind::Operation {
+                    operation,
+                    settings,
+                    ..
+                } if operation == crate::studio::flow_operations::RC_ASTRO_COLOR => {
+                    serde_json::from_value(settings.clone()).ok()
+                }
+                _ => None,
+            });
+        let Some(config) = config.filter(|config| !config.steps.is_empty()) else {
+            continue;
+        };
+        let in_group: Vec<&StackColorSource> = members
+            .iter()
+            .filter_map(|member| {
+                stacks.iter().find(|stack| {
+                    crate::studio_flow::role_name(stack.role).ok().as_deref() == Some(member)
+                })
+            })
+            .collect();
+        if in_group.len() < 2 {
+            continue;
+        }
+        // The group's result follows each member's stack and the tools
+        // that ran on it first.
+        let source = format!(
+            "{group}:{}",
+            in_group
+                .iter()
+                .map(|stack| format!("{}:{}", stack.job_id, stack.group_index))
+                .collect::<Vec<_>>()
+                .join("+")
+        );
+        let revision = in_group
+            .iter()
+            .map(|stack| {
+                let before = chains
+                    .get(&stack.role)
+                    .and_then(|chain: &ToolChain| chain.ids.last().cloned())
+                    .or_else(|| {
+                        deconvolutions
+                            .get(&stack.role)
+                            .map(|d: &crate::color_steps::ChannelDeconvolution| d.id.clone())
+                    })
+                    .unwrap_or_default();
+                format!("{}:{before}", stack.artifact_revision)
+            })
+            .collect::<Vec<_>>()
+            .join("+");
+        let chain = ToolChain::resolve(&workers, &config, "studio", &source, &revision, None)
+            .map_err(|error| anyhow!("the tools of {group}: {error}"))?;
+        groups.push(crate::studio_sources::GroupTools {
+            name: group.to_string(),
+            roles: in_group.iter().map(|stack| stack.role).collect(),
+            chain,
+        });
+    }
     // One line per tool and per hundredth of its channel's chain, which
     // PSF Studio shows as a progress bar.
     let reported = std::cell::RefCell::new((String::new(), u32::MAX));
@@ -491,6 +558,7 @@ fn prepare_store(
         cache: folder,
         chains,
         deconvolutions,
+        groups,
         progress: &report,
     };
 
@@ -519,7 +587,8 @@ fn prepare_store(
             });
     let mut prepared = RegisteredChannels::prepare(
         &inputs,
-        (!tools.chains.is_empty() || !tools.deconvolutions.is_empty()).then_some(&tools),
+        (!tools.chains.is_empty() || !tools.deconvolutions.is_empty() || !tools.groups.is_empty())
+            .then_some(&tools),
         continuum.as_ref(),
         background.as_ref(),
         &seiza_stacking::GpuOptions::cpu(),
@@ -621,6 +690,12 @@ fn prepare_store(
                 .chains
                 .values()
                 .filter_map(|chain| chain.ids.last().map(String::as_str)),
+        )
+        .chain(
+            tools
+                .groups
+                .iter()
+                .filter_map(|group| group.chain.ids.last().map(String::as_str)),
         )
         .collect::<Vec<_>>()
         .join("|");
