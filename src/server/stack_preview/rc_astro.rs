@@ -456,7 +456,10 @@ pub(crate) fn normalize_against_schemas(
 /// a BlurX run reuses the BlurX output instead of recomputing it. The base
 /// includes the deconvolution identity because the chain processes the
 /// deconvolved image, not the raw stack, and each step's CLI and model
-/// versions because an upgrade changes the output for identical inputs.
+/// versions because an upgrade changes the output for identical inputs. It
+/// also includes Seiza's exchange version, which defines how an image is
+/// written for a tool and read back: version 4 writes the few samples of a
+/// 0-to-1 stack that lie above 1 at 1, so a tool's output changes.
 pub(crate) fn rc_astro_chain_ids(
     database_id: &str,
     source_key: &str,
@@ -470,6 +473,8 @@ pub(crate) fn rc_astro_chain_ids(
     hasher.update(source_key.as_bytes());
     hasher.update(source_revision.as_bytes());
     hasher.update(RC_ASTRO_CACHE_VERSION.to_le_bytes());
+    hasher.update(b"exchange");
+    hasher.update(seiza_stacking::EXTERNAL_EXCHANGE_VERSION.to_le_bytes());
     hasher.update(b"deconvolution");
     hasher.update(deconvolution_id.unwrap_or("none").as_bytes());
     let mut previous = hasher.finalize();
@@ -1553,9 +1558,12 @@ mod tests {
 
     #[test]
     fn rc_astro_results_cached_before_providers_keep_their_identities() {
-        // These ids are what the release before providers gave this chain:
+        // These ids were what the release before providers gave this chain:
         // SHA-256 over the same bytes, worked out from that release's
-        // source. A change here would orphan every processed stack.
+        // source. A change here would orphan every processed stack. They
+        // were recorded again when the ids took in Seiza's exchange
+        // version (4, from Seiza 0.57), because that version changes what
+        // a tool returns, so processed stacks are made again once.
         let config: RcAstroProcessing = serde_json::from_value(serde_json::json!({
             "steps": [{"tool": "sxt"}, {"tool": "bxt", "parameters": {"ss": 0.4}}]
         }))
@@ -1568,8 +1576,8 @@ mod tests {
         assert_eq!(
             ids,
             [
-                "058e754a9ce83078e5ad14c828016372527765a77a7cbb343cb67fa67e9cc6ec",
-                "a6b759f07dfad2b2dc8f87850a641d393198ff8a3cf874bce8afda427750aa66",
+                "5509624f2e336fbfd00374eb8d7cb3be8dbd027611a31857667d80189e6fdb94",
+                "bae48928d647da7d932fbf61409a6af85051430146aadae757999a756509f7c2",
             ]
         );
     }

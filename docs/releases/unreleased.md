@@ -6,10 +6,13 @@
 
 ## Changes
 
-- PSF Guard now uses Seiza 0.56. Seiza's stacking output changed, so stacks
+- PSF Guard now uses Seiza 0.57. Seiza's stacking output changed, so stacks
   and color previews made before this update are stacked again the next
   time they are needed. When an expanded mosaic is reintegrated, its panel
-  backgrounds now match. Update every remote worker to this release too: a
+  backgrounds now match. Processing tools such as RC-Astro now receive the
+  few star-core pixels of a stack that lie above full scale at full scale,
+  as PixInsight does, so their results are made again too. Update every
+  remote worker to this release too: a
   worker running an older PSF Guard is not given stacking work until it is
   updated, though it still runs processing tools.
 - **Processing tools** has its own page, **Settings › Processing ›

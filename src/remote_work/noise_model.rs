@@ -447,7 +447,7 @@ impl Config {
     /// The installed noise model, or why there is none to run.
     pub fn bundle(&self) -> Result<seiza_model::ModelBundle, String> {
         seiza_model::ModelStore::new(self.models())
-            .resolve(None)
+            .resolve(None, seiza_model::Task::Denoise)
             .map_err(|error| match error {
                 seiza_model::ModelError::NoModelInstalled { .. } => MODEL_MISSING.to_string(),
                 error => error.to_string(),

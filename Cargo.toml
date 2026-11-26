@@ -53,24 +53,24 @@ quick-xml = "0.42"
 globset = "0.4"
 semver = "1"
 byteorder = "1.5"
-seiza = "0.56.0"
+seiza = "0.57.0"
 seiza-download = "0.12.0"
 # The learned noise model. It links nothing native: ONNX Runtime is found and
 # opened at run time, and only after a person asked PSF Guard to download it.
-seiza-model = "0.7.0"
+seiza-model = "0.8.0"
 seiza-imgproc = { version = "0.3.2", features = ["parallel"] }
-seiza-fits = "=0.8.1"
-seiza-image-io = "0.13.1"
+seiza-fits = "=0.9.0"
+seiza-image-io = "0.14.0"
 seiza-satellites = { version = "0.26.0", features = ["serde"] }
-seiza-stacking = "0.64.0"
-seiza-stretch = "0.3.3"
+seiza-stacking = "0.65.0"
+seiza-stretch = "0.4.0"
 # XISF reading. Already in the tree through seiza-stacking, which decodes both
 # containers into the same `seiza_fits::FitsImage`.
-seiza-xisf = "0.9.1"
-seiza-background = "0.3.2"
+seiza-xisf = "0.10.0"
+seiza-background = "0.4.0"
 seiza-calibration = "0.12.2"
-seiza-deconvolution = "0.2.0"
-seiza-stars = "0.6.0"
+seiza-deconvolution = "0.3.0"
+seiza-stars = "0.7.0"
 sha2 = "0.11"
 base64 = "0.23"
 rayon = "1"
@@ -189,7 +189,8 @@ toml_edit = "0.25"
 
 # Temporary: the published seiza-download 0.12.0 depends on zip 4.6, which has
 # security advisories (RUSTSEC-2026-0548 and others). Seiza #494 moved it to
-# zip 9.8 without changing anything else. Remove this once a Seiza release
-# includes #494.
+# zip 9.8 without changing anything else, and Seiza 0.57.0 has that change in
+# its source, but crates.io still has only seiza-download 0.12.0. Remove this
+# once crates.io has a newer seiza-download.
 [patch.crates-io]
-seiza-download = { git = "https://github.com/theatrus/seiza", rev = "bea223f1ab34ccd91555bc1b7575a960ad2dd932" }
+seiza-download = { git = "https://github.com/theatrus/seiza", rev = "b16f18d5d33134db0c73d88f09b8d1d872ef50ed" }
