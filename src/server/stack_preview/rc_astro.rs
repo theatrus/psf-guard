@@ -324,7 +324,7 @@ pub async fn get_rc_astro_capabilities(
 /// Read the schemas the requested steps need, from this server or a
 /// connected worker, or explain which tool cannot run. May spawn
 /// short-lived processes; callers wrap it in `spawn_blocking`.
-pub(super) fn schemas_for(
+pub(crate) fn schemas_for(
     workers: &crate::server::workers::Workers,
     config: &RcAstroProcessing,
 ) -> Result<Vec<(String, ExternalToolSchema)>, String> {
@@ -344,7 +344,7 @@ pub(super) fn schemas_for(
 /// anything runs, and coerce a whole-number float (which JSON delivers as
 /// an integer) to its float form. Coercion must happen before hashing:
 /// `1` and `1.0` are the same request and must share one cache identity.
-pub(super) fn normalize_against_schemas(
+pub(crate) fn normalize_against_schemas(
     config: &RcAstroProcessing,
     schemas: &[(String, ExternalToolSchema)],
 ) -> Result<RcAstroProcessing, String> {
@@ -457,7 +457,7 @@ pub(super) fn normalize_against_schemas(
 /// includes the deconvolution identity because the chain processes the
 /// deconvolved image, not the raw stack, and each step's CLI and model
 /// versions because an upgrade changes the output for identical inputs.
-pub(super) fn rc_astro_chain_ids(
+pub(crate) fn rc_astro_chain_ids(
     database_id: &str,
     source_key: &str,
     source_revision: &str,
@@ -553,7 +553,7 @@ pub async fn download_rc_astro_fits(
     .await
 }
 
-pub(super) struct RcAstroOutcome {
+pub struct RcAstroOutcome {
     /// The processed linear image — the starless one when stars were
     /// removed.
     pub image: LinearImage,
@@ -706,7 +706,7 @@ fn persist_prefix(
 /// tool starts; an error ends the chain there, keeping the steps already
 /// cached.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn apply_rc_astro(
+pub(crate) fn apply_rc_astro(
     runner: crate::server::workers::rc_astro::RcAstroRunner<'_>,
     stack_root: &FsPath,
     chain_ids: &[String],

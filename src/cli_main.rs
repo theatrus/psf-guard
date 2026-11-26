@@ -7,7 +7,7 @@ use crate::cli::{Cli, Commands};
 use crate::commands::{
     analyze_fits_and_compare, annotate_stars, benchmark_psf, dump_grading_results,
     filter_rejected_files, list_projects, list_targets, read_fits, regrade_images, screen_fits,
-    show_images, stretch_to_png, update_grade,
+    show_images, stretch_to_png, studio_store, update_grade,
 };
 
 struct SyncPair {
@@ -1386,6 +1386,144 @@ pub fn main() -> Result<()> {
                 annotate_dir: annotate,
             };
             screen_fits(&path, &options)?;
+        }
+        Commands::StudioSources {
+            server,
+            db,
+            token,
+            project,
+            target,
+            channels,
+            document,
+            apply,
+            output,
+        } => {
+            let runtime = tokio::runtime::Runtime::new()?;
+            runtime.block_on(crate::commands::studio_sources::studio_sources(
+                crate::commands::studio_sources::StudioSourcesOptions {
+                    server,
+                    database: db,
+                    token,
+                    project_id: project,
+                    target_id: target,
+                    channels,
+                    document: document.map(Into::into),
+                    apply: apply.map(Into::into),
+                    output: output.into(),
+                },
+            ))?;
+        }
+        Commands::StudioPrepare {
+            sources,
+            document,
+            apply,
+            output,
+        } => {
+            crate::commands::studio_sources::studio_prepare(
+                crate::commands::studio_sources::StudioPrepareOptions {
+                    sources: sources.into(),
+                    apply: apply.map(Into::into),
+                    document: document.map(Into::into),
+                    output: output.into(),
+                },
+            )?;
+        }
+        Commands::StudioFiles {
+            channels,
+            document,
+            apply,
+            pointing,
+            output,
+        } => {
+            crate::commands::studio_sources::studio_files(
+                crate::commands::studio_sources::StudioFilesOptions {
+                    channels,
+                    apply: apply.map(Into::into),
+                    document: document.map(Into::into),
+                    pointing: pointing
+                        .map(|text| {
+                            let values = text
+                                .split(',')
+                                .map(|value| value.trim().parse::<f64>())
+                                .collect::<Result<Vec<_>, _>>()?;
+                            match values[..] {
+                                [ra, dec, scale] => Ok((ra, dec, scale)),
+                                _ => anyhow::bail!("--pointing takes three numbers: RA,DEC,SCALE"),
+                            }
+                        })
+                        .transpose()?,
+                    output: output.into(),
+                },
+            )?;
+        }
+        Commands::Studio {
+            server,
+            db,
+            token,
+            project,
+            target,
+            channels,
+            mut files,
+            unnamed,
+            pointing,
+            folder,
+            name,
+            app,
+            no_open,
+        } => {
+            let pointing = pointing
+                .map(|text| {
+                    let values = text
+                        .split(',')
+                        .map(|value| value.trim().parse::<f64>())
+                        .collect::<Result<Vec<_>, _>>()?;
+                    match values[..] {
+                        [ra, dec, scale] => Ok((ra, dec, scale)),
+                        _ => anyhow::bail!("--pointing takes three numbers: RA,DEC,SCALE"),
+                    }
+                })
+                .transpose()?;
+            for file in unnamed {
+                files.push(crate::commands::studio_sources::channel_and_file(&file)?);
+            }
+            let from = match (server, db, project, target) {
+                (Some(server), Some(database), Some(project_id), Some(target_id)) => {
+                    crate::commands::studio_sources::StudioFrom::Server {
+                        server,
+                        database,
+                        token,
+                        project_id,
+                        target_id,
+                        channels,
+                    }
+                }
+                _ if !files.is_empty() => crate::commands::studio_sources::StudioFrom::Files {
+                    channels: files,
+                    pointing,
+                },
+                _ => anyhow::bail!(
+                    "say where the stacks are: --server with --db, --project and --target, or --channel"
+                ),
+            };
+            crate::commands::studio_sources::studio(
+                crate::commands::studio_sources::StudioOptions {
+                    from,
+                    folder: folder.into(),
+                    name,
+                    app: app.map(Into::into),
+                    open: !no_open,
+                },
+            )?;
+        }
+        Commands::StudioTools => {
+            crate::commands::studio_sources::studio_tools()?;
+        }
+        Commands::StudioStore {
+            input,
+            output,
+            half_floats,
+        } => {
+            studio_store(&input, output, half_floats)?;
         }
         Commands::StretchToPng {
             fits_path,

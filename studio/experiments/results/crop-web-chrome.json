@@ -1,0 +1,77 @@
+{
+ "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36",
+ "slider_drag_iterations_1_to_40": [
+  {
+   "crop": 512,
+   "bytes": 524288,
+   "total_ms": {
+    "p50": 23.9,
+    "max": 44.3
+   },
+   "compute_ms": {
+    "p50": 19.76,
+    "max": 37.88
+   },
+   "transfer_ms": {
+    "p50": 2.34,
+    "max": 5.73
+   },
+   "upload_ms": {
+    "p50": 1.2,
+    "max": 2.1
+   },
+   "overhead_ms": {
+    "p50": 3.94,
+    "max": 7.23
+   }
+  },
+  {
+   "crop": 1024,
+   "bytes": 2097152,
+   "total_ms": {
+    "p50": 40.5,
+    "max": 64.3
+   },
+   "compute_ms": {
+    "p50": 32.29,
+    "max": 56.64
+   },
+   "transfer_ms": {
+    "p50": 5.35,
+    "max": 10.29
+   },
+   "upload_ms": {
+    "p50": 2.8,
+    "max": 3.4
+   },
+   "overhead_ms": {
+    "p50": 8.31,
+    "max": 12.89
+   }
+  },
+  {
+   "crop": 2048,
+   "bytes": 8388608,
+   "total_ms": {
+    "p50": 87,
+    "max": 130.5
+   },
+   "compute_ms": {
+    "p50": 75.43,
+    "max": 117.03
+   },
+   "transfer_ms": {
+    "p50": 10.62,
+    "max": 12.56
+   },
+   "upload_ms": {
+    "p50": 3.1,
+    "max": 3.7
+   },
+   "overhead_ms": {
+    "p50": 13.65,
+    "max": 15.52
+   }
+  }
+ ]
+}

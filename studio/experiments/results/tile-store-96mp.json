@@ -1,0 +1,43 @@
+{
+  "image": {
+    "channels": 3,
+    "height": 8000,
+    "width": 12000
+  },
+  "raw_f32_mb": 1098.6328125,
+  "source_seconds": 0.265953917,
+  "stores": [
+    {
+      "file_mb": 1464.4900283813477,
+      "file_over_raw_f32": 1.3330113680555555,
+      "levels": 6,
+      "read_1024_crop_ms": 1.380583,
+      "read_4k_view_ms": 10.771042,
+      "read_whole_top_level_ms": 0.094,
+      "sample": "F32",
+      "top_level": [
+        375,
+        250
+      ],
+      "write_mb_per_second": 2901.861200426788,
+      "write_seconds": 0.770626583,
+      "write_seconds_without_the_source": 0.504672666
+    },
+    {
+      "file_mb": 732.2469673156738,
+      "file_over_raw_f32": 0.6665074618055555,
+      "levels": 6,
+      "read_1024_crop_ms": 1.836125,
+      "read_4k_view_ms": 13.733083,
+      "read_whole_top_level_ms": 0.135584,
+      "sample": "F16",
+      "top_level": [
+        375,
+        250
+      ],
+      "write_mb_per_second": 1311.2148841222167,
+      "write_seconds": 0.824403166,
+      "write_seconds_without_the_source": 0.5584492489999999
+    }
+  ]
+}

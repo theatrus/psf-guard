@@ -18,6 +18,8 @@ use super::{
     LatestStackPreviews, StackJobState, StackPreviewImageQuery, StackPreviewImageSize,
     StackPreviewManager, MAX_REMEMBERED_JOBS, SEIZA_STACKING_OUTPUT_VERSION,
 };
+#[cfg(test)]
+use crate::color_steps::{fit_channel_background, fit_uses_model, refit_channel_background};
 use crate::concurrency::Stop;
 use crate::server::file_body::file_body;
 use axum::{
@@ -29,14 +31,14 @@ use axum::{
     response::Response,
     Json,
 };
-use seiza_background::{
-    BackgroundConfig, BackgroundFit, CorrectionMode, FittedModel, ModelConfig, ProtectedRegion,
-};
+use seiza_background::{BackgroundConfig, BackgroundFit, CorrectionMode, ProtectedRegion};
+#[cfg(test)]
+use seiza_background::{FittedModel, ModelConfig};
 use seiza_stacking::{
     combine_lrgb, combine_narrowband, combine_rgb, resample_to_reference_with_gpu,
     write_color_fits_f32, write_processed_image_fits_f32, ColorComposition, ColorCrop,
     ColorNormalization, ColorOptions, ColorTransfer, CropReport, FitsFrame, ForaxxOptions,
-    LinearImage, NarrowbandPalette, ReferenceRegion, Registrar, RegistrationOptions,
+    LinearImage, NarrowbandPalette, ReferenceRegion,
 };
 use seiza_stretch::{ImageShape, StretchStack, StretchStackOutput, StretchStageProgress};
 use serde::{Deserialize, Serialize};
@@ -61,7 +63,6 @@ const COLOR_INPUT_CACHE_VERSION: u32 = 4;
 /// tools keep their ids.
 const COLOR_CHANNEL_TOOLS_VERSION: u32 = 2;
 const SEIZA_BACKGROUND_VERSION: &str = env!("PSF_GUARD_SEIZA_BACKGROUND_VERSION");
-const MAX_REGISTRATION_RMS_PIXELS: f64 = 2.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -76,7 +77,7 @@ pub enum StackColorRole {
 }
 
 impl StackColorRole {
-    pub(super) fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Luminance => "L",
             Self::Red => "R",
@@ -3312,92 +3313,6 @@ fn finish_color_job(job: &mut StackColorJob) {
     job.progress.stage_count = None;
 }
 
-fn fit_channel_background(
-    image: &LinearImage,
-    extraction: &StackBackgroundExtraction,
-    protected_regions: Vec<ProtectedRegion>,
-    mut on_fallback: impl FnMut(&str),
-) -> Result<(BackgroundFit, Option<String>), seiza_background::Error> {
-    let mut config = extraction.config.clone();
-    if extraction.protect_catalog_emission {
-        config.protected_regions = protected_regions;
-    } else {
-        config.protected_regions.clear();
-    }
-    let protected_fit = !config.protected_regions.is_empty();
-    match seiza_background::fit_background(
-        &image.data,
-        image.width,
-        image.height,
-        image.channels,
-        &config,
-    ) {
-        Ok(fit) => Ok((fit, None)),
-        Err(error) if protected_fit => {
-            let reason = error.to_string();
-            on_fallback(&reason);
-            config.protected_regions.clear();
-            seiza_background::fit_background(
-                &image.data,
-                image.width,
-                image.height,
-                image.channels,
-                &config,
-            )
-            .map(|fit| (fit, Some(reason)))
-        }
-        Err(error) => Err(error),
-    }
-}
-
-/// Whether `fit` already carries the surface `model` names.
-fn fit_uses_model(fit: &BackgroundFit, model: &ModelConfig) -> bool {
-    match (&fit.model, model) {
-        (
-            FittedModel::Polynomial { degree, .. },
-            ModelConfig::Polynomial { degree: wanted, .. },
-        ) => degree == wanted,
-        (FittedModel::RadialBasis { .. }, ModelConfig::RadialBasis { .. }) => true,
-        _ => false,
-    }
-}
-
-/// Refit one channel with the model chosen for every channel.
-///
-/// The refit keeps whatever catalog protection the first fit ended up with,
-/// and keeps its candidate scores so the manifest still shows why the shared
-/// model won.
-fn refit_channel_background(
-    image: &LinearImage,
-    extraction: &StackBackgroundExtraction,
-    protected_regions: Vec<ProtectedRegion>,
-    first: &BackgroundFit,
-    model: &ModelConfig,
-) -> Result<BackgroundFit, seiza_background::Error> {
-    let mut config = extraction.config.clone();
-    config.model = model.clone();
-    config.protected_regions = if first.diagnostics.protected_regions > 0 {
-        protected_regions
-    } else {
-        Vec::new()
-    };
-    let mut fit = seiza_background::fit_background(
-        &image.data,
-        image.width,
-        image.height,
-        image.channels,
-        &config,
-    )?;
-    if let Some(mut selection) = first.diagnostics.model_selection.clone() {
-        selection.selected = match &fit.model {
-            FittedModel::Polynomial { degree, .. } => format!("polynomial_{degree}"),
-            _ => "radial_basis".into(),
-        };
-        fit.diagnostics.model_selection = Some(selection);
-    }
-    Ok(fit)
-}
-
 /// Run each channel's deconvolution and RC-Astro tools on its own stack and
 /// put the result in its place. Deconvolution comes from, or goes to, the
 /// cache its channel card uses (`input_deconvolution_ids`); RC-Astro caches
@@ -3535,19 +3450,25 @@ fn run_channel_tools(
             .get_mut(&source.role)
             .ok_or_else(|| format!("{} source was not loaded", source.role.label()))?;
         let steps = config.steps.len();
+        let tools = crate::color_steps::ToolChain {
+            config: config.clone(),
+            schemas: schemas.clone(),
+            ids: chain.clone(),
+        };
         let outcome = pool.install(|| {
-            super::rc_astro::apply_rc_astro(
+            crate::color_steps::run_tool_chain(
                 crate::server::workers::rc_astro::RcAstroRunner {
                     workers: &state.workers,
                     person: !job.automatic,
                 },
                 stack_root,
-                chain,
-                config,
-                schemas,
+                &tools,
                 &frame.image,
                 &frame.headers,
-                &mut |label, fraction| {
+                // A stop kills the tool in hand; the steps it finished stay
+                // cached for the next composition and the channel's card.
+                Some(&stop.signal()),
+                |crate::color_steps::ToolEvent::Running { label, fraction }| {
                     let percent = (fraction.clamp(0.0, 1.0) * 100.0).round() as u8;
                     progress.begin(
                         StackColorProgressPhase::RcAstroInputs,
@@ -3557,9 +3478,6 @@ fn run_channel_tools(
                     );
                     progress.partial(steps, fraction);
                 },
-                // A stop kills the tool in hand; the steps it finished stay
-                // cached for the next composition and the channel's card.
-                Some(&stop.signal()),
                 &mut || stop.check(),
             )
         })?;
@@ -4000,74 +3918,75 @@ fn compose_color(
             "Reused registered input channels",
         );
     } else {
-        progress.begin(
-            StackColorProgressPhase::RegisteringSources,
-            format!("Using {} as registration reference", reference_role.label()),
-            Some(reference_role),
-            None,
-        );
-        let registrar = pool
-            .install(|| {
-                Registrar::new_with_gpu(&reference.image, RegistrationOptions::default(), &gpu)
-            })
-            .map_err(|error| error.to_string())?;
-        progress.advance(StackColorProgressPhase::RegisteringSources, 1);
-        state.stack_previews.update_color(&job.job_id, |current| {
-            current.processed_channels = 1;
-        });
+        let mut others = Vec::with_capacity(job.sources.len());
         for source in job
             .sources
             .iter()
             .filter(|source| source.role != reference_role)
         {
-            stop.check()?;
-            progress.begin(
-                StackColorProgressPhase::RegisteringSources,
-                format!("Registering {}", source.role.label()),
-                Some(source.role),
-                None,
-            );
             let frame = frames
                 .get(&source.role)
                 .ok_or_else(|| format!("{} source was not loaded", source.role.label()))?;
-            let registration =
-                pool.install(|| registrar.register(&frame.image))
-                    .map_err(|error| {
-                        format!(
-                            "Failed to register {} to {}: {error}",
-                            source.role.label(),
-                            reference_role.label()
-                        )
-                    })?;
-            if registration.rms_error_pixels > MAX_REGISTRATION_RMS_PIXELS {
-                return Err(format!(
-                    "{} registration RMS {:.3}px exceeds {:.3}px",
-                    source.role.label(),
-                    registration.rms_error_pixels,
-                    MAX_REGISTRATION_RMS_PIXELS
-                ));
-            }
-            tracing::info!(
-                "Stack color {} registered {}: {:.3}px RMS, {:.1}px drift, {} stars",
-                job.job_id,
-                source.role.label(),
-                registration.rms_error_pixels,
-                registration.drift_pixels,
-                registration.matched_stars
-            );
-            registered_transforms.insert(source.role, registration.transform);
-            state.stack_previews.update_color(&job.job_id, |current| {
-                if let Some(current_source) = current
-                    .sources
-                    .iter_mut()
-                    .find(|current_source| current_source.role == source.role)
-                {
-                    current_source.registration_transform = Some(registration.transform);
-                }
-                current.processed_channels += 1;
-            });
-            progress.advance(StackColorProgressPhase::RegisteringSources, 1);
+            others.push((source.role, &frame.image));
         }
+        let phase = StackColorProgressPhase::RegisteringSources;
+        pool.install(|| {
+            crate::color_steps::register_channels(
+                (reference_role, &reference.image),
+                &others,
+                &gpu,
+                |role, event| {
+                    use crate::color_steps::RegistrationEvent as Event;
+                    match event {
+                        Event::PreparingReference => progress.begin(
+                            phase,
+                            format!("Using {} as registration reference", role.label()),
+                            Some(role),
+                            None,
+                        ),
+                        Event::ReferenceReady => {
+                            progress.advance(phase, 1);
+                            state.stack_previews.update_color(&job.job_id, |current| {
+                                current.processed_channels = 1;
+                            });
+                        }
+                        Event::Registering => {
+                            stop.check()?;
+                            progress.begin(
+                                phase,
+                                format!("Registering {}", role.label()),
+                                Some(role),
+                                None,
+                            );
+                        }
+                        Event::Registered(registration) => {
+                            tracing::info!(
+                                "Stack color {} registered {}: {:.3}px RMS, {:.1}px drift, {} stars",
+                                job.job_id,
+                                role.label(),
+                                registration.rms_error_pixels,
+                                registration.drift_pixels,
+                                registration.matched_stars
+                            );
+                            registered_transforms.insert(role, registration.transform);
+                            state.stack_previews.update_color(&job.job_id, |current| {
+                                if let Some(current_source) = current
+                                    .sources
+                                    .iter_mut()
+                                    .find(|current_source| current_source.role == role)
+                                {
+                                    current_source.registration_transform =
+                                        Some(registration.transform);
+                                }
+                                current.processed_channels += 1;
+                            });
+                            progress.advance(phase, 1);
+                        }
+                    }
+                    Ok(())
+                },
+            )
+        })?;
         progress.finish(StackColorProgressPhase::RegisteringSources);
     }
 
@@ -4115,116 +4034,81 @@ fn compose_color(
         .and_then(|processing| processing.background_extraction.as_ref())
     {
         pool.install(|| {
-            let mut fitted = Vec::with_capacity(job.sources.len());
+            // The channels in source order, each as the image the step
+            // corrects in place.
+            let mut images: BTreeMap<StackColorRole, &mut LinearImage> = frames
+                .iter_mut()
+                .map(|(role, frame)| (*role, &mut frame.image))
+                .collect();
+            images.insert(reference_role, &mut reference.image);
+            let mut channels = Vec::with_capacity(job.sources.len());
             for source in &job.sources {
-                let frame = if source.role == reference_role {
-                    &reference
-                } else {
-                    frames
-                        .get(&source.role)
-                        .ok_or_else(|| format!("{} source was not loaded", source.role.label()))?
-                };
-                stop.check()?;
-                progress.begin(
-                    StackColorProgressPhase::BackgroundPreparation,
-                    format!("Fitting {} background", source.role.label()),
-                    Some(source.role),
-                    None,
-                );
-                let (fit, fallback) = fit_channel_background(
-                    &frame.image,
-                    extraction,
-                    background_regions
-                        .get(&source.role)
-                        .cloned()
-                        .unwrap_or_default(),
-                    |error| {
-                        tracing::warn!(
-                            "Protected {} background fit failed; retrying without catalog protection: {error}",
-                            source.role.label()
-                        );
-                        progress.begin(
-                            StackColorProgressPhase::BackgroundPreparation,
-                            format!(
-                                "Retrying {} background without catalog protection",
-                                source.role.label()
-                            ),
-                            Some(source.role),
+                let image = images
+                    .remove(&source.role)
+                    .ok_or_else(|| format!("{} source was not loaded", source.role.label()))?;
+                channels.push((source.role, image));
+            }
+            let phase = StackColorProgressPhase::BackgroundPreparation;
+            crate::color_steps::correct_channel_backgrounds(
+                &mut channels,
+                extraction,
+                |role| background_regions.get(&role).cloned().unwrap_or_default(),
+                |role, event| {
+                    use crate::color_steps::BackgroundEvent as Event;
+                    let label = role.label();
+                    match event {
+                        Event::Fitting => {
+                            stop.check()?;
+                            progress.begin(
+                                phase,
+                                format!("Fitting {label} background"),
+                                Some(role),
+                                None,
+                            );
+                        }
+                        Event::RetryingWithoutProtection(error) => {
+                            tracing::warn!(
+                                "Protected {label} background fit failed; retrying without catalog protection: {error}"
+                            );
+                            progress.begin(
+                                phase,
+                                format!("Retrying {label} background without catalog protection"),
+                                Some(role),
+                                None,
+                            );
+                        }
+                        Event::Fitted => progress.advance(phase, 1),
+                        Event::Refitting => progress.begin(
+                            phase,
+                            format!("Refitting {label} background to match the other channels"),
+                            Some(role),
                             None,
-                        );
-                    },
-                )
-                .map_err(|error| {
-                    format!("Failed to fit {} background: {error}", source.role.label())
-                })?;
-                progress.advance(StackColorProgressPhase::BackgroundPreparation, 1);
-                fitted.push((source.role, fit, fallback));
-            }
-
-            // Automatic selection runs per channel. Left alone it can curve
-            // one channel and leave another flat, which tints the corners.
-            let fits: Vec<&BackgroundFit> = fitted.iter().map(|(_, fit, _)| fit).collect();
-            let shared = if fits.len() > 1 {
-                seiza_background::select_shared_model(&extraction.config.model, &fits)
-            } else {
-                None
-            };
-
-            for (role, mut fit, fallback) in fitted {
-                let frame = if role == reference_role {
-                    &mut reference
-                } else {
-                    frames
-                        .get_mut(&role)
-                        .ok_or_else(|| format!("{} source was not loaded", role.label()))?
-                };
-                if let Some(shared) = shared.as_ref()
-                    && !fit_uses_model(&fit, shared)
-                {
-                    progress.begin(
-                        StackColorProgressPhase::BackgroundPreparation,
-                        format!("Refitting {} background to match the other channels", role.label()),
-                        Some(role),
-                        None,
-                    );
-                    fit = refit_channel_background(
-                        &frame.image,
-                        extraction,
-                        background_regions.get(&role).cloned().unwrap_or_default(),
-                        &fit,
-                        shared,
-                    )
-                    .map_err(|error| {
-                        format!("Failed to refit {} background: {error}", role.label())
-                    })?;
-                }
-                progress.begin(
-                    StackColorProgressPhase::BackgroundPreparation,
-                    format!("Correcting {} background", role.label()),
-                    Some(role),
-                    None,
-                );
-                fit.correct_in_place_with_strength(
-                    &mut frame.image.data,
-                    extraction.correction_mode,
-                    extraction.strength,
-                )
-                .map_err(|error| format!("Failed to correct {} background: {error}", role.label()))?;
-                progress.advance(StackColorProgressPhase::BackgroundPreparation, 1);
-                state.stack_previews.update_color(&job.job_id, |current| {
-                    current.resolved_backgrounds.insert(role, fit.clone());
-                    if let Some(reason) = fallback.as_ref() {
-                        current
-                            .background_protection_fallbacks
-                            .insert(role, reason.clone());
+                        ),
+                        Event::Correcting => progress.begin(
+                            phase,
+                            format!("Correcting {label} background"),
+                            Some(role),
+                            None,
+                        ),
+                        Event::Corrected { fit, fallback } => {
+                            progress.advance(phase, 1);
+                            state.stack_previews.update_color(&job.job_id, |current| {
+                                current.resolved_backgrounds.insert(role, fit.clone());
+                                if let Some(reason) = fallback {
+                                    current
+                                        .background_protection_fallbacks
+                                        .insert(role, reason.to_string());
+                                }
+                            });
+                            if let Some(reason) = fallback {
+                                background_protection_fallbacks.insert(role, reason.to_string());
+                            }
+                            resolved_backgrounds.insert(role, fit.clone());
+                        }
                     }
-                });
-                if let Some(reason) = fallback {
-                    background_protection_fallbacks.insert(role, reason);
-                }
-                resolved_backgrounds.insert(role, fit);
-            }
-            Ok::<(), String>(())
+                    Ok(())
+                },
+            )
         })?;
         progress.finish(StackColorProgressPhase::BackgroundPreparation);
     } else {
@@ -6079,7 +5963,7 @@ fn availability(sources: &BTreeMap<i32, TargetSources>) -> Vec<StackColorTargetA
         .collect()
 }
 
-fn classify_filter(filter_name: &str) -> Option<StackColorRole> {
+pub(crate) fn classify_filter(filter_name: &str) -> Option<StackColorRole> {
     let folded = filter_name
         .to_lowercase()
         .replace('α', "alpha")

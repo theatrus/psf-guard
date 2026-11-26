@@ -6,6 +6,7 @@ import { http, HttpResponse } from 'msw';
 import { server } from '../../test/msw-server';
 import type { StackColorJob, StackColorProcessing, StackColorRole, StackColorSource } from '../../api/types';
 import StackColorPreviewPanel from '../StackColorPreviewPanel';
+import { AccessContext } from '../../auth/access';
 import { ALL_COLOR_ROLES, defaultColorProcessing } from '../stackColorProcessing';
 
 const ok = (data: unknown, status = 200) =>
@@ -66,6 +67,11 @@ describe('a color card with no preview yet', () => {
     </QueryClientProvider>);
 
     const build = await screen.findByRole('button', { name: 'Build RGB color preview' });
+    // The target's stacks open in PSF Studio through a link to this server.
+    const studio = screen.getByRole('link', { name: 'Open M31 in PSF Studio' });
+    expect(studio.getAttribute('href')).toMatch(
+      /^psf-studio:\/\/open\?server=http%3A%2F%2F[^&]+&db=test&project=1&target=42$/,
+    );
     await userEvent.click(build);
     // Pending at once, so a second click cannot start it twice.
     expect(build).toHaveTextContent('Building…');
@@ -81,6 +87,36 @@ describe('a color card with no preview yet', () => {
   });
 });
 
+
+describe('the PSF Studio link', () => {
+  it('is left out on a server that needs sign-in, which PSF Studio cannot pass', async () => {
+    server.use(
+      http.get('/api/stack-activity', () => ok({ active: [] })),
+      http.get('/api/processing-setups', () => ok({ schema_version: 1, setups: [], default_color: null })),
+      http.get('/api/db/test/projects/1/stack-previews/color', () => ok({
+        targets: [{
+          target_id: 42, target_name: 'M31', available_roles: roles.map((role) => ({ role, filter_name: role })),
+          source_candidates: sources, ambiguous_roles: [], unmapped_filters: [],
+          rgb_available: true, lrgb_available: false, narrowband_palettes: [],
+        }],
+        jobs: [],
+      })),
+    );
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    render(<QueryClientProvider client={client}>
+      <AccessContext.Provider value={{
+        status: { authentication_required: true, authenticated: true, role: 'read_write', can_compute: true },
+        canWrite: true, canCompute: true, logout: async () => undefined,
+      }}>
+        <StackColorPreviewPanel dbId="test" projectId={1} sourceRevision="initial"
+          channelBuildRunning={false} outdatedSourceKeys={new Set()} canCompute onOpenImage={() => undefined} />
+      </AccessContext.Provider>
+    </QueryClientProvider>);
+
+    await screen.findByRole('button', { name: 'Build RGB color preview' });
+    expect(screen.queryByRole('link', { name: 'Open M31 in PSF Studio' })).toBeNull();
+  });
+});
 
 describe('automatic narrowband on a regular card', () => {
   async function setup(legacy: boolean | 'rgb-stars' = false) {

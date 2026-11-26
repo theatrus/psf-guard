@@ -350,7 +350,10 @@ fn header_number(headers: &[(String, HeaderValue)], wanted: &str) -> Option<f64>
         })
 }
 
-fn header_text<'a>(headers: &'a [(String, HeaderValue)], wanted: &str) -> Option<&'a str> {
+pub(crate) fn header_text<'a>(
+    headers: &'a [(String, HeaderValue)],
+    wanted: &str,
+) -> Option<&'a str> {
     headers
         .iter()
         .find(|(name, _)| name.eq_ignore_ascii_case(wanted))

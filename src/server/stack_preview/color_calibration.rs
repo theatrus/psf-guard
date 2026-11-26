@@ -126,7 +126,7 @@ pub struct StackColorCalibrationSkip {
 }
 
 impl StackColorCalibrationSkip {
-    fn new(reason: StackColorCalibrationSkipReason, detail: impl Into<String>) -> Self {
+    pub(crate) fn new(reason: StackColorCalibrationSkipReason, detail: impl Into<String>) -> Self {
         Self {
             reason,
             detail: detail.into(),
@@ -195,10 +195,10 @@ pub enum StackColorCalibrationOutcome {
 /// How Gaia stars reach the composition grid: its pixel solve and layout.
 /// A mosaic's solution is already on the integrated canvas.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(super) struct StarPlacement {
+pub(crate) struct StarPlacement {
     #[serde(with = "wcs_form")]
-    pub(super) wcs: seiza::Wcs,
-    pub(super) orientation: StackSkyOrientation,
+    pub(crate) wcs: seiza::Wcs,
+    pub(crate) orientation: StackSkyOrientation,
 }
 
 /// A prepared calibration: what it rests on, and either the way to place
@@ -332,7 +332,7 @@ impl StarPlacement {
     /// The solution of the grid every channel is registered to, or of the
     /// part of it a composition kept: the reference frame's solve carried
     /// through the stack's layout and the crop.
-    pub(super) fn wcs_on(&self, crop: Option<ReferenceRegion>) -> Result<seiza::Wcs, String> {
+    pub(crate) fn wcs_on(&self, crop: Option<ReferenceRegion>) -> Result<seiza::Wcs, String> {
         let mut source_to_image = self.orientation.source_to_output;
         if let Some(region) = crop {
             source_to_image = source_to_image.then(AffineTransform {
@@ -349,7 +349,7 @@ impl StarPlacement {
 /// Calibrate the registered red, green and blue channels in place against
 /// `catalog`, through `wcs`, the solution of their shared grid. Seiza
 /// leaves the channels as they were when it cannot calibrate.
-pub(super) fn calibrate_channels(
+pub(crate) fn calibrate_channels(
     channels: [&mut LinearImage; 3],
     wcs: &seiza::Wcs,
     catalog: &seiza::catalog::PhotometryCatalog,
@@ -581,7 +581,7 @@ pub(super) fn mark_stretched_separately(outcome: &mut StackColorCalibrationOutco
 }
 
 /// Interleave three mono channels on one grid into an RGB image.
-pub(super) fn interleave(
+pub(crate) fn interleave(
     red: &LinearImage,
     green: &LinearImage,
     blue: &LinearImage,

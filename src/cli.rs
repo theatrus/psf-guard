@@ -1168,6 +1168,189 @@ pub enum Commands {
         verbose: bool,
     },
 
+    /// Fetch a target's channel stacks from a PSF Guard server, register
+    /// them and write them as a PSF-Studio tile store
+    StudioSources {
+        /// The server's address, such as http://localhost:3000
+        #[arg(long)]
+        server: String,
+
+        /// The database's name in the server's URLs
+        #[arg(long)]
+        db: String,
+
+        /// An API token, when the server asks for one
+        #[arg(long)]
+        token: Option<String>,
+
+        /// The project's ID
+        #[arg(long)]
+        project: i32,
+
+        /// The target's ID
+        #[arg(long)]
+        target: i32,
+
+        /// The channels to take, reference first, such as red,green,blue.
+        /// Without this, every channel the target has
+        #[arg(long, value_delimiter = ',')]
+        channels: Vec<String>,
+
+        /// Also write a document that starts as PSF Guard's default color
+        /// flow to this path
+        #[arg(long)]
+        document: Option<String>,
+
+        /// Prepare the store for this PSF-Studio document in place of the
+        /// default flow: its processing tools run on each channel, and its
+        /// background settings are used
+        #[arg(long, conflicts_with = "document")]
+        apply: Option<String>,
+
+        /// Output path of the tile store
+        #[arg(short, long)]
+        output: String,
+    },
+
+    /// Prepare a PSF-Studio tile store again from channel stacks that
+    /// studio-sources downloaded, without the server
+    StudioPrepare {
+        /// The folder studio-sources downloaded the channel stacks to
+        #[arg(long)]
+        sources: String,
+
+        /// Also write a document that starts as PSF Guard's default color
+        /// flow to this path
+        #[arg(long)]
+        document: Option<String>,
+
+        /// Prepare the store for this PSF-Studio document in place of the
+        /// default flow: its processing tools run on each channel, and its
+        /// background settings are used
+        #[arg(long, conflicts_with = "document")]
+        apply: Option<String>,
+
+        /// Output path of the tile store
+        #[arg(short, long)]
+        output: String,
+    },
+
+    /// Register channel stacks from FITS or XISF files on this computer
+    /// and write them as a PSF-Studio tile store. The files are read where
+    /// they are and never changed
+    StudioFiles {
+        /// One channel and its stack file, reference first, such as
+        /// ha=Ha.xisf. Give the option once per channel. The channels are
+        /// PSF Guard's: luminance, red, green, blue, ha, oiii, sii, nii
+        #[arg(long = "channel", value_name = "CHANNEL=FILE", required = true)]
+        channels: Vec<String>,
+
+        /// Also write a document that starts as PSF Guard's default color
+        /// flow to this path
+        #[arg(long)]
+        document: Option<String>,
+
+        /// Prepare the store for this PSF-Studio document in place of the
+        /// default flow
+        #[arg(long, conflicts_with = "document")]
+        apply: Option<String>,
+
+        /// Where the first file points and its pixel scale, to plate solve
+        /// it for color calibration: right ascension and declination in
+        /// degrees, then arcseconds per pixel, such as 349.05,60.11,0.93.
+        /// A stack often keeps neither in its header
+        #[arg(long, value_name = "RA,DEC,SCALE")]
+        pointing: Option<String>,
+
+        /// Output path of the tile store
+        #[arg(short, long)]
+        output: String,
+    },
+
+    /// Prepare a picture's channel stacks and open them in PSF-Studio:
+    /// from a PSF Guard server (--server, --db, --project, --target) or
+    /// from stack files (--channel). A picture opened before keeps its
+    /// document
+    Studio {
+        /// The server's address, such as http://localhost:3000
+        #[arg(long, requires_all = ["db", "project", "target"], conflicts_with = "files")]
+        server: Option<String>,
+
+        /// The database's name in the server's URLs
+        #[arg(long)]
+        db: Option<String>,
+
+        /// An API token, when the server asks for one
+        #[arg(long)]
+        token: Option<String>,
+
+        /// The project's ID
+        #[arg(long)]
+        project: Option<i32>,
+
+        /// The target's ID
+        #[arg(long)]
+        target: Option<i32>,
+
+        /// With --server: the channels to take, reference first. Without
+        /// this, every channel the target has
+        #[arg(long, value_delimiter = ',')]
+        channels: Vec<String>,
+
+        /// One channel and its FITS or XISF stack file, reference first,
+        /// such as ha=Ha.xisf. Give the option once per channel
+        #[arg(long = "channel", value_name = "CHANNEL=FILE")]
+        files: Vec<String>,
+
+        /// A FITS or XISF stack file whose channel is read from its FILTER
+        /// header, or from its name when it has none. Give the option
+        /// once per file. They follow the --channel files
+        #[arg(long = "file", value_name = "FILE", conflicts_with = "server")]
+        unnamed: Vec<String>,
+
+        /// With --channel: where the first file points and its pixel
+        /// scale, as RA,DEC,SCALE in degrees and arcseconds per pixel
+        #[arg(long, value_name = "RA,DEC,SCALE")]
+        pointing: Option<String>,
+
+        /// The folder the picture's store and document are kept in
+        #[arg(long)]
+        folder: String,
+
+        /// The picture's name: its store is NAME.pgtiles and its document
+        /// NAME.json in the folder
+        #[arg(long, default_value = "picture")]
+        name: String,
+
+        /// The PSF-Studio application or its executable. Without this,
+        /// the PSF_STUDIO_APP environment variable
+        #[arg(long)]
+        app: Option<String>,
+
+        /// Prepare the picture and do not open it
+        #[arg(long)]
+        no_open: bool,
+    },
+
+    /// Print the processing tools this computer can run, with their
+    /// settings, as JSON
+    StudioTools,
+
+    /// Write a PSF-Studio tile store from a FITS or XISF frame
+    StudioStore {
+        /// Path to the FITS or XISF frame
+        input: String,
+
+        /// Output path (if not provided, the frame's name with .pgtiles)
+        #[arg(short, long)]
+        output: Option<String>,
+
+        /// Store 16-bit floats: half the size, about three significant
+        /// digits. For display-referred images, not linear data
+        #[arg(long)]
+        half_floats: bool,
+    },
+
     /// Convert FITS to PNG with MTF stretch applied
     StretchToPng {
         /// Path to FITS file

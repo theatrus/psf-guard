@@ -524,6 +524,30 @@ it processes as `stack_job_id` and `group_index`, and, while it waits,
 running job, so leaving the page and coming back restores the live per-card
 progress instead of an idle panel.
 
+## Open a target in PSF Studio
+
+PSF Studio is a separate, experimental editor for color processing. It
+starts from a target's channel stacks and keeps its own document of layers,
+so nothing it does changes PSF Guard's previews.
+
+Install PSF Studio on the computer you browse from. Then open a project's
+stacks and click **Open *target* in PSF Studio** over the color stacks. PSF
+Guard shows one link for each target in the color stacks section, when the
+target has channel stacks.
+
+PSF Studio fetches the target's current channel stacks from this server,
+registers them and opens them. Opening the same target again keeps the PSF
+Studio document you left.
+
+The link carries no sign-in, so PSF Guard shows it only on a server that
+needs none. For a server that needs sign-in, run this on the computer you
+browse from, with an API token from **Settings › Server & access › Users ›
+API tokens**:
+
+```bash
+psf-guard studio --server https://guard.example --db DATABASE --project PROJECT --target TARGET --token TOKEN --folder ~/Pictures/studio
+```
+
 ## Stacks made by WBPP
 
 **Stack in WBPP**, beside **Build stacks**, runs PixInsight's WBPP on the
