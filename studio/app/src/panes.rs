@@ -711,7 +711,7 @@ fn push_heal(
 /// `picture_samples` are RGB samples of the combined picture, with the id of
 /// the sampling they came from, for the output stretches Seiza resolves from
 /// the picture. `chains` keeps output stretches resolved before.
-fn scene(
+pub(super) fn scene(
     document: &Document,
     bands: &Bands,
     view: &View,
@@ -1480,13 +1480,16 @@ impl Studio {
         {
             return;
         }
-        self.picture_samples = Some((id, samples));
+        self.picture_samples = Some((id, samples.clone()));
+        if let Some(report) = self.parity_report.take() {
+            self.write_parity_report(report, samples);
+        }
         self.refresh_canvas();
     }
 
     /// Each band's stretch analysis at these background strengths. An
     /// analysis is kept, so a pane that returns to a place does not wait.
-    fn analysis(&mut self, states: &[BandState]) -> Arc<Vec<BandStretch>> {
+    pub(super) fn analysis(&mut self, states: &[BandState]) -> Arc<Vec<BandStretch>> {
         if let Some((_, known)) = self.analysed.iter().find(|(at, _)| at == states) {
             return known.clone();
         }

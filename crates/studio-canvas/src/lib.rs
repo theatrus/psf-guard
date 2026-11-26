@@ -8,6 +8,7 @@
 //! two renders of one pane agree.
 
 pub mod cpu;
+pub mod export;
 pub mod histogram;
 pub mod output_stretch;
 pub mod tone;

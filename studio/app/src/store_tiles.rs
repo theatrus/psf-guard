@@ -674,27 +674,59 @@ fn analyse_synthetic() -> Bands {
     }
 }
 
+/// A store opened for the canvas, with its bands analysed and the scales
+/// its channels are divided by.
+pub fn open_store(path: &Path) -> Result<(StoreTiles, Bands), String> {
+    let mut store = StoreTiles::open(path).map_err(|error| error.to_string())?;
+    // The planes already stretched for display keep a scale of 1.
+    store.display = std::fs::read_to_string(path.with_extension("prepared.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|record| {
+            Some(
+                record["display"]
+                    .as_array()?
+                    .iter()
+                    .filter_map(|plane| Some(plane.as_str()?.to_string()))
+                    .collect(),
+            )
+        })
+        .unwrap_or_default();
+    let mut bands = store.analyse()?;
+    bands.read_calibration(path);
+    Ok((store, bands))
+}
+
+/// The CPU render reads the store's full-resolution samples as the canvas's
+/// tiles hold them, but in 32-bit floats: each channel divided by its scale
+/// and kept from 0 to 1, a missing sample as 0.
+impl psf_studio_canvas::cpu::SampleReader for StoreTiles {
+    fn channels(&self) -> usize {
+        self.bands
+    }
+
+    fn read(&self, rect: [u32; 4]) -> Result<Vec<f32>, String> {
+        let [x, y, width, height] = rect.map(|value| value as usize);
+        let level = self.levels.first().ok_or("the store has no levels")?;
+        let mut samples = level
+            .read(Region::new(x, y, width, height))
+            .map_err(|error| error.to_string())?;
+        for (index, sample) in samples.iter_mut().enumerate() {
+            *sample = if sample.is_finite() {
+                (*sample / self.scales[index % self.bands]).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+        }
+        Ok(samples)
+    }
+}
+
 /// The tile source the options ask for, with its bands.
 pub fn source(open: Option<&Path>) -> Result<(Arc<dyn TileSource>, Bands), String> {
     match open {
         Some(path) => {
-            let mut store = StoreTiles::open(path).map_err(|error| error.to_string())?;
-            // The planes already stretched for display keep a scale of 1.
-            store.display = std::fs::read_to_string(path.with_extension("prepared.json"))
-                .ok()
-                .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-                .and_then(|record| {
-                    Some(
-                        record["display"]
-                            .as_array()?
-                            .iter()
-                            .filter_map(|plane| Some(plane.as_str()?.to_string()))
-                            .collect(),
-                    )
-                })
-                .unwrap_or_default();
-            let mut bands = store.analyse()?;
-            bands.read_calibration(path);
+            let (store, bands) = open_store(path)?;
             Ok((Arc::new(store), bands))
         }
         None => Ok((

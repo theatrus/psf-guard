@@ -4671,6 +4671,8 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "rayon",
+ "seiza-fits",
+ "seiza-image-io",
  "seiza-stretch",
  "serde_json",
 ]
