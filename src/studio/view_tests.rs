@@ -335,7 +335,10 @@ fn a_blended_view_draws_band_layers_and_adjustments_in_order() {
     );
     assert!(alone
         .description
-        .starts_with("The layer B as blue on its own"));
+        .starts_with("The layer B as blue on its own, in gray"));
+    // One input's layer on its own is drawn in gray; the stack is not.
+    assert!(alone.gray);
+    assert!(!up_to.gray);
 
     // An adjustment alone has nothing to show, so it comes with the layers
     // beneath it.
@@ -394,4 +397,45 @@ fn a_layers_mask_is_painted_and_a_document_with_adjustments_round_trips() {
         color_setup_from_document(&loaded).unwrap(),
         color_setup_from_document(&super::view_tests::document()).unwrap()
     );
+}
+
+#[test]
+fn an_input_deconvolved_without_tools_is_shown_in_its_tools_state() {
+    let settings: Value =
+        serde_json::from_str(include_str!("../processing_setups/default_color.json")).unwrap();
+    let mut document = document_from_color_setup("Default", &settings, &["ha", "oiii"]).unwrap();
+    let deconvolution = StepRecord::new(StepKind::Operation {
+        operation: super::flow_operations::DECONVOLUTION.to_string(),
+        accepts: crate::image_steps::Accepts::Linear,
+        settings: serde_json::json!({}),
+    })
+    .for_band("ha");
+    let id = deconvolution.id;
+    document
+        .insert_step(StageKind::Linear, 0, deconvolution)
+        .unwrap();
+    let view = View {
+        subject: Subject::Channel("ha".to_string()),
+        up_to: UpTo::Final,
+        stretch: DisplayStretch::Document,
+        own_until: None,
+    };
+    assert_eq!(plan(&document, &view).channels[0].tools, Some(id));
+}
+
+#[test]
+fn a_line_without_its_continuum_is_stretched_as_its_channel() {
+    let settings: Value =
+        serde_json::from_str(include_str!("../processing_setups/default_color.json")).unwrap();
+    let document = document_from_color_setup("Default", &settings, &["ha", "oiii"]).unwrap();
+    let stretch = |channel: &str| {
+        let view = View {
+            subject: Subject::Channel(channel.to_string()),
+            up_to: UpTo::Final,
+            stretch: DisplayStretch::Document,
+            own_until: None,
+        };
+        plan(&document, &view).channels[0].stretch.clone()
+    };
+    assert_eq!(stretch("ha@line"), stretch("ha"));
 }

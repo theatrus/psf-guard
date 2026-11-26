@@ -437,7 +437,9 @@ fn a_view_blends_a_group_on_its_own() {
         layer: group,
         alone: true,
     };
-    assert_eq!(entries(alone), ["begin", "band", "band", "end"]);
+    assert_eq!(entries(alone.clone()), ["begin", "band", "band", "end"]);
+    // A group on its own keeps its colors.
+    assert!(!plan(&document, &alone.view()).gray);
     // A view that stops inside the group shows the group so far.
     let part = Place::Layer {
         layer: ids[1],
@@ -449,7 +451,9 @@ fn a_view_blends_a_group_on_its_own() {
         layer: ids[1],
         alone: true,
     };
-    assert_eq!(entries(member), ["band"]);
+    assert_eq!(entries(member.clone()), ["band"]);
+    // A member on its own is one input, drawn in gray.
+    assert!(plan(&document, &member.view()).gray);
     // Before the group is the stack beneath its members.
     let whole = Place::Layer {
         layer: group,
@@ -680,4 +684,43 @@ fn the_stars_of_an_input_are_stretched_as_the_input_is() {
         color_setup_from_document(&with_stars).unwrap(),
         color_setup_from_document(&document).unwrap()
     );
+}
+
+#[test]
+fn a_color_groups_tools_belong_to_its_inputs_and_stay_out_of_psf_guards_setup() {
+    let mut document = document(&["red", "green", "blue", "ha", "oiii"]);
+    let before = color_setup_from_document(&document).unwrap();
+    let chain = serde_json::json!({ "steps": [{ "provider": "sxt", "parameters": {} }] });
+    let group_step = |band: &str| {
+        let mut step = StepRecord::new(StepKind::Operation {
+            operation: op::RC_ASTRO_COLOR.to_string(),
+            accepts: crate::image_steps::Accepts::Linear,
+            settings: chain.clone(),
+        })
+        .for_band(band);
+        step.enabled = true;
+        step
+    };
+    let rgb = group_step("rgb");
+    let lines = group_step("lines");
+    let (rgb_id, lines_id) = (rgb.id, lines.id);
+    document.insert_step(StageKind::Linear, 0, rgb).unwrap();
+    document.insert_step(StageKind::Linear, 0, lines).unwrap();
+    let listed = |channel: &str| -> Vec<Uuid> {
+        input_steps(&document, channel)
+            .into_iter()
+            .map(|row| row.id)
+            .collect()
+    };
+    for channel in ["red", "green", "blue"] {
+        assert!(listed(channel).contains(&rgb_id), "{channel}");
+        assert!(!listed(channel).contains(&lines_id), "{channel}");
+    }
+    for channel in ["ha", "oiii"] {
+        assert!(listed(channel).contains(&lines_id), "{channel}");
+        assert!(!listed(channel).contains(&rgb_id), "{channel}");
+    }
+    // PSF Guard removes stars on each channel stack alone: the groups'
+    // steps are not part of the color setup.
+    assert_eq!(color_setup_from_document(&document).unwrap(), before);
 }

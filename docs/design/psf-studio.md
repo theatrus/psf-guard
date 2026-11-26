@@ -1792,6 +1792,11 @@ to make, not one for what to edit and another for what to look at.
 - An input row shows the input as stacked; a step row shows the input
   after that step.
 - A layer row shows the stack up to that layer, or that layer alone.
+  **Show: Stack | Only**, first in the layer's inspector, chooses which.
+  A layer of one input shown alone is drawn in gray at full strength,
+  without its color, opacity or blend mode, so its tones can be judged as
+  the input's own. A group shown alone keeps its colors, as its members
+  blend together (`ViewPlan::gray`).
 - A row for one layer's own edit shows that layer alone, with its own
   edits up to and including that one (`Place::LayerEdit`). The row before
   it is the same layer without the edit, so a before and after of one edit
@@ -1999,6 +2004,32 @@ picture.
 - A palette leaves a stars layer where it is.
 - PSF Guard's settings have no place for a stars input, so it stays out
   of them.
+
+#### Star removal on a color group (2026-11-25)
+
+Star removal runs on each input alone, or on a color group together:
+red, green and blue, or the narrowband lines SII, Ha and OIII. The
+person chooses. In the Tools block of an input with a star removal tool,
+**Run on** offers **This input** or the group's inputs together. The
+choice moves the tool and its settings between each input's Processing
+tools step and one step for the group.
+
+- The group's step is “Processing tools on color” with the group's band,
+  `rgb` or `lines`. That step with no band is still PSF Guard's color
+  tools (`color_rc_astro`).
+- When the store is prepared, each input's own tools run first. Then the
+  group's registered inputs are combined into one color image, the
+  group's chain runs on it, and the result is split back into each
+  input's `@tools` and `@stars`. A group of two inputs repeats the last
+  one to make three channels. The background is fitted after that, on the
+  reference grid.
+- PSF Guard refuses star removal among its color tools (“Star removal runs
+  on channel stacks, not on the color channels together”), so the group
+  steps stay out of the exported color setup. A setup exported from such a
+  document has no star removal.
+- The cache key of a group's result includes each input's stack and the
+  last tool that ran on it, so a change to an input's own tools runs the
+  group's tools again.
 
 ### Tried
 
@@ -2263,9 +2294,21 @@ channel's last linear state and adds the result as `<channel>@stretched`.
 Calibrated red, green and blue with the same stretches are stretched
 together as one color image. The spike draws a stretched plane as it is
 wherever the view applies the channel's stretches. Changing a layered
-stretch's settings takes effect when the store is prepared again. A star
-layer that was not star-stretched still follows its input's table
-stretches only.
+stretch's settings takes effect when the store is prepared again. The
+stars of such an input follow it: the input with its stars put back is
+stretched with the very stretch the starless input got (the same input
+range and Seiza's resolved plans, `color_steps::DisplayStretch`), and the
+stars are taken out of that with the unscreen Seiza's star screen uses, so
+screening them over the starless input gives the input with its stars.
+Stars already stretched by the star stretch are left as they are.
+
+**Stopping a run.** While Studio prepares a store or a picture, the top bar
+shows **Stop**. The run is started in a process group of its own, so Stop
+ends `psf-guard` and the tools it started, and the partial store it was
+writing is removed; the store and the picture stay as they were, and the
+tool results already finished are kept for the next run. Stop works on
+macOS and Linux; a run started from Studio does not end when Studio
+quits.
 
 **From stack files, with no server.** `psf-guard studio-files --channel
 ha=Ha.xisf --channel oiii=… --output picture.pgtiles` prepares the same
@@ -2317,8 +2360,62 @@ The link carries no token, so a server with user accounts refuses Studio's
 requests; Studio has no sign-in yet. Nothing runs on the server for the
 button: the page only makes the link.
 
-Input deconvolution is not run when a store is prepared: the preparation
-says so for each input whose setup has one. A mosaic is not color
+**Cropping.** The document records what the picture keeps
+(`Document.crop`): **Auto**, the largest rectangle every input covers,
+which the preparation measures with Seiza's `crop_report` (the crop PSF
+Guard's previews call "Inscribed") and records in `<store>.prepared.json`;
+**Whole**, the full grid with the empty edges registration leaves; or a
+rectangle drawn with the **Crop** tool, which stays inside the automatic
+one. The canvas draws only inside the crop (`Frame::crop`), and a fit fits
+the crop. Set it on the Final picture.
+
+**Mask editing.** The brush has a size, and paints or erases on any mask:
+a layer's, a step's, or a shared mask's touch-ups. **Undo stroke** removes
+a mask's newest stroke (`Document::remove_last_stroke`). A painted mask has
+a **Blur**, in document pixels, that softens the edge of every stroke
+without changing them (`PaintedMask::blur`, drawn by `Stroke::blurred` on
+the canvas and in the engine alike).
+
+**Continuum subtraction** runs when a store is prepared, when the document
+has the step "Subtract continuum" (Continuum › Subtract on an Ha, OIII or
+SII input). The fit is `color_steps::fit_continuum_line`, which PSF Guard's
+color previews call too; Seiza's `subtract_continuum` then removes the
+continuum. The fit measures stars, so it runs on the stacks as they came;
+the subtraction is applied to each input in its last linear state (with its
+background corrected, else after its tools, else as stacked), after the
+background step. The line and its references must agree on their stars:
+all starless or all with their stars, or the subtraction is skipped with
+that reason, since otherwise the line would keep or lose the stars of its
+references. OIII's continuum comes from G and B, the others' from R. The
+result is a new input, `<line>@line` ("Ha line"), stretched as its channel
+is, and the Emission lines part uses it when it is there, at half opacity.
+A color recipe adds the RGB stars part when R, G and B lost their stars to
+a star removal.
+
+The fit needs to know where each stack clipped. `studio-sources` downloads
+the clipping map the stacker wrote (`…/stack-previews/{job}/{group}/clipped`,
+added for this). A map cannot be made from a finished stack, because only
+the stacker sees which frames clipped, so stack files from elsewhere need an
+explicit saturation level per input in the step's settings.
+
+Seiza checks the profiles of held-out stars after the fit and refuses a fit
+whose stars would keep cores or halos. On the Sh2-157 stacks it refused all
+three lines, with and without PSF matching, although the photometric checks
+passed. The worst stars were bright ones, and their residual came mostly
+from sub-pixel registration offsets and non-Gaussian profile differences
+between the narrowband and broadband stacks. Those show only on stars. So
+when the line and its references are starless, Studio fits with Seiza's
+`ContinuumTarget::Starless` (theatrus/seiza#524): the check still runs and
+is reported, and the photometric checks decide. Starless, the three lines
+are subtracted with the check on (weights Ha 0.264, OIII 0.187 and 0.306,
+SII 0.337); with their stars kept they are still refused. PSF Guard's
+previews still fit for images with stars.
+
+Input deconvolution runs when a store is prepared, before the input's
+tools, with the step PSF Guard's color previews run
+(`color_steps::deconvolve`), and its result is kept in the sources folder.
+The store holds the input after its deconvolution and its tools together,
+so the view shows that state from either step on. A mosaic is not color
 calibrated, because PSF Guard calibrates a mosaic with a solve of its
 canvas, which Studio does not make yet.
 

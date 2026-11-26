@@ -248,6 +248,7 @@ fn strokes_add_and_subtract_in_order() {
             dab(50.0, 40.0, 20.0, StrokeMode::Add),
             dab(50.0, 40.0, 6.0, StrokeMode::Subtract),
         ],
+        blur: 0.0,
     };
     let region = Region::new(20, 10, 60, 60);
     let drawn = mask.mask(region, 0).unwrap();
@@ -259,6 +260,7 @@ fn strokes_add_and_subtract_in_order() {
     // The other order leaves the centre selected.
     let reversed = PaintedMask {
         strokes: mask.strokes.iter().rev().cloned().collect(),
+        blur: 0.0,
     };
     let drawn = reversed.mask(region, 0).unwrap();
     assert_eq!(
@@ -276,6 +278,7 @@ fn a_mask_drawn_for_a_region_matches_the_same_pixels_of_a_larger_one() {
             hardness: 0.3,
             mode: StrokeMode::Add,
         }],
+        blur: 0.0,
     };
     let whole = mask.mask(Region::whole(WIDTH, HEIGHT), 0).unwrap();
     for region in regions() {
@@ -288,6 +291,7 @@ fn a_mask_drawn_for_a_region_matches_the_same_pixels_of_a_larger_one() {
 fn a_mask_at_a_reduced_level_covers_the_same_part_of_the_image() {
     let mask = PaintedMask {
         strokes: vec![dab(80.0, 48.0, 24.0, StrokeMode::Add)],
+        blur: 0.0,
     };
     let full = mask.mask(Region::whole(WIDTH, HEIGHT), 0).unwrap();
     let reduced = mask.mask(Region::whole(WIDTH / 4, HEIGHT / 4), 2).unwrap();
@@ -299,6 +303,7 @@ fn a_masked_step_changes_only_what_the_mask_selects() {
     let source = image(3);
     let mask = Arc::new(PaintedMask {
         strokes: vec![dab(60.0, 50.0, 15.0, StrokeMode::Add)],
+        blur: 0.0,
     });
     let masked: Arc<dyn Step> = Arc::new(Masked::new(Arc::new(Gain(3.0)), mask));
     let reader = Pipeline::new(vec![masked]).over(source.clone()).unwrap();
@@ -461,6 +466,7 @@ fn a_document_has_every_stage_in_order_and_survives_a_round_trip() {
     let mut curves = operation("Curves", Accepts::Display);
     curves.mask = Some(MaskRecord::Painted(PaintedMask {
         strokes: vec![dab(10.0, 10.0, 5.0, StrokeMode::Add)],
+        blur: 0.0,
     }));
     document.insert_step(StageKind::Finish, 0, curves).unwrap();
     document
@@ -648,4 +654,92 @@ fn a_step_is_edited_in_place() {
     assert!(document
         .paint_step_mask(Uuid::new_v4(), dab(1.0, 1.0, 1.0, StrokeMode::Add))
         .is_err());
+}
+
+#[test]
+fn a_blurred_mask_keeps_its_core_and_softens_its_edge() {
+    let sharp = PaintedMask {
+        strokes: vec![dab(50.0, 40.0, 20.0, StrokeMode::Add)],
+        blur: 0.0,
+    };
+    let soft = PaintedMask {
+        blur: 10.0,
+        ..sharp.clone()
+    };
+    let region = Region::new(0, 0, 100, 80);
+    let at = |mask: &PaintedMask, x: usize| mask.mask(region, 0).unwrap().values()[40 * 100 + x];
+    // The fully covered core is the same.
+    assert_eq!(at(&sharp, 50), 1.0);
+    assert_eq!(at(&soft, 50), 1.0);
+    // Past the sharp stroke's edge, the blurred one still reaches.
+    assert_eq!(at(&sharp, 72), 0.0);
+    assert!(at(&soft, 72) > 0.0);
+}
+
+#[test]
+fn the_newest_stroke_of_a_mask_is_removed_and_an_empty_mask_goes() {
+    let mut document = Document::new("strokes");
+    let layer = LayerRecord::new(
+        "Ha",
+        LayerSource::Band {
+            band: "ha".to_string(),
+        },
+    );
+    let id = layer.id;
+    document.insert_layer(0, layer).unwrap();
+    document
+        .paint_layer_mask(id, dab(10.0, 10.0, 4.0, StrokeMode::Add))
+        .unwrap();
+    document
+        .paint_layer_mask(id, dab(20.0, 10.0, 4.0, StrokeMode::Subtract))
+        .unwrap();
+    assert!(document.set_mask_blur(id, 3.0));
+    assert!(document.remove_last_stroke(id));
+    let Some(MaskRecord::Painted(mask)) = &document.layers()[0].mask else {
+        panic!("the mask keeps its first stroke");
+    };
+    assert_eq!((mask.strokes.len(), mask.blur), (1, 3.0));
+    assert!(document.remove_last_stroke(id));
+    assert!(document.layers()[0].mask.is_none());
+    assert!(!document.remove_last_stroke(id));
+
+    // A crop drawn from any corner, inside the image, and none when tiny.
+    assert_eq!(
+        CropRecord::from_corners([90.0, 70.0], [-5.0, 10.0], (80, 60)),
+        Some(CropRecord::Region {
+            x: 0,
+            y: 10,
+            width: 80,
+            height: 50
+        })
+    );
+    assert_eq!(
+        CropRecord::from_corners([1.0, 1.0], [4.0, 30.0], (80, 60)),
+        None
+    );
+}
+
+#[test]
+fn erasing_where_there_is_no_mask_is_refused_and_leaves_the_layer_whole() {
+    let mut document = Document::new("erase");
+    let layer = LayerRecord::new(
+        "Ha",
+        LayerSource::Band {
+            band: "ha".to_string(),
+        },
+    );
+    let id = layer.id;
+    document.insert_layer(0, layer).unwrap();
+    assert!(document
+        .paint_layer_mask(id, dab(10.0, 10.0, 4.0, StrokeMode::Subtract))
+        .is_err());
+    assert!(document.layers()[0].mask.is_none());
+    assert_eq!(document.stroke_count(id), 0);
+    document
+        .paint_layer_mask(id, dab(10.0, 10.0, 4.0, StrokeMode::Add))
+        .unwrap();
+    document
+        .paint_layer_mask(id, dab(12.0, 10.0, 2.0, StrokeMode::Subtract))
+        .unwrap();
+    assert_eq!(document.stroke_count(id), 2);
 }

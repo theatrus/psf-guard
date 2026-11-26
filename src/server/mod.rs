@@ -565,6 +565,10 @@ pub fn api_router(state: Arc<AppState>) -> Router {
             get(stack_preview::download_stack_preview_fits),
         )
         .route(
+            "/stack-previews/{job_id}/{group_index}/clipped",
+            get(stack_preview::download_stack_preview_clipped),
+        )
+        .route(
             "/stack-previews/{job_id}/{group_index}/fits/window",
             get(stack_preview::read_stack_preview_window),
         )

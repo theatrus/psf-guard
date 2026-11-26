@@ -1,6 +1,6 @@
 use crate::bench::Bench;
 use crate::store_tiles::{BandState, BandStretch, Bands};
-use crate::studio_model::{Document, Place, Row, Split, Stroke, StrokeMode};
+use crate::studio_model::{CropRecord, Document, Place, Row, Split, Stroke, StrokeMode};
 use gpui::{
     prelude::*, px, rgb, size, App, Bounds, Context, MouseButton, MouseDownEvent, MouseMoveEvent,
     MouseUpEvent, NativeView, Pixels, Point, ScrollDelta, ScrollEvent, Window, WindowBounds,
@@ -73,6 +73,8 @@ enum Tool {
     Pan,
     Brush,
     Heal,
+    /// Draws the rectangle the picture keeps.
+    Crop,
 }
 
 /// A slider in a pane.
@@ -98,6 +100,10 @@ enum SliderId {
     Reach,
     /// How far the selected shared mask is smoothed.
     Smoothing,
+    /// The brush's size on screen.
+    BrushSize,
+    /// How far the selected painted mask's strokes are softened.
+    MaskBlur,
     /// The hue of one layer, by its place in the stack, in the palette's
     /// list of tones.
     ToneHue(usize),
@@ -107,7 +113,7 @@ enum SliderId {
 }
 
 impl SliderId {
-    const ALL: [SliderId; 7] = [
+    const ALL: [SliderId; 9] = [
         SliderId::Opacity,
         SliderId::Hue,
         SliderId::Saturation,
@@ -115,6 +121,8 @@ impl SliderId {
         SliderId::LayerAmount,
         SliderId::Reach,
         SliderId::Smoothing,
+        SliderId::BrushSize,
+        SliderId::MaskBlur,
     ];
 }
 
@@ -148,7 +156,14 @@ pub struct CanvasState {
     /// Strokes shown over the image: a stroke being drawn, or the selected
     /// step's mask.
     pub strokes: Vec<Segment>,
+    /// Counts the times `strokes` was replaced rather than grown, so the
+    /// render thread copies all of it then, and only the new tail while a
+    /// stroke is drawn.
+    pub strokes_replaced: u64,
     pub surface_size: (u32, u32),
+    /// The part of the document the picture keeps, as left, top, right and
+    /// bottom in document pixels, or `None` for all of it.
+    pub crop: Option<[f32; 4]>,
     fitted: bool,
     /// The name of a capture to take on the next frame.
     pub capture: Option<String>,
@@ -171,7 +186,9 @@ impl CanvasState {
             scenes: Arc::new(vec![Scene::default()]),
             wipe: None,
             strokes: Vec::new(),
+            strokes_replaced: 0,
             surface_size: (1, 1),
+            crop: None,
             fitted: false,
             capture: None,
             measure_gpu: false,
@@ -212,18 +229,29 @@ impl CanvasState {
         self.pane_rects(index).0
     }
 
+    /// What a fit shows: the crop, or the whole document.
+    fn fitted_rect(&self) -> [f64; 4] {
+        match self.crop {
+            Some(crop) => crop.map(f64::from),
+            None => [
+                0.0,
+                0.0,
+                self.document_size.0 as f64,
+                self.document_size.1 as f64,
+            ],
+        }
+    }
+
     pub fn fit_zoom(&self) -> f64 {
         let [_, _, width, height] = self.pane(0);
-        (width as f64 / self.document_size.0 as f64)
-            .min(height as f64 / self.document_size.1 as f64)
+        let [left, top, right, bottom] = self.fitted_rect();
+        (width as f64 / (right - left).max(1.0)).min(height as f64 / (bottom - top).max(1.0))
     }
 
     pub fn fit(&mut self) {
+        let [left, top, right, bottom] = self.fitted_rect();
         self.view = View {
-            center: [
-                self.document_size.0 as f64 / 2.0,
-                self.document_size.1 as f64 / 2.0,
-            ],
+            center: [(left + right) / 2.0, (top + bottom) / 2.0],
             zoom: self.fit_zoom(),
         };
     }
@@ -355,6 +383,7 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
             canvas.band_count = shared.canvas.band_count;
             canvas.scenes = shared.canvas.scenes.clone();
             canvas.wipe = shared.canvas.wipe;
+            canvas.crop = shared.canvas.crop;
             if !shared.canvas.fitted && canvas.surface_size.0 > 1 {
                 canvas.fit();
                 shared.canvas.view = canvas.view;
@@ -364,9 +393,13 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
             }
             if bench.is_none() {
                 canvas.sliders = shared.canvas.sliders;
-                // Strokes only grow or reset, so copy the new tail.
-                if shared.canvas.strokes.len() < canvas.strokes.len() {
+                // Strokes grow while one is drawn; otherwise they are
+                // replaced, and copied whole.
+                if shared.canvas.strokes_replaced != canvas.strokes_replaced
+                    || shared.canvas.strokes.len() < canvas.strokes.len()
+                {
                     canvas.strokes.clear();
+                    canvas.strokes_replaced = shared.canvas.strokes_replaced;
                 }
                 let known = canvas.strokes.len();
                 canvas
@@ -419,6 +452,7 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
             masks_version: version,
             overlay: &canvas.strokes,
             overlay_strength: 1.0,
+            crop: canvas.crop,
         };
         let capture = canvas.capture.take();
         renderer.capture_next = capture.is_some() && options.capture_prefix.is_some();
@@ -514,9 +548,12 @@ pub struct Studio {
     alone: bool,
     /// Whether the selected row's mask is drawn over the image.
     mask_shown: bool,
-    /// Whether the brush takes away from a shared mask, in place of adding
-    /// to it.
+    /// Whether the brush takes away from a mask, in place of adding to it.
     brush_removes: bool,
+    /// The brush's radius on screen, in points.
+    brush_size: f32,
+    /// Where a crop being drawn started, in document pixels.
+    crop_from: Option<[f64; 2]>,
     /// Whether the canvas shows the final picture while a mask is selected,
     /// in place of the mask itself.
     mask_shows_picture: bool,
@@ -694,6 +731,8 @@ impl Studio {
                 alone: false,
                 mask_shown: false,
                 brush_removes: false,
+                brush_size: 24.0,
+                crop_from: None,
                 mask_shows_picture: false,
                 wipe: 0.5,
                 split: Split::WithPicture,
@@ -761,7 +800,7 @@ impl Studio {
     /// The brush's radius in document pixels at the current zoom.
     fn brush_radius(&self) -> f32 {
         let zoom = self.canvas.read(|shared| shared.canvas.view.zoom);
-        (24.0 * self.scale_factor as f64 / zoom) as f32
+        (f64::from(self.brush_size) * self.scale_factor as f64 / zoom) as f32
     }
 
     /// A window position as a fraction of the canvas's width.
@@ -781,6 +820,10 @@ impl Studio {
             return;
         }
         self.drag = Some(Drag::Canvas(event.position));
+        if self.tool == Tool::Crop {
+            self.crop_from = Some(self.to_document(event.position));
+            return;
+        }
         if self.tool != Tool::Pan {
             let at = self.to_document(event.position);
             self.stroke = Some(Stroke {
@@ -812,6 +855,29 @@ impl Studio {
                 let from = self.to_document(last);
                 let to = self.to_document(event.position);
                 let (tool, radius) = (self.tool, self.brush_radius());
+                // The crop being drawn shows as its outline.
+                if let (Tool::Crop, Some(start)) = (tool, self.crop_from) {
+                    let zoom = self.canvas.read(|shared| shared.canvas.view.zoom);
+                    let line = (1.5 * self.scale_factor as f64 / zoom) as f32;
+                    let (a, b) = (start.map(|v| v as f32), to.map(|v| v as f32));
+                    let corners = [[a[0], a[1]], [b[0], a[1]], [b[0], b[1]], [a[0], b[1]]];
+                    self.canvas.edit(|canvas| {
+                        canvas.strokes_replaced += 1;
+                        canvas.strokes = (0..4)
+                            .map(|side| Segment {
+                                from: corners[side],
+                                to: corners[(side + 1) % 4],
+                                radius: line,
+                                hardness: 1.0,
+                                value: 1.0,
+                                _pad: 0.0,
+                            })
+                            .collect();
+                    });
+                    self.drag = Some(Drag::Canvas(event.position));
+                    cx.notify();
+                    return;
+                }
                 self.canvas.edit(|canvas| match tool {
                     Tool::Pan => {
                         canvas.view.center[0] -= to[0] - from[0];
@@ -819,6 +885,7 @@ impl Studio {
                     }
                     // The canvas shows a stroke as mask coverage while it is
                     // drawn, for the brush and for healing alike.
+                    Tool::Crop => {}
                     Tool::Brush | Tool::Heal => canvas.strokes.push(Segment {
                         from: [from[0] as f32, from[1] as f32],
                         to: [to[0] as f32, to[1] as f32],
@@ -837,8 +904,30 @@ impl Studio {
         }
     }
 
-    fn mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn mouse_up(&mut self, event: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.drag = None;
+        if let Some(start) = self.crop_from.take() {
+            let end = self.to_document(event.position);
+            let size = self.canvas.read(|shared| shared.canvas.document_size);
+            // A drawn crop stays inside what every input covers, so it never
+            // brings back the empty edges registration leaves.
+            let (mut start, mut end) = (start, end);
+            if let Some([x, y, width, height]) = self.band_info.automatic_crop {
+                let (left, top) = (f64::from(x), f64::from(y));
+                let (right, bottom) = (left + f64::from(width), top + f64::from(height));
+                for corner in [&mut start, &mut end] {
+                    corner[0] = corner[0].clamp(left, right);
+                    corner[1] = corner[1].clamp(top, bottom);
+                }
+            }
+            if let Some(crop) = CropRecord::from_corners(start, end, size) {
+                self.document.crop = crop;
+            }
+            self.refresh_canvas();
+            self.canvas.edit(|canvas| canvas.fit());
+            cx.notify();
+            return;
+        }
         if let Some(stroke) = self.stroke.take() {
             self.commit_stroke(stroke);
             cx.notify();

@@ -246,6 +246,10 @@ pub struct Frame<'a> {
     pub overlay: &'a [Segment],
     /// How strongly the overlay shows, from 0 to 1.
     pub overlay_strength: f32,
+    /// The part of the document the picture keeps, as left, top, right and
+    /// bottom in document pixels. Nothing outside it is drawn. `None` keeps
+    /// the whole document.
+    pub crop: Option<[f32; 4]>,
 }
 
 /// The pixels between two panes.
@@ -1045,7 +1049,19 @@ impl Renderer {
             if source != *key {
                 stats.tiles_coarse += 1;
             }
-            let rect = self.pyramid.doc_rect(*key);
+            let mut rect = self.pyramid.doc_rect(*key);
+            // A tile is drawn only where it is inside the crop.
+            if let Some(crop) = frame.crop {
+                rect = [
+                    rect[0].max(crop[0]),
+                    rect[1].max(crop[1]),
+                    rect[2].min(crop[2]),
+                    rect[3].min(crop[3]),
+                ];
+                if rect[0] >= rect[2] || rect[1] >= rect[3] {
+                    continue;
+                }
+            }
             let span = (TILE << source.level) as f32;
             let origin = [source.x as f32 * span, source.y as f32 * span];
             instances.push(TileInstance {

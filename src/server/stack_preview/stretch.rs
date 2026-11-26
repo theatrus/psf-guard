@@ -169,7 +169,7 @@ pub(super) fn deconvolution_version() -> String {
     format!("algorithm-{ALGORITHM_VERSION}")
 }
 
-pub(super) fn deconvolution_cache_id(
+pub(crate) fn deconvolution_cache_id(
     database_id: &str,
     source_key: &str,
     source_revision: &str,
@@ -2608,7 +2608,7 @@ fn render_fits_variant(
 /// Marks the entry as used now: the janitor keeps a deconvolution a week
 /// past its last use, and the result that will name it may not be written
 /// yet.
-pub(super) fn cached_deconvolution(
+pub(crate) fn cached_deconvolution(
     stack_root: &FsPath,
     deconvolution_id: &str,
     request: DeconvolutionConfig,
@@ -2659,7 +2659,7 @@ pub(super) fn deconvolution_cached(
 
 /// File a stack's deconvolution in the cache a channel card and a color
 /// build share, so the next one that asks for it reads it.
-pub(super) fn store_deconvolution(
+pub(crate) fn store_deconvolution(
     stack_root: &FsPath,
     deconvolution_id: &str,
     restored: &LinearImage,
@@ -2692,7 +2692,7 @@ pub(super) fn store_deconvolution(
     )
 }
 
-pub(super) fn apply_deconvolution(
+pub(crate) fn apply_deconvolution(
     image: &LinearImage,
     request: DeconvolutionConfig,
 ) -> Result<(LinearImage, StackDeconvolutionResult), String> {

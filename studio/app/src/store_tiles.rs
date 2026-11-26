@@ -202,6 +202,9 @@ pub struct Bands {
     /// The bands the store holds already stretched for display, such as
     /// stars after the star stretch. They are drawn as they are.
     display: Vec<usize>,
+    /// The largest rectangle every input covers, as x, y, width and height,
+    /// which the store records when it is prepared.
+    pub automatic_crop: Option<[u32; 4]>,
     /// What color calibration did when the store was prepared, in words.
     /// Empty when it was not asked for.
     pub calibration: String,
@@ -248,6 +251,10 @@ impl Bands {
         else {
             return;
         };
+        self.automatic_crop = record["crop"].as_array().and_then(|values| {
+            let value = |at: usize| Some(values.get(at)?.as_u64()? as u32);
+            Some([value(0)?, value(1)?, value(2)?, value(3)?])
+        });
         self.display = record["display"]
             .as_array()
             .map(|planes| {
@@ -443,9 +450,9 @@ impl StoreTiles {
         let named = |name: String| self.names.iter().position(|other| *other == name);
         // The stars a tool took out of a channel are an input of their own.
         let is_band = |channel: usize| {
-            self.names
-                .get(channel)
-                .is_none_or(|name| !name.contains('@') || name.ends_with("@stars"))
+            self.names.get(channel).is_none_or(|name| {
+                !name.contains('@') || name.ends_with("@stars") || name.ends_with("@line")
+            })
         };
         let mut bands = Bands::default();
         for channel in (0..self.bands).filter(|channel| is_band(*channel)) {

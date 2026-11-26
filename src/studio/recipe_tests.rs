@@ -397,3 +397,61 @@ fn edits_keep_groups_whole_and_masks_with_what_uses_them() {
     assert!(document.parts().is_empty());
     assert!(document.masks().iter().all(|mask| mask.part != Some(part)));
 }
+
+#[test]
+fn emission_lines_use_each_line_with_its_continuum_subtracted_when_there_is_one() {
+    let inputs = names(&["red", "green", "blue", "ha", "oiii"]);
+    let mut document = document(&["red", "green", "blue", "ha", "oiii"]);
+    let line = StepRecord::new(StepKind::Operation {
+        operation: flow_operations::CHANNEL_STACK.to_string(),
+        accepts: crate::image_steps::Accepts::Linear,
+        settings: serde_json::json!({}),
+    })
+    .for_band("ha@line");
+    document
+        .insert_step(StageKind::Sources, usize::MAX, line)
+        .unwrap();
+    let part = document.add_part(PartKind::Lines, &inputs).unwrap();
+    let shown: Vec<String> = document
+        .group_members(part)
+        .filter_map(|layer| match &layer.source {
+            LayerSource::Band { band } => Some(band.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(shown, names(&["ha@line", "oiii"]));
+    assert_eq!(channel_label("ha@line"), "Ha line");
+    assert_eq!(
+        Document::default_tone("ha@line").0,
+        Document::default_tone("ha").0
+    );
+}
+
+#[test]
+fn a_color_recipe_brings_back_the_stars_a_star_removal_took() {
+    let inputs = names(&["red", "green", "blue", "ha"]);
+    let mut document = document(&["red", "green", "blue", "ha"]);
+    // Without the stars of R, G and B, RGB is the color part alone.
+    assert!(document.use_recipe(recipe("RGB"), &inputs));
+    assert_eq!(parts(&document).len(), 1);
+    for name in ["red", "green", "blue"] {
+        let stars = StepRecord::new(StepKind::Operation {
+            operation: flow_operations::CHANNEL_STACK.to_string(),
+            accepts: crate::image_steps::Accepts::Linear,
+            settings: serde_json::json!({}),
+        })
+        .for_band(&format!("{name}@stars"));
+        document
+            .insert_step(StageKind::Sources, usize::MAX, stars)
+            .unwrap();
+    }
+    assert!(document.use_recipe(recipe("RGB with emission lines"), &inputs));
+    let made: Vec<String> = parts(&document).into_iter().map(|(name, _)| name).collect();
+    assert_eq!(made, ["Color", "Emission lines", "RGB stars"]);
+    let lines = document
+        .parts()
+        .into_iter()
+        .find(|part| part.name == "Emission lines")
+        .unwrap();
+    assert_eq!(lines.opacity, 0.5);
+}

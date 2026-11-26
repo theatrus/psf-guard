@@ -17,9 +17,9 @@ use crate::image_steps::Accepts;
 use crate::store_tiles::{BandState, BandStretch};
 use crate::studio_model::{
     band_layer, channel_label, color_from_hue, document_from_color_setup, flow_operations, hue_of,
-    layer_name, panes, plan, BlendMode, ChannelPlan, Document, LayerRecord, LayerSource,
-    MaskRecord, MaskShape, Place, PlannedStretch, Row, SharedMask, Split, StackEntry, StageKind,
-    StepKind, StepRecord, Stroke, StrokeMode, Subject, View,
+    layer_name, panes, plan, BlendMode, ChannelPlan, CropRecord, Document, LayerRecord,
+    LayerSource, MaskRecord, MaskShape, Place, PlannedStretch, Row, SharedMask, Split, StackEntry,
+    StageKind, StepKind, StepRecord, Stroke, StrokeMode, Subject, View,
 };
 use gpui::{
     canvas, div, img, prelude::*, px, relative, rgb, AnyElement, Context, MouseButton,
@@ -352,8 +352,21 @@ pub(super) fn is_drawn(stage: StageKind, step: &StepRecord, bands: &Bands) -> bo
                 || (operation == flow_operations::COLOR_CALIBRATION && bands.is_calibrated())
                 // An input's tools are drawn when the store holds their
                 // result.
-                || (operation == flow_operations::RC_ASTRO_INPUT
+                || ((operation == flow_operations::RC_ASTRO_INPUT
+                    || operation == flow_operations::DECONVOLUTION)
                     && band.is_some_and(|band| bands.has_tools(band)))
+                // A color group's tools are drawn when the store holds
+                // their result for the group's inputs.
+                || (operation == flow_operations::RC_ASTRO_COLOR
+                    && crate::studio_model::COLOR_GROUPS
+                        .iter()
+                        .find(|(group, _)| step.band.as_deref() == Some(*group))
+                        .is_some_and(|(_, inputs)| {
+                            inputs
+                                .iter()
+                                .filter_map(|input| bands.band_of(input))
+                                .any(|band| bands.has_tools(band))
+                        }))
         }
         (StepKind::Operation { .. }, StageKind::Stretch) if stretch_model(step).is_some() => {
             // The layered stretch is drawn when the store stretched the
@@ -412,7 +425,10 @@ fn segments(stroke: &Stroke) -> Vec<Segment> {
 
 fn mask_strokes(mask: &Option<MaskRecord>) -> Vec<Segment> {
     match mask {
-        Some(MaskRecord::Painted(mask)) => mask.strokes.iter().flat_map(segments).collect(),
+        Some(MaskRecord::Painted(mask)) => mask
+            .drawn_strokes()
+            .flat_map(|stroke| segments(&stroke))
+            .collect(),
         _ => Vec::new(),
     }
 }
@@ -608,6 +624,7 @@ fn stretch_source<'a>(
 ) -> (usize, &'a ChannelPlan) {
     plan.channel
         .strip_suffix("@stars")
+        .or_else(|| plan.channel.strip_suffix("@line"))
         // Stars the store holds stretched for display are drawn as they
         // are, not through their input's stretch.
         .filter(|_| !bands.is_display(band))
@@ -856,10 +873,24 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
             },
         };
         let hidden = !layer.visible || base.is_some_and(|base| !base.visible);
+        // One input's layer on its own is drawn in gray at full strength.
+        let gray = planned.gray;
         layers.push(Layer {
-            color: layer.color.unwrap_or([1.0; 3]),
-            opacity: if hidden { 0.0 } else { layer.opacity },
-            blend: blend_of(layer.blend),
+            color: if gray {
+                [1.0; 3]
+            } else {
+                layer.color.unwrap_or([1.0; 3])
+            },
+            opacity: match (gray, hidden) {
+                (true, _) => 1.0,
+                (false, true) => 0.0,
+                (false, false) => layer.opacity,
+            },
+            blend: if gray {
+                Blend::Normal
+            } else {
+                blend_of(layer.blend)
+            },
             mask,
             clip: clip_mask,
             ..shown
@@ -1109,6 +1140,78 @@ impl Studio {
         }
     }
 
+    /// What the brush paints: the layer, the step, or the shared mask the
+    /// selected row is.
+    pub(super) fn mask_target(&self) -> Option<Uuid> {
+        match &self.selected {
+            Row::Layer(id) | Row::Mask(id) => Some(*id),
+            Row::LayerStep { step, .. } | Row::Finish(step) => Some(*step),
+            _ => None,
+        }
+    }
+
+    /// The blur of the selected row's painted mask, when it has one.
+    pub(super) fn mask_blur(&self) -> Option<f32> {
+        let painted = |record: &Option<MaskRecord>| match record {
+            Some(MaskRecord::Painted(mask)) => Some(mask.blur),
+            _ => None,
+        };
+        match &self.selected {
+            Row::Layer(id) => painted(&self.layer(*id)?.mask),
+            Row::LayerStep { step, .. } | Row::Finish(step) => {
+                painted(&self.document.step(*step)?.1.mask)
+            }
+            _ => None,
+        }
+    }
+
+    /// Whether the brush's mask has a stroke that Undo stroke can remove.
+    pub(super) fn can_undo_stroke(&self) -> bool {
+        self.mask_target()
+            .is_some_and(|target| self.document.stroke_count(target) > 0)
+    }
+
+    /// The part of the document the picture keeps, as left, top, right and
+    /// bottom: the person's rectangle, the store's automatic crop, or all.
+    pub(super) fn crop_rect(&self) -> Option<[f32; 4]> {
+        let rect = |x: u32, y: u32, width: u32, height: u32| {
+            [
+                x as f32,
+                y as f32,
+                x.saturating_add(width) as f32,
+                y.saturating_add(height) as f32,
+            ]
+        };
+        let automatic = self
+            .band_info
+            .automatic_crop
+            .map(|[x, y, width, height]| rect(x, y, width, height));
+        match self.document.crop {
+            CropRecord::Whole => None,
+            CropRecord::Automatic => automatic,
+            // A drawn rectangle stays inside what every input covers, even
+            // after the store is prepared again.
+            CropRecord::Region {
+                x,
+                y,
+                width,
+                height,
+            } => {
+                let drawn = rect(x, y, width, height);
+                let inside = automatic.unwrap_or([0.0, 0.0, f32::MAX, f32::MAX]);
+                let kept = [
+                    drawn[0].max(inside[0]),
+                    drawn[1].max(inside[1]),
+                    drawn[2].min(inside[2]),
+                    drawn[3].min(inside[3]),
+                ];
+                (kept[0] < kept[2] && kept[1] < kept[3])
+                    .then_some(kept)
+                    .or(automatic)
+            }
+        }
+    }
+
     /// The strokes shown over the image while a brush is in hand: the
     /// selected row's mask.
     fn selected_strokes(&self) -> Vec<Segment> {
@@ -1210,10 +1313,13 @@ impl Studio {
             Vec::new()
         };
         let wipe = (self.split == Split::Wipe).then_some(self.wipe);
+        let crop = self.crop_rect();
         self.canvas.edit(|canvas| {
             canvas.scenes = scenes;
             canvas.strokes = overlay;
+            canvas.strokes_replaced += 1;
             canvas.wipe = wipe;
+            canvas.crop = crop;
         });
     }
 
@@ -1222,27 +1328,29 @@ impl Studio {
     /// input, of the selected layer, or of the combined picture.
     pub(super) fn commit_stroke(&mut self, stroke: Stroke) {
         match self.tool {
-            Tool::Pan => {}
-            Tool::Brush => match &self.selected {
-                Row::Layer(id) => {
-                    let _ = self.document.paint_layer_mask(*id, stroke);
+            Tool::Pan | Tool::Crop => {}
+            Tool::Brush => {
+                // The brush adds to a mask, or erases from it, as the
+                // person chose.
+                let mode = if self.brush_removes {
+                    StrokeMode::Subtract
+                } else {
+                    StrokeMode::Add
+                };
+                let stroke = Stroke { mode, ..stroke };
+                match &self.selected {
+                    Row::Layer(id) => {
+                        let _ = self.document.paint_layer_mask(*id, stroke);
+                    }
+                    Row::LayerStep { step, .. } | Row::Finish(step) => {
+                        let _ = self.document.paint_step_mask(*step, stroke);
+                    }
+                    Row::Mask(mask) => {
+                        self.document.touch_up_mask(*mask, stroke);
+                    }
+                    _ => {}
                 }
-                Row::LayerStep { step, .. } | Row::Finish(step) => {
-                    let _ = self.document.paint_step_mask(*step, stroke);
-                }
-                Row::Mask(mask) => {
-                    // The brush adds to a shared mask, or takes away from
-                    // it, as the person chose.
-                    let mode = if self.brush_removes {
-                        StrokeMode::Subtract
-                    } else {
-                        StrokeMode::Add
-                    };
-                    self.document
-                        .touch_up_mask(*mask, Stroke { mode, ..stroke });
-                }
-                _ => {}
-            },
+            }
             Tool::Heal => {
                 // Copy from three radii to the right until a person can
                 // choose the source. The brightness shift is measured by the
@@ -1358,6 +1466,16 @@ impl Studio {
                     && let Some(mask) = self.document.mask_mut(*id)
                 {
                     mask.reach = 2f32.powf(position * 4.0 - 2.0);
+                }
+            }
+            SliderId::BrushSize => {
+                // From a fine brush to a broad one, in points on screen.
+                self.brush_size = 2.0 + position * position * 198.0;
+            }
+            SliderId::MaskBlur => {
+                // From none to 64 document pixels.
+                if let Some(id) = self.mask_target() {
+                    self.document.set_mask_blur(id, position * position * 64.0);
                 }
             }
             SliderId::Smoothing => {
@@ -1544,11 +1662,11 @@ impl Studio {
         let what = match &self.selected {
             Row::Input(channel) => format!("the input {}", channel_label(channel)),
             Row::InputStep { channel, step } => {
-                let shared = self
-                    .document
-                    .step(*step)
-                    .is_some_and(|(_, step)| step.band.is_none());
-                if shared {
+                let found = self.document.step(*step).map(|(_, step)| step);
+                let shared = found.is_some_and(|step| step.band.is_none());
+                if let Some(group) = found.and_then(|step| self.group_applies_to(step)) {
+                    format!("{}, of {group}", step_name(step))
+                } else if shared {
                     format!("{}, of every input", step_name(step))
                 } else {
                     format!(
@@ -1576,12 +1694,15 @@ impl Studio {
         let on_a_mask = matches!(self.selected, Row::Mask(_));
         let tool = match (self.tool, &self.selected) {
             (Tool::Pan, _) => None,
-            (Tool::Brush, Row::Mask(_)) if self.brush_removes => {
-                Some("The mask brush subtracts from this mask.".to_string())
+            (Tool::Brush, _) if self.brush_removes => {
+                Some("The mask brush erases from this mask.".to_string())
             }
             (Tool::Brush, Row::Mask(_)) => Some("The mask brush adds to this mask.".to_string()),
             (Tool::Brush, _) => Some("The mask brush paints where this applies.".to_string()),
             (Tool::Heal, _) => Some("Heal adds a step here.".to_string()),
+            (Tool::Crop, _) => {
+                Some("Crop sets the rectangle the picture is cropped to.".to_string())
+            }
         };
         let marked = on_a_mask || self.tool == Tool::Brush;
         div()
@@ -1671,14 +1792,44 @@ impl Studio {
                     .overflow_hidden()
                     .text_xs()
                     .text_color(rgb(QUIET))
-                    .when(self.is_running(), |status| {
-                        status.child(self.run_status().to_string())
+                    .when_some(self.run_progress(), |status, (what, share, elapsed)| {
+                        let seconds = elapsed.as_secs();
+                        status
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .w(px(120.0))
+                                    .h(px(6.0))
+                                    .rounded_sm()
+                                    .bg(rgb(CONTROL))
+                                    .child(
+                                        div()
+                                            .h_full()
+                                            .rounded_sm()
+                                            .bg(rgb(SELECTED))
+                                            // Without a share, the bar fills
+                                            // and empties each second.
+                                            .w(relative(share.unwrap_or(
+                                                (elapsed.as_millis() % 1000) as f32 / 1000.0,
+                                            ))),
+                                    ),
+                            )
+                            .child(format!("{}:{:02}", seconds / 60, seconds % 60))
+                            .child(div().overflow_hidden().child(what))
                     })
                     .when(
                         !self.is_running() && self.run_status().starts_with("Not "),
                         |status| status.child(self.run_status().to_string()),
                     ),
             )
+            .when(self.is_running(), |bar| {
+                bar.child(Self::act("Stop", "stop-run", false, cx, |this| {
+                    this.stop_run()
+                }))
+            })
             .child(Self::act("?", "help", Self::help_shown(), cx, |_| {
                 Self::toggle_help()
             }))

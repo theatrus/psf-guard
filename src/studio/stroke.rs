@@ -119,12 +119,46 @@ impl Stroke {
 pub struct PaintedMask {
     /// The strokes, oldest first.
     pub strokes: Vec<Stroke>,
+    /// How far each stroke's edge is softened, in document pixels: the
+    /// mask's blur. 0 leaves the strokes as painted.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub blur: f32,
+}
+
+fn is_zero(value: &f32) -> bool {
+    *value == 0.0
+}
+
+impl PaintedMask {
+    /// The strokes as they are drawn: with the mask's blur.
+    pub fn drawn_strokes(&self) -> impl Iterator<Item = Stroke> + '_ {
+        self.strokes.iter().map(|stroke| stroke.blurred(self.blur))
+    }
+}
+
+impl Stroke {
+    /// The stroke with its edge softened by `blur` document pixels: the
+    /// fully covered core keeps its size, and the fall-off to the edge
+    /// widens by `blur`.
+    pub fn blurred(&self, blur: f32) -> Stroke {
+        let blur = blur.max(0.0);
+        if blur == 0.0 {
+            return self.clone();
+        }
+        let core = self.radius.max(0.0) * self.hardness.clamp(0.0, 1.0);
+        let radius = self.radius.max(0.0) + blur;
+        Stroke {
+            radius,
+            hardness: if radius > 0.0 { core / radius } else { 0.0 },
+            ..self.clone()
+        }
+    }
 }
 
 impl MaskSource for PaintedMask {
     fn mask(&self, region: Region, level: u8) -> Result<Mask, StudioError> {
         let mut values = vec![0.0; region.width * region.height];
-        for stroke in &self.strokes {
+        for stroke in self.drawn_strokes() {
             stroke.draw(&mut values, region, level);
         }
         Ok(Mask::new(region.width, region.height, values)?)

@@ -37,3 +37,16 @@
   it only on a server that needs none. For a server that needs sign-in, run
   `psf-guard studio` with `--token` on the computer you browse from; see
   the stacking guide.
+- PSF Studio, the experimental color editor, now runs an input's
+  deconvolution before its processing tools, can subtract the continuum
+  under Ha, OIII and SII from the R, G and B stacks (using each stack's
+  clipping map from PSF Guard), and crops the picture to the area every
+  input covers, or to a rectangle drawn with its new Crop tool. Mask
+  editing gains a brush size, Erase, Undo stroke and Blur, and a run that
+  prepares a picture can be stopped. A progress bar shows the tool that is
+  running and how far it has got. Star removal can run on each input alone,
+  or after registration on R, G and B together or on the narrowband lines
+  together. Continuum subtraction from starless lines no longer stops at
+  Seiza's check of star profiles, which only matters when the stars stay.
+  **Show › Only** on a layer shows that layer by itself: one
+  input in gray, or a group such as R, G, B in color.

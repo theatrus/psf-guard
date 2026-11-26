@@ -161,7 +161,9 @@ impl Studio {
                     continue;
                 };
                 let id = listed.id;
-                let mut applies_to = if listed.shared {
+                let mut applies_to = if let Some(group) = self.group_applies_to(step) {
+                    group
+                } else if listed.shared {
                     "every input".to_string()
                 } else {
                     format!("{label} only")
@@ -563,7 +565,7 @@ impl Studio {
                 self.document.channels().iter().any(|c| c.contains('@')),
                 |tree| {
                     tree.child(
-                        self.section("stars", "Stars of inputs", false, cx, |this, cx| {
+                        self.section("stars", "Stars and lines", false, cx, |this, cx| {
                             div()
                                 .flex()
                                 .flex_col()

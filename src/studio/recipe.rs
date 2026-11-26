@@ -295,7 +295,9 @@ impl Document {
     pub fn default_tone(shows: &str) -> (f32, f32, BlendMode) {
         let input = shows.split('@').next().unwrap_or(shows);
         match LINES.iter().find(|(line, _)| *line == input) {
-            Some((_, hue)) if !shows.contains('@') => (*hue, 1.0, BlendMode::Screen),
+            Some((_, hue)) if !shows.contains('@') || shows.ends_with("@line") => {
+                (*hue, 1.0, BlendMode::Screen)
+            }
             _ => match COLOR.iter().position(|name| *name == input) {
                 Some(at) => (at as f32 * 120.0, 1.0, BlendMode::Screen),
                 None => (0.0, 0.0, BlendMode::Screen),
@@ -360,9 +362,23 @@ impl Document {
             }
             PartKind::Lines => {
                 let group = self.add_group(kind.label(), BlendMode::Screen);
+                // Lines added over a color picture at full strength wash it
+                // out; half is a start a person tunes from.
+                if let Some(layer) = self.layer_mut(group) {
+                    layer.opacity = 0.5;
+                }
+                let channels = self.channels();
                 for input in narrowband(inputs) {
                     let (hue, saturation, blend) = Self::default_tone(&input);
-                    self.add_layer_showing(&input, Some(group), hue, saturation, blend);
+                    // The line with its continuum subtracted, when the store
+                    // has it: what adds only the line's own light.
+                    let line = format!("{input}@line");
+                    let shows = if channels.contains(&line) {
+                        line
+                    } else {
+                        input
+                    };
+                    self.add_layer_showing(&shows, Some(group), hue, saturation, blend);
                 }
                 group
             }
@@ -421,7 +437,12 @@ impl Document {
         }
         self.palette = None;
         // The Star stretch belongs to the RGB stars part.
-        if !recipe.parts.contains(&PartKind::ColorStars) {
+        let adds_color_stars = recipe.parts.contains(&PartKind::ColorStars)
+            || (recipe.parts.contains(&PartKind::Color)
+                && ["red", "green", "blue"]
+                    .iter()
+                    .all(|name| self.channels().contains(&stars_channel(name))));
+        if !adds_color_stars {
             let star_stretch: Vec<Uuid> = self
                 .stage(StageKind::Stretch)
                 .steps
@@ -433,9 +454,20 @@ impl Document {
                 self.remove_step(id);
             }
         }
+        // A color picture whose inputs lost their stars to a star removal
+        // gets them back: the stars of red, green and blue on top.
+        let channels = self.channels();
+        let color_stars = ["red", "green", "blue"]
+            .iter()
+            .all(|name| channels.contains(&stars_channel(name)));
+        let mut parts = recipe.parts.to_vec();
+        if parts.contains(&PartKind::Color) && !parts.contains(&PartKind::ColorStars) && color_stars
+        {
+            parts.push(PartKind::ColorStars);
+        }
         let kept = self.layers().len();
         let mut made = 0;
-        for kind in recipe.parts {
+        for kind in &parts {
             let Some(group) = self.add_part(*kind, inputs) else {
                 continue;
             };

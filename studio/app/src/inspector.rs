@@ -12,15 +12,15 @@ use super::{SliderId, Studio, Tool, PANEL_WIDTH};
 use crate::image_steps::Accepts;
 use crate::studio_model::{
     balance_colors, channel_label, flow_operations, hue_of, input_steps, layer_name,
-    level_for_zoom, own_step_for_channel, BlendMode, JunctionStatus, LayerRecord, LayerSource,
-    MaskRecord, MaskShape, Row, SharedMask, StageKind, StepKind, StepRecord,
+    level_for_zoom, own_step_for_channel, BlendMode, CropRecord, JunctionStatus, LayerRecord,
+    LayerSource, MaskRecord, MaskShape, Row, SharedMask, StageKind, StepKind, StepRecord,
 };
 use gpui::{div, prelude::*, px, rgb, AnyElement, Context};
 use uuid::Uuid;
 
 /// The steps a reduced view leaves out, because their result depends on
 /// pixel scale. The engine reports these per step; the demo names them.
-const FULL_RESOLUTION_ONLY: [&str; 2] = ["Deconvolution", "Noise reduction"];
+const FULL_RESOLUTION_ONLY: [&str; 1] = ["Noise reduction"];
 
 /// The steps offered on the combined picture.
 const FINISH_STEPS: [(&str, Accepts); 3] = [
@@ -309,9 +309,35 @@ impl Studio {
                 "The stack as PSF Guard made it, before any step.",
             ))
             .child(self.routes_block(channel, cx))
+            .children(self.continuum_block(channel, cx))
             .child(self.tools_block(channel, cx))
             .child(self.zoom_notes(channel))
             .into_any_element()
+    }
+
+    /// For an emission line: whether the continuum under it is subtracted,
+    /// which adds the line as an input of its own.
+    fn continuum_block(&self, channel: &str, cx: &mut Context<Self>) -> Option<gpui::Div> {
+        if !["ha", "oiii", "sii"].contains(&channel) {
+            return None;
+        }
+        let on = self.continuum_step().is_some();
+        Some(
+            column()
+                .child(Self::field(
+                    "Continuum",
+                    Self::segmented()
+                        .child(Self::act("Keep", "continuum-keep", !on, cx, |this| {
+                            this.set_continuum(false)
+                        }))
+                        .child(Self::act("Subtract", "continuum-subtract", on, cx, |this| {
+                            this.set_continuum(true)
+                        })),
+                ))
+                .children(Self::help(
+                    "Subtract applies to Ha, OIII and SII together. It fits the broadband light under each line from the R, G and B stacks and adds each line without that light as an input, such as Ha line. Run tools to prepare the store with them.",
+                )),
+        )
     }
 
     fn inspect_input_step(&self, channel: &str, id: Uuid, cx: &mut Context<Self>) -> AnyElement {
@@ -320,7 +346,9 @@ impl Studio {
         };
         let label = channel_label(channel);
         let shared = step.band.is_none();
-        let applies_to = if shared {
+        let applies_to = if let Some(group) = self.group_applies_to(step) {
+            format!("Applies to {group}: their registered inputs combined into one color image.")
+        } else if shared {
             "Applies to every input that has no step of its own of this kind.".to_string()
         } else {
             format!("Applies to {label} only.")
@@ -348,7 +376,8 @@ impl Studio {
             .child(Self::title(step.kind.name().to_string(), applies_to))
             .child(self.step_controls(stage, step, cx))
             .when(
-                step.kind.name() == flow_operations::RC_ASTRO_INPUT,
+                step.kind.name() == flow_operations::RC_ASTRO_INPUT
+                    || (step.kind.name() == flow_operations::RC_ASTRO_COLOR && step.band.is_some()),
                 |pane| pane.child(self.tools_block(&channel, cx)),
             )
             .children(own)
@@ -405,6 +434,10 @@ impl Studio {
                 layer.name.clone(),
                 "A layer of the picture: one input, in one color.",
             ))
+            .child(self.shows_block(
+                "Only shows this layer's input, in gray, without its color, opacity or blend.",
+                cx,
+            ))
             .child(Self::field(
                 "Input",
                 self.menu("layer-input", "Input", inputs, cx),
@@ -431,7 +464,6 @@ impl Studio {
                 cx,
             ))
             .child(self.blend_block(layer, cx))
-            .child(self.shows_block("This layer alone", cx))
             .child(self.mask_block(layer, cx))
             .child(self.shared_mask_block(layer, cx))
             .child(Self::heading("Clipping"))
@@ -535,19 +567,22 @@ impl Studio {
         Self::field("Blend", self.blend_menu(layer, cx))
     }
 
-    /// Whether the canvas shows the stack up to the selected layer, or the
-    /// selected layer alone.
-    fn shows_block(&self, alone_label: &'static str, cx: &mut Context<Self>) -> gpui::Div {
+    /// Whether the canvas shows the stack up to the selected layer, or
+    /// only the selected layer.
+    fn shows_block(&self, only_help: &'static str, cx: &mut Context<Self>) -> gpui::Div {
         let alone = self.alone;
-        column().child(Self::heading("View")).child(
-            Self::segmented()
-                .child(Self::act("Stack", "show-stack", !alone, cx, |this| {
-                    this.alone = false
-                }))
-                .child(Self::act(alone_label, "show-alone", alone, cx, |this| {
-                    this.alone = true
-                })),
-        )
+        column()
+            .child(Self::field(
+                "Show",
+                Self::segmented()
+                    .child(Self::act("Stack", "show-stack", !alone, cx, |this| {
+                        this.alone = false
+                    }))
+                    .child(Self::act("Only", "show-alone", alone, cx, |this| {
+                        this.alone = true
+                    })),
+            ))
+            .children(Self::help(only_help))
     }
 
     fn inspect_group(&self, layer: &LayerRecord, cx: &mut Context<Self>) -> AnyElement {
@@ -561,6 +596,10 @@ impl Studio {
                     super::panes::counted(members, "layer")
                 ),
             ))
+            .child(self.shows_block(
+                "Only shows the group's layers blended together, in color, without the layers beneath.",
+                cx,
+            ))
             .children(Self::help(
                 "Drag a layer onto the group, or into the gap under one of its layers, to add it. Drag it out to remove it.",
             ))
@@ -573,7 +612,6 @@ impl Studio {
             .child(self.blend_block(layer, cx))
             .child(self.palette_block(Some(id), cx))
             .child(Self::field("Layers", self.add_layer_menu(Some(id), cx)))
-            .child(self.shows_block("Alone", cx))
             .child(self.mask_block(layer, cx))
             .child(self.shared_mask_block(layer, cx))
             .child(Self::field("Adjust", self.adjustment_menu(
@@ -1122,9 +1160,61 @@ impl Studio {
     fn inspect_final(&self, cx: &mut Context<Self>) -> AnyElement {
         column()
             .child(Self::title("Final picture", "Every step of the document."))
+            .child(self.crop_block(cx))
             .child(self.finish_menu(cx))
             .child(self.junction_block())
             .into_any_element()
+    }
+
+    /// What the picture keeps: the automatic crop, the whole image, or a
+    /// rectangle drawn with the Crop tool.
+    fn crop_block(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let crop = self.document.crop;
+        let drawn = matches!(crop, CropRecord::Region { .. });
+        column()
+            .child(Self::field(
+                "Crop",
+                Self::segmented()
+                    .child(Self::act(
+                        "Auto",
+                        "crop-auto",
+                        crop == CropRecord::Automatic,
+                        cx,
+                        |this| {
+                            this.document.crop = CropRecord::Automatic;
+                            this.refresh_canvas();
+                            this.canvas.edit(|canvas| canvas.fit());
+                        },
+                    ))
+                    .child(Self::act(
+                        "Whole",
+                        "crop-whole",
+                        crop == CropRecord::Whole,
+                        cx,
+                        |this| {
+                            this.document.crop = CropRecord::Whole;
+                            this.refresh_canvas();
+                            this.canvas.edit(|canvas| canvas.fit());
+                        },
+                    ))
+                    .child(Self::act("Drawn", "crop-drawn", drawn, cx, |this| {
+                        this.tool = Tool::Crop;
+                    })),
+            ))
+            .when_some(
+                match crop {
+                    CropRecord::Region { width, height, .. } => Some((width, height)),
+                    _ => self
+                        .band_info
+                        .automatic_crop
+                        .filter(|_| crop == CropRecord::Automatic)
+                        .map(|[_, _, width, height]| (width, height)),
+                },
+                |block, (width, height)| block.child(Self::note(format!("{width} × {height} pixels"))),
+            )
+            .children(Self::help(
+                "Auto crops to the largest rectangle every input covers, removing the empty edges left by registration. Drawn crops to a rectangle drawn with the Crop tool.",
+            ))
     }
 
     // ---- blocks under the row's controls --------------------------------
@@ -1225,7 +1315,15 @@ impl Studio {
                 "Drag over a blemish. Each stroke becomes a Heal step of {}.",
                 self.heal_target()
             ),
+            Tool::Crop => {
+                "Drag a rectangle over the picture. Studio crops the picture to it.".to_string()
+            }
         };
+        let brushing = matches!(self.tool, Tool::Brush | Tool::Heal);
+        let painting = self.tool == Tool::Brush && can_mask;
+        let removes = self.brush_removes;
+        let target = self.mask_target();
+        let blur = self.mask_blur();
         column()
             .child(Self::heading("Tools"))
             .child(
@@ -1234,9 +1332,51 @@ impl Studio {
                     .when(can_mask, |row| {
                         row.child(tool(Tool::Brush, "Brush", cx))
                     })
-                    .child(tool(Tool::Heal, "Heal", cx)),
+                    .child(tool(Tool::Heal, "Heal", cx))
+                    .child(tool(Tool::Crop, "Crop", cx)),
             )
             .children(Self::help(help))
+            .when(brushing, |pane| {
+                pane.child(self.labelled_slider(
+                    format!("Size {:.0}", self.brush_size),
+                    SliderId::BrushSize,
+                    ((self.brush_size - 2.0) / 198.0).max(0.0).sqrt(),
+                    cx,
+                ))
+            })
+            .when(painting, |pane| {
+                pane.child(Self::field(
+                    "Brush",
+                    Self::segmented()
+                        .child(Self::act("Paint", "brush-paints", !removes, cx, |this| {
+                            this.brush_removes = false
+                        }))
+                        .child(Self::act("Erase", "brush-erases", removes, cx, |this| {
+                            this.brush_removes = true
+                        })),
+                ))
+            })
+            .when(self.can_undo_stroke(), |pane| {
+                pane.child(Self::field(
+                    "",
+                    Self::act("Undo stroke", "undo-stroke", false, cx, move |this| {
+                        if let Some(target) = target {
+                            this.document.remove_last_stroke(target);
+                        }
+                    }),
+                ))
+            })
+            .when_some(blur, |pane, blur| {
+                pane.child(self.labelled_slider(
+                    format!("Blur {blur:.0} px"),
+                    SliderId::MaskBlur,
+                    (blur / 64.0).sqrt(),
+                    cx,
+                ))
+                .children(Self::help(
+                    "Blur softens the edge of every stroke of this mask. The strokes are kept as painted.",
+                ))
+            })
             .when(can_mask || self.has_strokes(), |pane| {
                 let shown = self.mask_shown;
                 pane.child(Self::act(

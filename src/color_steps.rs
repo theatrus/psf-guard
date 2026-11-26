@@ -10,13 +10,16 @@
 //! `server::stack_preview::color` and moves here step by step.
 
 use crate::astrometry::AstrometrySolutionResponse;
-use crate::server::stack_preview::color::{StackBackgroundExtraction, StackColorRole};
+use crate::server::stack_preview::color::{
+    ContinuumMode, EmissionLineSettings, EmissionProcessing, StackBackgroundExtraction,
+    StackColorRole,
+};
 use crate::server::stack_preview::color_calibration::{
     calibrate_channels, interleave, StackColorCalibration, StackColorCalibrationOutcome,
     StackColorCalibrationSkip, StackColorCalibrationSkipReason, StarPlacement,
 };
 use crate::server::stack_preview::rc_astro::{self, ProcessingChain, RcAstroOutcome};
-use crate::server::stack_preview::stretch::StackStretchRequest;
+use crate::server::stack_preview::stretch::{StackDeconvolutionResult, StackStretchRequest};
 use crate::server::stack_preview::StackSkyOrientation;
 use crate::server::workers::rc_astro::RcAstroRunner;
 use crate::server::workers::Workers;
@@ -46,7 +49,9 @@ pub struct ToolChain {
 impl ToolChain {
     /// Resolves a chain against the tools the workers offer. `scope`,
     /// `source` and `revision` say which image the chain runs on, so the
-    /// cache keeps one result per image and per setting.
+    /// cache keeps one result per image and per setting. `deconvolution` is
+    /// the identity of a deconvolution that runs before the chain, if one
+    /// does, so the chain's results follow its settings.
     ///
     /// Refuses a chain with a tool no worker offers.
     pub fn resolve(
@@ -55,11 +60,13 @@ impl ToolChain {
         scope: &str,
         source: &str,
         revision: &str,
+        deconvolution: Option<&str>,
     ) -> Result<Self, String> {
         let schemas = rc_astro::schemas_for(workers, config)?;
         let config = rc_astro::normalize_against_schemas(config, &schemas)?;
-        let ids = rc_astro::rc_astro_chain_ids(scope, source, revision, &config, &schemas, None)
-            .map_err(|error| format!("{error:?}"))?;
+        let ids =
+            rc_astro::rc_astro_chain_ids(scope, source, revision, &config, &schemas, deconvolution)
+                .map_err(|error| format!("{error:?}"))?;
         Ok(Self {
             config,
             schemas,
@@ -354,6 +361,136 @@ pub(crate) fn refit_channel_background(
     Ok(fit)
 }
 
+/// Deconvolves one channel with Seiza: the step PSF Guard's channel cards
+/// and color previews run on an input before its processing tools.
+pub fn deconvolve(
+    image: &LinearImage,
+    config: seiza_deconvolution::DeconvolutionConfig,
+) -> Result<(LinearImage, StackDeconvolutionResult), String> {
+    crate::server::stack_preview::stretch::apply_deconvolution(image, config)
+}
+
+/// One channel's deconvolution, with the identity its result is kept
+/// under: the channel's stack and the settings.
+pub struct ChannelDeconvolution {
+    pub config: seiza_deconvolution::DeconvolutionConfig,
+    pub id: String,
+}
+
+impl ChannelDeconvolution {
+    /// The deconvolution of the stack `source` at `revision`, kept under
+    /// `scope`, as [`ToolChain::resolve`] keys a chain.
+    pub fn resolve(
+        config: seiza_deconvolution::DeconvolutionConfig,
+        scope: &str,
+        source: &str,
+        revision: &str,
+    ) -> Result<Self, String> {
+        let id = crate::server::stack_preview::stretch::deconvolution_cache_id(
+            scope, source, revision, &config,
+        )
+        .map_err(|error| format!("{error:?}"))?;
+        Ok(Self { config, id })
+    }
+
+    /// Deconvolves `frame`, or reads the result kept under `cache` from an
+    /// earlier run with the same stack and settings. Returns the result and
+    /// whether it was read rather than computed.
+    pub fn apply(
+        &self,
+        cache: &Path,
+        frame: &seiza_stacking::FitsFrame,
+    ) -> Result<(LinearImage, bool), String> {
+        use crate::server::stack_preview::stretch;
+        if let Some((kept, _)) = stretch::cached_deconvolution(cache, &self.id, self.config)? {
+            return Ok((kept.image, true));
+        }
+        let (restored, result) = deconvolve(&frame.image, self.config)?;
+        stretch::store_deconvolution(cache, &self.id, &restored, &frame.headers, &result)?;
+        Ok((restored, false))
+    }
+}
+
+/// Fits the continuum under one emission line from broadband references:
+/// the step PSF Guard's color previews run before they subtract it.
+///
+/// `line` and `references` are linear and on one grid, and still have
+/// their stars, which the fit measures. `masks` has one entry per input,
+/// the line first: the pixels its stack clipped, one byte each, or `None`
+/// where the stack kept no map. Every input needs a map or an explicit
+/// saturation level in `config`; without them the fit is skipped, because
+/// a clipped star would bias it. In manual mode the settings' weights are
+/// the plan, and the fit only supplies flux ratios it lacks.
+#[allow(clippy::too_many_arguments)]
+pub fn fit_continuum_line(
+    line: &LinearImage,
+    references: &[&LinearImage],
+    sources: &seiza_stacking::ContinuumSources,
+    masks: &[Option<&[u8]>],
+    config: &EmissionProcessing,
+    settings: &EmissionLineSettings,
+    label: &str,
+) -> Result<seiza_stacking::ContinuumFitOutcome, String> {
+    use seiza_stacking::{ContinuumFitOutcome, ContinuumOrigin, ContinuumPlan};
+    let pixels = sources.width * sources.height;
+    let have_evidence = std::iter::once(&sources.narrowband)
+        .chain(&sources.references)
+        .all(|source| source.saturation.is_some() || source.clipping_revision.is_some());
+    let measured = if have_evidence {
+        let filled: Vec<Vec<u8>> = masks
+            .iter()
+            .map(|mask| mask.map_or_else(|| vec![0; pixels], <[u8]>::to_vec))
+            .collect();
+        let borrowed: Vec<&[u8]> = filled.iter().map(Vec::as_slice).collect();
+        seiza_stacking::measure_and_fit_continuum_masked(
+            line,
+            references,
+            sources,
+            &borrowed,
+            &[],
+            &config.fit,
+            &config.photometry,
+        )
+        .map_err(|error| error.to_string())?
+    } else {
+        ContinuumFitOutcome::Skipped {
+            reason: seiza_stacking::ContinuumSkipReason::UnknownSaturation,
+            detail: "Producer clipping maps or explicit physical working-unit limits are required for every input".into(),
+            diagnostics: Default::default(),
+        }
+    };
+    if config.mode != ContinuumMode::Manual {
+        return Ok(measured);
+    }
+    if settings.coefficients.len() != references.len() {
+        return Err(format!(
+            "Enter {} manual continuum weights for {label}",
+            references.len()
+        ));
+    }
+    let ratios = if !settings.reference_flux_ratios.is_empty() {
+        settings.reference_flux_ratios.clone()
+    } else {
+        match &measured {
+            ContinuumFitOutcome::Fitted { plan } => plan.reference_flux_ratios.clone(),
+            ContinuumFitOutcome::Skipped { diagnostics, .. } => {
+                diagnostics.reference_flux_ratios.clone()
+            }
+        }
+    };
+    Ok(ContinuumFitOutcome::Fitted {
+        plan: ContinuumPlan {
+            schema_version: 1,
+            psf_matching: None,
+            sources: sources.clone(),
+            coefficients: settings.coefficients.clone(),
+            reference_flux_ratios: ratios,
+            origin: ContinuumOrigin::Manual,
+            diagnostics: None,
+        },
+    })
+}
+
 /// What [`measure_color_gains`] found.
 pub struct ColorGains {
     /// What the calibration did, with its evidence, or why it did not run.
@@ -476,16 +613,44 @@ pub fn stretch_star_layer(
     Ok(channels)
 }
 
+/// A stretch for display as Seiza resolved it for one image: the range
+/// its physical values were brought into, and each stage's plan. Applied to
+/// another image of the same scene, it gives the same transfer, as an
+/// image and its stars need for one to screen back onto the other.
+pub struct DisplayStretch {
+    domain: seiza_stretch::ResolvedSampleDomain,
+    plans: Vec<seiza_stretch::StretchPlan>,
+}
+
+impl DisplayStretch {
+    /// Applies this stretch to `image`, which has the channels and the
+    /// physical units of the image it was resolved for.
+    pub fn apply(&self, image: &LinearImage) -> Result<LinearImage, String> {
+        let shape = seiza_stretch::ImageShape::new(image.width, image.height, image.channels);
+        let mut current = self
+            .domain
+            .apply(&image.data, image.channels)
+            .map_err(|error| error.to_string())?;
+        for plan in &self.plans {
+            current = plan
+                .apply_f32_image(&current, shape)
+                .map_err(|error| error.to_string())?;
+        }
+        LinearImage::new(image.width, image.height, image.channels, current)
+            .map_err(|error| error.to_string())
+    }
+}
+
 /// Runs a chain of stretches over a whole image, with Seiza's stretch
-/// stack, and returns the image stretched for display. A chain with the
-/// layered stretch needs this: that stretch blurs the image, so it cannot
-/// be resolved from samples. `image` has one channel, or three that are
-/// stretched together. Its samples are physical values, as a stack holds
-/// them.
+/// stack, and returns the image stretched for display with the stretch as
+/// resolved. A chain with the layered stretch needs this: that stretch
+/// blurs the image, so it cannot be resolved from samples. `image` has one
+/// channel, or three that are stretched together. Its samples are physical
+/// values, as a stack holds them.
 pub fn stretch_for_display(
     image: &LinearImage,
     stages: &[StackStretchRequest],
-) -> Result<LinearImage, String> {
+) -> Result<(LinearImage, DisplayStretch), String> {
     use seiza_stretch::{SampleDomain, SampleNormalization};
 
     // A stack holds physical values. They are brought to the range of 0
@@ -507,14 +672,47 @@ pub fn stretch_for_display(
     let output = stack
         .apply_f32_image(&unit, shape)
         .map_err(|error| error.to_string())?;
-    LinearImage::new(image.width, image.height, image.channels, output.data)
-        .map_err(|error| error.to_string())
+    let stretched = LinearImage::new(image.width, image.height, image.channels, output.data)
+        .map_err(|error| error.to_string())?;
+    Ok((
+        stretched,
+        DisplayStretch {
+            domain,
+            plans: output.plans,
+        },
+    ))
+}
+
+/// The stars of a display-stretched image: the image with its stars,
+/// unscreened from the same image without them. Screening the result over
+/// `starless` gives `original` back. The formula is the one Seiza's RGB
+/// star screen uses; a pixel either image does not cover is `NaN`.
+pub fn unscreen(original: f32, starless: f32) -> f32 {
+    if !original.is_finite() || !starless.is_finite() {
+        f32::NAN
+    } else if starless >= 1.0 {
+        0.0
+    } else {
+        ((original - starless) / (1.0 - starless)).clamp(0.0, 1.0)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use seiza_background::{BackgroundConfig, CorrectionMode};
+
+    #[test]
+    fn stars_unscreened_screen_back_onto_the_starless_image() {
+        for (original, starless) in [(0.8_f32, 0.3_f32), (0.3, 0.3), (0.05, 0.0), (0.99, 0.95)] {
+            let stars = unscreen(original, starless);
+            // Screen: 1 - (1 - a)(1 - b).
+            let screened = 1.0 - (1.0 - starless) * (1.0 - stars);
+            assert!((screened - original).abs() < 1e-6, "{original} {starless}");
+        }
+        assert_eq!(unscreen(0.2, 0.4), 0.0, "a darker original gives no star");
+        assert!(unscreen(f32::NAN, 0.1).is_nan());
+    }
     use seiza_stacking::SimilarityTransform;
 
     const WIDTH: usize = 96;
