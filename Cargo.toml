@@ -54,7 +54,7 @@ globset = "0.4"
 semver = "1"
 byteorder = "1.5"
 seiza = "0.57.0"
-seiza-download = "0.12.0"
+seiza-download = "0.12.1"
 # The learned noise model. It links nothing native: ONNX Runtime is found and
 # opened at run time, and only after a person asked PSF Guard to download it.
 seiza-model = "0.8.0"
@@ -185,12 +185,3 @@ panic = "unwind"
 [build-dependencies]
 tauri-build = { version = "2.7.4", features = [] }
 toml_edit = "0.25"
-
-
-# Temporary: the published seiza-download 0.12.0 depends on zip 4.6, which has
-# security advisories (RUSTSEC-2026-0548 and others). Seiza #494 moved it to
-# zip 9.8 without changing anything else, and Seiza 0.57.0 has that change in
-# its source, but crates.io still has only seiza-download 0.12.0. Remove this
-# once crates.io has a newer seiza-download.
-[patch.crates-io]
-seiza-download = { git = "https://github.com/theatrus/seiza", rev = "b16f18d5d33134db0c73d88f09b8d1d872ef50ed" }
