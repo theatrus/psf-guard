@@ -506,66 +506,19 @@ pub(super) fn apply(
         let mut outcome = if let Some(cached) = cached {
             cached
         } else {
-            let have_evidence = std::iter::once(&sources.narrowband)
-                .chain(&sources.references)
-                .all(|s| s.saturation.is_some() || s.clipping_revision.is_some());
-            let measured = if have_evidence {
-                let masks: Vec<_> = std::iter::once(&role)
-                    .chain(&references)
-                    .map(|r| {
-                        masks
-                            .get(r)
-                            .cloned()
-                            .unwrap_or_else(|| vec![0; grid.0 * grid.1])
-                    })
-                    .collect();
-                let borrowed: Vec<_> = masks.iter().map(Vec::as_slice).collect();
-                seiza_stacking::measure_and_fit_continuum_masked(
-                    &raw[&role],
-                    &raw_references,
-                    &sources,
-                    &borrowed,
-                    &[],
-                    &config.fit,
-                    &config.photometry,
-                )
-                .map_err(|e| e.to_string())?
-            } else {
-                ContinuumFitOutcome::Skipped{reason:seiza_stacking::ContinuumSkipReason::UnknownSaturation,
-                    detail:"Producer clipping maps or explicit physical working-unit limits are required for every input".into(),diagnostics:Default::default()}
-            };
-            if config.mode == ContinuumMode::Manual {
-                if settings.coefficients.len() != references.len() {
-                    return Err(format!(
-                        "Enter {} manual continuum weights for {}",
-                        references.len(),
-                        role.label()
-                    ));
-                }
-                let ratios = if !settings.reference_flux_ratios.is_empty() {
-                    settings.reference_flux_ratios.clone()
-                } else {
-                    match &measured {
-                        ContinuumFitOutcome::Fitted { plan } => plan.reference_flux_ratios.clone(),
-                        ContinuumFitOutcome::Skipped { diagnostics, .. } => {
-                            diagnostics.reference_flux_ratios.clone()
-                        }
-                    }
-                };
-                ContinuumFitOutcome::Fitted {
-                    plan: ContinuumPlan {
-                        schema_version: 1,
-                        psf_matching: None,
-                        sources: sources.clone(),
-                        coefficients: settings.coefficients.clone(),
-                        reference_flux_ratios: ratios,
-                        origin: ContinuumOrigin::Manual,
-                        diagnostics: None,
-                    },
-                }
-            } else {
-                measured
-            }
+            let line_masks: Vec<Option<&[u8]>> = std::iter::once(&role)
+                .chain(&references)
+                .map(|r| masks.get(r).map(Vec::as_slice))
+                .collect();
+            crate::color_steps::fit_continuum_line(
+                &raw[&role],
+                &raw_references,
+                &sources,
+                &line_masks,
+                config,
+                settings,
+                role.label(),
+            )?
         };
         if let ContinuumFitOutcome::Fitted { plan } = &mut outcome {
             progress.begin(

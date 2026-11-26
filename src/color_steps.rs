@@ -10,7 +10,10 @@
 //! `server::stack_preview::color` and moves here step by step.
 
 use crate::astrometry::AstrometrySolutionResponse;
-use crate::server::stack_preview::color::{StackBackgroundExtraction, StackColorRole};
+use crate::server::stack_preview::color::{
+    ContinuumMode, EmissionLineSettings, EmissionProcessing, StackBackgroundExtraction,
+    StackColorRole,
+};
 use crate::server::stack_preview::color_calibration::{
     calibrate_channels, interleave, StackColorCalibration, StackColorCalibrationOutcome,
     StackColorCalibrationSkip, StackColorCalibrationSkipReason, StarPlacement,
@@ -406,6 +409,86 @@ impl ChannelDeconvolution {
         stretch::store_deconvolution(cache, &self.id, &restored, &frame.headers, &result)?;
         Ok((restored, false))
     }
+}
+
+/// Fits the continuum under one emission line from broadband references:
+/// the step PSF Guard's color previews run before they subtract it.
+///
+/// `line` and `references` are linear and on one grid, and still have
+/// their stars, which the fit measures. `masks` has one entry per input,
+/// the line first: the pixels its stack clipped, one byte each, or `None`
+/// where the stack kept no map. Every input needs a map or an explicit
+/// saturation level in `config`; without them the fit is skipped, because
+/// a clipped star would bias it. In manual mode the settings' weights are
+/// the plan, and the fit only supplies flux ratios it lacks.
+#[allow(clippy::too_many_arguments)]
+pub fn fit_continuum_line(
+    line: &LinearImage,
+    references: &[&LinearImage],
+    sources: &seiza_stacking::ContinuumSources,
+    masks: &[Option<&[u8]>],
+    config: &EmissionProcessing,
+    settings: &EmissionLineSettings,
+    label: &str,
+) -> Result<seiza_stacking::ContinuumFitOutcome, String> {
+    use seiza_stacking::{ContinuumFitOutcome, ContinuumOrigin, ContinuumPlan};
+    let pixels = sources.width * sources.height;
+    let have_evidence = std::iter::once(&sources.narrowband)
+        .chain(&sources.references)
+        .all(|source| source.saturation.is_some() || source.clipping_revision.is_some());
+    let measured = if have_evidence {
+        let filled: Vec<Vec<u8>> = masks
+            .iter()
+            .map(|mask| mask.map_or_else(|| vec![0; pixels], <[u8]>::to_vec))
+            .collect();
+        let borrowed: Vec<&[u8]> = filled.iter().map(Vec::as_slice).collect();
+        seiza_stacking::measure_and_fit_continuum_masked(
+            line,
+            references,
+            sources,
+            &borrowed,
+            &[],
+            &config.fit,
+            &config.photometry,
+        )
+        .map_err(|error| error.to_string())?
+    } else {
+        ContinuumFitOutcome::Skipped {
+            reason: seiza_stacking::ContinuumSkipReason::UnknownSaturation,
+            detail: "Producer clipping maps or explicit physical working-unit limits are required for every input".into(),
+            diagnostics: Default::default(),
+        }
+    };
+    if config.mode != ContinuumMode::Manual {
+        return Ok(measured);
+    }
+    if settings.coefficients.len() != references.len() {
+        return Err(format!(
+            "Enter {} manual continuum weights for {label}",
+            references.len()
+        ));
+    }
+    let ratios = if !settings.reference_flux_ratios.is_empty() {
+        settings.reference_flux_ratios.clone()
+    } else {
+        match &measured {
+            ContinuumFitOutcome::Fitted { plan } => plan.reference_flux_ratios.clone(),
+            ContinuumFitOutcome::Skipped { diagnostics, .. } => {
+                diagnostics.reference_flux_ratios.clone()
+            }
+        }
+    };
+    Ok(ContinuumFitOutcome::Fitted {
+        plan: ContinuumPlan {
+            schema_version: 1,
+            psf_matching: None,
+            sources: sources.clone(),
+            coefficients: settings.coefficients.clone(),
+            reference_flux_ratios: ratios,
+            origin: ContinuumOrigin::Manual,
+            diagnostics: None,
+        },
+    })
 }
 
 /// What [`measure_color_gains`] found.

@@ -204,6 +204,10 @@ pub fn channel_label(channel: &str) -> String {
     if let Some(input) = channel.strip_suffix("@stars") {
         return format!("{} stars", channel_label(input));
     }
+    // An emission line with the continuum under it subtracted.
+    if let Some(input) = channel.strip_suffix("@line") {
+        return format!("{} line", channel_label(input));
+    }
     match channel {
         "luminance" => "L".to_string(),
         "red" => "R".to_string(),

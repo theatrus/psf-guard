@@ -6,6 +6,7 @@
 
 #[path = "emission.rs"]
 mod emission;
+pub(crate) use emission::{ContinuumMode, EmissionLineSettings, EmissionProcessing};
 #[path = "narrowband.rs"]
 mod narrowband;
 

@@ -57,6 +57,20 @@ pub async fn studio_sources(options: StudioSourcesOptions) -> Result<()> {
     for stack in &stacks {
         let path = folder.join(stack_file(stack));
         let bytes = server.download_stack(stack, &path).await?;
+        // Where the stack's frames clipped, for continuum subtraction.
+        let clipped = server
+            .download_clipped(stack, &folder.join(clipped_file(stack)))
+            .await
+            .unwrap_or_else(|error| {
+                println!(
+                    "  No clipping map of the {} stack: {error}",
+                    stack.filter_name
+                );
+                None
+            });
+        if clipped.is_none() {
+            println!("  The {} stack has no clipping map", stack.filter_name);
+        }
         println!(
             "Downloaded the {} stack ({} frames, {:.1} MB)",
             stack.filter_name,
@@ -170,6 +184,11 @@ const PATHS_FILE: &str = "paths.json";
 /// job can hold several channels, one per group.
 fn stack_file(stack: &StackColorSource) -> String {
     format!("{}-{}.fits", stack.job_id, stack.group_index)
+}
+
+/// The name of a stack's clipping map in its sources folder.
+fn clipped_file(stack: &StackColorSource) -> String {
+    format!("{}-{}-clipped.fits", stack.job_id, stack.group_index)
 }
 
 /// Where one channel's stack is: the file a person named for it, or the
@@ -477,9 +496,28 @@ fn prepare_store(
         .iter()
         .map(|(role, path)| (*role, path.as_path()))
         .collect();
+    // Continuum subtraction, when the document asks for it, with each
+    // stack's clipping map from the sources folder.
+    let continuum =
+        processing
+            .emission
+            .clone()
+            .map(|config| crate::studio_sources::ChannelContinuum {
+                config,
+                clipping: stacks
+                    .iter()
+                    .filter_map(|stack| {
+                        let map = crate::server::stack_preview::read_clipped(
+                            &folder.join(clipped_file(stack)),
+                        )?;
+                        Some((stack.role, map))
+                    })
+                    .collect(),
+            });
     let mut prepared = RegisteredChannels::prepare(
         &inputs,
         (!tools.chains.is_empty() || !tools.deconvolutions.is_empty()).then_some(&tools),
+        continuum.as_ref(),
         background.as_ref(),
         &seiza_stacking::GpuOptions::cpu(),
     )?;
@@ -519,6 +557,9 @@ fn prepare_store(
             .map(|step| step.provider.as_str())
             .collect();
         println!("  {role:?} tools: {}", ran.join(", "));
+    }
+    for (role, words) in &prepared.continuum {
+        println!("  {} continuum: {words}", role.label());
     }
     for placement in &prepared.placements {
         match &placement.registration {

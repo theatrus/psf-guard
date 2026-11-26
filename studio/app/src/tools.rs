@@ -212,15 +212,61 @@ impl Studio {
     /// Every input's tools, to tell whether the store was prepared for
     /// them.
     fn all_chains(&self) -> serde_json::Value {
-        self.document
+        let mut chains = self
+            .document
             .channels()
             .into_iter()
             .map(|channel| {
                 let chain = self.chain(&channel);
                 (channel, serde_json::Value::Array(chain))
             })
-            .collect::<serde_json::Map<_, _>>()
-            .into()
+            .collect::<serde_json::Map<_, _>>();
+        // Continuum subtraction is prepared with the store as well.
+        chains.insert(
+            "continuum".to_string(),
+            self.continuum_step()
+                .map_or(serde_json::Value::Null, |(_, settings)| settings),
+        );
+        chains.into()
+    }
+
+    /// The document's continuum subtraction step and its settings, if it
+    /// has one that is on.
+    pub(super) fn continuum_step(&self) -> Option<(uuid::Uuid, serde_json::Value)> {
+        self.document
+            .stage(StageKind::Linear)
+            .steps
+            .iter()
+            .filter(|step| step.enabled)
+            .find_map(|step| match &step.kind {
+                StepKind::Operation {
+                    operation,
+                    settings,
+                    ..
+                } if operation == flow_operations::EMISSION => Some((step.id, settings.clone())),
+                _ => None,
+            })
+    }
+
+    /// Turns continuum subtraction on, with Seiza's automatic fit, or off.
+    /// It takes effect when the store is prepared again.
+    pub(super) fn set_continuum(&mut self, on: bool) {
+        match (on, self.continuum_step()) {
+            (true, None) => {
+                let step = StepRecord::new(StepKind::Operation {
+                    operation: flow_operations::EMISSION.to_string(),
+                    accepts: Accepts::Linear,
+                    settings: serde_json::json!({}),
+                });
+                let _ = self
+                    .document
+                    .insert_step(StageKind::Linear, usize::MAX, step);
+            }
+            (false, Some((id, _))) => {
+                self.document.remove_step(id);
+            }
+            _ => {}
+        }
     }
 
     /// Records that the store the canvas draws was prepared for the
@@ -682,6 +728,11 @@ impl Studio {
             let _ = self
                 .document
                 .insert_step(StageKind::Sources, usize::MAX, source);
+            // A line with its continuum subtracted is an input to add to a
+            // part; stars go back on top at once.
+            if name.ends_with("@line") {
+                continue;
+            }
             let mut layer = LayerRecord::new(
                 &channel_label(&name),
                 LayerSource::Band { band: name.clone() },

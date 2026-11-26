@@ -152,28 +152,53 @@ impl Server {
 
     /// Downloads a channel stack's FITS to `path`, a piece at a time.
     pub async fn download_stack(&self, stack: &StackColorSource, path: &Path) -> Result<u64> {
+        self.download(stack, "fits", path)
+            .await?
+            .ok_or_else(|| anyhow!("the server has no {} stack", stack.filter_name))
+    }
+
+    /// Downloads the map of where a stack's frames clipped, which the
+    /// stacker recorded. `None` when the stack has none.
+    pub async fn download_clipped(
+        &self,
+        stack: &StackColorSource,
+        path: &Path,
+    ) -> Result<Option<u64>> {
+        self.download(stack, "clipped", path).await
+    }
+
+    /// Downloads one file of a stack to `path` through a partial file.
+    /// `None` when the server has no such file.
+    async fn download(
+        &self,
+        stack: &StackColorSource,
+        file: &str,
+        path: &Path,
+    ) -> Result<Option<u64>> {
         use std::io::Write;
         let url = format!(
-            "{}/stack-previews/{}/{}/fits?v={}",
+            "{}/stack-previews/{}/{}/{file}?v={}",
             self.database_url, stack.job_id, stack.group_index, stack.artifact_revision
         );
-        let mut response = self
-            .get(url)
-            .send()
-            .await?
+        let response = self.get(url).send().await?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND && file != "fits" {
+            let _ = std::fs::remove_file(path);
+            return Ok(None);
+        }
+        let mut response = response
             .error_for_status()
             .with_context(|| format!("downloading the {} stack", stack.filter_name))?;
         let partial = path.with_extension("fits.part");
-        let mut file = std::fs::File::create(&partial)
+        let mut output = std::fs::File::create(&partial)
             .with_context(|| format!("creating {}", partial.display()))?;
         let mut bytes = 0;
         while let Some(chunk) = response.chunk().await? {
-            file.write_all(&chunk)?;
+            output.write_all(&chunk)?;
             bytes += chunk.len() as u64;
         }
-        file.sync_all()?;
+        output.sync_all()?;
         std::fs::rename(&partial, path).with_context(|| format!("writing {}", path.display()))?;
-        Ok(bytes)
+        Ok(Some(bytes))
     }
 }
 
@@ -219,6 +244,22 @@ pub struct RegisteredChannels {
     /// The processing tools that ran on each channel that had any, with
     /// their settings as they were run.
     pub tools: Vec<(StackColorRole, ProcessingChain)>,
+    /// What continuum subtraction did for each emission line it was asked
+    /// for, in words.
+    pub continuum: Vec<(StackColorRole, String)>,
+}
+
+/// Continuum subtraction: its settings, and where each channel's stack
+/// clipped, in the channel's own frame, as its stacker recorded it.
+pub struct ChannelContinuum {
+    pub config: crate::server::stack_preview::color::EmissionProcessing,
+    pub clipping: BTreeMap<StackColorRole, LinearImage>,
+}
+
+/// The name of the channel that holds an emission line with the continuum
+/// under it subtracted, in a store that keeps both.
+pub fn line_channel(channel: &str) -> String {
+    format!("{channel}@line")
 }
 
 impl RegisteredChannels {
@@ -240,6 +281,7 @@ impl RegisteredChannels {
     pub fn prepare(
         stacks: &[(StackColorRole, &Path)],
         tools: Option<&ChannelTools<'_>>,
+        continuum: Option<&ChannelContinuum>,
         background: Option<&StackBackgroundExtraction>,
         gpu: &GpuOptions,
     ) -> Result<Self> {
@@ -363,6 +405,131 @@ impl RegisteredChannels {
             }
         }
 
+        // Continuum subtraction, with the steps PSF Guard's color previews
+        // run: the continuum under each line is fitted on the stacks as
+        // they came, which still have the stars the fit measures, and then
+        // subtracted from the line in its last state before the background:
+        // after its tools, when the line and its references all have them.
+        let mut continuum_results = Vec::new();
+        if let Some(continuum) = continuum.filter(|continuum| {
+            continuum.config.mode != crate::server::stack_preview::color::ContinuumMode::Off
+        }) {
+            use seiza_stacking::{
+                ContinuumFitOutcome, ContinuumSource, ContinuumSources, ContinuumTransfer,
+            };
+            let (width, height) = (reference.1, reference.2);
+            let image = |samples: Vec<f32>| LinearImage::new(width, height, 1, samples);
+            for (line, role) in roles.iter().enumerate() {
+                let Some(settings) = continuum.config.lines.get(role) else {
+                    continue;
+                };
+                let wanted = if *role == StackColorRole::Oiii {
+                    vec![StackColorRole::Green, StackColorRole::Blue]
+                } else {
+                    vec![StackColorRole::Red]
+                };
+                let Some(references) = wanted
+                    .iter()
+                    .map(|wanted| roles.iter().position(|other| other == wanted))
+                    .collect::<Option<Vec<usize>>>()
+                else {
+                    continuum_results.push((
+                        *role,
+                        "not subtracted: the broadband channel under it is missing".to_string(),
+                    ));
+                    continue;
+                };
+                let inputs: Vec<usize> = std::iter::once(line).chain(references.clone()).collect();
+                let masks: Vec<Option<Vec<u8>>> = inputs
+                    .iter()
+                    .map(|input| {
+                        let map = continuum.clipping.get(&roles[*input])?;
+                        let placed = place(*input, map.clone()).ok()?;
+                        Some(
+                            placed
+                                .iter()
+                                .map(|value| u8::from(!value.is_finite() || *value > 0.0))
+                                .collect(),
+                        )
+                    })
+                    .collect();
+                let source = |input: usize, mask: &Option<Vec<u8>>| ContinuumSource {
+                    name: channel_names[input].clone(),
+                    revision: format!("studio:{}", channel_names[input]),
+                    transfer: ContinuumTransfer::Linear,
+                    saturation: continuum.config.saturation.get(&roles[input]).copied(),
+                    clipping_revision: mask
+                        .as_ref()
+                        .map(|_| format!("clipping:{}", channel_names[input])),
+                };
+                let sources = ContinuumSources {
+                    width,
+                    height,
+                    narrowband: source(line, &masks[0]),
+                    references: references
+                        .iter()
+                        .zip(&masks[1..])
+                        .map(|(input, mask)| source(*input, mask))
+                        .collect(),
+                };
+                let stacked: Vec<LinearImage> = inputs
+                    .iter()
+                    .map(|input| image(planes[*input].clone()))
+                    .collect::<Result<_, _>>()?;
+                let borrowed: Vec<&LinearImage> = stacked[1..].iter().collect();
+                let mask_slices: Vec<Option<&[u8]>> =
+                    masks.iter().map(|mask| mask.as_deref()).collect();
+                let outcome = crate::color_steps::fit_continuum_line(
+                    &stacked[0],
+                    &borrowed,
+                    &sources,
+                    &mask_slices,
+                    &continuum.config,
+                    settings,
+                    role.label(),
+                )
+                .map_err(|error| anyhow!("the continuum of {}: {error}", role.label()))?;
+                let plan = match outcome {
+                    ContinuumFitOutcome::Fitted { plan } => plan,
+                    ContinuumFitOutcome::Skipped { detail, .. } => {
+                        continuum_results.push((*role, format!("not subtracted: {detail}")));
+                        continue;
+                    }
+                };
+                // The starless state when every input has one.
+                let starless: Option<Vec<LinearImage>> = inputs
+                    .iter()
+                    .map(|input| {
+                        let wanted = tools_channel(&channel_names[*input]);
+                        let at = names.iter().position(|other| *other == wanted)?;
+                        image(planes[at].clone()).ok()
+                    })
+                    .collect();
+                let (from, state) = match &starless {
+                    Some(starless) => (starless, "after its tools"),
+                    None => (&stacked, "as stacked"),
+                };
+                let from_references: Vec<&LinearImage> = from[1..].iter().collect();
+                let residual =
+                    seiza_stacking::subtract_continuum(&from[0], &from_references, &sources, &plan)
+                        .map_err(|error| anyhow!("the continuum of {}: {error}", role.label()))?;
+                let residual = residual.data;
+                names.push(line_channel(&channel_names[line]));
+                planes.push(residual);
+                continuum_results.push((
+                    *role,
+                    format!(
+                        "subtracted {state}, weights {}",
+                        plan.coefficients
+                            .iter()
+                            .map(|weight| format!("{weight:.3}"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                ));
+            }
+        }
+
         let mut backgrounds = Vec::new();
         if let Some(extraction) = background {
             // Corrected in full: the strength is applied when the two
@@ -403,6 +570,7 @@ impl RegisteredChannels {
             placements,
             backgrounds,
             tools: tool_runs,
+            continuum: continuum_results,
         })
     }
 }
@@ -620,6 +788,7 @@ mod tests {
             placements: Vec::new(),
             backgrounds: Vec::new(),
             tools: Vec::new(),
+            continuum: Vec::new(),
         }
     }
 

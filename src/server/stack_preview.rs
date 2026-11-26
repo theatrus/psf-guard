@@ -2395,6 +2395,34 @@ pub async fn download_stack_preview_fits(
         })
 }
 
+/// GET …/stack-previews/{job}/{group}/clipped: where the stack's frames
+/// clipped, as the stacker recorded it, for continuum subtraction in
+/// PSF-Studio. Not found when the stacker kept no map.
+pub async fn download_stack_preview_clipped(
+    ctx: DbContext,
+    Path((_db_id, job_id, group_index)): Path<(String, String, usize)>,
+) -> Result<Response, AppError> {
+    validate_job_id(&job_id)?;
+    let path = clipped_path(&ctx.stack_root, &job_id, group_index);
+    let file = tokio::fs::File::open(&path)
+        .await
+        .map_err(|_| AppError::NotFound)?;
+    let length = file
+        .metadata()
+        .await
+        .map_err(|error| AppError::InternalError(format!("Failed to stat clipped map: {error}")))?
+        .len();
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, "application/fits")
+        .header(CONTENT_LENGTH, length)
+        .header(CACHE_CONTROL, "private, no-cache")
+        .body(file_body(file))
+        .map_err(|error| {
+            AppError::InternalError(format!("Failed to build clipped map response: {error}"))
+        })
+}
+
 /// GET …/stack-previews/{job}/{group}/fits/window: a rectangle of the stack
 /// FITS, for the inspector's pointer readout.
 pub async fn read_stack_preview_window(
@@ -3280,7 +3308,7 @@ fn write_clipped(
 /// The clipped map [`write_clipped`] wrote at `path`, or `None` when there
 /// is none. One that cannot be read is logged and treated as absent: the
 /// stack still calibrates, only without rendering clipped cores neutral.
-fn read_clipped(path: &FsPath) -> Option<seiza_stacking::LinearImage> {
+pub(crate) fn read_clipped(path: &FsPath) -> Option<seiza_stacking::LinearImage> {
     if !path.exists() {
         return None;
     }

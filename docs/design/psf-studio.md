@@ -2317,6 +2317,25 @@ The link carries no token, so a server with user accounts refuses Studio's
 requests; Studio has no sign-in yet. Nothing runs on the server for the
 button: the page only makes the link.
 
+**Continuum subtraction** runs when a store is prepared, when the document
+has the step "Subtract continuum" (Continuum › Subtract on an Ha, OIII or
+SII input). The fit is `color_steps::fit_continuum_line`, which PSF Guard's
+color previews call too; Seiza's `subtract_continuum` then removes the
+continuum. The fit measures stars, so it runs on the stacks as they came;
+the subtraction is applied to the line in its starless state when the line
+and its references all have one. OIII's continuum comes from G and B, the
+others' from R. The result is a new input, `<line>@line` ("Ha line"), and
+the Emission lines part uses it when it is there.
+
+The fit needs to know where each stack clipped. `studio-sources` downloads
+the clipping map the stacker wrote (`…/stack-previews/{job}/{group}/clipped`,
+added for this). A map cannot be made from a finished stack, because only
+the stacker sees which frames clipped, so stack files from elsewhere need an
+explicit saturation level per input in the step's settings. Seiza refuses a
+fit whose held-out stars leave large residuals; on the Sh2-157 stacks it
+refused all three lines until its pixel-residual check was turned off,
+which PSF Guard's previews would do as well.
+
 Input deconvolution runs when a store is prepared, before the input's
 tools, with the step PSF Guard's color previews run
 (`color_steps::deconvolve`), and its result is kept in the sources folder.

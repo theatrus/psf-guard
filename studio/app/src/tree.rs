@@ -563,7 +563,7 @@ impl Studio {
                 self.document.channels().iter().any(|c| c.contains('@')),
                 |tree| {
                     tree.child(
-                        self.section("stars", "Stars of inputs", false, cx, |this, cx| {
+                        self.section("stars", "Stars and lines", false, cx, |this, cx| {
                             div()
                                 .flex()
                                 .flex_col()

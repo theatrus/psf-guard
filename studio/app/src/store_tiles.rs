@@ -443,9 +443,9 @@ impl StoreTiles {
         let named = |name: String| self.names.iter().position(|other| *other == name);
         // The stars a tool took out of a channel are an input of their own.
         let is_band = |channel: usize| {
-            self.names
-                .get(channel)
-                .is_none_or(|name| !name.contains('@') || name.ends_with("@stars"))
+            self.names.get(channel).is_none_or(|name| {
+                !name.contains('@') || name.ends_with("@stars") || name.ends_with("@line")
+            })
         };
         let mut bands = Bands::default();
         for channel in (0..self.bands).filter(|channel| is_band(*channel)) {

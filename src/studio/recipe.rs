@@ -295,7 +295,9 @@ impl Document {
     pub fn default_tone(shows: &str) -> (f32, f32, BlendMode) {
         let input = shows.split('@').next().unwrap_or(shows);
         match LINES.iter().find(|(line, _)| *line == input) {
-            Some((_, hue)) if !shows.contains('@') => (*hue, 1.0, BlendMode::Screen),
+            Some((_, hue)) if !shows.contains('@') || shows.ends_with("@line") => {
+                (*hue, 1.0, BlendMode::Screen)
+            }
             _ => match COLOR.iter().position(|name| *name == input) {
                 Some(at) => (at as f32 * 120.0, 1.0, BlendMode::Screen),
                 None => (0.0, 0.0, BlendMode::Screen),
@@ -360,9 +362,18 @@ impl Document {
             }
             PartKind::Lines => {
                 let group = self.add_group(kind.label(), BlendMode::Screen);
+                let channels = self.channels();
                 for input in narrowband(inputs) {
                     let (hue, saturation, blend) = Self::default_tone(&input);
-                    self.add_layer_showing(&input, Some(group), hue, saturation, blend);
+                    // The line with its continuum subtracted, when the store
+                    // has it: what adds only the line's own light.
+                    let line = format!("{input}@line");
+                    let shows = if channels.contains(&line) {
+                        line
+                    } else {
+                        input
+                    };
+                    self.add_layer_showing(&shows, Some(group), hue, saturation, blend);
                 }
                 group
             }

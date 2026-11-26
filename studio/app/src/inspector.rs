@@ -309,9 +309,35 @@ impl Studio {
                 "The stack as PSF Guard made it, before any step.",
             ))
             .child(self.routes_block(channel, cx))
+            .children(self.continuum_block(channel, cx))
             .child(self.tools_block(channel, cx))
             .child(self.zoom_notes(channel))
             .into_any_element()
+    }
+
+    /// For an emission line: whether the continuum under it is subtracted,
+    /// which adds the line as an input of its own.
+    fn continuum_block(&self, channel: &str, cx: &mut Context<Self>) -> Option<gpui::Div> {
+        if !["ha", "oiii", "sii"].contains(&channel) {
+            return None;
+        }
+        let on = self.continuum_step().is_some();
+        Some(
+            column()
+                .child(Self::field(
+                    "Continuum",
+                    Self::segmented()
+                        .child(Self::act("Keep", "continuum-keep", !on, cx, |this| {
+                            this.set_continuum(false)
+                        }))
+                        .child(Self::act("Subtract", "continuum-subtract", on, cx, |this| {
+                            this.set_continuum(true)
+                        })),
+                ))
+                .children(Self::help(
+                    "Subtract fits the broadband light under each line from the R, G and B stacks and adds the line alone as an input, such as Ha line. Run tools to prepare it.",
+                )),
+        )
     }
 
     fn inspect_input_step(&self, channel: &str, id: Uuid, cx: &mut Context<Self>) -> AnyElement {
