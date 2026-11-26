@@ -186,3 +186,10 @@ panic = "unwind"
 tauri-build = { version = "2.7.4", features = [] }
 toml_edit = "0.25"
 
+
+# Temporary: the published seiza-download 0.12.0 depends on zip 4.6, which has
+# security advisories (RUSTSEC-2026-0548 and others). Seiza #494 moved it to
+# zip 9.8 without changing anything else. Remove this once a Seiza release
+# includes #494.
+[patch.crates-io]
+seiza-download = { git = "https://github.com/theatrus/seiza", rev = "bea223f1ab34ccd91555bc1b7575a960ad2dd932" }
