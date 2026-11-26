@@ -918,6 +918,8 @@ impl Renderer {
     /// Draws another document from now on, such as a store that was
     /// prepared again. Every tile of the document before is dropped.
     pub fn replace_source(&mut self, source: Arc<dyn TileSource>) {
+        // A sampling of the old document's picture is of no use now.
+        self.stop_sampling();
         let pyramid = source.pyramid();
         let bands = source.bands().max(1);
         let mut cache = TileCache::new(self.cache_budget_bytes, bands);
@@ -1835,7 +1837,17 @@ impl Renderer {
         let mut probe = self.probe.take().expect("a sampling");
         probe.samples.resize(patches.len(), None);
         self.probe_wanted.clear();
-        let mut drawn = 0;
+        // The patches drawn in this call are copied into one buffer, read
+        // once at the end, so the call waits for the GPU once.
+        let row_bytes = (size * 8).next_multiple_of(256);
+        let patch_bytes = u64::from(row_bytes) * u64::from(size);
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("picture samples"),
+            size: patch_bytes * PROBE_PATCHES_PER_CALL as u64,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut drawn: Vec<usize> = Vec::new();
         for (index, origin) in patches.iter().enumerate() {
             if probe.samples[index].is_some() {
                 continue;
@@ -1860,16 +1872,38 @@ impl Renderer {
             for key in &keys {
                 self.cache.touch(*key, self.frame);
             }
-            if drawn == PROBE_PATCHES_PER_CALL {
+            if drawn.len() == PROBE_PATCHES_PER_CALL {
                 continue;
             }
-            probe.samples[index] = Some(self.draw_patch(&mut probe, pane, crop, *origin, &keys));
-            drawn += 1;
+            let offset = patch_bytes * drawn.len() as u64;
+            self.draw_patch(&mut probe, pane, crop, *origin, &keys, (&buffer, offset));
+            drawn.push(index);
         }
-        // The tables and masks of the view are uploaded again next frame.
-        if drawn > 0 {
+        if !drawn.is_empty() {
+            // The tables and masks of the view are uploaded again next
+            // frame.
             self.stretches_version = None;
             self.masks_version = None;
+            buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+            let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+            if let Ok(mapped) = buffer.slice(..).get_mapped_range() {
+                for (place, index) in drawn.iter().enumerate() {
+                    let start = place * patch_bytes as usize;
+                    let patch = &mapped[start..start + patch_bytes as usize];
+                    let mut samples = Vec::with_capacity(size as usize * size as usize * 3);
+                    for row in patch.chunks(row_bytes as usize) {
+                        let pixels: &[u16] = bytemuck::cast_slice(&row[..size as usize * 8]);
+                        for pixel in pixels.as_chunks::<4>().0 {
+                            samples.extend(
+                                pixel[..3]
+                                    .iter()
+                                    .map(|bits| half::f16::from_bits(*bits).to_f32()),
+                            );
+                        }
+                    }
+                    probe.samples[*index] = Some(samples);
+                }
+            }
         }
         let done = probe
             .samples
@@ -1889,8 +1923,8 @@ impl Renderer {
         result
     }
 
-    /// Draws one patch of the picture into the sampling's targets and reads
-    /// its combined image back, as red, green and blue.
+    /// Draws one patch of the picture into the sampling's targets and
+    /// copies its combined image into `buffer` at `offset`, row by row.
     fn draw_patch(
         &mut self,
         probe: &mut PictureProbe,
@@ -1898,7 +1932,8 @@ impl Renderer {
         crop: Option<[f32; 4]>,
         origin: [u32; 2],
         keys: &[TileKey],
-    ) -> Vec<f32> {
+        (buffer, offset): (&wgpu::Buffer, u64),
+    ) {
         let size = probe.size;
         let mut instances = Vec::with_capacity(keys.len());
         let mut sources = Vec::with_capacity(keys.len());
@@ -1966,18 +2001,12 @@ impl Renderer {
             true,
         );
         let row_bytes = (size * 8).next_multiple_of(256);
-        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("picture sample"),
-            size: u64::from(row_bytes) * u64::from(size),
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
         encoder.copy_texture_to_buffer(
             self.targets.combined_texture.as_image_copy(),
             wgpu::TexelCopyBufferInfo {
-                buffer: &buffer,
+                buffer,
                 layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
+                    offset,
                     bytes_per_row: Some(row_bytes),
                     rows_per_image: None,
                 },
@@ -1991,23 +2020,13 @@ impl Renderer {
         self.queue.submit([encoder.finish()]);
         std::mem::swap(&mut self.targets, &mut probe.targets);
         (self.config.width, self.config.height) = surface;
+    }
 
-        buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
-        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
-        let mut samples = Vec::with_capacity(size as usize * size as usize * 3);
-        if let Ok(mapped) = buffer.slice(..).get_mapped_range() {
-            for row in mapped.chunks(row_bytes as usize) {
-                let pixels: &[u16] = bytemuck::cast_slice(&row[..size as usize * 8]);
-                for pixel in pixels.as_chunks::<4>().0 {
-                    samples.extend(
-                        pixel[..3]
-                            .iter()
-                            .map(|bits| half::f16::from_bits(*bits).to_f32()),
-                    );
-                }
-            }
-        }
-        samples
+    /// Stops a sampling of the picture: forgets the patches read and asks
+    /// for no more of its tiles.
+    pub fn stop_sampling(&mut self) {
+        self.probe = None;
+        self.probe_wanted.clear();
     }
 
     /// Draws the last frame again `frames` times into a texture of the
@@ -2058,7 +2077,6 @@ impl Renderer {
     }
 }
 
-/// The tiles of `level` that touch `rect`, grown by `ring` tiles on each side.
 const LAYERS_SHADER: &str = include_str!("layers.wgsl");
 const FINISH_SHADER: &str = include_str!("finish.wgsl");
 
@@ -2072,6 +2090,7 @@ fn shader_source(body: &str) -> String {
     )
 }
 
+/// The tiles of `level` that touch `rect`, grown by `ring` tiles on each side.
 fn keys_in(pyramid: &Pyramid, level: u8, rect: [f64; 4], ring: i64) -> Vec<TileKey> {
     let span = (TILE << level) as f64;
     let (across, down) = pyramid.tiles_across(level);

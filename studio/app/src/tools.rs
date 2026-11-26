@@ -998,6 +998,7 @@ impl Studio {
         let pyramid = source.pyramid();
         self.band_info = Arc::new(bands);
         self.analysed.clear();
+        self.source_generation += 1;
         self.levels = pyramid.levels;
         {
             let mut shared = self.canvas.0 .0.lock().expect("canvas state");

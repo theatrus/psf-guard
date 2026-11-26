@@ -707,14 +707,16 @@ fn push_heal(
 /// without its stretch analyses, and each band's background strength in it.
 /// What one frame has no room for is listed in the scene, never drawn
 /// without its mask.
-/// `picture_samples` are RGB samples of the combined picture, for the output
-/// stretches Seiza resolves from the picture.
+/// `picture_samples` are RGB samples of the combined picture, with the id of
+/// the sampling they came from, for the output stretches Seiza resolves from
+/// the picture. `chains` keeps output stretches resolved before.
 fn scene(
     document: &Document,
     bands: &Bands,
     view: &View,
     version: u64,
-    picture_samples: Option<&[f32]>,
+    picture_samples: Option<(u64, &[f32])>,
+    chains: &mut output_stretch::ResolvedChains,
 ) -> (Scene, Vec<BandState>) {
     let planned = plan(document, view);
     let mut states = vec![BandState::default(); bands.len()];
@@ -986,7 +988,7 @@ fn scene(
             _ => None,
         })
         .collect();
-    let mut resolved = output_stretch::resolve_chain(&configs, picture_samples).into_iter();
+    let mut resolved = chains.resolve(&configs, picture_samples).into_iter();
     let mut finish = Vec::new();
     let mut finish_stretches: Vec<[Vec<f32>; 3]> = Vec::new();
     for step in drawn_finish {
@@ -999,7 +1001,7 @@ fn scene(
                             "an output stretch, until the picture has been sampled".to_string()
                         }
                         output_stretch::NotDrawn::Refused(reason) => {
-                            format!("an output stretch Seiza refused: {reason}")
+                            format!("an output stretch Seiza could not resolve: {reason}")
                         }
                         output_stretch::NotDrawn::NeedsImage => {
                             "an output stretch that needs the engine".to_string()
@@ -1348,8 +1350,6 @@ impl Studio {
 
     // ---- the canvas -----------------------------------------------------
 
-    /// Each band's stretch analysis at these background strengths. An
-    /// analysis is kept, so a pane that returns to a place does not wait.
     /// What the canvas samples of the combined picture for the output
     /// stretches that Seiza resolves from the picture. `None` leaves the
     /// request the canvas has, because it already asks for the picture as
@@ -1379,6 +1379,7 @@ impl Studio {
                     })
             });
         if !wanted {
+            self.picture_samples = None;
             return self.picture_wanted.take().map(|_| None);
         }
         let (mut scene, states) = scene(
@@ -1387,22 +1388,23 @@ impl Studio {
             &Place::Final.view(),
             self.scene_version,
             None,
+            &mut output_stretch::ResolvedChains::default(),
         );
         scene.stretches = self.analysis(&states);
         let crop = self.crop_rect();
         let (width, height) = self.canvas.read(|shared| shared.canvas.document_size);
         let rect = crop.unwrap_or([0.0, 0.0, width as f32, height as f32]);
         let (patches, size) = picture_patches(rect);
-        // The picture is the scene's layers with their stretches, masks
-        // and heals, the inputs' states and the crop.
+        // The picture is the store's tiles, the scene's layers with their
+        // stretches, masks and heals, the inputs' states and the crop.
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        std::hash::Hash::hash(&self.source_generation, &mut hasher);
         std::hash::Hash::hash(
             &format!(
-                "{:?}{:?}{:?}{:?}{:?}{:?}{:?}{:?}",
+                "{:?}{:?}{:?}{:?}{:?}{:?}{:?}",
                 scene.layers,
                 scene.layer_bands,
                 scene.layer_stretches,
-                scene.masks,
                 scene.computed,
                 scene.heals,
                 states,
@@ -1410,6 +1412,21 @@ impl Studio {
             ),
             &mut hasher,
         );
+        // A painted mask can have many segments; their numbers are hashed
+        // as they are.
+        for segment in scene.masks.iter().flatten() {
+            let Segment {
+                from,
+                to,
+                radius,
+                hardness,
+                value,
+                _pad,
+            } = segment;
+            for number in [from[0], from[1], to[0], to[1], *radius, *hardness, *value] {
+                std::hash::Hash::hash(&number.to_bits(), &mut hasher);
+            }
+        }
         let id = std::hash::Hasher::finish(&hasher);
         if self.picture_wanted == Some(id) {
             return None;
@@ -1440,6 +1457,8 @@ impl Studio {
         self.refresh_canvas();
     }
 
+    /// Each band's stretch analysis at these background strengths. An
+    /// analysis is kept, so a pane that returns to a place does not wait.
     fn analysis(&mut self, states: &[BandState]) -> Arc<Vec<BandStretch>> {
         if let Some((_, known)) = self.analysed.iter().find(|(at, _)| at == states) {
             return known.clone();
@@ -1459,10 +1478,8 @@ impl Studio {
         // Samples of an earlier picture stand in until the new ones are
         // read, so an output stretch keeps its place while the picture
         // changes.
-        let samples = self
-            .picture_samples
-            .as_ref()
-            .map(|(_, samples)| samples.clone());
+        let samples = self.picture_samples.clone();
+        let mut chains = std::mem::take(&mut self.resolved_chains);
         let selected = self.selected.place(self.alone);
         let mut places = panes(self.split, &selected, &self.document);
         // While a mask is edited a person may watch the final picture in
@@ -1488,7 +1505,10 @@ impl Studio {
                     &self.band_info,
                     &place.view(),
                     self.scene_version,
-                    samples.as_deref().map(Vec::as_slice),
+                    samples
+                        .as_ref()
+                        .map(|(id, samples)| (*id, samples.as_slice())),
+                    &mut chains,
                 );
                 // The stretch is applied to the corrected samples, so each
                 // band's analysis follows its background strength.
@@ -1496,6 +1516,7 @@ impl Studio {
                 scene
             })
             .collect();
+        self.resolved_chains = chains;
         self.places = places;
         let scenes = Arc::new(scenes);
         // The selected row's mask shows over the image while a person has

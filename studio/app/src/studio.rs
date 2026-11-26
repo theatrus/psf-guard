@@ -533,6 +533,11 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
             }
         };
         animate = stats.tiles_coarse > 0 || stats.tiles_in_flight > 0 || stats.tiles_uploaded > 0;
+        // A sampling no document asks for any more is stopped.
+        if canvas.probe.is_none() && probe_tables.take().is_some() {
+            renderer.stop_sampling();
+            sampled = None;
+        }
         // The combined picture is sampled between frames, a few patches at
         // a time, until every patch is read.
         if let Some(request) = canvas.probe.clone()
@@ -673,6 +678,11 @@ pub struct Studio {
     picture_samples: Option<(u64, Arc<Vec<f32>>)>,
     /// The id of the sampling last asked for.
     picture_wanted: Option<u64>,
+    /// Counts the stores shown, so a sampling of the picture follows a store
+    /// that is prepared again.
+    source_generation: u64,
+    /// Output stretches resolved lately.
+    resolved_chains: crate::output_stretch::ResolvedChains,
     /// The levels in the document's pyramid.
     levels: u8,
     /// The processing tools: which this computer has, and the run in hand.
@@ -842,6 +852,8 @@ impl Studio {
                 analysed: Vec::new(),
                 picture_samples: None,
                 picture_wanted: None,
+                source_generation: 0,
+                resolved_chains: Default::default(),
                 levels,
                 tools,
             };
