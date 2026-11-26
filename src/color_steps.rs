@@ -597,7 +597,7 @@ pub fn stretch_star_layer(
 ) -> Result<[Vec<f32>; 3], String> {
     let original = interleave(original[0], original[1], original[2])?;
     let starless = interleave(starless[0], starless[1], starless[2])?;
-    let layer = seiza_stacking::stretch_rgb_stars(&original, &starless, amount)
+    let layer = seiza_compose::stretch_rgb_stars(&original, &starless, amount)
         .map_err(|error| error.to_string())?;
     let pixels = layer.data.len() / 3;
     let mut channels = [

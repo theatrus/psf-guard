@@ -363,8 +363,11 @@ are created again. Calibration master previews can also render again after
 an app update; this does not rebuild the masters.
 
 Stack cache keys use `seiza_stacking::OUTPUT_VERSION`; stretch results and
-card previews use `seiza_stretch::OUTPUT_VERSION`. These identify compatible
-output, rather than the installed crate release. Card previews record
+card previews use `seiza_stretch::OUTPUT_VERSION`. Color previews and their
+prepared inputs also use `seiza_compose::OUTPUT_VERSION`, the version of
+Seiza's color composition: palettes, LRGB, color calibration, narrowband
+balance and star layers. These identify compatible output, rather than the
+installed crate release. Card previews record
 `preview_stretch_version`, and a new `preview_revision` lets the page load
 the refreshed image without discarding the completed stack.
 
@@ -2371,7 +2374,7 @@ RGB and LRGB previews, and one-shot-color stacks, are color calibrated
 against Gaia star colors by default. Narrowband palettes are false color and
 never are.
 
-Seiza does the calibration (`seiza_stacking::calibrate_and_stretch`). It
+Seiza does the calibration (`seiza_compose::calibrate_and_stretch`). It
 measures each Gaia star in R, G and B, fits instrumental color against Gaia
 BP−RP, and finds the gains that make a star the Sun's color come out white.
 It also offsets each channel so the sky is one gray. PSF Guard gives Seiza

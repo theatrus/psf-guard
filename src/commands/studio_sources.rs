@@ -1346,12 +1346,11 @@ fn automatic_crop(prepared: &RegisteredChannels) -> Option<[usize; 4]> {
         .filter(|name| !name.contains('@'))
         .filter_map(|name| Some((name.clone(), prepared.plane(name)?)))
         .collect();
-    let samples: Vec<seiza_stacking::ChannelSamples<'_>> = inputs
+    let samples: Vec<seiza_compose::ChannelSamples<'_>> = inputs
         .iter()
-        .map(|(name, image)| seiza_stacking::ChannelSamples::new(name, image))
+        .map(|(name, image)| seiza_compose::ChannelSamples::new(name, image))
         .collect();
-    let report =
-        seiza_stacking::crop_report(&samples, seiza_stacking::ColorCrop::Inscribed).ok()?;
+    let report = seiza_compose::crop_report(&samples, seiza_compose::ColorCrop::Inscribed).ok()?;
     let region = report.region;
     Some([region.x, region.y, region.width, region.height])
 }
