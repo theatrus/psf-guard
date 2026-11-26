@@ -1964,6 +1964,60 @@ Limits:
 - The layered stretch needs the whole image, so the canvas does not draw it
   as an output stretch either.
 
+### Final adjustments, histogram and 16-bit export (2026-11-26)
+
+Asked for: final adjustments of the picture such as a stretch, the tone
+and color controls Adobe Camera Raw has around its histogram, and saving
+the final picture as FITS or TIFF without leaving 16-bit precision.
+
+**Tone.** A Finish step, **Tone**, has Camera Raw's Basic controls:
+
+| Control | Range | What it does |
+|---|---|---|
+| Exposure | −3 to +3 stops | Multiplies the picture by 2^exposure. |
+| Contrast | −1 to +1 | An S-curve around the middle, or a flattening one. |
+| Highlights | −1 to +1 | Raises or lowers the bright tones, most at two thirds of the way up. |
+| Shadows | −1 to +1 | Raises or lowers the dark tones, most at a third of the way up. |
+| Whites | −1 to +1 | Moves the white point: up clips more of the brightest tones to white. |
+| Blacks | −1 to +1 | Moves the black point: down clips more of the darkest tones to black. |
+| Vibrance | −1 to +1 | Saturation that changes muted colors more than vivid ones. |
+| Saturation | −1 to +1 | Saturation of every color alike. |
+
+The tone controls make one curve of the luminance. Studio applies it as it
+applies a luminance-preserving output stretch: each pixel is scaled by one
+factor, kept in gamut, so the curve changes brightness and not hue. The
+curve is computed on the CPU into a stretch-table row, so the canvas, the
+histogram and an export apply the same curve. Highlights and Shadows are
+global here; Camera Raw's are local, which needs the blurred image that a
+clarity control would also need.
+
+**Histogram.** The inspector of the Final picture, of a Tone step and of an
+output stretch shows the histogram of the final picture: red, green, blue
+and luminance, with the share of pixels clipped to black and to white.
+Studio computes it from the full-resolution samples of the combined picture
+that output stretches already use, with the Finish steps applied on the
+CPU.
+
+**Export.** **Export** in the Final picture's inspector writes the whole
+picture, cropped, at full resolution: TIFF or PNG at 16 bits per channel,
+or FITS or XISF as 32-bit floats, through Seiza's `seiza_image_io::save_f32`,
+which replaces the destination only once the file is complete.
+
+The canvas cannot make that file. Its tiles hold half floats, about three
+significant digits, and so do its stretch tables. So a CPU render mirrors
+the canvas's shaders, pass for pass, over the same description of the
+picture the GPU gets (`psf_studio_render::Pane`), with the store's 32-bit
+samples and the stretch tables in 32-bit floats. A table of 4,096 entries
+indexed by square root, interpolated, follows Seiza's curves to about 1e-7,
+well inside a 16-bit step. The CPU render works in tiles with a margin wide
+enough for mask smoothing and heals, so unlike the canvas's patches it has
+no seams.
+
+The two renders of one picture must agree. A parity check draws the
+sampling patches both ways and compares them; the differences allowed are
+those of half floats. A change to a shader changes its CPU twin in the same
+commit.
+
 ## Processing tools in Studio (2026-11-25, first part)
 
 The tools are the ones PSF Guard's color processing runs: sharpening,

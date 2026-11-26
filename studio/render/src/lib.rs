@@ -2,6 +2,7 @@
 //! document drawn with wgpu. It knows nothing about the window toolkit; the
 //! host hands it a `wgpu::Surface`.
 
+pub mod cpu;
 pub mod display;
 mod renderer;
 mod source;

@@ -136,6 +136,14 @@ pub enum FinishKind {
     /// the pixel's Rec. 709 luminance and the pixel is scaled to match, as
     /// Seiza's luminance-preserving strategy does.
     Stretch { table: usize, luminance: bool },
+    /// Tone and color: [`Pane::finish_stretches`] entry `table` holds a
+    /// curve of the luminance, applied as a luminance stretch is, then
+    /// `vibrance` and `saturation`, each from -1 to 1, change the colors.
+    Tone {
+        table: usize,
+        vibrance: f32,
+        saturation: f32,
+    },
 }
 
 /// One step of the Finish stage, applied to the combined image.
@@ -1411,13 +1419,25 @@ impl Renderer {
                 FinishKind::Saturation => (2.0, [0.0; 2], [0.0; 3]),
                 FinishKind::Heal { offset, shift } => (3.0, offset, shift),
                 FinishKind::Stretch { .. } => (4.0, [0.0; 2], [0.0; 3]),
-            };
-            // A stretch's first row, and whether it maps luminance.
-            let (first_row, luminance) = match step.kind {
-                FinishKind::Stretch { table, luminance } => (
-                    (MAX_LAYERS + 3 * table.min(MAX_FINISH_STEPS - 1)) as f32,
-                    if luminance { 1.0 } else { 0.0 },
+                FinishKind::Tone {
+                    vibrance,
+                    saturation,
+                    ..
+                } => (
+                    5.0,
+                    [0.0; 2],
+                    [vibrance.clamp(-1.0, 1.0), saturation.clamp(-1.0, 1.0), 0.0],
                 ),
+            };
+            // A stretch's first row, and whether it maps luminance. Tone and
+            // color always does.
+            let first_row =
+                |table: usize| (MAX_LAYERS + 3 * table.min(MAX_FINISH_STEPS - 1)) as f32;
+            let (first_row, luminance) = match step.kind {
+                FinishKind::Stretch { table, luminance } => {
+                    (first_row(table), if luminance { 1.0 } else { 0.0 })
+                }
+                FinishKind::Tone { table, .. } => (first_row(table), 1.0),
                 _ => (0.0, 0.0),
             };
             *slot = [
