@@ -537,7 +537,7 @@ pub struct StackColorJob {
     pub cache_version: u32,
     pub stacking_version: String,
     /// The color composition the preview was made with. A preview from
-    /// before PSF Guard recorded it has none, and is made again.
+    /// before PSF Guard recorded it has none, and is out of date.
     #[serde(default)]
     pub compose_version: String,
     #[serde(default)]
@@ -2037,7 +2037,11 @@ pub(super) fn prepare_color_job(
             let rgb_chain = if calibration.is_some() {
                 super::rc_astro::rc_astro_chain_ids(
                     &ctx.id,
-                    &format!("rgb-stars:{rgb_input}:{calibration_key}"),
+                    // The chain reads the calibrated color picture, which
+                    // Seiza's color composition makes.
+                    &format!(
+                        "rgb-stars:{rgb_input}:{calibration_key}:{SEIZA_COMPOSE_OUTPUT_VERSION}"
+                    ),
                     &rgb_input,
                     &rgb_config,
                     &schemas,
@@ -2634,7 +2638,6 @@ fn color_input_cache_id(
     hasher.update(target_id.to_le_bytes());
     hasher.update(COLOR_INPUT_CACHE_VERSION.to_le_bytes());
     hasher.update(SEIZA_STACKING_OUTPUT_VERSION.as_bytes());
-    hasher.update(SEIZA_COMPOSE_OUTPUT_VERSION.as_bytes());
     if processing.background_extraction.is_some() {
         hasher.update(SEIZA_BACKGROUND_VERSION.as_bytes());
     }
@@ -2711,7 +2714,9 @@ fn color_rc_astro_chain_ids(
 ) -> Result<Vec<String>, AppError> {
     super::rc_astro::rc_astro_chain_ids(
         database_id,
-        &format!("color-channels:{input_id}"),
+        // The chain reads the combined color channels, which Seiza's color
+        // composition makes.
+        &format!("color-channels:{input_id}:{SEIZA_COMPOSE_OUTPUT_VERSION}"),
         &roles.map(role_cache_name).join(","),
         config,
         schemas,
@@ -9938,6 +9943,7 @@ mod tests {
             mosaic_retry_fingerprint: None,
             reference_image_id: Some(41),
             solution_fingerprint: Some("solve".into()),
+            compose_version: super::SEIZA_COMPOSE_OUTPUT_VERSION.into(),
             catalog: Some(crate::astrometry::AstrometryCatalogFileSignature {
                 name: "gaia_photometry".into(),
                 path: "/catalogs/stars-gaia-photometry.bin".into(),

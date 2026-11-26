@@ -114,7 +114,8 @@ pub const SEIZA_STACKING_OUTPUT_VERSION: &str = seiza_stacking::OUTPUT_VERSION;
 
 /// The Seiza release whose color composition this build reproduces:
 /// palettes, LRGB, color calibration, narrowband balance and star layers.
-/// Color previews and their linear inputs key on it, as stacks key on
+/// Color previews, the processing-tool runs on a color picture, and a
+/// one-shot-color stack's calibration key on it, as stacks key on
 /// [`SEIZA_STACKING_OUTPUT_VERSION`].
 pub const SEIZA_COMPOSE_OUTPUT_VERSION: &str = seiza_compose::OUTPUT_VERSION;
 

@@ -100,6 +100,11 @@ pub struct StackColorCalibrationBasis {
     pub solution_fingerprint: Option<String>,
     /// The Gaia photometry file, when one is installed.
     pub catalog: Option<AstrometryCatalogFileSignature>,
+    /// The release of Seiza's color composition that calibrates,
+    /// `seiza_compose::OUTPUT_VERSION`. Empty in a record from before PSF
+    /// Guard recorded it, which is then out of date.
+    #[serde(default)]
+    pub compose_version: String,
 }
 
 /// Why a preview was not color calibrated.
@@ -224,6 +229,7 @@ pub(super) fn plan(
         reference_image_id,
         solution_fingerprint,
         catalog: catalog.clone(),
+        compose_version: super::SEIZA_COMPOSE_OUTPUT_VERSION.into(),
     };
     let placement = match (solution, orientation) {
         (None, Some(orientation)) if super::canvas_astrometry::is_mosaic(Some(orientation)) => {
@@ -404,6 +410,7 @@ impl StackCalibrationSource {
             reference_image_id: self.reference_image_id,
             solution_fingerprint: self.solution.as_ref().map(solution_fingerprint),
             catalog: self.catalog.clone(),
+            compose_version: super::SEIZA_COMPOSE_OUTPUT_VERSION.into(),
         }
     }
 
@@ -463,6 +470,9 @@ pub(super) fn calibration_outdated(
     };
     if recorded.mosaic_canvas != now.mosaic_canvas {
         return Some("Out of date — mosaic color calibration now uses the canvas plate solve");
+    }
+    if recorded.compose_version != now.compose_version {
+        return Some("Out of date — Seiza's color calibration changed");
     }
     match (&recorded.catalog, &now.catalog) {
         (None, Some(_)) => return Some("Out of date — Gaia colors were installed"),
@@ -1104,6 +1114,18 @@ pub(super) mod tests {
             calibration_outdated(Some(&recorded), None, &source(true, None)),
             Some("Out of date — Gaia colors were removed")
         );
+        // Calibrated by another release of Seiza's color composition, or
+        // recorded before PSF Guard noted which.
+        for version in ["0.0.0", ""] {
+            let older = StackColorCalibrationBasis {
+                compose_version: version.into(),
+                ..recorded.clone()
+            };
+            assert_eq!(
+                calibration_outdated(Some(&older), None, &ready),
+                Some("Out of date — Seiza's color calibration changed")
+            );
+        }
         // A solve made since, or a different one.
         let unsolved = source(false, Some(10)).basis();
         assert_eq!(

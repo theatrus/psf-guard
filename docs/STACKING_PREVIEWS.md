@@ -363,10 +363,14 @@ are created again. Calibration master previews can also render again after
 an app update; this does not rebuild the masters.
 
 Stack cache keys use `seiza_stacking::OUTPUT_VERSION`; stretch results and
-card previews use `seiza_stretch::OUTPUT_VERSION`. Color previews and their
-prepared inputs also use `seiza_compose::OUTPUT_VERSION`, the version of
-Seiza's color composition: palettes, LRGB, color calibration, narrowband
-balance and star layers. These identify compatible output, rather than the
+card previews use `seiza_stretch::OUTPUT_VERSION`. Color previews also use
+`seiza_compose::OUTPUT_VERSION`, the version of Seiza's color composition:
+palettes, LRGB, color calibration, narrowband balance and star layers. So do
+the processing-tool runs on a color picture, such as star removal for RGB
+stars. A color build's prepared inputs do not: they are made before any color
+composition, so a change to it leaves them in place. A one-shot-color stack's color calibration records
+it too, so its stretch results and card preview are out of date when Seiza's
+color calibration changes. These identify compatible output, rather than the
 installed crate release. Card previews record
 `preview_stretch_version`, and a new `preview_revision` lets the page load
 the refreshed image without discarding the completed stack.
@@ -2381,7 +2385,7 @@ It also offsets each channel so the sky is one gray. PSF Guard gives Seiza
 the solution of the image it calibrates: the fresh pixel solve of the
 reference stack's reference frame, carried through the stack's saved
 source-to-output transform and, for a composition, its edge crop
-(`seiza_stacking::transform_wcs`). Every other channel was registered to
+(`seiza_compose::transform_wcs`). Every other channel was registered to
 that stack's grid (R for RGB, L for LRGB), so the stars land on all three
 channels.
 
