@@ -66,8 +66,26 @@ fn maps_pixels(step: FinishStep) -> bool {
     return step.kind.x < 2.5 || step.kind.x > 3.5;
 }
 
+// Vibrance and saturation, each from -1 to 1. Vibrance changes a muted
+// color more than a vivid one. The CPU render's `colorfulness` is the same.
+fn colorfulness(color: vec3f, vibrance: f32, saturation: f32) -> vec3f {
+    let luminance = dot(color, vec3f(0.2126, 0.7152, 0.0722));
+    let high = max(max(color.r, color.g), color.b);
+    let low = min(min(color.r, color.g), color.b);
+    var vivid = 0.0;
+    if high > 1.0e-6 {
+        vivid = clamp((high - low) / high, 0.0, 1.0);
+    }
+    let gain = (1.0 + saturation) * (1.0 + vibrance * (1.0 - vivid));
+    return max(vec3f(luminance) + (color - vec3f(luminance)) * gain, vec3f(0.0));
+}
+
 // A step that maps each pixel alone.
 fn adjust(color: vec3f, step: FinishStep) -> vec3f {
+    if step.kind.x > 4.5 {
+        // Tone and color: the luminance curve, then the colors.
+        return colorfulness(stretch_picture(color, step), step.shift.x, step.shift.y);
+    }
     if step.kind.x > 3.5 {
         return stretch_picture(color, step);
     }

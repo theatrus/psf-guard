@@ -3716,6 +3716,7 @@ dependencies = [
  "bytemuck",
  "half",
  "naga 30.0.2",
+ "rayon",
  "wgpu 30.0.2",
 ]
 
