@@ -2263,9 +2263,17 @@ channel's last linear state and adds the result as `<channel>@stretched`.
 Calibrated red, green and blue with the same stretches are stretched
 together as one color image. The spike draws a stretched plane as it is
 wherever the view applies the channel's stretches. Changing a layered
-stretch's settings takes effect when the store is prepared again. A star
-layer that was not star-stretched still follows its input's table
-stretches only.
+stretch's settings takes effect when the store is prepared again. The
+stars of such an input follow it: the input is stretched again with its
+stars put back, and the stars are taken out of that with Seiza's unscreen,
+so screening them over the starless input gives the input with its stars.
+Stars already stretched by the star stretch are left as they are.
+
+**Stopping a run.** While Studio prepares a store or a picture, the top bar
+shows **Stop**. The run is started in a process group of its own, so Stop
+ends `psf-guard` and the tools it started; the store and the picture stay
+as they were, and the tool results already finished are kept for the next
+run.
 
 **From stack files, with no server.** `psf-guard studio-files --channel
 ha=Ha.xisf --channel oiii=… --output picture.pgtiles` prepares the same

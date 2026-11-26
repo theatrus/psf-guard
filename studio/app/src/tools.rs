@@ -99,6 +99,10 @@ struct Run {
     /// For a run of the tools: each input's tools as the run was given
     /// them, which the store holds once it ends.
     chains: Option<serde_json::Value>,
+    /// The program's process, while it runs, so a person can stop it.
+    process: Option<u32>,
+    /// Whether a person stopped the run.
+    stopped: bool,
 }
 
 /// The processing tools of the app.
@@ -522,6 +526,25 @@ impl Studio {
         self.tools.status = message.to_string();
     }
 
+    /// Stops the run in hand. The store and the picture stay as they were
+    /// before it; what its tools finished is kept in the cache for the next
+    /// run.
+    pub(super) fn stop_run(&mut self) {
+        let Some(run) = &self.tools.run else {
+            return;
+        };
+        let mut run = run.lock().expect("tool run");
+        run.stopped = true;
+        if let Some(process) = run.process {
+            // The program runs in a process group of its own, with the
+            // tools it starts, so the whole group is stopped.
+            let _ = Command::new("kill")
+                .arg("-TERM")
+                .arg(format!("-{process}"))
+                .status();
+        }
+    }
+
     /// Whether a run of `psf-guard` is in hand.
     pub(super) fn is_running(&self) -> bool {
         self.tools.run.is_some()
@@ -549,10 +572,18 @@ impl Studio {
             done: None,
             opens,
             chains: None,
+            process: None,
+            stopped: false,
         }));
         self.tools.run = Some(run.clone());
         std::thread::spawn(move || {
             let program = command.get_program().to_string_lossy().into_owned();
+            // A group of its own, so a stop reaches the tools it starts.
+            #[cfg(unix)]
+            {
+                use std::os::unix::process::CommandExt;
+                command.process_group(0);
+            }
             let child = command
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
@@ -560,6 +591,7 @@ impl Studio {
             let outcome = match child {
                 Err(error) => Err(format!("{program} did not start: {error}")),
                 Ok(mut child) => {
+                    run.lock().expect("tool run").process = Some(child.id());
                     // Both pipes are read at once: a program that fills one
                     // while the other is read would wait forever.
                     let errors = child.stderr.take().map(|stderr| {
@@ -577,7 +609,9 @@ impl Studio {
                         }
                     }
                     let last_error = errors.and_then(|reader| reader.join().ok()).flatten();
+                    let stopped = run.lock().expect("tool run").stopped;
                     match child.wait() {
+                        _ if stopped => Err("stopped".to_string()),
                         Ok(status) if status.success() => Ok(()),
                         Ok(_) => Err(last_error.unwrap_or_else(|| "it failed".to_string())),
                         Err(error) => Err(error.to_string()),

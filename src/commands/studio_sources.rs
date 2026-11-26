@@ -547,7 +547,12 @@ fn prepare_store(
         );
     }
     let calibrated = matches!(calibration, Calibration::Done { .. });
-    for name in stretch_whole_images(&mut prepared, &processing.input_stretches, calibrated) {
+    for name in stretch_whole_images(
+        &mut prepared,
+        &processing.input_stretches,
+        calibrated,
+        &display,
+    ) {
         println!("  {name}: stretched for display");
         display.push(name);
     }
@@ -909,8 +914,11 @@ fn stretch_whole_images(
         Vec<crate::server::stack_preview::stretch::StackStretchRequest>,
     >,
     calibrated: bool,
+    already_display: &[String],
 ) -> Vec<String> {
-    use crate::studio::{background_corrected_channel, stretched_channel, tools_channel};
+    use crate::studio::{
+        background_corrected_channel, stars_channel, stretched_channel, tools_channel,
+    };
     use seiza_stretch::StretchModel;
 
     let linear = |prepared: &RegisteredChannels, name: &str| {
@@ -971,7 +979,7 @@ fn stretch_whole_images(
             }
         }
     }
-    for (role, name) in layered {
+    for (role, name) in layered.clone() {
         if together && rgb.contains(&role) {
             continue;
         }
@@ -986,6 +994,105 @@ fn stretch_whole_images(
                 }
             }
             Err(error) => println!("  {name} was not stretched: {error}"),
+        }
+    }
+
+    // The stars of a channel stretched this way follow it: the channel is
+    // stretched again with its stars put back, and the stars are taken out
+    // of that with Seiza's unscreen, so screening them over the starless
+    // channel gives the channel with its stars. Stars already stretched for
+    // display, by the star stretch, are left as they are.
+    let mut groups: Vec<Vec<(StackColorRole, String)>> = Vec::new();
+    if together {
+        groups.push(
+            layered
+                .iter()
+                .filter(|(role, _)| rgb.contains(role))
+                .cloned()
+                .collect(),
+        );
+    }
+    groups.extend(
+        layered
+            .iter()
+            .filter(|(role, _)| !(together && rgb.contains(role)))
+            .map(|entry| vec![entry.clone()]),
+    );
+    for group in groups {
+        let wanted = group.iter().all(|(_, name)| {
+            let stars = stars_channel(name);
+            prepared.names.contains(&stars) && !already_display.contains(&stars)
+        });
+        if !wanted || group.is_empty() {
+            continue;
+        }
+        let with_stars: Option<Vec<seiza_stacking::LinearImage>> = group
+            .iter()
+            .map(|(_, name)| {
+                let mut image = linear(prepared, name)?;
+                let stars = prepared.plane(&stars_channel(name))?;
+                for (sample, star) in image.data.iter_mut().zip(&stars.data) {
+                    *sample += *star;
+                }
+                Some(image)
+            })
+            .collect();
+        let Some(with_stars) = with_stars else {
+            continue;
+        };
+        let role = group[0].0;
+        let stretched: Result<Vec<Vec<f32>>, String> = if with_stars.len() == 3 {
+            crate::server::stack_preview::color_calibration::interleave(
+                &with_stars[0],
+                &with_stars[1],
+                &with_stars[2],
+            )
+            .and_then(|image| crate::color_steps::stretch_for_display(&image, &stretches[&role]))
+            .map(|image| {
+                (0..3)
+                    .map(|channel| {
+                        image
+                            .data
+                            .iter()
+                            .skip(channel)
+                            .step_by(3)
+                            .copied()
+                            .collect()
+                    })
+                    .collect()
+            })
+        } else {
+            crate::color_steps::stretch_for_display(&with_stars[0], &stretches[&role])
+                .map(|image| vec![image.data])
+        };
+        let stretched = match stretched {
+            Ok(stretched) => stretched,
+            Err(error) => {
+                println!("  The stars of {} were not stretched: {error}", group[0].1);
+                continue;
+            }
+        };
+        for ((_, name), original) in group.iter().zip(stretched) {
+            let Some(starless) = prepared.plane(&stretched_channel(name)) else {
+                continue;
+            };
+            let stars: Vec<f32> = original
+                .iter()
+                .zip(&starless.data)
+                .map(|(original, base)| {
+                    if !original.is_finite() || !base.is_finite() {
+                        f32::NAN
+                    } else if *base >= 1.0 {
+                        0.0
+                    } else {
+                        ((original - base) / (1.0 - base)).clamp(0.0, 1.0)
+                    }
+                })
+                .collect();
+            let plane = stars_channel(name);
+            if prepared.replace_plane(&plane, stars) {
+                added.push(plane);
+            }
         }
     }
     added

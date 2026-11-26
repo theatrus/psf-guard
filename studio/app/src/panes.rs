@@ -1744,6 +1744,11 @@ impl Studio {
                         |status| status.child(self.run_status().to_string()),
                     ),
             )
+            .when(self.is_running(), |bar| {
+                bar.child(Self::act("Stop", "stop-run", false, cx, |this| {
+                    this.stop_run()
+                }))
+            })
             .child(Self::act("?", "help", Self::help_shown(), cx, |_| {
                 Self::toggle_help()
             }))
