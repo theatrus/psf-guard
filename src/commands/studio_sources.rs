@@ -1140,24 +1140,6 @@ pub fn channel_and_file(file: &str) -> Result<String> {
     Ok(format!("{}={file}", crate::studio_flow::role_name(role)?))
 }
 
-#[cfg(test)]
-mod tests {
-    use crate::server::stack_preview::color::{classify_filter, StackColorRole};
-
-    #[test]
-    fn a_file_name_gives_its_channel_from_its_last_filter_part() {
-        let of = |name: &str| {
-            name.split(|character: char| !character.is_alphanumeric())
-                .rev()
-                .find_map(classify_filter)
-        };
-        assert_eq!(of("Sh2-157_Ha_300s_master"), Some(StackColorRole::Ha));
-        assert_eq!(of("masterLight_OIII"), Some(StackColorRole::Oiii));
-        assert_eq!(of("M31-L"), Some(StackColorRole::Luminance));
-        assert_eq!(of("integration"), None);
-    }
-}
-
 /// The largest rectangle in which every input, as stacked, covers every
 /// pixel, with Seiza's crop: what PSF Guard's color previews keep with the
 /// crop "Inscribed". As x, y, width and height, or `None` when the inputs
@@ -1177,4 +1159,22 @@ fn automatic_crop(prepared: &RegisteredChannels) -> Option<[usize; 4]> {
         seiza_stacking::crop_report(&samples, seiza_stacking::ColorCrop::Inscribed).ok()?;
     let region = report.region;
     Some([region.x, region.y, region.width, region.height])
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::server::stack_preview::color::{classify_filter, StackColorRole};
+
+    #[test]
+    fn a_file_name_gives_its_channel_from_its_last_filter_part() {
+        let of = |name: &str| {
+            name.split(|character: char| !character.is_alphanumeric())
+                .rev()
+                .find_map(classify_filter)
+        };
+        assert_eq!(of("Sh2-157_Ha_300s_master"), Some(StackColorRole::Ha));
+        assert_eq!(of("masterLight_OIII"), Some(StackColorRole::Oiii));
+        assert_eq!(of("M31-L"), Some(StackColorRole::Luminance));
+        assert_eq!(of("integration"), None);
+    }
 }
