@@ -1456,6 +1456,61 @@ pub fn main() -> Result<()> {
                 },
             )?;
         }
+        Commands::Studio {
+            server,
+            db,
+            token,
+            project,
+            target,
+            channels,
+            files,
+            pointing,
+            folder,
+            name,
+            app,
+            no_open,
+        } => {
+            let pointing = pointing
+                .map(|text| {
+                    let values = text
+                        .split(',')
+                        .map(|value| value.trim().parse::<f64>())
+                        .collect::<Result<Vec<_>, _>>()?;
+                    match values[..] {
+                        [ra, dec, scale] => Ok((ra, dec, scale)),
+                        _ => anyhow::bail!("--pointing takes three numbers: RA,DEC,SCALE"),
+                    }
+                })
+                .transpose()?;
+            let from = match (server, db, project, target) {
+                (Some(server), Some(database), Some(project_id), Some(target_id)) => {
+                    crate::commands::studio_sources::StudioFrom::Server {
+                        server,
+                        database,
+                        token,
+                        project_id,
+                        target_id,
+                        channels,
+                    }
+                }
+                _ if !files.is_empty() => crate::commands::studio_sources::StudioFrom::Files {
+                    channels: files,
+                    pointing,
+                },
+                _ => anyhow::bail!(
+                    "say where the stacks are: --server with --db, --project and --target, or --channel"
+                ),
+            };
+            crate::commands::studio_sources::studio(
+                crate::commands::studio_sources::StudioOptions {
+                    from,
+                    folder: folder.into(),
+                    name,
+                    app: app.map(Into::into),
+                    open: !no_open,
+                },
+            )?;
+        }
         Commands::StudioTools => {
             crate::commands::studio_sources::studio_tools()?;
         }

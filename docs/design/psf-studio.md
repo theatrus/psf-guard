@@ -2280,8 +2280,25 @@ RA,DEC,SCALE` gives the solve its start; a blind index would remove the
 need. On the Sh2-157 R, G and B stacks this path gave red x1.028 and blue
 x1.304, against x1.027 and x1.303 through the server.
 
-Not built: opening either source from inside Studio or from a PSF Guard
-page, tools per input in one table, continuum subtraction, groups in groups, and a recipe's small picture of its
+**One command to the editor.** `psf-guard studio` prepares a picture
+from either source and opens it in Studio:
+
+```bash
+psf-guard studio --server http://localhost:3000 --db my-db --project 11 --target 17 --folder ~/Pictures/studio --name sh2-157
+```
+
+```bash
+psf-guard studio --channel red=R.xisf --channel green=G.xisf --channel blue=B.xisf --pointing 348.94,60.17,1.03 --folder ~/Pictures/studio --name sh2-157-rgb
+```
+
+The picture's store and document are `<name>.pgtiles` and `<name>.json`
+in the folder. A document that is already there is kept, and the store is
+prepared for it. The application is given with `--app` or the
+`PSF_STUDIO_APP` environment variable; `--no-open` prepares without
+opening.
+
+Not built: choosing a source from inside Studio, or a button on a PSF
+Guard page that runs this command, tools per input in one table, continuum subtraction, groups in groups, and a recipe's small picture of its
 parts. No luminance stack was at hand, so the Luminance part is covered
 by tests only.
 

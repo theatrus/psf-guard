@@ -833,3 +833,120 @@ fn stretch_whole_images(
     }
     added
 }
+
+/// Where a picture's channel stacks come from.
+pub enum StudioFrom {
+    /// A target's current stacks on a PSF Guard server.
+    Server {
+        server: String,
+        database: String,
+        token: Option<String>,
+        project_id: i32,
+        target_id: i32,
+        channels: Vec<String>,
+    },
+    /// Stack files on this computer, as `channel=file`.
+    Files {
+        channels: Vec<String>,
+        pointing: Option<(f64, f64, f64)>,
+    },
+}
+
+pub struct StudioOptions {
+    pub from: StudioFrom,
+    /// The folder that holds the picture's store and document.
+    pub folder: PathBuf,
+    /// The picture's name in that folder.
+    pub name: String,
+    /// The PSF-Studio application, or its executable.
+    pub app: Option<PathBuf>,
+    /// Whether to open the picture once it is prepared.
+    pub open: bool,
+}
+
+/// Prepares a picture from its channel stacks and opens it in PSF-Studio:
+/// one command from a PSF Guard target, or from stack files, to the
+/// editor.
+///
+/// The picture's store is `<name>.pgtiles` and its document `<name>.json`
+/// in the folder. A document that is there already is the picture's: the
+/// store is prepared for it, so its tools and stretches are kept. Without
+/// one, a new document is written from Studio's default flow.
+pub fn studio(options: StudioOptions) -> Result<()> {
+    std::fs::create_dir_all(&options.folder)
+        .with_context(|| format!("creating {}", options.folder.display()))?;
+    let store = options.folder.join(format!("{}.pgtiles", options.name));
+    let document = options.folder.join(format!("{}.json", options.name));
+    let known = document.is_file();
+    let (apply, new_document) = if known {
+        (Some(document.clone()), None)
+    } else {
+        (None, Some(document.clone()))
+    };
+    match options.from {
+        StudioFrom::Server {
+            server,
+            database,
+            token,
+            project_id,
+            target_id,
+            channels,
+        } => tokio::runtime::Runtime::new()?.block_on(studio_sources(StudioSourcesOptions {
+            server,
+            database,
+            token,
+            project_id,
+            target_id,
+            channels,
+            document: new_document,
+            apply,
+            output: store.clone(),
+        }))?,
+        StudioFrom::Files { channels, pointing } => studio_files(StudioFilesOptions {
+            channels,
+            apply,
+            document: new_document,
+            pointing,
+            output: store.clone(),
+        })?,
+    }
+    if !options.open {
+        return Ok(());
+    }
+    let app = options
+        .app
+        .or_else(|| std::env::var_os("PSF_STUDIO_APP").map(PathBuf::from))
+        .ok_or_else(|| {
+            anyhow!(
+                "the picture is prepared at {}. To open it, give --app or set PSF_STUDIO_APP \
+                 to the PSF-Studio application",
+                store.display()
+            )
+        })?;
+    // Studio runs the tools through this same program.
+    let this_program = std::env::current_exe().context("finding this program")?;
+    let arguments = [
+        std::ffi::OsString::from("--open"),
+        store.clone().into(),
+        "--document".into(),
+        document.into(),
+        "--psf-guard".into(),
+        this_program.into(),
+    ];
+    // A macOS application bundle is opened through the system, so it gets
+    // a window of its own; an executable is started as it is.
+    let bundle = app.extension().is_some_and(|extension| extension == "app");
+    let mut command = if bundle && cfg!(target_os = "macos") {
+        let mut command = std::process::Command::new("open");
+        command.arg("-n").arg(&app).arg("--args");
+        command
+    } else {
+        std::process::Command::new(&app)
+    };
+    command
+        .args(arguments)
+        .spawn()
+        .with_context(|| format!("starting {}", app.display()))?;
+    println!("Opened {} in PSF-Studio", store.display());
+    Ok(())
+}

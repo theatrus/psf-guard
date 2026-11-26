@@ -1267,6 +1267,65 @@ pub enum Commands {
         output: String,
     },
 
+    /// Prepare a picture's channel stacks and open them in PSF-Studio:
+    /// from a PSF Guard server (--server, --db, --project, --target) or
+    /// from stack files (--channel). A picture opened before keeps its
+    /// document
+    Studio {
+        /// The server's address, such as http://localhost:3000
+        #[arg(long, requires_all = ["db", "project", "target"], conflicts_with = "files")]
+        server: Option<String>,
+
+        /// The database's name in the server's URLs
+        #[arg(long)]
+        db: Option<String>,
+
+        /// An API token, when the server asks for one
+        #[arg(long)]
+        token: Option<String>,
+
+        /// The project's ID
+        #[arg(long)]
+        project: Option<i32>,
+
+        /// The target's ID
+        #[arg(long)]
+        target: Option<i32>,
+
+        /// With --server: the channels to take, reference first. Without
+        /// this, every channel the target has
+        #[arg(long, value_delimiter = ',')]
+        channels: Vec<String>,
+
+        /// One channel and its FITS or XISF stack file, reference first,
+        /// such as ha=Ha.xisf. Give the option once per channel
+        #[arg(long = "channel", value_name = "CHANNEL=FILE")]
+        files: Vec<String>,
+
+        /// With --channel: where the first file points and its pixel
+        /// scale, as RA,DEC,SCALE in degrees and arcseconds per pixel
+        #[arg(long, value_name = "RA,DEC,SCALE")]
+        pointing: Option<String>,
+
+        /// The folder the picture's store and document are kept in
+        #[arg(long)]
+        folder: String,
+
+        /// The picture's name: its store is NAME.pgtiles and its document
+        /// NAME.json in the folder
+        #[arg(long, default_value = "picture")]
+        name: String,
+
+        /// The PSF-Studio application or its executable. Without this,
+        /// the PSF_STUDIO_APP environment variable
+        #[arg(long)]
+        app: Option<String>,
+
+        /// Prepare the picture and do not open it
+        #[arg(long)]
+        no_open: bool,
+    },
+
     /// Print the processing tools this computer can run, with their
     /// settings, as JSON
     StudioTools,
