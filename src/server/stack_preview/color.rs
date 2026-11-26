@@ -7564,11 +7564,12 @@ mod tests {
         // The id this build gives. With the bytes above unchanged it is the
         // id the earlier release gave; a change here recomposes every
         // color build that has steps of its own. It also hashes Seiza's
-        // stacking output version, so it was recorded again for Seiza 0.56
-        // (seiza-stacking output 0.62.0), which recomposes every color build.
+        // stacking output version and the seiza-background version, so it
+        // was recorded again for Seiza 0.57 (seiza-stacking output 0.62.0,
+        // seiza-background 0.4.0), which recomposes every color build.
         assert_eq!(
             id,
-            "8445ea211ae64a0ab542a08a31221e40ae422e43b772a4d57953d5dd736114d1"
+            "20b204e5a3fd9860af951e20cad8b110f5e49f4a8c1b7447268c360df0ca835a"
         );
     }
 
