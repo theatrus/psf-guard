@@ -114,6 +114,9 @@ pub(super) struct Tools {
     run: Option<Arc<Mutex<Run>>>,
     /// What the last run said, or why it failed.
     status: String,
+    /// The document as it was last saved, to save it again only when it
+    /// changed.
+    saved: String,
     /// Each input's tools as they were when the store was prepared, to say
     /// when the document has moved on.
     prepared: Option<serde_json::Value>,
@@ -164,6 +167,7 @@ impl Tools {
             tools: Vec::new(),
             run: None,
             status: String::new(),
+            saved: String::new(),
             prepared: None,
         }
     }
@@ -420,6 +424,33 @@ impl Studio {
         self.start_run(command, None);
     }
 
+    /// Saves the document where the picture keeps it, when it changed
+    /// since it was last saved. The file is written beside its place and
+    /// renamed over it, so a crash never leaves half a document.
+    pub(super) fn save_document(&mut self) {
+        let Some(path) = self.tools.document.clone() else {
+            return;
+        };
+        let text = self.document.to_json();
+        if text == self.tools.saved {
+            return;
+        }
+        let temporary = path.with_extension("json.saving");
+        let saved =
+            std::fs::write(&temporary, &text).and_then(|()| std::fs::rename(&temporary, &path));
+        match saved {
+            Ok(()) => self.tools.saved = text,
+            Err(error) => {
+                self.tools.status = format!("Not saved: {error}");
+            }
+        }
+    }
+
+    /// Takes the document as saved on disk: what a picture opened with.
+    pub(super) fn document_is_saved(&mut self) {
+        self.tools.saved = self.document.to_json();
+    }
+
     /// The open picture's store, if any.
     pub(super) fn store_path(&self) -> Option<&std::path::Path> {
         self.tools.store.as_deref()
@@ -525,7 +556,10 @@ impl Studio {
             .and_then(|text| {
                 crate::studio_model::Document::from_json(&text).map_err(|error| error.to_string())
             }) {
-            Ok(opened) => self.document = opened,
+            Ok(opened) => {
+                self.document = opened;
+                self.document_is_saved();
+            }
             Err(error) => {
                 self.tools.status = format!("The document could not be opened: {error}");
                 return;

@@ -99,6 +99,10 @@ pub async fn studio_sources(options: StudioSourcesOptions) -> Result<()> {
     )
 }
 
+/// The names documents had when they were named after the setup they
+/// started from.
+const SETUP_NAMES: [&str; 2] = ["PSF Guard default color", "Default"];
+
 /// A picture's name from its sources folder: the folder's name without
 /// `.sources`.
 fn title_of_sources(folder: &Path) -> String {
@@ -339,7 +343,15 @@ fn prepare_store(
         Some(path) => {
             let text = std::fs::read_to_string(path)
                 .with_context(|| format!("reading {}", path.display()))?;
-            Document::from_json(&text)?
+            let mut document = Document::from_json(&text)?;
+            // A document named after the setup it started from, as they
+            // were before, takes its picture's name, and is saved with it.
+            if SETUP_NAMES.contains(&document.name.as_str()) && title != document.name {
+                document.name = title.to_string();
+                std::fs::write(path, document.to_json())
+                    .with_context(|| format!("writing {}", path.display()))?;
+            }
+            document
         }
         None => {
             let processing = serde_json::from_str(DEFAULT_COLOR_SETTINGS)?;

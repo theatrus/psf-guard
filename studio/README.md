@@ -51,6 +51,8 @@ from `--psf-guard`, then the `PSF_GUARD` environment variable, then beside
 its own program, then on the `PATH`. Pictures are kept in
 `~/Library/Application Support/psf-studio/pictures`, never beside your
 stacks, and opening the same target or files again keeps the document.
+PSF Studio saves the document as you work, within a quarter of a second
+of each change; there is no Save command.
 
 ## Layout
 

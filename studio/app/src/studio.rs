@@ -636,6 +636,9 @@ impl Studio {
             let updated = this.update(cx, |this, cx| {
                 this.follow_tools();
                 this.follow_links();
+                // Every change is kept: the document is saved as soon as it
+                // differs from the file.
+                this.save_document();
                 // SAFETY: the view is alive and this runs on the main thread.
                 let layer = unsafe { layer_description(&this._ns_view) };
                 this.canvas.0 .0.lock().expect("canvas state").readout.layer = layer;
