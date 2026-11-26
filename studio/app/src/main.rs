@@ -11,11 +11,11 @@
 // without building all of PSF Guard under GPUI's toolchain.
 #[cfg(target_os = "macos")]
 #[allow(dead_code, unused_imports)]
-#[path = "../../../../src/image_steps/mod.rs"]
+#[path = "../../../src/image_steps/mod.rs"]
 mod image_steps;
 #[cfg(target_os = "macos")]
 #[allow(dead_code, unused_imports)]
-#[path = "../../../../src/studio/mod.rs"]
+#[path = "../../../src/studio/mod.rs"]
 mod studio_model;
 
 #[cfg(target_os = "macos")]

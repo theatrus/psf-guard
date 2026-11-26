@@ -25,14 +25,14 @@ use gpui::{
     canvas, div, prelude::*, px, relative, rgb, AnyElement, Context, MouseButton, MouseDownEvent,
     Rgba, SharedString, Window,
 };
-use seiza_stretch::StretchModel;
-use std::collections::HashMap;
-use std::sync::Arc;
-use studio_render_spike::{
+use psf_studio_render::{
     Adjustment, Blend, ComputedMask, FinishKind, FinishStep, Layer, LayerHeal, Mark, MaskBand,
     Segment, MAX_COMPUTED_MASKS, MAX_FINISH_STEPS, MAX_HEALED_LAYERS, MAX_HEALS, MAX_LAYERS,
     MAX_MASKS,
 };
+use seiza_stretch::StretchModel;
+use std::collections::HashMap;
+use std::sync::Arc;
 use uuid::Uuid;
 
 pub(super) const BACKGROUND: u32 = 0x16181c;
@@ -61,8 +61,7 @@ pub(super) fn operation(name: &str, accepts: Accepts) -> StepRecord {
 }
 
 /// PSF Guard's built-in default color setup.
-const DEFAULT_COLOR_SETUP: &str =
-    include_str!("../../../../src/processing_setups/default_color.json");
+const DEFAULT_COLOR_SETUP: &str = include_str!("../../../src/processing_setups/default_color.json");
 
 /// A new document: PSF Guard's default color flow over the store's inputs.
 /// The steps and their settings are the ones PSF Guard's color previews
@@ -1599,9 +1598,37 @@ impl Studio {
             .px_3()
             .bg(rgb(PANE))
             .child(div().pr_3().child(self.document.name.clone()))
+            .child(
+                div()
+                    .id("open-files")
+                    .px_2()
+                    .py_1()
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .bg(rgb(CONTROL))
+                    .child("Open")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.pick_files(cx);
+                        cx.notify();
+                    })),
+            )
             .child(div().pl_3().child(Self::note("View")))
             .child(Self::segmented().children(splits))
-            .child(div().flex_1())
+            .child(
+                div()
+                    .flex_1()
+                    .pl_3()
+                    .overflow_hidden()
+                    .text_xs()
+                    .text_color(rgb(QUIET))
+                    .when(self.is_running(), |status| {
+                        status.child(self.run_status().to_string())
+                    })
+                    .when(
+                        !self.is_running() && self.run_status().starts_with("Not finished"),
+                        |status| status.child(self.run_status().to_string()),
+                    ),
+            )
             .child(Self::act("?", "help", Self::help_shown(), cx, |_| {
                 Self::toggle_help()
             }))

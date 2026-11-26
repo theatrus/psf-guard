@@ -11,6 +11,11 @@ use objc2::{
     rc::{Allocated, Retained},
     runtime::AnyObject,
 };
+use psf_studio_render::MAX_LAYERS;
+use psf_studio_render::{
+    pane_rect, ComputedMask, FinishStep, Frame, FrameStats, Layer, LayerHeal, Output, Pane,
+    Renderer, Segment, View,
+};
 use raw_window_handle::{
     AppKitDisplayHandle, AppKitWindowHandle, RawDisplayHandle, RawWindowHandle,
 };
@@ -21,11 +26,6 @@ use std::ptr::NonNull;
 use std::rc::Rc;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
-use studio_render_spike::MAX_LAYERS;
-use studio_render_spike::{
-    pane_rect, ComputedMask, FinishStep, Frame, FrameStats, Layer, LayerHeal, Output, Pane,
-    Renderer, Segment, View,
-};
 
 pub struct Options {
     pub bench_output: Option<PathBuf>,
@@ -297,7 +297,7 @@ struct Shared {
     canvas: CanvasState,
     /// A document for the canvas to draw from now on, in place of the one
     /// it has: set by the UI, taken by the render thread.
-    new_source: Option<Arc<dyn studio_render_spike::TileSource>>,
+    new_source: Option<Arc<dyn psf_studio_render::TileSource>>,
     /// Set by the UI when the canvas changed; cleared by the render thread.
     dirty: bool,
     /// When the oldest input not yet drawn arrived.
@@ -633,6 +633,7 @@ impl Studio {
                 .await;
             let updated = this.update(cx, |this, cx| {
                 this.follow_tools();
+                this.follow_links();
                 // SAFETY: the view is alive and this runs on the main thread.
                 let layer = unsafe { layer_description(&this._ns_view) };
                 this.canvas.0 .0.lock().expect("canvas state").readout.layer = layer;
@@ -986,8 +987,8 @@ fn output(options: &Options) -> Result<Output, String> {
         .working_profile
         .as_ref()
         .map(|working| {
-            let target = std::path::Path::new(studio_color_spike::SYSTEM_PROFILES).join(target);
-            studio_color_spike::curves_between(working, &target)
+            let target = std::path::Path::new(psf_studio_color::SYSTEM_PROFILES).join(target);
+            psf_studio_color::curves_between(working, &target)
         })
         .transpose()?;
     Ok(Output {
@@ -1023,7 +1024,11 @@ fn push(values: &mut VecDeque<f32>, value: f32) {
 }
 
 pub fn run(options: Options) {
-    gpui_platform::application().run(move |cx: &mut App| {
+    let application = gpui_platform::application();
+    // A link from a PSF Guard page, whether it starts the program or
+    // reaches it while it runs.
+    application.on_open_urls(open::keep_links);
+    application.run(move |cx: &mut App| {
         // The canvas is 1920 x 1080 points: a 4K surface on a 2x display.
         let bounds = Bounds::centered(
             None,
@@ -1044,6 +1049,8 @@ pub fn run(options: Options) {
 
 #[path = "inspector.rs"]
 mod inspector;
+#[path = "open.rs"]
+mod open;
 #[path = "panes.rs"]
 mod panes;
 #[path = "parts.rs"]

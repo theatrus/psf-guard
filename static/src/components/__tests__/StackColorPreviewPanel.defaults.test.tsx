@@ -66,6 +66,11 @@ describe('a color card with no preview yet', () => {
     </QueryClientProvider>);
 
     const build = await screen.findByRole('button', { name: 'Build RGB color preview' });
+    // The target's stacks open in PSF Studio through a link to this server.
+    const studio = screen.getByRole('link', { name: 'Open M31 in PSF Studio' });
+    expect(studio.getAttribute('href')).toMatch(
+      /^psf-studio:\/\/open\?server=http%3A%2F%2F[^&]+&db=test&project=1&target=42$/,
+    );
     await userEvent.click(build);
     // Pending at once, so a second click cannot start it twice.
     expect(build).toHaveTextContent('Building…');

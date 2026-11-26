@@ -3674,6 +3674,51 @@ dependencies = [
 ]
 
 [[package]]
+name = "psf-studio"
+version = "0.0.0"
+dependencies = [
+ "gpui",
+ "gpui_platform",
+ "half",
+ "objc2 0.6.5",
+ "png 0.17.16",
+ "pollster",
+ "psf-studio-color",
+ "psf-studio-render",
+ "raw-window-handle",
+ "seiza-stretch",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "tempfile",
+ "thiserror",
+ "uuid",
+ "wgpu 30.0.2",
+]
+
+[[package]]
+name = "psf-studio-color"
+version = "0.0.0"
+dependencies = [
+ "bytemuck",
+ "lcms2",
+ "png 0.17.16",
+ "pollster",
+ "psf-studio-render",
+ "serde_json",
+ "wgpu 30.0.2",
+]
+
+[[package]]
+name = "psf-studio-render"
+version = "0.0.0"
+dependencies = [
+ "bytemuck",
+ "half",
+ "wgpu 30.0.2",
+]
+
+[[package]]
 name = "pxfm"
 version = "0.1.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4605,65 +4650,20 @@ dependencies = [
 ]
 
 [[package]]
-name = "studio-canvas-spike"
-version = "0.0.0"
-dependencies = [
- "gpui",
- "gpui_platform",
- "half",
- "objc2 0.6.5",
- "png 0.17.16",
- "pollster",
- "raw-window-handle",
- "seiza-stretch",
- "serde",
- "serde_json",
- "sha2 0.11.1",
- "studio-color-spike",
- "studio-render-spike",
- "tempfile",
- "thiserror",
- "uuid",
- "wgpu 30.0.2",
-]
-
-[[package]]
-name = "studio-color-spike"
-version = "0.0.0"
-dependencies = [
- "bytemuck",
- "lcms2",
- "png 0.17.16",
- "pollster",
- "serde_json",
- "studio-render-spike",
- "wgpu 30.0.2",
-]
-
-[[package]]
 name = "studio-crop-preview-spike"
 version = "0.0.0"
 dependencies = [
  "half",
+ "psf-studio-render",
  "rayon",
  "seiza-deconvolution",
  "serde",
  "serde_json",
  "sha2 0.11.1",
- "studio-render-spike",
  "tempfile",
  "thiserror",
  "tiny_http",
  "uuid",
-]
-
-[[package]]
-name = "studio-render-spike"
-version = "0.0.0"
-dependencies = [
- "bytemuck",
- "half",
- "wgpu 30.0.2",
 ]
 
 [[package]]

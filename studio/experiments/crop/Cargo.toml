@@ -7,7 +7,7 @@ license.workspace = true
 description = "Investigation 3: a heavy step previewed on a full-resolution crop."
 
 [dependencies]
-studio-render-spike = { path = "../render" }
+psf-studio-render = { path = "../../render" }
 seiza-deconvolution = "0.2.0"
 rayon = "1"
 half = "2"

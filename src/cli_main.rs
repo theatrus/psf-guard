@@ -1463,7 +1463,8 @@ pub fn main() -> Result<()> {
             project,
             target,
             channels,
-            files,
+            mut files,
+            unnamed,
             pointing,
             folder,
             name,
@@ -1482,6 +1483,9 @@ pub fn main() -> Result<()> {
                     }
                 })
                 .transpose()?;
+            for file in unnamed {
+                files.push(crate::commands::studio_sources::channel_and_file(&file)?);
+            }
             let from = match (server, db, project, target) {
                 (Some(server), Some(database), Some(project_id), Some(target_id)) => {
                     crate::commands::studio_sources::StudioFrom::Server {

@@ -1,24 +1,61 @@
-# PSF-Studio canvas spike
+# PSF-Studio
 
-This holds investigations 1, 3 and 9 of the
-[PSF-Studio design record](../../docs/design/psf-studio.md). Investigation 1:
-can a GPUI window host a tiled wgpu canvas that meets the responsiveness
-targets, and how does it compare with WebGPU in a browser? Investigation 3:
-how fast is a heavy step previewed on a full-resolution crop? Investigation 9:
-can the canvas present color-managed output? The results are
-in the design record under “Investigation results”.
+PSF-Studio is the native editor that starts from PSF Guard's channel stacks
+and does the color processing as a document of layers. Its program is
+`psf-studio`. The [design record](../docs/design/psf-studio.md) says what is
+built and what is not.
 
-The spike is its own Cargo workspace. It is not part of the PSF Guard build,
-and it needs Rust 1.100 for GPUI.
+PSF-Studio is its own Cargo workspace. It is not part of the PSF Guard
+build: GPUI is a git dependency on Zed and needs Rust 1.100. The document
+model and the tile store are compiled from PSF Guard's source, under
+`src/studio` and `src/image_steps`, so both programs read and write the same
+documents.
+
+## Build and open a picture
+
+```bash
+cargo build --release -p psf-studio
+```
+
+On macOS, build the application, with `psf-guard` inside it:
+
+```bash
+./bundle-macos.sh ../target/release/psf-guard
+```
+
+The script prints where it wrote `PSF Studio.app`. The application answers
+`psf-studio://` links, which is how **Open in PSF Studio** on PSF Guard's
+color stacks reaches it. Move it to `/Applications` so macOS registers the
+link; an application in a temporary folder is not registered.
+
+Open a picture in any of three ways:
+
+- In PSF Guard, open a project's stacks and click **Open *target* in PSF
+  Studio** over the color stacks.
+- In PSF-Studio, click **Open** and choose one stack file per channel, FITS
+  or XISF. PSF-Studio reads each file's channel from its `FILTER` header or
+  its name.
+- From a terminal, run `psf-guard studio`; see `psf-guard studio --help`.
+
+Each way runs `psf-guard studio`, so the stacks are fetched, registered,
+calibrated and stretched by the same code. PSF-Studio finds `psf-guard`
+from `--psf-guard`, then the `PSF_GUARD` environment variable, then beside
+its own program, then on the `PATH`. Pictures are kept in
+`~/Library/Application Support/psf-studio/pictures`, never beside your
+stacks, and opening the same target or files again keeps the document.
+
+## Layout
 
 | Path | Contents |
 |---|---|
-| `render/` | The canvas: a synthetic 600-megapixel, eight-band document, a GPU tile cache, and three passes: masks from strokes, layers blended into one image, then the finish steps and the display transform. It depends on wgpu only. |
-| `app/` | A GPUI window that hosts the canvas in a native view, with band sliders and a brush. macOS only. |
-| `web/` | The canvas as it was when the web comparison was measured, in WebGPU, with its own copy of that shader, and the page for the crop preview. |
+| `render/` | The canvas: a GPU tile cache and three passes: masks from strokes, layers blended into one image, then the finish steps and the display transform. It depends on wgpu only. |
+| `app/` | The `psf-studio` program: a GPUI window that hosts the canvas in a native view, with the tree, the inspector and the tools. macOS only. |
 | `color/` | The display transform built from ICC profiles with Little CMS, and a check of the shader against Little CMS and ColorSync. macOS only. |
-| `crop/` | Seiza deconvolution previewed on a crop: timings in process, and a server that answers the same previews over HTTP. Also `store_bench`, which measures PSF Guard's tile store. |
-| `results/` | The measurements quoted in the design record. |
+| `experiments/crop/` | Seiza deconvolution previewed on a crop, and `store_bench`, which measures PSF Guard's tile store. |
+| `experiments/web/` | The canvas as it was when the web comparison was measured, in WebGPU. |
+| `experiments/results/` | The measurements quoted in the design record. |
+
+The experiments answer investigations 1, 3 and 9 of the design record.
 
 ## The staged panes
 
@@ -45,7 +82,7 @@ measure it. The external editor button is disabled.
 ## Run the native canvas
 
 ```bash
-cargo run --release -p studio-canvas-spike
+cargo run --release -p psf-studio
 ```
 
 Drag to pan. Scroll with Command held to zoom. Choose **Brush** and drag to
@@ -60,11 +97,11 @@ document to a store, then open it. The default is 12,000 by 8,000 pixels in
 eight bands, which takes 4.1 GB.
 
 ```bash
-cargo run --release -p studio-canvas-spike -- --make-store /tmp/synthetic.pgtiles
+cargo run --release -p psf-studio -- --make-store /tmp/synthetic.pgtiles
 ```
 
 ```bash
-cargo run --release -p studio-canvas-spike -- --open /tmp/synthetic.pgtiles
+cargo run --release -p psf-studio -- --open /tmp/synthetic.pgtiles
 ```
 
 To open a real FITS or XISF frame, write a store from it with PSF Guard,
@@ -86,7 +123,7 @@ Keep the window visible and in front while a measurement runs. A covered
 window gets no frames.
 
 ```bash
-cargo run --release -p studio-canvas-spike -- --bench results/native.json
+cargo run --release -p psf-studio -- --bench results/native.json
 ```
 
 For the web baseline, start the server, then open the page in the browser to
@@ -135,7 +172,7 @@ swift color/display-profiles.swift
 Compare the shader's display transform with Little CMS and ColorSync:
 
 ```bash
-cargo run --release -p studio-color-spike -- results/color.json display-0.icc
+cargo run --release -p psf-studio-color -- results/color.json display-0.icc
 ```
 
 Run the canvas on a wide-gamut surface. `--output` is `srgb8`, `p3-8`,
@@ -143,7 +180,7 @@ Run the canvas on a wide-gamut surface. `--output` is `srgb8`, `p3-8`,
 working space; the canvas converts from it to the surface's color space.
 
 ```bash
-cargo run --release -p studio-canvas-spike -- --output p3-extended --working "/System/Library/ColorSync/Profiles/AdobeRGB1998.icc"
+cargo run --release -p psf-studio -- --output p3-extended --working "/System/Library/ColorSync/Profiles/AdobeRGB1998.icc"
 ```
 
 The panel's **Layer** line shows the pixel format and color space that the

@@ -377,7 +377,7 @@ what was measured, and what it changes.
 ### 1. GPUI canvas (2026-11-24, macOS only so far)
 
 The code and the result files are in
-[`spikes/psf-studio-canvas`](../../spikes/psf-studio-canvas/README.md).
+[`studio`](../../studio/README.md).
 
 **Result so far: go on macOS, not yet answered for Windows and Linux.** A
 GPUI window can host the tiled canvas and hold the display's frame rate. The
@@ -552,7 +552,7 @@ Tiles, in every run on both sides:
 ### 3. Crop preview loop (2026-11-24)
 
 The code is the `crop` crate in
-[`spikes/psf-studio-canvas`](../../spikes/psf-studio-canvas/README.md), with
+[`studio`](../../studio/README.md), with
 `web/crop.html` for the browser side.
 
 **Result: the 1 s target is met with a wide margin, in process and through a
@@ -708,7 +708,7 @@ a cold disk was not measured.
 
 The code is the `color` crate and the `--output` and `--working` options of
 the app in
-[`spikes/psf-studio-canvas`](../../spikes/psf-studio-canvas/README.md).
+[`studio`](../../studio/README.md).
 
 **Result so far: the canvas can present a wide-gamut, floating-point,
 color-managed surface on macOS at no cost in frame rate, and a shader step
@@ -2297,8 +2297,27 @@ prepared for it. The application is given with `--app` or the
 `PSF_STUDIO_APP` environment variable; `--no-open` prepares without
 opening.
 
-Not built: choosing a source from inside Studio, or a button on a PSF
-Guard page that runs this command, tools per input in one table, continuum subtraction, groups in groups, and a recipe's small picture of its
+**Opening from inside Studio and from PSF Guard.** Studio lives in
+`studio/`, a workspace of its own, and its program is `psf-studio`.
+
+- **Open** in Studio's top bar asks for stack files and opens them. Studio
+  passes the files to `psf-guard studio --file …`, which reads each file's
+  channel from its `FILTER` header with PSF Guard's own filter classifier,
+  or from the file's name.
+- PSF Guard's color stacks show **Open *target* in PSF Studio**, a link of
+  the form `psf-studio://open?server=…&db=…&project=…&target=…`. The
+  application registers that scheme (`studio/bundle-macos.sh` writes the
+  `Info.plist`). Studio takes only links whose server is HTTP or HTTPS,
+  and runs `psf-guard studio --server …` for the target.
+- Both show the run's last line in the top bar while it prepares, then
+  the picture. Pictures are kept in Studio's own folder, by target or by
+  the set of files, so opening one again keeps its document.
+
+The link carries no token, so a server with user accounts refuses Studio's
+requests; Studio has no sign-in yet. Nothing runs on the server for the
+button: the page only makes the link.
+
+Not built: choosing a server target from a list inside Studio, sign-in, tools per input in one table, continuum subtraction, groups in groups, and a recipe's small picture of its
 parts. No luminance stack was at hand, so the Luminance part is covered
 by tests only.
 

@@ -6,14 +6,14 @@
 //! CMS converting the same colors directly, and compares Little CMS with
 //! macOS ColorSync (through `sips`) so the reference is not one engine alone.
 //!
-//! usage: studio-color-spike <results.json> <display.icc>...
+//! usage: psf-studio-color <results.json> <display.icc>...
 
 use lcms2::Profile;
+use psf_studio_color::{convert, curves, SYSTEM_PROFILES};
+use psf_studio_render::display::{DisplayCurves, DisplayTable, TableFormat, SHADER};
 use serde_json::{json, Value};
 use std::path::Path;
 use std::process::Command;
-use studio_color_spike::{convert, curves, SYSTEM_PROFILES};
-use studio_render_spike::display::{DisplayCurves, DisplayTable, TableFormat, SHADER};
 
 const SIDE: u32 = 256;
 const SOURCES: [(&str, &str); 4] = [
@@ -438,7 +438,7 @@ fn colorsync(colors: &[[f32; 3]], source: &Path, target: &Path) -> Option<Vec<[f
 fn main() {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     let [output, displays @ ..] = arguments.as_slice() else {
-        eprintln!("usage: studio-color-spike <results.json> <display.icc>...");
+        eprintln!("usage: psf-studio-color <results.json> <display.icc>...");
         std::process::exit(2);
     };
     let colors = test_colors();

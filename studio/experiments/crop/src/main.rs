@@ -6,12 +6,12 @@
 //! page in `web/crop.html`.
 
 use half::f16;
+use psf_studio_render::synth::{generate_tile, TileKey, TILE};
 use rayon::prelude::*;
 use seiza_deconvolution::{deconvolve, DeconvolutionConfig};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::time::Instant;
-use studio_render_spike::synth::{generate_tile, TileKey, TILE};
 
 const WIDTH: usize = 6144;
 const HEIGHT: usize = 4096;

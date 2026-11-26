@@ -6,14 +6,14 @@ use crate::studio_model::{
     background_corrected_channel, stretched_channel, tools_channel, MemoryBudget, RegionReader,
     SampleFormat, StoreLevel, StoreOptions, StudioError, TileStore,
 };
+use psf_studio_render::synth::{generate_tile, TileKey, BANDS, DOC_HEIGHT, DOC_WIDTH, TILE};
+use psf_studio_render::{Pyramid, TileSource, STRETCH_TABLE_WIDTH};
 use seiza_stretch::{
     ResolvedSampleDomain, SampleDomain, SampleNormalization, StretchAnalysis, StretchConfig,
     StretchModel, StretchParams,
 };
 use std::path::Path;
 use std::sync::Arc;
-use studio_render_spike::synth::{generate_tile, TileKey, BANDS, DOC_HEIGHT, DOC_WIDTH, TILE};
-use studio_render_spike::{Pyramid, TileSource, STRETCH_TABLE_WIDTH};
 
 /// A document read from a tile store.
 pub struct StoreTiles {
@@ -691,7 +691,7 @@ pub fn source(open: Option<&Path>) -> Result<(Arc<dyn TileSource>, Bands), Strin
             Ok((Arc::new(store), bands))
         }
         None => Ok((
-            Arc::new(studio_render_spike::synth::Synthetic),
+            Arc::new(psf_studio_render::synth::Synthetic),
             analyse_synthetic(),
         )),
     }

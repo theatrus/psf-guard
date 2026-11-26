@@ -888,7 +888,7 @@ impl Studio {
             let Some(color) = layer.color.filter(|_| layer.source.shows_pixels()) else {
                 continue;
             };
-            if layer.blend == BlendMode::Luminance || index >= studio_render_spike::MAX_LAYERS {
+            if layer.blend == BlendMode::Luminance || index >= psf_studio_render::MAX_LAYERS {
                 continue;
             }
             let (hue, saturation, _) = hue_of(color);

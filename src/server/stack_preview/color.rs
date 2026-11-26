@@ -5963,7 +5963,7 @@ fn availability(sources: &BTreeMap<i32, TargetSources>) -> Vec<StackColorTargetA
         .collect()
 }
 
-fn classify_filter(filter_name: &str) -> Option<StackColorRole> {
+pub(crate) fn classify_filter(filter_name: &str) -> Option<StackColorRole> {
     let folded = filter_name
         .to_lowercase()
         .replace('α', "alpha")

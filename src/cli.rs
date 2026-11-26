@@ -1302,6 +1302,12 @@ pub enum Commands {
         #[arg(long = "channel", value_name = "CHANNEL=FILE")]
         files: Vec<String>,
 
+        /// A FITS or XISF stack file whose channel is read from its FILTER
+        /// header, or from its name when it has none. Give the option
+        /// once per file. They follow the --channel files
+        #[arg(long = "file", value_name = "FILE", conflicts_with = "server")]
+        unnamed: Vec<String>,
+
         /// With --channel: where the first file points and its pixel
         /// scale, as RA,DEC,SCALE in degrees and arcseconds per pixel
         #[arg(long, value_name = "RA,DEC,SCALE")]

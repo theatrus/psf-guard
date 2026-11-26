@@ -950,3 +950,49 @@ pub fn studio(options: StudioOptions) -> Result<()> {
     println!("Opened {} in PSF-Studio", store.display());
     Ok(())
 }
+
+/// A stack file as `channel=file`, with the channel read from the file:
+/// its FILTER header, classified as PSF Guard classifies a filter's name,
+/// or failing that the parts of the file's name.
+pub fn channel_and_file(file: &str) -> Result<String> {
+    use crate::server::stack_preview::color::classify_filter;
+
+    let path = Path::new(file);
+    let frame = crate::image_io::open_linear_frame(path)
+        .with_context(|| format!("reading {}", path.display()))?;
+    let from_header = crate::image_io::header_text(&frame.headers, "FILTER")
+        .and_then(|filter| classify_filter(filter.trim()));
+    let from_name = || {
+        let name = path.file_stem()?.to_string_lossy().into_owned();
+        // The last part that is a filter's name: a target's name comes
+        // first in most file names.
+        name.split(|character: char| !character.is_alphanumeric())
+            .rev()
+            .find_map(classify_filter)
+    };
+    let role = from_header.or_else(from_name).ok_or_else(|| {
+        anyhow!(
+            "{} does not say which channel it is; give it as --channel CHANNEL={file}",
+            path.display()
+        )
+    })?;
+    Ok(format!("{}={file}", crate::studio_flow::role_name(role)?))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::server::stack_preview::color::{classify_filter, StackColorRole};
+
+    #[test]
+    fn a_file_name_gives_its_channel_from_its_last_filter_part() {
+        let of = |name: &str| {
+            name.split(|character: char| !character.is_alphanumeric())
+                .rev()
+                .find_map(classify_filter)
+        };
+        assert_eq!(of("Sh2-157_Ha_300s_master"), Some(StackColorRole::Ha));
+        assert_eq!(of("masterLight_OIII"), Some(StackColorRole::Oiii));
+        assert_eq!(of("M31-L"), Some(StackColorRole::Luminance));
+        assert_eq!(of("integration"), None);
+    }
+}

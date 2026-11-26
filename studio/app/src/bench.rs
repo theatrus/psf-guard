@@ -2,9 +2,9 @@
 //! of frames and records what every frame cost.
 
 use crate::studio::CanvasState;
+use psf_studio_render::{FrameStats, Segment};
 use serde_json::{json, Value};
 use std::time::Instant;
-use studio_render_spike::{FrameStats, Segment};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Phase {

@@ -4212,6 +4212,13 @@
   white-space: nowrap;
 }
 
+.stack-color-studio {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
 .stack-color-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, min(100%, var(--stack-card-size, 550px)));

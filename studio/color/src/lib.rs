@@ -2,8 +2,8 @@
 //! Little CMS as the color engine.
 
 use lcms2::{Intent, PixelFormat, Profile, Transform};
+use psf_studio_render::display::DisplayCurves;
 use std::path::Path;
-use studio_render_spike::display::DisplayCurves;
 
 pub const SYSTEM_PROFILES: &str = "/System/Library/ColorSync/Profiles";
 

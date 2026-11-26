@@ -94,6 +94,8 @@ struct Run {
     line: String,
     /// How it ended, once it has.
     done: Option<Result<(), String>>,
+    /// For a run that prepares a picture to open: its store and document.
+    opens: Option<(PathBuf, PathBuf)>,
 }
 
 /// The processing tools of the app.
@@ -121,7 +123,19 @@ impl Tools {
     /// Asks the program for the tools, without waiting for the answer.
     pub(super) fn new(options: &Options) -> Self {
         let listing = Arc::new(Mutex::new(None));
-        if let Some(binary) = options.psf_guard.clone() {
+        // The program given, or the one named by PSF_GUARD, or the one
+        // beside this program, or the one on the PATH.
+        let binary_path = options
+            .psf_guard
+            .clone()
+            .or_else(|| std::env::var_os("PSF_GUARD").map(PathBuf::from))
+            .or_else(|| {
+                let beside = std::env::current_exe().ok()?.with_file_name("psf-guard");
+                beside.is_file().then_some(beside)
+            })
+            .unwrap_or_else(|| PathBuf::from("psf-guard"));
+        {
+            let binary = binary_path.clone();
             let listing = listing.clone();
             std::thread::spawn(move || {
                 let listed = Command::new(&binary)
@@ -140,7 +154,7 @@ impl Tools {
             });
         }
         Self {
-            binary: options.psf_guard.clone(),
+            binary: Some(binary_path),
             store: options.open.clone(),
             document: options
                 .document
@@ -369,7 +383,7 @@ impl Studio {
     /// cannot.
     fn cannot_run(&self) -> Option<&'static str> {
         if self.tools.binary.is_none() {
-            Some("Start Studio with --psf-guard and the path of the psf-guard program to choose and run tools.")
+            Some("The psf-guard program was not found.")
         } else if self.tools.store.is_none() || self.tools.document.is_none() {
             Some("Tools run on a store of channel stacks. This document has none.")
         } else {
@@ -394,26 +408,54 @@ impl Studio {
             self.tools.status = format!("The document could not be saved: {error}");
             return;
         }
+        let mut command = Command::new(&binary);
+        command
+            .arg("studio-prepare")
+            .arg("--sources")
+            .arg(store.with_extension("sources"))
+            .arg("--apply")
+            .arg(&document)
+            .arg("--output")
+            .arg(&store);
+        self.start_run(command, None);
+    }
+
+    /// Whether a run of `psf-guard` is in hand.
+    pub(super) fn is_running(&self) -> bool {
+        self.tools.run.is_some()
+    }
+
+    /// What the run in hand, or the last one, said.
+    pub(super) fn run_status(&self) -> &str {
+        &self.tools.status
+    }
+
+    /// The `psf-guard` program.
+    pub(super) fn psf_guard(&self) -> Option<PathBuf> {
+        self.tools.binary.clone()
+    }
+
+    /// Starts a run of `psf-guard` and follows what it prints. With
+    /// `opens`, the run prepares a picture, and its store and document are
+    /// opened when it ends.
+    pub(super) fn start_run(&mut self, mut command: Command, opens: Option<(PathBuf, PathBuf)>) {
+        if self.tools.run.is_some() {
+            return;
+        }
         let run = Arc::new(Mutex::new(Run {
             line: "Starting…".to_string(),
             done: None,
+            opens,
         }));
         self.tools.run = Some(run.clone());
         std::thread::spawn(move || {
-            let sources = store.with_extension("sources");
-            let child = Command::new(&binary)
-                .arg("studio-prepare")
-                .arg("--sources")
-                .arg(&sources)
-                .arg("--apply")
-                .arg(&document)
-                .arg("--output")
-                .arg(&store)
+            let program = command.get_program().to_string_lossy().into_owned();
+            let child = command
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .spawn();
             let outcome = match child {
-                Err(error) => Err(format!("{} did not start: {error}", binary.display())),
+                Err(error) => Err(format!("{program} did not start: {error}")),
                 Ok(mut child) => {
                     if let Some(stdout) = child.stdout.take() {
                         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
@@ -425,7 +467,7 @@ impl Studio {
                         Ok(output) => Err(String::from_utf8_lossy(&output.stderr)
                             .lines()
                             .last()
-                            .unwrap_or("the tools failed")
+                            .unwrap_or("it failed")
                             .to_string()),
                         Err(error) => Err(error.to_string()),
                     }
@@ -435,8 +477,6 @@ impl Studio {
         });
     }
 
-    /// Takes what the program has reported since the last look: its list
-    /// of tools, a run's progress, and a run's end.
     pub(super) fn follow_tools(&mut self) {
         if let Some(listed) = self.tools.listing.lock().expect("tool listing").take() {
             match listed {
@@ -447,26 +487,53 @@ impl Studio {
         let Some(run) = self.tools.run.clone() else {
             return;
         };
-        let (line, done) = {
+        let (line, done, opens) = {
             let mut run = run.lock().expect("tool run");
-            (run.line.clone(), run.done.take())
+            (run.line.clone(), run.done.take(), run.opens.clone())
         };
         self.tools.status = line;
         match done {
             None => {}
             Some(Ok(())) => {
                 self.tools.run = None;
-                self.tools.status = "The tools ran. The canvas shows their result.".to_string();
-                self.reload_store();
+                match opens {
+                    Some((store, document)) => self.show_picture(store, document),
+                    None => {
+                        self.tools.status =
+                            "The tools ran. The canvas shows their result.".to_string();
+                        self.reload_store();
+                    }
+                }
             }
             Some(Err(error)) => {
                 self.tools.run = None;
-                self.tools.status = format!("The tools did not finish: {error}");
+                self.tools.status = format!("Not finished: {error}");
             }
         }
     }
 
     /// Draws the store again from its file, after a run prepared it.
+    /// Shows a picture a run prepared: its document, then its store.
+    fn show_picture(&mut self, store: PathBuf, document: PathBuf) {
+        match std::fs::read_to_string(&document)
+            .map_err(|error| error.to_string())
+            .and_then(|text| {
+                crate::studio_model::Document::from_json(&text).map_err(|error| error.to_string())
+            }) {
+            Ok(opened) => self.document = opened,
+            Err(error) => {
+                self.tools.status = format!("The document could not be opened: {error}");
+                return;
+            }
+        }
+        self.tools.store = Some(store);
+        self.tools.document = Some(document);
+        self.tools.status = String::new();
+        self.selected = crate::studio_model::Row::Combined;
+        self.reload_store();
+        self.canvas.edit(|canvas| canvas.fit());
+    }
+
     fn reload_store(&mut self) {
         let Some(path) = self.tools.store.clone() else {
             return;

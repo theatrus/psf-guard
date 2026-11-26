@@ -1,0 +1,26 @@
+# PSF-Studio: the native editor that starts from PSF Guard's channel stacks.
+# Its binary is `psf-studio`. See docs/design/psf-studio.md.
+#
+# This workspace stands apart from the PSF Guard workspace on purpose. GPUI
+# is a git dependency on Zed and needs a newer toolchain, and neither belongs
+# in PSF Guard's lock file. The document model and the tile store are
+# compiled from PSF Guard's source, under `src/studio` and `src/image_steps`,
+# so the two programs read and write the same documents.
+#
+# `experiments/` holds the measurements the design record cites: the crop
+# preview, the browser canvas, and their results.
+[workspace]
+members = ["render", "app", "color", "experiments/crop"]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+publish = false
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+wgpu = "30"
+bytemuck = { version = "1", features = ["derive"] }
+
+[profile.release]
+debug = 1
