@@ -612,6 +612,7 @@ fn stretch_source<'a>(
 ) -> (usize, &'a ChannelPlan) {
     plan.channel
         .strip_suffix("@stars")
+        .or_else(|| plan.channel.strip_suffix("@line"))
         // Stars the store holds stretched for display are drawn as they
         // are, not through their input's stretch.
         .filter(|_| !bands.is_display(band))
@@ -1113,8 +1114,6 @@ impl Studio {
         }
     }
 
-    /// The strokes shown over the image while a brush is in hand: the
-    /// selected row's mask.
     /// What the brush paints: the layer, the step, or the shared mask the
     /// selected row is.
     pub(super) fn mask_target(&self) -> Option<Uuid> {
@@ -1131,35 +1130,64 @@ impl Studio {
             Some(MaskRecord::Painted(mask)) => Some(mask.blur),
             _ => None,
         };
-        if let Some(layer) = self.selected_layer() {
-            return painted(&layer.mask);
+        match &self.selected {
+            Row::Layer(id) => painted(&self.layer(*id)?.mask),
+            Row::LayerStep { step, .. } | Row::Finish(step) => {
+                painted(&self.document.step(*step)?.1.mask)
+            }
+            _ => None,
         }
-        self.selected_step()
-            .and_then(|id| self.document.step(id))
-            .and_then(|(_, step)| painted(&step.mask))
+    }
+
+    /// Whether the brush's mask has a stroke that Undo stroke can remove.
+    pub(super) fn can_undo_stroke(&self) -> bool {
+        self.mask_target()
+            .is_some_and(|target| self.document.stroke_count(target) > 0)
     }
 
     /// The part of the document the picture keeps, as left, top, right and
     /// bottom: the person's rectangle, the store's automatic crop, or all.
     pub(super) fn crop_rect(&self) -> Option<[f32; 4]> {
         let rect = |x: u32, y: u32, width: u32, height: u32| {
-            [x as f32, y as f32, (x + width) as f32, (y + height) as f32]
+            [
+                x as f32,
+                y as f32,
+                x.saturating_add(width) as f32,
+                y.saturating_add(height) as f32,
+            ]
         };
+        let automatic = self
+            .band_info
+            .automatic_crop
+            .map(|[x, y, width, height]| rect(x, y, width, height));
         match self.document.crop {
             CropRecord::Whole => None,
+            CropRecord::Automatic => automatic,
+            // A drawn rectangle stays inside what every input covers, even
+            // after the store is prepared again.
             CropRecord::Region {
                 x,
                 y,
                 width,
                 height,
-            } => Some(rect(x, y, width, height)),
-            CropRecord::Automatic => self
-                .band_info
-                .automatic_crop
-                .map(|[x, y, width, height]| rect(x, y, width, height)),
+            } => {
+                let drawn = rect(x, y, width, height);
+                let inside = automatic.unwrap_or([0.0, 0.0, f32::MAX, f32::MAX]);
+                let kept = [
+                    drawn[0].max(inside[0]),
+                    drawn[1].max(inside[1]),
+                    drawn[2].min(inside[2]),
+                    drawn[3].min(inside[3]),
+                ];
+                (kept[0] < kept[2] && kept[1] < kept[3])
+                    .then_some(kept)
+                    .or(automatic)
+            }
         }
     }
 
+    /// The strokes shown over the image while a brush is in hand: the
+    /// selected row's mask.
     fn selected_strokes(&self) -> Vec<Segment> {
         if let Some(layer) = self.selected_layer() {
             return mask_strokes(&layer.mask);
@@ -1641,12 +1669,14 @@ impl Studio {
         let tool = match (self.tool, &self.selected) {
             (Tool::Pan, _) => None,
             (Tool::Brush, _) if self.brush_removes => {
-                Some("The mask brush subtracts from this mask.".to_string())
+                Some("The mask brush erases from this mask.".to_string())
             }
             (Tool::Brush, Row::Mask(_)) => Some("The mask brush adds to this mask.".to_string()),
             (Tool::Brush, _) => Some("The mask brush paints where this applies.".to_string()),
             (Tool::Heal, _) => Some("Heal adds a step here.".to_string()),
-            (Tool::Crop, _) => Some("Crop sets what the picture keeps.".to_string()),
+            (Tool::Crop, _) => {
+                Some("Crop sets the rectangle the picture is cropped to.".to_string())
+            }
         };
         let marked = on_a_mask || self.tool == Tool::Brush;
         div()

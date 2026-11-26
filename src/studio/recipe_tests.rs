@@ -426,3 +426,32 @@ fn emission_lines_use_each_line_with_its_continuum_subtracted_when_there_is_one(
         Document::default_tone("ha").0
     );
 }
+
+#[test]
+fn a_color_recipe_brings_back_the_stars_a_star_removal_took() {
+    let inputs = names(&["red", "green", "blue", "ha"]);
+    let mut document = document(&["red", "green", "blue", "ha"]);
+    // Without the stars of R, G and B, RGB is the color part alone.
+    assert!(document.use_recipe(recipe("RGB"), &inputs));
+    assert_eq!(parts(&document).len(), 1);
+    for name in ["red", "green", "blue"] {
+        let stars = StepRecord::new(StepKind::Operation {
+            operation: flow_operations::CHANNEL_STACK.to_string(),
+            accepts: crate::image_steps::Accepts::Linear,
+            settings: serde_json::json!({}),
+        })
+        .for_band(&format!("{name}@stars"));
+        document
+            .insert_step(StageKind::Sources, usize::MAX, stars)
+            .unwrap();
+    }
+    assert!(document.use_recipe(recipe("RGB with emission lines"), &inputs));
+    let made: Vec<String> = parts(&document).into_iter().map(|(name, _)| name).collect();
+    assert_eq!(made, ["Color", "Emission lines", "RGB stars"]);
+    let lines = document
+        .parts()
+        .into_iter()
+        .find(|part| part.name == "Emission lines")
+        .unwrap();
+    assert_eq!(lines.opacity, 0.5);
+}

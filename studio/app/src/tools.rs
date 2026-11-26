@@ -225,6 +225,22 @@ impl Studio {
                 (channel, serde_json::Value::Array(chain))
             })
             .collect::<serde_json::Map<_, _>>();
+        // An input's deconvolution is prepared with the store as well.
+        for step in &self.document.stage(StageKind::Linear).steps {
+            if let (
+                true,
+                Some(band),
+                StepKind::Operation {
+                    operation,
+                    settings,
+                    ..
+                },
+            ) = (step.enabled, &step.band, &step.kind)
+                && operation == flow_operations::DECONVOLUTION
+            {
+                chains.insert(format!("{band}:deconvolution"), settings.clone());
+            }
+        }
         // Continuum subtraction is prepared with the store as well.
         chains.insert(
             "continuum".to_string(),
@@ -591,7 +607,17 @@ impl Studio {
             let outcome = match child {
                 Err(error) => Err(format!("{program} did not start: {error}")),
                 Ok(mut child) => {
-                    run.lock().expect("tool run").process = Some(child.id());
+                    {
+                        let mut state = run.lock().expect("tool run");
+                        state.process = Some(child.id());
+                        // A stop asked for before the program started.
+                        if state.stopped {
+                            let _ = Command::new("kill")
+                                .arg("-TERM")
+                                .arg(format!("-{}", child.id()))
+                                .status();
+                        }
+                    }
                     // Both pipes are read at once: a program that fills one
                     // while the other is read would wait forever.
                     let errors = child.stderr.take().map(|stderr| {
@@ -609,8 +635,15 @@ impl Studio {
                         }
                     }
                     let last_error = errors.and_then(|reader| reader.join().ok()).flatten();
-                    let stopped = run.lock().expect("tool run").stopped;
-                    match child.wait() {
+                    let waited = child.wait();
+                    // The process is gone, so a later stop must not reach a
+                    // group that has taken its number.
+                    let stopped = {
+                        let mut state = run.lock().expect("tool run");
+                        state.process = None;
+                        state.stopped
+                    };
+                    match waited {
                         _ if stopped => Err("stopped".to_string()),
                         Ok(status) if status.success() => Ok(()),
                         Ok(_) => Err(last_error.unwrap_or_else(|| "it failed".to_string())),
@@ -662,6 +695,16 @@ impl Studio {
             }
             Some(Err(error)) => {
                 self.tools.run = None;
+                // A stopped run leaves the store it was writing behind.
+                if error == "stopped" {
+                    let store = opens
+                        .as_ref()
+                        .map(|(store, _)| store.clone())
+                        .or_else(|| self.tools.store.clone());
+                    if let Some(store) = store {
+                        remove_partial_stores(&store);
+                    }
+                }
                 self.tools.status = format!("Not finished: {error}");
             }
         }
@@ -920,5 +963,23 @@ impl Studio {
             block = block.child(div().text_xs().child(self.tools.status.clone()));
         }
         block
+    }
+}
+
+/// Removes the partial files a stopped run left beside a store: a store
+/// `picture.pgtiles` is written to `picture.partial-<id>` and renamed when
+/// it is complete.
+fn remove_partial_stores(store: &std::path::Path) {
+    let (Some(folder), Some(name)) = (store.parent(), store.file_stem()) else {
+        return;
+    };
+    let prefix = format!("{}.partial-", name.to_string_lossy());
+    let Ok(entries) = std::fs::read_dir(folder) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if entry.file_name().to_string_lossy().starts_with(&prefix) {
+            let _ = std::fs::remove_file(entry.path());
+        }
     }
 }

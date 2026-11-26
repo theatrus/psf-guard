@@ -2264,16 +2264,20 @@ Calibrated red, green and blue with the same stretches are stretched
 together as one color image. The spike draws a stretched plane as it is
 wherever the view applies the channel's stretches. Changing a layered
 stretch's settings takes effect when the store is prepared again. The
-stars of such an input follow it: the input is stretched again with its
-stars put back, and the stars are taken out of that with Seiza's unscreen,
-so screening them over the starless input gives the input with its stars.
+stars of such an input follow it: the input with its stars put back is
+stretched with the very stretch the starless input got (the same input
+range and Seiza's resolved plans, `color_steps::DisplayStretch`), and the
+stars are taken out of that with the unscreen Seiza's star screen uses, so
+screening them over the starless input gives the input with its stars.
 Stars already stretched by the star stretch are left as they are.
 
 **Stopping a run.** While Studio prepares a store or a picture, the top bar
 shows **Stop**. The run is started in a process group of its own, so Stop
-ends `psf-guard` and the tools it started; the store and the picture stay
-as they were, and the tool results already finished are kept for the next
-run.
+ends `psf-guard` and the tools it started, and the partial store it was
+writing is removed; the store and the picture stay as they were, and the
+tool results already finished are kept for the next run. Stop works on
+macOS and Linux; a run started from Studio does not end when Studio
+quits.
 
 **From stack files, with no server.** `psf-guard studio-files --channel
 ha=Ha.xisf --channel oiii=… --output picture.pgtiles` prepares the same
@@ -2346,10 +2350,16 @@ has the step "Subtract continuum" (Continuum › Subtract on an Ha, OIII or
 SII input). The fit is `color_steps::fit_continuum_line`, which PSF Guard's
 color previews call too; Seiza's `subtract_continuum` then removes the
 continuum. The fit measures stars, so it runs on the stacks as they came;
-the subtraction is applied to the line in its starless state when the line
-and its references all have one. OIII's continuum comes from G and B, the
-others' from R. The result is a new input, `<line>@line` ("Ha line"), and
-the Emission lines part uses it when it is there.
+the subtraction is applied to each input in its last linear state (with its
+background corrected, else after its tools, else as stacked), after the
+background step. The line and its references must agree on their stars:
+all starless or all with their stars, or the subtraction is skipped with
+that reason, since otherwise the line would keep or lose the stars of its
+references. OIII's continuum comes from G and B, the others' from R. The
+result is a new input, `<line>@line` ("Ha line"), stretched as its channel
+is, and the Emission lines part uses it when it is there, at half opacity.
+A color recipe adds the RGB stars part when R, G and B lost their stars to
+a star removal.
 
 The fit needs to know where each stack clipped. `studio-sources` downloads
 the clipping map the stacker wrote (`…/stack-previews/{job}/{group}/clipped`,

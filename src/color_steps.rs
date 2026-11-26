@@ -613,16 +613,44 @@ pub fn stretch_star_layer(
     Ok(channels)
 }
 
+/// A stretch for display as Seiza resolved it for one image: the range
+/// its physical values were brought into, and each stage's plan. Applied to
+/// another image of the same scene, it gives the same transfer, as an
+/// image and its stars need for one to screen back onto the other.
+pub struct DisplayStretch {
+    domain: seiza_stretch::ResolvedSampleDomain,
+    plans: Vec<seiza_stretch::StretchPlan>,
+}
+
+impl DisplayStretch {
+    /// Applies this stretch to `image`, which has the channels and the
+    /// physical units of the image it was resolved for.
+    pub fn apply(&self, image: &LinearImage) -> Result<LinearImage, String> {
+        let shape = seiza_stretch::ImageShape::new(image.width, image.height, image.channels);
+        let mut current = self
+            .domain
+            .apply(&image.data, image.channels)
+            .map_err(|error| error.to_string())?;
+        for plan in &self.plans {
+            current = plan
+                .apply_f32_image(&current, shape)
+                .map_err(|error| error.to_string())?;
+        }
+        LinearImage::new(image.width, image.height, image.channels, current)
+            .map_err(|error| error.to_string())
+    }
+}
+
 /// Runs a chain of stretches over a whole image, with Seiza's stretch
-/// stack, and returns the image stretched for display. A chain with the
-/// layered stretch needs this: that stretch blurs the image, so it cannot
-/// be resolved from samples. `image` has one channel, or three that are
-/// stretched together. Its samples are physical values, as a stack holds
-/// them.
+/// stack, and returns the image stretched for display with the stretch as
+/// resolved. A chain with the layered stretch needs this: that stretch
+/// blurs the image, so it cannot be resolved from samples. `image` has one
+/// channel, or three that are stretched together. Its samples are physical
+/// values, as a stack holds them.
 pub fn stretch_for_display(
     image: &LinearImage,
     stages: &[StackStretchRequest],
-) -> Result<LinearImage, String> {
+) -> Result<(LinearImage, DisplayStretch), String> {
     use seiza_stretch::{SampleDomain, SampleNormalization};
 
     // A stack holds physical values. They are brought to the range of 0
@@ -644,14 +672,47 @@ pub fn stretch_for_display(
     let output = stack
         .apply_f32_image(&unit, shape)
         .map_err(|error| error.to_string())?;
-    LinearImage::new(image.width, image.height, image.channels, output.data)
-        .map_err(|error| error.to_string())
+    let stretched = LinearImage::new(image.width, image.height, image.channels, output.data)
+        .map_err(|error| error.to_string())?;
+    Ok((
+        stretched,
+        DisplayStretch {
+            domain,
+            plans: output.plans,
+        },
+    ))
+}
+
+/// The stars of a display-stretched image: the image with its stars,
+/// unscreened from the same image without them. Screening the result over
+/// `starless` gives `original` back. The formula is the one Seiza's RGB
+/// star screen uses; a pixel either image does not cover is `NaN`.
+pub fn unscreen(original: f32, starless: f32) -> f32 {
+    if !original.is_finite() || !starless.is_finite() {
+        f32::NAN
+    } else if starless >= 1.0 {
+        0.0
+    } else {
+        ((original - starless) / (1.0 - starless)).clamp(0.0, 1.0)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use seiza_background::{BackgroundConfig, CorrectionMode};
+
+    #[test]
+    fn stars_unscreened_screen_back_onto_the_starless_image() {
+        for (original, starless) in [(0.8_f32, 0.3_f32), (0.3, 0.3), (0.05, 0.0), (0.99, 0.95)] {
+            let stars = unscreen(original, starless);
+            // Screen: 1 - (1 - a)(1 - b).
+            let screened = 1.0 - (1.0 - starless) * (1.0 - stars);
+            assert!((screened - original).abs() < 1e-6, "{original} {starless}");
+        }
+        assert_eq!(unscreen(0.2, 0.4), 0.0, "a darker original gives no star");
+        assert!(unscreen(f32::NAN, 0.1).is_nan());
+    }
     use seiza_stacking::SimilarityTransform;
 
     const WIDTH: usize = 96;

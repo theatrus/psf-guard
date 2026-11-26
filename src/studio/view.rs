@@ -249,7 +249,11 @@ pub fn plan(document: &Document, view: &View) -> ViewPlan {
     let channel_plan = |channel: &str| {
         // The stars a tool took out of an input are stretched as that
         // input is, so the two go back together.
-        let stretched_as = channel.strip_suffix("@stars").unwrap_or(channel);
+        // A line with its continuum subtracted is stretched as its channel.
+        let stretched_as = channel
+            .strip_suffix("@stars")
+            .or_else(|| channel.strip_suffix("@line"))
+            .unwrap_or(channel);
         let stretches: Vec<Uuid> = steps
             .iter()
             .filter(|(_, step)| step.enabled && step.kind.name() == op::STRETCH)

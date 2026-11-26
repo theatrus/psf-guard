@@ -718,3 +718,28 @@ fn the_newest_stroke_of_a_mask_is_removed_and_an_empty_mask_goes() {
         None
     );
 }
+
+#[test]
+fn erasing_where_there_is_no_mask_is_refused_and_leaves_the_layer_whole() {
+    let mut document = Document::new("erase");
+    let layer = LayerRecord::new(
+        "Ha",
+        LayerSource::Band {
+            band: "ha".to_string(),
+        },
+    );
+    let id = layer.id;
+    document.insert_layer(0, layer).unwrap();
+    assert!(document
+        .paint_layer_mask(id, dab(10.0, 10.0, 4.0, StrokeMode::Subtract))
+        .is_err());
+    assert!(document.layers()[0].mask.is_none());
+    assert_eq!(document.stroke_count(id), 0);
+    document
+        .paint_layer_mask(id, dab(10.0, 10.0, 4.0, StrokeMode::Add))
+        .unwrap();
+    document
+        .paint_layer_mask(id, dab(12.0, 10.0, 2.0, StrokeMode::Subtract))
+        .unwrap();
+    assert_eq!(document.stroke_count(id), 2);
+}

@@ -419,3 +419,20 @@ fn an_input_deconvolved_without_tools_is_shown_in_its_tools_state() {
     };
     assert_eq!(plan(&document, &view).channels[0].tools, Some(id));
 }
+
+#[test]
+fn a_line_without_its_continuum_is_stretched_as_its_channel() {
+    let settings: Value =
+        serde_json::from_str(include_str!("../processing_setups/default_color.json")).unwrap();
+    let document = document_from_color_setup("Default", &settings, &["ha", "oiii"]).unwrap();
+    let stretch = |channel: &str| {
+        let view = View {
+            subject: Subject::Channel(channel.to_string()),
+            up_to: UpTo::Final,
+            stretch: DisplayStretch::Document,
+            own_until: None,
+        };
+        plan(&document, &view).channels[0].stretch.clone()
+    };
+    assert_eq!(stretch("ha@line"), stretch("ha"));
+}

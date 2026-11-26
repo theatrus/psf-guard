@@ -1,4 +1,4 @@
-use super::{Junction, PaintedMask, Stroke, StudioError};
+use super::{Junction, PaintedMask, Stroke, StrokeMode, StudioError};
 use crate::image_steps::{Accepts, Domain};
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -1067,10 +1067,6 @@ impl Document {
             .is_some()
     }
 
-    /// Adds a stroke to a step's painted mask, starting the mask if the step
-    /// has none. A mask of another kind is replaced by the painted one.
-    ///
-    /// Refuses a step in a stage that allows no manual edits.
     /// Removes the newest stroke from a painted mask: of a layer, of a step
     /// (an input's, a layer's own, or a Finish step's), or the newest
     /// touch-up of a shared mask. `id` names the layer, the step or the
@@ -1109,6 +1105,36 @@ impl Document {
         false
     }
 
+    /// How many strokes the painted mask of the layer or the step `id` has,
+    /// or the touch-ups of the shared mask `id`.
+    pub fn stroke_count(&self, id: Uuid) -> usize {
+        if let Some(mask) = self.masks.iter().find(|mask| mask.id == id) {
+            return mask.touch_ups.len();
+        }
+        let count = |record: &Option<MaskRecord>| match record {
+            Some(MaskRecord::Painted(mask)) => mask.strokes.len(),
+            _ => 0,
+        };
+        for stage in &self.stages {
+            for step in &stage.steps {
+                if step.id == id {
+                    return count(&step.mask);
+                }
+            }
+            for layer in &stage.layers {
+                if layer.id == id {
+                    return count(&layer.mask);
+                }
+                for step in &layer.steps {
+                    if step.id == id {
+                        return count(&step.mask);
+                    }
+                }
+            }
+        }
+        0
+    }
+
     /// Sets how far a painted mask's strokes are softened: of the layer or
     /// the step `id`. Returns whether it has a painted mask.
     pub fn set_mask_blur(&mut self, id: Uuid, blur: f32) -> bool {
@@ -1139,6 +1165,12 @@ impl Document {
         false
     }
 
+    /// Adds a stroke to a step's painted mask, starting the mask if the step
+    /// has none. A mask of another kind is refused.
+    ///
+    /// Refuses a step in a stage that allows no manual edits.
+    /// An erasing stroke on a step with no mask is refused: the step applies
+    /// everywhere, and a new mask would start empty and hide it.
     pub fn paint_step_mask(&mut self, id: Uuid, stroke: Stroke) -> Result<(), StudioError> {
         let (stage, step) = self
             .step_mut(id)
@@ -1151,6 +1183,11 @@ impl Document {
         match &mut step.mask {
             Some(MaskRecord::Painted(mask)) => mask.strokes.push(stroke),
             mask @ None => {
+                if stroke.mode == StrokeMode::Subtract {
+                    return Err(StudioError::Document(
+                        "the step has no mask to erase from".to_string(),
+                    ));
+                }
                 *mask = Some(MaskRecord::Painted(PaintedMask {
                     strokes: vec![stroke],
                     blur: 0.0,
@@ -1197,6 +1234,11 @@ impl Document {
                 ));
             }
             mask @ None => {
+                if stroke.mode == StrokeMode::Subtract {
+                    return Err(StudioError::Document(
+                        "the layer has no mask to erase from".to_string(),
+                    ));
+                }
                 *mask = Some(MaskRecord::Painted(PaintedMask {
                     strokes: vec![stroke],
                     blur: 0.0,

@@ -335,7 +335,7 @@ impl Studio {
                         })),
                 ))
                 .children(Self::help(
-                    "Subtract fits the broadband light under each line from the R, G and B stacks and adds the line alone as an input, such as Ha line. Run tools to prepare it.",
+                    "Subtract applies to Ha, OIII and SII together. It fits the broadband light under each line from the R, G and B stacks and adds each line without that light as an input, such as Ha line. Run tools to prepare the store with them.",
                 )),
         )
     }
@@ -1201,7 +1201,7 @@ impl Studio {
                 |block, (width, height)| block.child(Self::note(format!("{width} × {height} pixels"))),
             )
             .children(Self::help(
-                "Auto keeps the largest rectangle every input covers, which cuts the empty edges registration leaves. Drawn uses a rectangle drawn with the Crop tool.",
+                "Auto crops to the largest rectangle every input covers, removing the empty edges left by registration. Drawn crops to a rectangle drawn with the Crop tool.",
             ))
     }
 
@@ -1303,8 +1303,9 @@ impl Studio {
                 "Drag over a blemish. Each stroke becomes a Heal step of {}.",
                 self.heal_target()
             ),
-            Tool::Crop => "Drag a rectangle over the picture. The picture keeps what is inside it."
-                .to_string(),
+            Tool::Crop => {
+                "Drag a rectangle over the picture. Studio crops the picture to it.".to_string()
+            }
         };
         let brushing = matches!(self.tool, Tool::Brush | Tool::Heal);
         let painting = self.tool == Tool::Brush && can_mask;
@@ -1343,7 +1344,7 @@ impl Studio {
                         })),
                 ))
             })
-            .when(can_mask && self.has_strokes(), |pane| {
+            .when(self.can_undo_stroke(), |pane| {
                 pane.child(Self::field(
                     "",
                     Self::act("Undo stroke", "undo-stroke", false, cx, move |this| {

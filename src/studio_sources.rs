@@ -405,11 +405,40 @@ impl RegisteredChannels {
             }
         }
 
+        let mut backgrounds = Vec::new();
+        if let Some(extraction) = background {
+            // Corrected in full: the strength is applied when the two
+            // planes are blended.
+            let full = StackBackgroundExtraction {
+                strength: 1.0,
+                ..extraction.clone()
+            };
+            let mut channels: Vec<(StackColorRole, &mut LinearImage)> =
+                roles.iter().copied().zip(processed.iter_mut()).collect();
+            // Catalog protection needs a plate solve of the stack, which
+            // Studio does not read yet, so no region is protected.
+            correct_channel_backgrounds(
+                &mut channels,
+                &full,
+                |_| Vec::new(),
+                |role, event| {
+                    if let BackgroundEvent::Corrected { fit, .. } = event {
+                        backgrounds.push((role, fit.clone()));
+                    }
+                    Ok(())
+                },
+            )
+            .map_err(anyhow::Error::msg)?;
+            for (channel, corrected) in processed.into_iter().enumerate() {
+                names.push(background_corrected_channel(&channel_names[channel]));
+                planes.push(place(channel, corrected)?);
+            }
+        }
+
         // Continuum subtraction, with the steps PSF Guard's color previews
         // run: the continuum under each line is fitted on the stacks as
         // they came, which still have the stars the fit measures, and then
-        // subtracted from the line in its last state before the background:
-        // after its tools, when the line and its references all have them.
+        // subtracted from the line in its last linear state.
         let mut continuum_results = Vec::new();
         if let Some(continuum) = continuum.filter(|continuum| {
             continuum.config.mode != crate::server::stack_preview::color::ContinuumMode::Off
@@ -445,6 +474,10 @@ impl RegisteredChannels {
                     .map(|input| {
                         let map = continuum.clipping.get(&roles[*input])?;
                         let placed = place(*input, map.clone()).ok()?;
+                        // A map of another size is not this stack's.
+                        if placed.len() != width * height {
+                            return None;
+                        }
                         Some(
                             placed
                                 .iter()
@@ -496,18 +529,42 @@ impl RegisteredChannels {
                         continue;
                     }
                 };
-                // The starless state when every input has one.
-                let starless: Option<Vec<LinearImage>> = inputs
+                // Each input in its last linear state: with its background
+                // corrected, else after its tools, else as stacked. The
+                // inputs must agree on their stars: all starless, or all
+                // with their stars, or the line keeps or loses the stars
+                // of its references.
+                let last_state = |input: usize| -> Option<LinearImage> {
+                    let name = &channel_names[input];
+                    [background_corrected_channel(name), tools_channel(name)]
+                        .iter()
+                        .find_map(|wanted| names.iter().position(|other| other == wanted))
+                        .and_then(|at| image(planes[at].clone()).ok())
+                };
+                let starless: Vec<bool> = inputs
                     .iter()
                     .map(|input| {
-                        let wanted = tools_channel(&channel_names[*input]);
-                        let at = names.iter().position(|other| *other == wanted)?;
-                        image(planes[at].clone()).ok()
+                        let wanted = stars_channel(&channel_names[*input]);
+                        names.contains(&wanted)
                     })
                     .collect();
-                let (from, state) = match &starless {
-                    Some(starless) => (starless, "after its tools"),
-                    None => (&stacked, "as stacked"),
+                if starless.iter().any(|&one| one) && !starless.iter().all(|&one| one) {
+                    continuum_results.push((
+                        *role,
+                        "not subtracted: remove the stars of the line and of its references alike"
+                            .to_string(),
+                    ));
+                    continue;
+                }
+                let latest: Vec<LinearImage> = inputs
+                    .iter()
+                    .zip(&stacked)
+                    .map(|(input, stacked)| last_state(*input).unwrap_or_else(|| stacked.clone()))
+                    .collect();
+                let (from, state) = if starless[0] {
+                    (&latest, "starless")
+                } else {
+                    (&latest, "with its stars")
                 };
                 let from_references: Vec<&LinearImage> = from[1..].iter().collect();
                 let residual =
@@ -530,35 +587,6 @@ impl RegisteredChannels {
             }
         }
 
-        let mut backgrounds = Vec::new();
-        if let Some(extraction) = background {
-            // Corrected in full: the strength is applied when the two
-            // planes are blended.
-            let full = StackBackgroundExtraction {
-                strength: 1.0,
-                ..extraction.clone()
-            };
-            let mut channels: Vec<(StackColorRole, &mut LinearImage)> =
-                roles.iter().copied().zip(processed.iter_mut()).collect();
-            // Catalog protection needs a plate solve of the stack, which
-            // Studio does not read yet, so no region is protected.
-            correct_channel_backgrounds(
-                &mut channels,
-                &full,
-                |_| Vec::new(),
-                |role, event| {
-                    if let BackgroundEvent::Corrected { fit, .. } = event {
-                        backgrounds.push((role, fit.clone()));
-                    }
-                    Ok(())
-                },
-            )
-            .map_err(anyhow::Error::msg)?;
-            for (channel, corrected) in processed.into_iter().enumerate() {
-                names.push(background_corrected_channel(&channel_names[channel]));
-                planes.push(place(channel, corrected)?);
-            }
-        }
         Ok(Self {
             shape: ImageShape {
                 width: reference.1,
