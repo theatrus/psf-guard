@@ -16,7 +16,7 @@ use crate::server::stack_preview::color_calibration::{
     StackColorCalibrationSkip, StackColorCalibrationSkipReason, StarPlacement,
 };
 use crate::server::stack_preview::rc_astro::{self, ProcessingChain, RcAstroOutcome};
-use crate::server::stack_preview::stretch::StackStretchRequest;
+use crate::server::stack_preview::stretch::{StackDeconvolutionResult, StackStretchRequest};
 use crate::server::stack_preview::StackSkyOrientation;
 use crate::server::workers::rc_astro::RcAstroRunner;
 use crate::server::workers::Workers;
@@ -46,7 +46,9 @@ pub struct ToolChain {
 impl ToolChain {
     /// Resolves a chain against the tools the workers offer. `scope`,
     /// `source` and `revision` say which image the chain runs on, so the
-    /// cache keeps one result per image and per setting.
+    /// cache keeps one result per image and per setting. `deconvolution` is
+    /// the identity of a deconvolution that runs before the chain, if one
+    /// does, so the chain's results follow its settings.
     ///
     /// Refuses a chain with a tool no worker offers.
     pub fn resolve(
@@ -55,11 +57,13 @@ impl ToolChain {
         scope: &str,
         source: &str,
         revision: &str,
+        deconvolution: Option<&str>,
     ) -> Result<Self, String> {
         let schemas = rc_astro::schemas_for(workers, config)?;
         let config = rc_astro::normalize_against_schemas(config, &schemas)?;
-        let ids = rc_astro::rc_astro_chain_ids(scope, source, revision, &config, &schemas, None)
-            .map_err(|error| format!("{error:?}"))?;
+        let ids =
+            rc_astro::rc_astro_chain_ids(scope, source, revision, &config, &schemas, deconvolution)
+                .map_err(|error| format!("{error:?}"))?;
         Ok(Self {
             config,
             schemas,
@@ -352,6 +356,56 @@ pub(crate) fn refit_channel_background(
         fit.diagnostics.model_selection = Some(selection);
     }
     Ok(fit)
+}
+
+/// Deconvolves one channel with Seiza: the step PSF Guard's channel cards
+/// and color previews run on an input before its processing tools.
+pub fn deconvolve(
+    image: &LinearImage,
+    config: seiza_deconvolution::DeconvolutionConfig,
+) -> Result<(LinearImage, StackDeconvolutionResult), String> {
+    crate::server::stack_preview::stretch::apply_deconvolution(image, config)
+}
+
+/// One channel's deconvolution, with the identity its result is kept
+/// under: the channel's stack and the settings.
+pub struct ChannelDeconvolution {
+    pub config: seiza_deconvolution::DeconvolutionConfig,
+    pub id: String,
+}
+
+impl ChannelDeconvolution {
+    /// The deconvolution of the stack `source` at `revision`, kept under
+    /// `scope`, as [`ToolChain::resolve`] keys a chain.
+    pub fn resolve(
+        config: seiza_deconvolution::DeconvolutionConfig,
+        scope: &str,
+        source: &str,
+        revision: &str,
+    ) -> Result<Self, String> {
+        let id = crate::server::stack_preview::stretch::deconvolution_cache_id(
+            scope, source, revision, &config,
+        )
+        .map_err(|error| format!("{error:?}"))?;
+        Ok(Self { config, id })
+    }
+
+    /// Deconvolves `frame`, or reads the result kept under `cache` from an
+    /// earlier run with the same stack and settings. Returns the result and
+    /// whether it was read rather than computed.
+    pub fn apply(
+        &self,
+        cache: &Path,
+        frame: &seiza_stacking::FitsFrame,
+    ) -> Result<(LinearImage, bool), String> {
+        use crate::server::stack_preview::stretch;
+        if let Some((kept, _)) = stretch::cached_deconvolution(cache, &self.id, self.config)? {
+            return Ok((kept.image, true));
+        }
+        let (restored, result) = deconvolve(&frame.image, self.config)?;
+        stretch::store_deconvolution(cache, &self.id, &restored, &frame.headers, &result)?;
+        Ok((restored, false))
+    }
 }
 
 /// What [`measure_color_gains`] found.

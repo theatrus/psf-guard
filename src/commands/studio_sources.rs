@@ -411,35 +411,47 @@ fn prepare_store(
         }
     };
     let processing = processing_from_document(&document)?;
-    for role in processing.input_deconvolutions.keys() {
-        println!(
-            "  The deconvolution of {} is not run in Studio yet: the store has {} without it",
-            role.label(),
-            role.label()
-        );
-    }
     let background = processing.background_extraction;
 
     // Each channel's processing tools, resolved against the tools this
     // machine has. A tool's result is kept beside the downloaded stacks.
     let workers = Workers::default();
     let mut chains = BTreeMap::new();
+    let mut deconvolutions = BTreeMap::new();
     for stack in stacks {
-        let Some(config) = processing.input_rc_astro.get(&stack.role) else {
-            continue;
-        };
-        if config.steps.is_empty() {
-            continue;
+        let source = format!("mono:{}:{}", stack.job_id, stack.group_index);
+        let revision = stack.artifact_revision.to_string();
+        let deconvolution = processing
+            .input_deconvolutions
+            .get(&stack.role)
+            .map(|config| {
+                crate::color_steps::ChannelDeconvolution::resolve(
+                    *config, "studio", &source, &revision,
+                )
+            })
+            .transpose()
+            .map_err(|error| anyhow!("the deconvolution of {}: {error}", stack.filter_name))?;
+        if let Some(config) = processing
+            .input_rc_astro
+            .get(&stack.role)
+            .filter(|config| !config.steps.is_empty())
+        {
+            let chain = ToolChain::resolve(
+                &workers,
+                config,
+                "studio",
+                &source,
+                &revision,
+                deconvolution
+                    .as_ref()
+                    .map(|deconvolution| deconvolution.id.as_str()),
+            )
+            .map_err(|error| anyhow!("the tools of {}: {error}", stack.filter_name))?;
+            chains.insert(stack.role, chain);
         }
-        let chain = ToolChain::resolve(
-            &workers,
-            config,
-            "studio",
-            &format!("mono:{}:{}", stack.job_id, stack.group_index),
-            &stack.artifact_revision.to_string(),
-        )
-        .map_err(|error| anyhow!("the tools of {}: {error}", stack.filter_name))?;
-        chains.insert(stack.role, chain);
+        if let Some(deconvolution) = deconvolution {
+            deconvolutions.insert(stack.role, deconvolution);
+        }
     }
     // One line per tool and per tenth of its channel's chain.
     let reported = std::cell::RefCell::new((String::new(), u32::MAX));
@@ -456,6 +468,7 @@ fn prepare_store(
         workers: &workers,
         cache: folder,
         chains,
+        deconvolutions,
         progress: &report,
     };
 
@@ -466,7 +479,7 @@ fn prepare_store(
         .collect();
     let mut prepared = RegisteredChannels::prepare(
         &inputs,
-        (!tools.chains.is_empty()).then_some(&tools),
+        (!tools.chains.is_empty() || !tools.deconvolutions.is_empty()).then_some(&tools),
         background.as_ref(),
         &seiza_stacking::GpuOptions::cpu(),
     )?;
@@ -547,9 +560,15 @@ fn prepare_store(
         .join("|");
     // It also changes with the tools that ran and their settings.
     let tool_key = tools
-        .chains
+        .deconvolutions
         .values()
-        .filter_map(|chain| chain.ids.last().map(String::as_str))
+        .map(|deconvolution| deconvolution.id.as_str())
+        .chain(
+            tools
+                .chains
+                .values()
+                .filter_map(|chain| chain.ids.last().map(String::as_str)),
+        )
         .collect::<Vec<_>>()
         .join("|");
     let key = if tool_key.is_empty() {

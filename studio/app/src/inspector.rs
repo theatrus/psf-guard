@@ -20,7 +20,7 @@ use uuid::Uuid;
 
 /// The steps a reduced view leaves out, because their result depends on
 /// pixel scale. The engine reports these per step; the demo names them.
-const FULL_RESOLUTION_ONLY: [&str; 2] = ["Deconvolution", "Noise reduction"];
+const FULL_RESOLUTION_ONLY: [&str; 1] = ["Noise reduction"];
 
 /// The steps offered on the combined picture.
 const FINISH_STEPS: [(&str, Accepts); 3] = [

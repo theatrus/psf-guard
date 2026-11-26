@@ -104,8 +104,8 @@ pub struct ChannelPlan {
     /// The background step that applies to the channel, if the view has
     /// reached one that is on.
     pub background: Option<Uuid>,
-    /// The step that holds the channel's processing tools, if the view has
-    /// reached one that is on. The channel is then shown as the tools left
+    /// The channel's processing tools step, or its deconvolution step, if
+    /// the view has reached one that is on. The channel is then shown as the tools left
     /// it.
     pub tools: Option<Uuid>,
     pub stretch: PlannedStretch,
@@ -259,7 +259,11 @@ pub fn plan(document: &Document, view: &View) -> ViewPlan {
         ChannelPlan {
             channel: channel.to_string(),
             background: step_for(&steps, op::BACKGROUND, channel).map(|step| step.id),
-            tools: step_for(&steps, op::RC_ASTRO_INPUT, channel).map(|step| step.id),
+            // The store holds an input after its deconvolution and its
+            // tools together, so either step reached shows that state.
+            tools: step_for(&steps, op::RC_ASTRO_INPUT, channel)
+                .or_else(|| step_for(&steps, op::DECONVOLUTION, channel))
+                .map(|step| step.id),
             stretch: if view.stretch == DisplayStretch::Document && !stretches.is_empty() {
                 PlannedStretch::Document(stretches)
             } else {

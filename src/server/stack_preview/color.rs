@@ -3406,7 +3406,7 @@ fn run_channel_tools(
                     None,
                 );
                 let (restored, result) = pool
-                    .install(|| super::stretch::apply_deconvolution(&frame.image, request))
+                    .install(|| crate::color_steps::deconvolve(&frame.image, request))
                     .map_err(|error| format!("Failed to deconvolve {role_label}: {error}"))?;
                 super::stretch::store_deconvolution(
                     stack_root,

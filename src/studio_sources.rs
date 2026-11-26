@@ -222,8 +222,8 @@ pub struct RegisteredChannels {
 }
 
 impl RegisteredChannels {
-    /// Reads each channel stack, runs the channel's processing tools when
-    /// `tools` has a chain for it, corrects its background when
+    /// Reads each channel stack, deconvolves it and runs its processing
+    /// tools when `tools` has them for it, corrects its background when
     /// `background` is given, and places every result on the first stack's
     /// grid.
     ///
@@ -311,10 +311,30 @@ impl RegisteredChannels {
         let mut tool_runs = Vec::new();
         if let Some(tools) = tools {
             for (channel, (role, frame)) in roles.iter().zip(&frames).enumerate() {
+                let label = channel_names[channel].clone();
+                // A deconvolution runs first, and the chain runs on its
+                // result. The two together are the channel's tools state.
+                let mut source = std::borrow::Cow::Borrowed(frame);
+                if let Some(deconvolution) = tools.deconvolutions.get(role) {
+                    (tools.progress)(&label, "Seiza deconvolution", 0.0);
+                    let (restored, _) = deconvolution
+                        .apply(tools.cache, frame)
+                        .map_err(|error| anyhow!("the deconvolution of {label}: {error}"))?;
+                    source = std::borrow::Cow::Owned(seiza_stacking::FitsFrame {
+                        image: restored,
+                        headers: frame.headers.clone(),
+                        ..frame.clone()
+                    });
+                }
                 let Some(chain) = tools.chains.get(role) else {
+                    if let std::borrow::Cow::Owned(restored) = source {
+                        names.push(tools_channel(&label));
+                        planes.push(place(channel, restored.image.clone())?);
+                        processed[channel] = restored.image;
+                    }
                     continue;
                 };
-                let label = channel_names[channel].clone();
+                let frame = source.as_ref();
                 let outcome = run_tool_chain(
                     RcAstroRunner {
                         workers: tools.workers,
@@ -529,6 +549,9 @@ pub struct ChannelTools<'a> {
     pub cache: &'a Path,
     /// The chain for each channel that has one.
     pub chains: BTreeMap<StackColorRole, ToolChain>,
+    /// The deconvolution of each channel that has one. It runs before the
+    /// channel's chain.
+    pub deconvolutions: BTreeMap<StackColorRole, crate::color_steps::ChannelDeconvolution>,
     /// Hears the channel, the tool running on it, and how far the channel's
     /// chain has got, from 0 to 1.
     pub progress: &'a dyn Fn(&str, &str, f32),

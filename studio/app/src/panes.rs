@@ -352,7 +352,8 @@ pub(super) fn is_drawn(stage: StageKind, step: &StepRecord, bands: &Bands) -> bo
                 || (operation == flow_operations::COLOR_CALIBRATION && bands.is_calibrated())
                 // An input's tools are drawn when the store holds their
                 // result.
-                || (operation == flow_operations::RC_ASTRO_INPUT
+                || ((operation == flow_operations::RC_ASTRO_INPUT
+                    || operation == flow_operations::DECONVOLUTION)
                     && band.is_some_and(|band| bands.has_tools(band)))
         }
         (StepKind::Operation { .. }, StageKind::Stretch) if stretch_model(step).is_some() => {

@@ -2317,8 +2317,11 @@ The link carries no token, so a server with user accounts refuses Studio's
 requests; Studio has no sign-in yet. Nothing runs on the server for the
 button: the page only makes the link.
 
-Input deconvolution is not run when a store is prepared: the preparation
-says so for each input whose setup has one. A mosaic is not color
+Input deconvolution runs when a store is prepared, before the input's
+tools, with the step PSF Guard's color previews run
+(`color_steps::deconvolve`), and its result is kept in the sources folder.
+The store holds the input after its deconvolution and its tools together,
+so the view shows that state from either step on. A mosaic is not color
 calibrated, because PSF Guard calibrates a mosaic with a solve of its
 canvas, which Studio does not make yet.
 
