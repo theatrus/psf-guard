@@ -1910,9 +1910,56 @@ by two GHS steps.
 - A shared mask reads each input through its whole chain.
 
 Not built: the layered stretch, which needs the image and not samples of
-it, so only the engine can draw it; a row says so. The stretches of the
-combined picture (`output_stretches`) are recorded and not drawn. A GHS
-slider covers stretch factors up to 10, where Seiza allows 20.
+it, so only the engine can draw it; a row says so. A GHS slider covers
+stretch factors up to 10, where Seiza allows 20.
+
+### Output stretches (2026-11-26)
+
+PSF Guard's output stretches stretch the combined picture, after the
+layers are blended. Studio draws them as Finish steps, in their place among
+the other Finish steps. **Add step › Output stretch** adds one, a
+generalized hyperbolic stretch to start with, and its controls are those of
+an input's Stretch step with one more choice, **Channels**:
+
+- **Linked:** one curve for red, green and blue.
+- **Each channel:** a curve resolved for each channel, which neutralizes a
+  colored background.
+- **Luminance:** one curve for the Rec. 709 luminance; each pixel is scaled
+  by one factor, kept in gamut, so its color holds.
+
+These are Seiza's three color strategies. Seiza resolves each stretch; the
+canvas draws the result as three rows of the stretch table, and the Finish
+pass applies them. The luminance strategy's per-pixel scaling is the only
+part the shader does itself, as Seiza's `map_luminance_pixel` does.
+
+A stretch with explicit settings (generalized hyperbolic, linear, asinh,
+midtones, PixInsight's histogram transformation, or none) is resolved
+without the picture. One that Seiza resolves from the picture's statistics
+(automatic midtones, median anchor, asinh by percentiles) needs samples of
+the combined picture. The render thread draws an eight-by-eight grid of
+128-pixel patches of the combined picture at full resolution into
+offscreen targets, a few patches per frame as their tiles load, and reads
+them back. Full resolution matters for the same reason as for an input: a
+reduced level's samples are means, and a stretch resolved from them would
+clip the shadows in the wrong place. Each output stretch after the first is
+resolved from the samples as the stretches before it left them, as Seiza's
+stretch stack does.
+
+The picture is sampled again when anything that changes it does: a
+layer, a stretch, a mask, a heal, an input's state or the crop. Until the
+new samples are read, the old ones stand in, so the stretch keeps its place
+while the picture changes. The first time, the picture shows without the
+stretch until the samples arrive.
+
+Limits:
+
+- The samples are of the combined picture before the Finish steps. Curves,
+  Saturation and heals placed before an output stretch are left out of
+  what that stretch is resolved from.
+- A smoothed mask in a patch is blurred within the patch, so near a
+  patch's edge it can differ slightly from the canvas.
+- The layered stretch needs the whole image, so the canvas does not draw it
+  as an output stretch either.
 
 ## Processing tools in Studio (2026-11-25, first part)
 

@@ -6,7 +6,7 @@
 
 use super::panes::{
     amount, amount_in, amount_range, is_drawn, mask_words, new_stretch, operation,
-    stretch_settings, ADJUSTMENTS, CONTROL, PANE, QUIET, STRETCHES,
+    output_stretch_step, stretch_settings, ADJUSTMENTS, CONTROL, PANE, QUIET, STRETCHES,
 };
 use super::{SliderId, Studio, Tool, PANEL_WIDTH};
 use crate::image_steps::Accepts;
@@ -23,7 +23,8 @@ use uuid::Uuid;
 const FULL_RESOLUTION_ONLY: [&str; 1] = ["Noise reduction"];
 
 /// The steps offered on the combined picture.
-const FINISH_STEPS: [(&str, Accepts); 3] = [
+const FINISH_STEPS: [(&str, Accepts); 4] = [
+    (flow_operations::OUTPUT_STRETCH, Accepts::Display),
     ("Curves", Accepts::Display),
     ("Saturation", Accepts::Display),
     ("Local contrast", Accepts::Display),
@@ -104,7 +105,11 @@ impl Studio {
             .map(|(index, (name, accepts))| {
                 let (name, accepts) = (*name, *accepts);
                 Self::pick(name, ("add-finish", index), false, cx, move |this| {
-                    let step = operation(name, accepts);
+                    let step = if name == flow_operations::OUTPUT_STRETCH {
+                        output_stretch_step()
+                    } else {
+                        operation(name, accepts)
+                    };
                     let id = step.id;
                     if this
                         .document
@@ -136,7 +141,9 @@ impl Studio {
                 operation,
                 settings,
                 ..
-            } if operation == flow_operations::STRETCH => {
+            } if operation == flow_operations::STRETCH
+                || operation == flow_operations::OUTPUT_STRETCH =>
+            {
                 Some(self.stretch_controls(id, settings, cx))
             }
             StepKind::Operation { operation, .. } => amount_range(operation).map(|(low, high)| {
@@ -201,15 +208,21 @@ impl Studio {
             })
     }
 
-    /// A Stretch step's controls: which of Seiza's stretches it is, and
-    /// that stretch's settings. A step that follows another Stretch step
-    /// of the same input stretches what that one left.
+    /// A Stretch or Output stretch step's controls: which of Seiza's
+    /// stretches it is, and that stretch's settings. A step that follows
+    /// another Stretch step of the same input stretches what that one left,
+    /// as an output stretch stretches what the output stretches before it
+    /// left. An output stretch also chooses how it treats the channels.
     fn stretch_controls(
         &self,
         id: Uuid,
         settings: &serde_json::Value,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
+        let output = self
+            .document
+            .step(id)
+            .is_some_and(|(_, step)| step.kind.name() == flow_operations::OUTPUT_STRETCH);
         let kind = settings["model"]["type"]
             .as_str()
             .unwrap_or_default()
@@ -246,6 +259,9 @@ impl Studio {
                     "This step uses the stretch “{kind}”, which the canvas does not draw."
                 )))
             });
+        if output {
+            block = block.child(self.channels_field(id, settings, cx));
+        }
         for (index, (key, label, low, high)) in stretch_settings(&kind).iter().enumerate() {
             let value = settings["model"][*key].as_f64().unwrap_or(*low);
             block = block.child(self.labelled_slider(
@@ -265,6 +281,7 @@ impl Studio {
                     return;
                 };
                 let band = step.band.clone();
+                let output = step.kind.name() == flow_operations::OUTPUT_STRETCH;
                 let Some(at) = this
                     .document
                     .stage(stage)
@@ -274,28 +291,80 @@ impl Studio {
                 else {
                     return;
                 };
-                let mut next = StepRecord::new(StepKind::Operation {
-                    operation: flow_operations::STRETCH.to_string(),
-                    accepts: Accepts::Linear,
-                    settings: serde_json::json!({
-                        "model": new_stretch("ghs"),
-                        "color_strategy": "linked",
-                    }),
-                });
+                let mut next = if output {
+                    output_stretch_step()
+                } else {
+                    StepRecord::new(StepKind::Operation {
+                        operation: flow_operations::STRETCH.to_string(),
+                        accepts: Accepts::Linear,
+                        settings: serde_json::json!({
+                            "model": new_stretch("ghs"),
+                            "color_strategy": "linked",
+                        }),
+                    })
+                };
                 next.band = band.clone();
                 let new = next.id;
-                if this.document.insert_step(stage, at + 1, next).is_ok()
-                    && let Row::InputStep { channel, .. } = &this.selected
-                {
-                    this.selected = Row::InputStep {
-                        channel: channel.clone(),
-                        step: new,
-                    };
+                if this.document.insert_step(stage, at + 1, next).is_ok() {
+                    match &this.selected {
+                        Row::InputStep { channel, .. } => {
+                            this.selected = Row::InputStep {
+                                channel: channel.clone(),
+                                step: new,
+                            };
+                        }
+                        Row::Finish(_) => this.selected = Row::Finish(new),
+                        _ => {}
+                    }
                 }
             },
         ))
-        .children(Self::help(
-            "Stretches of one input apply in order. Each is resolved from what the one before it left.",
+        .children(Self::help(if output {
+            "Output stretches apply in order to the combined picture. Each is resolved from what the one before it left."
+        } else {
+            "Stretches of one input apply in order. Each is resolved from what the one before it left."
+        }))
+    }
+
+    /// How an output stretch treats the channels: one curve for all three,
+    /// a curve for each, or one curve for the luminance that keeps each
+    /// pixel's color.
+    fn channels_field(
+        &self,
+        id: Uuid,
+        settings: &serde_json::Value,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let current = settings["color_strategy"].as_str().unwrap_or("linked");
+        let mut choices = Self::segmented();
+        for (index, (strategy, label)) in [
+            ("linked", "Linked"),
+            ("unlinked", "Each channel"),
+            ("luminance-preserving", "Luminance"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let settings = settings.clone();
+            choices = choices.child(Self::act(
+                label,
+                ("stretch-channels", index),
+                strategy == current,
+                cx,
+                move |this| {
+                    let mut settings = settings.clone();
+                    settings["color_strategy"] = strategy.into();
+                    this.document.set_step_settings(id, settings);
+                },
+            ));
+        }
+        // The three choices do not fit beside a label, so they have a line
+        // of their own.
+        column()
+            .child(Self::heading("Channels"))
+            .child(choices)
+            .children(Self::help(
+            "Linked stretches red, green and blue with one curve. Each channel resolves a curve per channel. Luminance stretches the brightness and keeps each pixel's color.",
         ))
     }
 

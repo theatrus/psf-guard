@@ -21,6 +21,8 @@ mod studio_model;
 #[cfg(target_os = "macos")]
 mod bench;
 #[cfg(target_os = "macos")]
+mod output_stretch;
+#[cfg(target_os = "macos")]
 mod store_tiles;
 #[cfg(target_os = "macos")]
 mod studio;
