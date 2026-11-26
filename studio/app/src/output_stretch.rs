@@ -16,6 +16,7 @@
 
 use psf_studio_render::STRETCH_TABLE_WIDTH;
 use seiza_stretch::{ColorStrategy, StretchConfig, StretchModel, StretchPlan};
+use std::borrow::Cow;
 
 /// The samples Seiza analyses per stretch, at most.
 const ANALYSIS_SAMPLES: usize = 300_000;
@@ -73,20 +74,68 @@ pub fn resolve_chain(
     configs: &[StretchConfig],
     samples: Option<&[f32]>,
 ) -> Vec<Result<PictureStretch, NotDrawn>> {
-    let mut seen: Option<Vec<f32>> = samples.map(<[f32]>::to_vec);
+    // The samples as the stretches so far left them. They are copied only
+    // when a stretch changes them for a later one.
+    let mut seen: Option<Cow<[f32]>> = samples.map(Cow::Borrowed);
     let mut drawn = Vec::with_capacity(configs.len());
     for (at, config) in configs.iter().enumerate() {
         let plan = resolve(config, seen.as_deref());
         drawn.push(plan.as_ref().map(stretch_of).map_err(Clone::clone));
         let later_needs_samples = configs[at + 1..].iter().any(needs_samples);
-        if let (Ok(plan), Some(samples), true) = (&plan, &mut seen, later_needs_samples) {
-            match plan.apply_f32(samples, 3) {
-                Ok(next) => *samples = next,
-                Err(_) => seen = None,
-            }
+        if let (Ok(plan), Some(samples), true) = (&plan, &seen, later_needs_samples) {
+            seen = plan.apply_f32(samples, 3).ok().map(Cow::Owned);
         }
     }
     drawn
+}
+
+/// A resolved chain for each chain of output stretches seen lately, so a
+/// refresh of the canvas that changes no output stretch and no samples does
+/// not resolve them again.
+#[derive(Default)]
+pub struct ResolvedChains {
+    entries: Vec<ResolvedChain>,
+}
+
+/// One chain resolved: the id of the samples it was resolved from (none
+/// when it reads no samples), the chain, and how the canvas draws each
+/// stretch of it.
+type ResolvedChain = (
+    Option<u64>,
+    Vec<StretchConfig>,
+    Vec<Result<PictureStretch, NotDrawn>>,
+);
+
+impl ResolvedChains {
+    /// The chains a cache keeps.
+    const KEPT: usize = 8;
+
+    /// [`resolve_chain`], from the cache when this chain was resolved from
+    /// these samples before. `samples` carry the id of the sampling they
+    /// came from.
+    pub fn resolve(
+        &mut self,
+        configs: &[StretchConfig],
+        samples: Option<(u64, &[f32])>,
+    ) -> Vec<Result<PictureStretch, NotDrawn>> {
+        // Explicit stretches do not read the samples, so any samples give
+        // the same result.
+        let id = samples
+            .filter(|_| configs.iter().any(needs_samples))
+            .map(|(id, _)| id);
+        if let Some((_, _, known)) = self
+            .entries
+            .iter()
+            .find(|(at, chain, _)| *at == id && chain.as_slice() == configs)
+        {
+            return known.clone();
+        }
+        let resolved = resolve_chain(configs, samples.map(|(_, samples)| samples));
+        self.entries
+            .insert(0, (id, configs.to_vec(), resolved.clone()));
+        self.entries.truncate(Self::KEPT);
+        resolved
+    }
 }
 
 fn resolve(config: &StretchConfig, samples: Option<&[f32]>) -> Result<StretchPlan, NotDrawn> {
@@ -248,6 +297,37 @@ mod tests {
         let drawn = drawn[0].as_ref().unwrap();
         assert!(drawn.luminance);
         assert_eq!(drawn.rows[0], drawn.rows[2]);
+    }
+
+    #[test]
+    fn a_chain_is_resolved_again_only_for_new_samples() {
+        let auto = config(json!({
+            "model": { "type": "auto-mtf", "target_median": 0.25, "shadows_clip": -2.8 },
+        }));
+        let dim: Vec<f32> = (0..30_000)
+            .map(|index| 0.02 + 0.01 * ((index * 7919) % 1000) as f32 / 1000.0)
+            .collect();
+        let bright: Vec<f32> = dim.iter().map(|sample| sample * 4.0).collect();
+        let mut chains = ResolvedChains::default();
+        let first = chains.resolve(std::slice::from_ref(&auto), Some((1, &dim)));
+        // The same id is the same samples: the kept chain is given back,
+        // although these samples differ.
+        let kept = chains.resolve(std::slice::from_ref(&auto), Some((1, &bright)));
+        assert_eq!(first, kept);
+        let again = chains.resolve(std::slice::from_ref(&auto), Some((2, &bright)));
+        assert_ne!(first, again);
+
+        // An explicit stretch reads no samples, so new ones change nothing.
+        let ghs = config(json!({
+            "model": { "type": "ghs", "stretch_factor": 3.0, "local_intensity": 4.0,
+                       "symmetry_point": 0.2, "protect_shadows": 0.0,
+                       "protect_highlights": 1.0, "black": 0.0, "white": 1.0 },
+        }));
+        let without = chains.resolve(std::slice::from_ref(&ghs), None);
+        assert_eq!(
+            without,
+            chains.resolve(std::slice::from_ref(&ghs), Some((3, &dim)))
+        );
     }
 
     #[test]

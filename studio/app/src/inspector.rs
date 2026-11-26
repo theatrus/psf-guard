@@ -364,7 +364,7 @@ impl Studio {
             .child(Self::heading("Channels"))
             .child(choices)
             .children(Self::help(
-            "Linked stretches red, green and blue with one curve. Each channel resolves a curve per channel. Luminance stretches the brightness and keeps each pixel's color.",
+            "Linked: one curve stretches red, green and blue. Each channel: Seiza resolves a separate curve for red, green and blue, which neutralizes a colored background. Luminance: one curve stretches the brightness and each pixel keeps its color.",
         ))
     }
 

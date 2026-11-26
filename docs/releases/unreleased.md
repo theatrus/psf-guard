@@ -58,9 +58,9 @@
   together. Continuum subtraction from starless lines no longer stops at
   Seiza's check of star profiles, which only matters when the stars stay.
   **Show › Only** on a layer shows that layer by itself: one
-  input in gray, or a group such as R, G, B in color. Output stretches of the
-  combined picture are drawn, with **Linked**, **Each channel** or
-  **Luminance** for the channels; one that Seiza resolves from the picture,
-  such as the automatic midtones stretch, is resolved from samples of the
+  input in gray, or a group such as R, G, B in color. Studio now draws output
+  stretches of the combined picture, with **Linked**, **Each channel** or
+  **Luminance** for the channels. Studio resolves a stretch that depends on
+  the picture, such as the automatic midtones stretch, from samples of the
   picture at full resolution. PixInsight's histogram transformation is
   among the stretches.

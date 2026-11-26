@@ -1938,15 +1938,17 @@ without the picture. One that Seiza resolves from the picture's statistics
 (automatic midtones, median anchor, asinh by percentiles) needs samples of
 the combined picture. The render thread draws an eight-by-eight grid of
 128-pixel patches of the combined picture at full resolution into
-offscreen targets, a few patches per frame as their tiles load, and reads
-them back. Full resolution matters for the same reason as for an input: a
+offscreen targets, up to eight patches per frame as their tiles load, and
+reads each frame's patches back with one wait for the GPU. Full resolution matters for the same reason as for an input: a
 reduced level's samples are means, and a stretch resolved from them would
 clip the shadows in the wrong place. Each output stretch after the first is
 resolved from the samples as the stretches before it left them, as Seiza's
 stretch stack does.
 
-The picture is sampled again when anything that changes it does: a
-layer, a stretch, a mask, a heal, an input's state or the crop. Until the
+The picture is sampled again when anything that changes it does: the
+store, a layer, a stretch, a mask, a heal, an input's state or the crop.
+A refresh that changes no output stretch and no samples reuses the
+stretches already resolved, and a sampling no longer needed stops. Until the
 new samples are read, the old ones stand in, so the stretch keeps its place
 while the picture changes. The first time, the picture shows without the
 stretch until the samples arrive.
@@ -1957,7 +1959,8 @@ Limits:
   Saturation and heals placed before an output stretch are left out of
   what that stretch is resolved from.
 - A smoothed mask in a patch is blurred within the patch, so near a
-  patch's edge it can differ slightly from the canvas.
+  patch's edge it can differ slightly from the canvas. A heal whose source
+  lies outside its patch copies nothing there.
 - The layered stretch needs the whole image, so the canvas does not draw it
   as an output stretch either.
 
