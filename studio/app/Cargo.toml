@@ -13,7 +13,7 @@ gpui = { git = "https://github.com/zed-industries/zed", rev = "f98c2c100d217ace3
 gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "f98c2c100d217ace3ca99564cfc4573612d43d47", features = ["runtime_shaders", "font-kit"] }
 pollster = "0.4"
 # The stretch the canvas shows is resolved and evaluated by Seiza.
-seiza-stretch = "0.3.3"
+seiza-stretch = "0.4.0"
 raw-window-handle = "0.6"
 serde_json = "1"
 png = "0.17"

@@ -24,8 +24,53 @@ fn applies(pixel: vec2i, step: FinishStep) -> f32 {
     return coverage(pixel, step.kind.z) * step.kind.w;
 }
 
+// One row of the stretch table at a value from 0 to 1. A row is indexed by
+// the square root of the value, as a layer's row is.
+fn table_value(value: f32, row: f32) -> f32 {
+    let size = vec2f(textureDimensions(stretch_table));
+    let at = vec2f(
+        (sqrt(clamp(value, 0.0, 1.0)) * (size.x - 1.0) + 0.5) / size.x,
+        (row + 0.5) / size.y,
+    );
+    return textureSampleLevel(stretch_table, linear_sampler, at, 0.0).r;
+}
+
+// A stretch of the picture. Its three rows map red, green and blue. With
+// luminance, the first row maps the Rec. 709 luminance and the pixel is
+// scaled by one factor, kept in gamut, as Seiza's luminance-preserving
+// strategy applies a curve.
+fn stretch_picture(color: vec3f, step: FinishStep) -> vec3f {
+    let row = step.heal.z;
+    if step.heal.w < 0.5 {
+        return vec3f(
+            table_value(color.r, row),
+            table_value(color.g, row + 1.0),
+            table_value(color.b, row + 2.0),
+        );
+    }
+    let luminance = dot(color, vec3f(0.2126, 0.7152, 0.0722));
+    let mapped = table_value(luminance, row);
+    if luminance <= 1.0e-8 {
+        return vec3f(mapped);
+    }
+    var scale = mapped / luminance;
+    let maximum = max(max(color.r, color.g), max(color.b, 0.0));
+    if maximum * scale > 1.0 {
+        scale = 1.0 / maximum;
+    }
+    return clamp(color * scale, vec3f(0.0), vec3f(1.0));
+}
+
+// Whether a step maps each pixel alone: everything but a heal.
+fn maps_pixels(step: FinishStep) -> bool {
+    return step.kind.x < 2.5 || step.kind.x > 3.5;
+}
+
 // A step that maps each pixel alone.
 fn adjust(color: vec3f, step: FinishStep) -> vec3f {
+    if step.kind.x > 3.5 {
+        return stretch_picture(color, step);
+    }
     if step.kind.x < 1.5 {
         return vec3f(
             contrast_curve(color.r, step.kind.y),
@@ -43,7 +88,7 @@ fn before(pixel: vec2i, upto: i32) -> vec3f {
     var color = textureLoad(combined, pixel, 0).rgb;
     for (var index = 0; index < upto; index++) {
         let step = globals.finish[index];
-        if step.kind.x < 2.5 {
+        if maps_pixels(step) {
             color = mix(color, adjust(color, step), applies(pixel, step));
         }
     }
@@ -59,7 +104,7 @@ fn finish_fragment(@builtin(position) position: vec4f) -> @location(0) vec4f {
     for (var index = 0; index < count; index++) {
         let step = globals.finish[index];
         let covered = applies(pixel, step);
-        if step.kind.x < 2.5 {
+        if maps_pixels(step) {
             color = mix(color, adjust(color, step), covered);
         } else {
             // A heal. Its source must be on the surface to be copied.

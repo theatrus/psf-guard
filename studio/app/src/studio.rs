@@ -14,7 +14,7 @@ use objc2::{
 use psf_studio_render::MAX_LAYERS;
 use psf_studio_render::{
     pane_rect, ComputedMask, FinishStep, Frame, FrameStats, Layer, LayerHeal, Output, Pane,
-    Renderer, Segment, View,
+    Renderer, Sampled, Segment, View,
 };
 use raw_window_handle::{
     AppKitDisplayHandle, AppKitWindowHandle, RawDisplayHandle, RawWindowHandle,
@@ -170,6 +170,39 @@ pub struct CanvasState {
     /// Set to measure the GPU's cost of the next frame with no display.
     pub measure_gpu: bool,
     pub gpu_frame_ms: Option<f32>,
+    /// The combined picture to sample for the output stretches that Seiza
+    /// resolves from the picture, when the document has one.
+    probe: Option<Arc<PictureRequest>>,
+}
+
+/// A sampling of the combined picture that the UI asks the render thread
+/// for: the scene of the whole picture, and where its patches are.
+pub struct PictureRequest {
+    /// Changes when anything that changes the combined picture does.
+    id: u64,
+    scene: Scene,
+    /// The top-left corner of each patch, in document pixels.
+    patches: Vec<[u32; 2]>,
+    /// Each patch's width and height, in document pixels.
+    size: u32,
+}
+
+/// Patches of the combined picture sampled for its stretch: an eight by
+/// eight grid of squares spread across `rect`, as each input is sampled.
+pub(super) fn picture_patches(rect: [f32; 4]) -> (Vec<[u32; 2]>, u32) {
+    let [left, top, right, bottom] = rect.map(|value| value.max(0.0) as u32);
+    let (width, height) = (right.saturating_sub(left), bottom.saturating_sub(top));
+    let size = 128.min(width).min(height).max(1);
+    let mut patches = Vec::with_capacity(64);
+    for row in 0..8 {
+        for column in 0..8 {
+            patches.push([
+                left + (width.saturating_sub(size)) * column / 7,
+                top + (height.saturating_sub(size)) * row / 7,
+            ]);
+        }
+    }
+    (patches, size)
 }
 
 impl CanvasState {
@@ -193,6 +226,7 @@ impl CanvasState {
             capture: None,
             measure_gpu: false,
             gpu_frame_ms: None,
+            probe: None,
         }
     }
 
@@ -262,23 +296,24 @@ impl CanvasState {
     fn stretch_tables(&self) -> Vec<Vec<Vec<f32>>> {
         self.scenes
             .iter()
-            .map(|scene| {
-                scene
-                    .layer_bands
-                    .iter()
-                    .zip(&scene.layer_stretches)
-                    .filter_map(|(band, stages)| {
-                        // The benchmark moves a band's slider to time a
-                        // stretch change. A slider at rest, a third of the
-                        // way, adds nothing.
-                        let moved =
-                            f64::from(self.sliders[(*band).min(MAX_LAYERS - 1)] - 1.0 / 3.0);
-                        if *band == panes::DISPLAY_ROW {
-                            return Some(crate::store_tiles::identity_table());
-                        }
-                        Some(scene.stretches.get(*band)?.table(stages, 0.45 * moved))
-                    })
-                    .collect()
+            .map(|scene| self.scene_tables(scene))
+            .collect()
+    }
+
+    /// One scene's stretch tables, as [`Self::stretch_tables`] gives them.
+    fn scene_tables(&self, scene: &Scene) -> Vec<Vec<f32>> {
+        scene
+            .layer_bands
+            .iter()
+            .zip(&scene.layer_stretches)
+            .filter_map(|(band, stages)| {
+                // The benchmark moves a band's slider to time a stretch
+                // change. A slider at rest, a third of the way, adds nothing.
+                let moved = f64::from(self.sliders[(*band).min(MAX_LAYERS - 1)] - 1.0 / 3.0);
+                if *band == panes::DISPLAY_ROW {
+                    return Some(crate::store_tiles::identity_table());
+                }
+                Some(scene.stretches.get(*band)?.table(stages, 0.45 * moved))
             })
             .collect()
     }
@@ -295,6 +330,8 @@ pub struct Scene {
     /// a preview stretch.
     layer_stretches: Vec<Vec<seiza_stretch::StretchModel>>,
     finish: Vec<FinishStep>,
+    /// The curves of the Finish steps that stretch the picture, in order.
+    finish_stretches: Vec<[Vec<f32>; 3]>,
     /// Heals of single layers and inputs.
     heals: Vec<LayerHeal>,
     /// The masks computed from inputs that the layers refer to.
@@ -331,6 +368,9 @@ struct Shared {
     /// When the oldest input not yet drawn arrived.
     input_at: Option<Instant>,
     readout: Readout,
+    /// The samples of the combined picture last read, with the id of the
+    /// request they answer: set by the render thread, read by the UI.
+    picture: Option<(u64, Arc<Vec<f32>>)>,
 }
 
 /// The UI thread's side of the canvas.
@@ -367,6 +407,10 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
     let mut stretched_for = None;
     let mut stretches_version = 0u64;
     let mut animate = true;
+    // The sampling of the combined picture last delivered, and the stretch
+    // tables of the one under way.
+    let mut sampled: Option<u64> = None;
+    let mut probe_tables: Option<(u64, Vec<Vec<f32>>)> = None;
     loop {
         let input_at = {
             let mut shared = lock.lock().expect("canvas state");
@@ -382,6 +426,7 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
             canvas.document_size = shared.canvas.document_size;
             canvas.band_count = shared.canvas.band_count;
             canvas.scenes = shared.canvas.scenes.clone();
+            canvas.probe = shared.canvas.probe.clone();
             canvas.wipe = shared.canvas.wipe;
             canvas.crop = shared.canvas.crop;
             if !shared.canvas.fitted && canvas.surface_size.0 > 1 {
@@ -437,6 +482,7 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
                     layers: &scene.layers,
                     stretches,
                     finish: &scene.finish,
+                    finish_stretches: &scene.finish_stretches,
                     masks: &scene.masks,
                     heals: &scene.heals,
                     computed: &scene.computed,
@@ -487,6 +533,46 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
             }
         };
         animate = stats.tiles_coarse > 0 || stats.tiles_in_flight > 0 || stats.tiles_uploaded > 0;
+        // The combined picture is sampled between frames, a few patches at
+        // a time, until every patch is read.
+        if let Some(request) = canvas.probe.clone()
+            && sampled != Some(request.id)
+        {
+            if probe_tables
+                .as_ref()
+                .is_none_or(|(id, _)| *id != request.id)
+            {
+                probe_tables = Some((request.id, canvas.scene_tables(&request.scene)));
+            }
+            let tables = &probe_tables.as_ref().expect("the request's tables").1;
+            let scene = &request.scene;
+            let whole = [0, 0, request.size, request.size];
+            let pane = Pane {
+                layers: &scene.layers,
+                stretches: tables,
+                finish: &[],
+                finish_stretches: &[],
+                masks: &scene.masks,
+                heals: &scene.heals,
+                computed: &scene.computed,
+                viewport: whole,
+                scissor: whole,
+            };
+            match renderer.sample_picture(
+                request.id,
+                &pane,
+                canvas.crop,
+                &request.patches,
+                request.size,
+            ) {
+                Sampled::Ready(samples) => {
+                    sampled = Some(request.id);
+                    lock.lock().expect("canvas state").picture =
+                        Some((request.id, Arc::new(samples)));
+                }
+                Sampled::Pending { .. } => animate = true,
+            }
+        }
         if let Some(bench) = &mut bench {
             bench.after_frame(&mut canvas, &stats);
             animate = true;
@@ -581,6 +667,12 @@ pub struct Studio {
     band_info: Arc<Bands>,
     /// Stretch analyses already made, by each band's background strength.
     analysed: Vec<(Vec<BandState>, Arc<Vec<BandStretch>>)>,
+    /// The latest samples of the combined picture, with the id of the
+    /// sampling they came from, for the output stretches Seiza resolves
+    /// from the picture.
+    picture_samples: Option<(u64, Arc<Vec<f32>>)>,
+    /// The id of the sampling last asked for.
+    picture_wanted: Option<u64>,
     /// The levels in the document's pyramid.
     levels: u8,
     /// The processing tools: which this computer has, and the run in hand.
@@ -607,6 +699,7 @@ impl Studio {
                 dirty: true,
                 input_at: None,
                 readout: Readout::default(),
+                picture: None,
             }),
             Condvar::new(),
         )));
@@ -678,6 +771,7 @@ impl Studio {
             let updated = this.update(cx, |this, cx| {
                 this.follow_tools();
                 this.follow_links();
+                this.follow_picture();
                 // Every change is kept: the document is saved as soon as it
                 // differs from the file.
                 this.save_document();
@@ -746,6 +840,8 @@ impl Studio {
                 scene_version: 0,
                 band_info,
                 analysed: Vec::new(),
+                picture_samples: None,
+                picture_wanted: None,
                 levels,
                 tools,
             };

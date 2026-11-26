@@ -117,6 +117,10 @@ pub enum Adjustment {
 /// The entries in one layer's stretch table.
 pub const STRETCH_TABLE_WIDTH: usize = 4096;
 
+/// The rows of the stretch table: one per layer, then three per Finish step
+/// for a stretch of the picture, one per channel.
+const STRETCH_TABLE_ROWS: usize = MAX_LAYERS + 3 * MAX_FINISH_STEPS;
+
 /// What a Finish step does.
 #[derive(Clone, Copy, Debug)]
 pub enum FinishKind {
@@ -127,6 +131,11 @@ pub enum FinishKind {
     /// A heal: the masked area is replaced by the area `offset` document
     /// pixels away, with `shift` added.
     Heal { offset: [f32; 2], shift: [f32; 3] },
+    /// A stretch of the picture: [`Pane::finish_stretches`] entry `table`
+    /// maps each channel. With `luminance`, the first of its curves maps
+    /// the pixel's Rec. 709 luminance and the pixel is scaled to match, as
+    /// Seiza's luminance-preserving strategy does.
+    Stretch { table: usize, luminance: bool },
 }
 
 /// One step of the Finish stage, applied to the combined image.
@@ -213,6 +222,9 @@ pub struct Pane<'a> {
     pub stretches: &'a [Vec<f32>],
     /// The Finish steps, in order. At most [`MAX_FINISH_STEPS`].
     pub finish: &'a [FinishStep],
+    /// The curves of the Finish steps that stretch the picture, in the
+    /// form of [`Self::stretches`]: one per channel, red, green and blue.
+    pub finish_stretches: &'a [[Vec<f32>; 3]],
     /// The masks the layers and the Finish steps refer to. At most
     /// [`MAX_MASKS`].
     pub masks: &'a [Vec<Segment>],
@@ -360,6 +372,8 @@ const HEALED_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
 
 /// The textures that are the size of the surface.
 struct Targets {
+    /// The combined image, which [`Renderer::sample_picture`] reads back.
+    combined_texture: wgpu::Texture,
     combined: wgpu::TextureView,
     /// One view per mask layer, to draw strokes into.
     mask_layers: Vec<wgpu::TextureView>,
@@ -465,7 +479,37 @@ pub struct Renderer {
     pub capture_next: bool,
     /// The last captured frame: width, height, and BGRA bytes.
     pub captured: Option<(u32, u32, Vec<u8>)>,
+    /// The sampling of the combined picture under way, if any.
+    probe: Option<PictureProbe>,
+    /// The tiles the sampling still needs, asked for after the view's.
+    probe_wanted: Vec<TileKey>,
 }
+
+/// How far [`Renderer::sample_picture`] has got.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Sampled {
+    /// Some patches still wait for their tiles.
+    Pending { done: usize, of: usize },
+    /// The combined picture's samples, red, green and blue interleaved,
+    /// patch after patch.
+    Ready(Vec<f32>),
+}
+
+/// A sampling of the combined picture: the patches read so far, and the
+/// targets the patches are drawn into.
+struct PictureProbe {
+    id: u64,
+    size: u32,
+    samples: Vec<Option<Vec<f32>>>,
+    targets: Targets,
+    output: wgpu::TextureView,
+}
+
+/// The patches one call of [`Renderer::sample_picture`] draws, at most, so a
+/// frame is not held up.
+const PROBE_PATCHES_PER_CALL: usize = 8;
+/// The tiles the sampling asks for at once, at most.
+const PROBE_TILES_WANTED: usize = 16;
 
 impl Renderer {
     pub async fn new(
@@ -545,18 +589,11 @@ impl Renderer {
         let module = |label: &str, body: &str| {
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some(label),
-                source: wgpu::ShaderSource::Wgsl(
-                    format!(
-                        "{}\n{}\n{body}",
-                        crate::display::SHADER,
-                        include_str!("globals.wgsl")
-                    )
-                    .into(),
-                ),
+                source: wgpu::ShaderSource::Wgsl(shader_source(body).into()),
             })
         };
-        let layers_shader = module("layers", include_str!("layers.wgsl"));
-        let finish_shader = module("finish", include_str!("finish.wgsl"));
+        let layers_shader = module("layers", LAYERS_SHADER);
+        let finish_shader = module("finish", FINISH_SHADER);
 
         let globals = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("globals"),
@@ -738,7 +775,7 @@ impl Renderer {
             label: Some("stretch table"),
             size: wgpu::Extent3d {
                 width: STRETCH_TABLE_WIDTH as u32,
-                height: MAX_LAYERS as u32,
+                height: STRETCH_TABLE_ROWS as u32,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -873,6 +910,8 @@ impl Renderer {
             last_overlay: 0,
             capture_next: false,
             captured: None,
+            probe: None,
+            probe_wanted: Vec::new(),
         })
     }
 
@@ -1028,6 +1067,15 @@ impl Renderer {
             keys_in(&self.pyramid, level, visible, 1)
                 .into_iter()
                 .filter(|key| !visible_keys.contains(key)),
+        );
+        // The tiles a sampling of the picture waits for come after the
+        // view's.
+        wanted.extend(
+            self.probe_wanted
+                .iter()
+                .filter(|key| !wanted.contains(key))
+                .copied()
+                .collect::<Vec<_>>(),
         );
         wanted.retain(|key| !self.cache.contains(*key));
         self.producer.set_wanted(wanted);
@@ -1360,6 +1408,15 @@ impl Renderer {
                 FinishKind::Curves => (1.0, [0.0; 2], [0.0; 3]),
                 FinishKind::Saturation => (2.0, [0.0; 2], [0.0; 3]),
                 FinishKind::Heal { offset, shift } => (3.0, offset, shift),
+                FinishKind::Stretch { .. } => (4.0, [0.0; 2], [0.0; 3]),
+            };
+            // A stretch's first row, and whether it maps luminance.
+            let (first_row, luminance) = match step.kind {
+                FinishKind::Stretch { table, luminance } => (
+                    (MAX_LAYERS + 3 * table.min(MAX_FINISH_STEPS - 1)) as f32,
+                    if luminance { 1.0 } else { 0.0 },
+                ),
+                _ => (0.0, 0.0),
             };
             *slot = [
                 kind,
@@ -1369,8 +1426,8 @@ impl Renderer {
                 // The offset in whole surface pixels.
                 (offset[0] as f64 * view.zoom).round() as f32,
                 (offset[1] as f64 * view.zoom).round() as f32,
-                0.0,
-                0.0,
+                first_row,
+                luminance,
                 shift[0],
                 shift[1],
                 shift[2],
@@ -1387,8 +1444,25 @@ impl Renderer {
         if version.is_some() && self.stretches_version == version {
             return;
         }
-        let mut bits = vec![0u16; STRETCH_TABLE_WIDTH * MAX_LAYERS];
-        for (row, table) in pane.stretches.iter().take(MAX_LAYERS).enumerate() {
+        let mut bits = vec![0u16; STRETCH_TABLE_WIDTH * STRETCH_TABLE_ROWS];
+        let finish_rows = pane
+            .finish_stretches
+            .iter()
+            .take(MAX_FINISH_STEPS)
+            .enumerate()
+            .flat_map(|(table, curves)| {
+                curves
+                    .iter()
+                    .enumerate()
+                    .map(move |(channel, curve)| (MAX_LAYERS + 3 * table + channel, curve))
+            });
+        let rows = pane
+            .stretches
+            .iter()
+            .take(MAX_LAYERS)
+            .enumerate()
+            .chain(finish_rows);
+        for (row, table) in rows {
             let target = &mut bits[row * STRETCH_TABLE_WIDTH..(row + 1) * STRETCH_TABLE_WIDTH];
             for (bits, value) in target.iter_mut().zip(table) {
                 *bits = half::f16::from_f32(*value).to_bits();
@@ -1700,6 +1774,242 @@ impl Renderer {
         pass.draw(0..3, 0..1);
     }
 
+    /// Samples the combined picture that `pane` draws, before its Finish
+    /// steps, from square patches of `size` document pixels at full
+    /// resolution whose top-left corners are `patches`.
+    ///
+    /// Full resolution, not a reduced level: a reduced level's samples are
+    /// means, so its noise is lower than the image's and a stretch resolved
+    /// from it would clip the shadows in the wrong place.
+    ///
+    /// Each call draws the patches whose tiles are loaded, a few at a time,
+    /// and asks for the tiles of the others. Calls with the same `id` carry
+    /// on one sampling; a new `id` starts again.
+    pub fn sample_picture(
+        &mut self,
+        id: u64,
+        pane: &Pane,
+        crop: Option<[f32; 4]>,
+        patches: &[[u32; 2]],
+        size: u32,
+    ) -> Sampled {
+        let size = size.max(1);
+        if self
+            .probe
+            .as_ref()
+            .is_none_or(|probe| probe.id != id || probe.size != size)
+        {
+            let output = self
+                .device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some("picture sample"),
+                    size: wgpu::Extent3d {
+                        width: size,
+                        height: size,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: self.config.format,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                    view_formats: &[],
+                })
+                .create_view(&wgpu::TextureViewDescriptor::default());
+            self.probe = Some(PictureProbe {
+                id,
+                size,
+                samples: vec![None; patches.len()],
+                targets: create_targets(
+                    &self.device,
+                    &self.finish_layout,
+                    &self.masks_layout,
+                    &self.tile_layout,
+                    &self.display_curves,
+                    size,
+                    size,
+                ),
+                output,
+            });
+        }
+        let mut probe = self.probe.take().expect("a sampling");
+        probe.samples.resize(patches.len(), None);
+        self.probe_wanted.clear();
+        let mut drawn = 0;
+        for (index, origin) in patches.iter().enumerate() {
+            if probe.samples[index].is_some() {
+                continue;
+            }
+            let rect = [
+                f64::from(origin[0]),
+                f64::from(origin[1]),
+                f64::from(origin[0] + size),
+                f64::from(origin[1] + size),
+            ];
+            let keys = keys_in(&self.pyramid, 0, rect, 0);
+            let missing: Vec<TileKey> = keys
+                .iter()
+                .filter(|key| !self.cache.contains(**key))
+                .copied()
+                .collect();
+            if !missing.is_empty() {
+                let room = PROBE_TILES_WANTED.saturating_sub(self.probe_wanted.len());
+                self.probe_wanted.extend(missing.into_iter().take(room));
+                continue;
+            }
+            for key in &keys {
+                self.cache.touch(*key, self.frame);
+            }
+            if drawn == PROBE_PATCHES_PER_CALL {
+                continue;
+            }
+            probe.samples[index] = Some(self.draw_patch(&mut probe, pane, crop, *origin, &keys));
+            drawn += 1;
+        }
+        // The tables and masks of the view are uploaded again next frame.
+        if drawn > 0 {
+            self.stretches_version = None;
+            self.masks_version = None;
+        }
+        let done = probe
+            .samples
+            .iter()
+            .filter(|samples| samples.is_some())
+            .count();
+        let result = if done == patches.len() {
+            self.probe_wanted.clear();
+            Sampled::Ready(probe.samples.iter().flatten().flatten().copied().collect())
+        } else {
+            Sampled::Pending {
+                done,
+                of: patches.len(),
+            }
+        };
+        self.probe = Some(probe);
+        result
+    }
+
+    /// Draws one patch of the picture into the sampling's targets and reads
+    /// its combined image back, as red, green and blue.
+    fn draw_patch(
+        &mut self,
+        probe: &mut PictureProbe,
+        pane: &Pane,
+        crop: Option<[f32; 4]>,
+        origin: [u32; 2],
+        keys: &[TileKey],
+    ) -> Vec<f32> {
+        let size = probe.size;
+        let mut instances = Vec::with_capacity(keys.len());
+        let mut sources = Vec::with_capacity(keys.len());
+        for key in keys {
+            let mut rect = self.pyramid.doc_rect(*key);
+            if let Some(crop) = crop {
+                rect = [
+                    rect[0].max(crop[0]),
+                    rect[1].max(crop[1]),
+                    rect[2].min(crop[2]),
+                    rect[3].min(crop[3]),
+                ];
+                if rect[0] >= rect[2] || rect[1] >= rect[3] {
+                    continue;
+                }
+            }
+            let span = TILE as f32;
+            let tile_origin = [key.x as f32 * span, key.y as f32 * span];
+            instances.push(TileInstance {
+                rect,
+                uv_rect: [
+                    (rect[0] - tile_origin[0]) / span,
+                    (rect[1] - tile_origin[1]) / span,
+                    (rect[2] - tile_origin[0]) / span,
+                    (rect[3] - tile_origin[1]) / span,
+                ],
+            });
+            sources.push(*key);
+        }
+        self.queue
+            .write_buffer(&self.tile_instances, 0, bytemuck::cast_slice(&instances));
+
+        // The passes read the surface's targets and size: the sampling's
+        // stand in for them while the patch is drawn.
+        let half = f64::from(size) / 2.0;
+        let frame = Frame {
+            view: View {
+                center: [f64::from(origin[0]) + half, f64::from(origin[1]) + half],
+                zoom: 1.0,
+            },
+            panes: &[],
+            stretches_version: 0,
+            masks_version: 0,
+            overlay: &[],
+            overlay_strength: 0.0,
+            crop,
+        };
+        let surface = (self.config.width, self.config.height);
+        (self.config.width, self.config.height) = (size, size);
+        std::mem::swap(&mut self.targets, &mut probe.targets);
+        let rect = [0, 0, size, size];
+        self.write_globals(&frame, pane, rect);
+        self.upload_stretches(pane, None);
+        self.upload_masks(pane, None);
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        self.passes(
+            &mut encoder,
+            &probe.output,
+            &sources,
+            0,
+            false,
+            (rect, rect),
+            true,
+        );
+        let row_bytes = (size * 8).next_multiple_of(256);
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("picture sample"),
+            size: u64::from(row_bytes) * u64::from(size),
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        encoder.copy_texture_to_buffer(
+            self.targets.combined_texture.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(row_bytes),
+                    rows_per_image: None,
+                },
+            },
+            wgpu::Extent3d {
+                width: size,
+                height: size,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.queue.submit([encoder.finish()]);
+        std::mem::swap(&mut self.targets, &mut probe.targets);
+        (self.config.width, self.config.height) = surface;
+
+        buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+        let mut samples = Vec::with_capacity(size as usize * size as usize * 3);
+        if let Ok(mapped) = buffer.slice(..).get_mapped_range() {
+            for row in mapped.chunks(row_bytes as usize) {
+                let pixels: &[u16] = bytemuck::cast_slice(&row[..size as usize * 8]);
+                for pixel in pixels.as_chunks::<4>().0 {
+                    samples.extend(
+                        pixel[..3]
+                            .iter()
+                            .map(|bits| half::f16::from_bits(*bits).to_f32()),
+                    );
+                }
+            }
+        }
+        samples
+    }
+
     /// Draws the last frame again `frames` times into a texture of the
     /// surface's size and waits for the GPU to finish, five times over.
     /// Returns the time per frame of the fastest batch, which is the GPU's
@@ -1749,6 +2059,19 @@ impl Renderer {
 }
 
 /// The tiles of `level` that touch `rect`, grown by `ring` tiles on each side.
+const LAYERS_SHADER: &str = include_str!("layers.wgsl");
+const FINISH_SHADER: &str = include_str!("finish.wgsl");
+
+/// A shader's whole source: the display transform and the globals every
+/// pass shares, then its own body.
+fn shader_source(body: &str) -> String {
+    format!(
+        "{}\n{}\n{body}",
+        crate::display::SHADER,
+        include_str!("globals.wgsl")
+    )
+}
+
 fn keys_in(pyramid: &Pyramid, level: u8, rect: [f64; 4], ring: i64) -> Vec<TileKey> {
     let span = (TILE << level) as f64;
     let (across, down) = pyramid.tiles_across(level);
@@ -1797,12 +2120,14 @@ fn create_targets(
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         })
     };
-    let combined = texture("combined", COMBINED_FORMAT, 1)
-        .create_view(&wgpu::TextureViewDescriptor::default());
+    let combined_texture = texture("combined", COMBINED_FORMAT, 1);
+    let combined = combined_texture.create_view(&wgpu::TextureViewDescriptor::default());
     let masks = texture("masks", MASK_FORMAT, MAX_MASKS as u32 + 1);
     let mask_layers = (0..=MAX_MASKS as u32)
         .map(|layer| {
@@ -1901,6 +2226,7 @@ fn create_targets(
     });
     let [(first, _), (second, _)] = smoothed_sets;
     Targets {
+        combined_texture,
         combined,
         mask_layers,
         finish_inputs,
@@ -2015,5 +2341,27 @@ impl GpuTiming {
                     Ordering::Release,
                 );
             });
+    }
+}
+
+#[cfg(test)]
+mod shader_tests {
+    use super::{shader_source, FINISH_SHADER, LAYERS_SHADER};
+
+    /// Every shader parses and validates, so a mistake in one is found by
+    /// the tests rather than when the canvas starts.
+    #[test]
+    fn every_shader_compiles() {
+        for (label, body) in [("layers", LAYERS_SHADER), ("finish", FINISH_SHADER)] {
+            let source = shader_source(body);
+            let module = naga::front::wgsl::parse_str(&source)
+                .unwrap_or_else(|error| panic!("{label}: {}", error.emit_to_string(&source)));
+            naga::valid::Validator::new(
+                naga::valid::ValidationFlags::all(),
+                naga::valid::Capabilities::all(),
+            )
+            .validate(&module)
+            .unwrap_or_else(|error| panic!("{label}: {error:?}"));
+        }
     }
 }

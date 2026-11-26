@@ -25,10 +25,13 @@ struct Layer {
 
 // One step of the Finish stage.
 struct FinishStep {
-    // x: 1 curves, 2 saturation, 3 heal. y: amount. z: the mask layer that
-    // limits the step, or -1 for everywhere. w: the step's opacity.
+    // x: 1 curves, 2 saturation, 3 heal, 4 stretch. y: amount. z: the mask
+    // layer that limits the step, or -1 for everywhere. w: the step's
+    // opacity.
     kind: vec4f,
     // xy: for a heal, where the replacement comes from, in surface pixels.
+    // z: for a stretch, the first of its three rows of the stretch table.
+    // w: for a stretch, 1 when it maps luminance.
     heal: vec4f,
     // rgb: for a heal, the brightness added to the copied color.
     shift: vec4f,

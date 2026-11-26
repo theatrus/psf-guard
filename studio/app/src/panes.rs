@@ -12,8 +12,9 @@
 //! decided in `src/studio/place.rs`, which knows of no toolkit. These files
 //! only lay that out with GPUI, and turn a place into what the canvas draws.
 
-use super::{Bands, Drag, Scene, SliderId, Studio, Tool};
+use super::{picture_patches, Bands, Drag, PictureRequest, Scene, SliderId, Studio, Tool};
 use crate::image_steps::Accepts;
+use crate::output_stretch;
 use crate::store_tiles::{BandState, BandStretch};
 use crate::studio_model::{
     band_layer, channel_label, color_from_hue, document_from_color_setup, flow_operations, hue_of,
@@ -57,6 +58,20 @@ pub(super) fn operation(name: &str, accepts: Accepts) -> StepRecord {
         operation: name.to_string(),
         accepts,
         settings: serde_json::Value::Null,
+    })
+}
+
+/// A new Output stretch step: a generalized hyperbolic stretch of the
+/// combined picture, linked across the channels. It needs no samples of the
+/// picture, so the canvas draws it at once.
+pub(super) fn output_stretch_step() -> StepRecord {
+    StepRecord::new(StepKind::Operation {
+        operation: flow_operations::OUTPUT_STRETCH.to_string(),
+        accepts: Accepts::Display,
+        settings: serde_json::json!({
+            "model": new_stretch("ghs"),
+            "color_strategy": "linked",
+        }),
     })
 }
 
@@ -220,7 +235,7 @@ fn with_amount(operation: &str, settings: &serde_json::Value, amount: f32) -> se
 /// The stretches Seiza has that work on samples alone, as a person
 /// chooses between them: Seiza's name for the stretch, and a label. The
 /// layered stretch is not here: it needs the image, so the engine draws it.
-pub(super) const STRETCHES: [(&str, &str); 9] = [
+pub(super) const STRETCHES: [(&str, &str); 10] = [
     ("auto-mtf", "Automatic midtones"),
     ("median-anchor", "Median anchor"),
     ("ghs", "Generalized hyperbolic"),
@@ -228,6 +243,7 @@ pub(super) const STRETCHES: [(&str, &str); 9] = [
     ("asinh", "Asinh"),
     ("percentile-asinh", "Asinh, by percentiles"),
     ("mtf", "Midtones"),
+    ("ht", "Histogram transformation"),
     ("identity", "None"),
     ("layered", "Layered"),
 ];
@@ -281,6 +297,11 @@ pub(super) fn stretch_settings(kind: &str) -> &'static [(&'static str, &'static 
             ("midtone", "Midtone", 0.01, 0.99),
             ("highlights", "Highlights", 0.5, 1.0),
         ],
+        "ht" => &[
+            ("shadows", "Shadows", 0.0, 0.5),
+            ("midtone", "Midtone", 0.01, 0.99),
+            ("highlights", "Highlights", 0.5, 1.0),
+        ],
         _ => &[],
     }
 }
@@ -304,6 +325,7 @@ pub(super) fn new_stretch(kind: &str) -> serde_json::Value {
             "type": kind, "black_percentile": 0.001, "white_percentile": 0.999, "strength": 50.0,
         }),
         "mtf" => json!({ "type": kind, "shadows": 0.0, "midtone": 0.25, "highlights": 1.0 }),
+        "ht" => json!({ "type": kind, "shadows": 0.0, "midtone": 0.5, "highlights": 1.0 }),
         "layered" => json!({
             "type": kind, "target_background": 0.15, "aggressiveness": 0.5,
             "dynamic_range_compression": 0.0, "contrast_recovery": 0.0,
@@ -388,8 +410,20 @@ pub(super) fn is_drawn(stage: StageKind, step: &StepRecord, bands: &Bands) -> bo
         // A heal of one input, of one layer, or of the whole picture.
         (StepKind::Heal { .. }, StageKind::Linear) => step.band.is_some(),
         (StepKind::Heal { .. }, StageKind::Combine | StageKind::Finish) => true,
-        (StepKind::Operation { operation, .. }, StageKind::Finish) => {
-            operation == "Curves" || operation == "Saturation"
+        (
+            StepKind::Operation {
+                operation,
+                settings,
+                ..
+            },
+            StageKind::Finish,
+        ) => {
+            operation == "Curves"
+                || operation == "Saturation"
+                // The layered stretch needs the whole image.
+                || (operation == flow_operations::OUTPUT_STRETCH
+                    && output_stretch::config_of(settings)
+                        .is_some_and(|config| !matches!(config.model, StretchModel::Layered(_))))
         }
         _ => false,
     }
@@ -673,7 +707,15 @@ fn push_heal(
 /// without its stretch analyses, and each band's background strength in it.
 /// What one frame has no room for is listed in the scene, never drawn
 /// without its mask.
-fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scene, Vec<BandState>) {
+/// `picture_samples` are RGB samples of the combined picture, for the output
+/// stretches Seiza resolves from the picture.
+fn scene(
+    document: &Document,
+    bands: &Bands,
+    view: &View,
+    version: u64,
+    picture_samples: Option<&[f32]>,
+) -> (Scene, Vec<BandState>) {
     let planned = plan(document, view);
     let mut states = vec![BandState::default(); bands.len()];
     let mut layers: Vec<Layer> = Vec::new();
@@ -921,11 +963,55 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
         );
     }
 
+    // The output stretches drawn, resolved in order: each from what the
+    // ones before it left.
+    let drawn_finish: Vec<&StepRecord> = document
+        .stage(StageKind::Finish)
+        .steps
+        .iter()
+        .filter(|step| {
+            planned.finish.contains(&step.id) && is_drawn(StageKind::Finish, step, bands)
+        })
+        .collect();
+    let configs: Vec<_> = drawn_finish
+        .iter()
+        .filter_map(|step| match &step.kind {
+            StepKind::Operation {
+                operation,
+                settings,
+                ..
+            } if operation == flow_operations::OUTPUT_STRETCH => {
+                output_stretch::config_of(settings)
+            }
+            _ => None,
+        })
+        .collect();
+    let mut resolved = output_stretch::resolve_chain(&configs, picture_samples).into_iter();
     let mut finish = Vec::new();
-    for step in &document.stage(StageKind::Finish).steps {
-        if !planned.finish.contains(&step.id) || !is_drawn(StageKind::Finish, step, bands) {
-            continue;
-        }
+    let mut finish_stretches: Vec<[Vec<f32>; 3]> = Vec::new();
+    for step in drawn_finish {
+        let stretch = if step.kind.name() == flow_operations::OUTPUT_STRETCH {
+            match resolved.next() {
+                Some(Ok(stretch)) => Some(stretch),
+                Some(Err(why)) => {
+                    omitted.push(match why {
+                        output_stretch::NotDrawn::NeedsSamples => {
+                            "an output stretch, until the picture has been sampled".to_string()
+                        }
+                        output_stretch::NotDrawn::Refused(reason) => {
+                            format!("an output stretch Seiza refused: {reason}")
+                        }
+                        output_stretch::NotDrawn::NeedsImage => {
+                            "an output stretch that needs the engine".to_string()
+                        }
+                    });
+                    continue;
+                }
+                None => continue,
+            }
+        } else {
+            None
+        };
         if finish.len() == MAX_FINISH_STEPS {
             omitted.push(step.kind.name().to_string());
             continue;
@@ -935,6 +1021,10 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
             continue;
         };
         let kind = match &step.kind {
+            _ if stretch.is_some() => FinishKind::Stretch {
+                table: finish_stretches.len(),
+                luminance: stretch.as_ref().is_some_and(|stretch| stretch.luminance),
+            },
             StepKind::Heal { offset, shift, .. } => FinishKind::Heal {
                 offset: [offset[0] as f32, offset[1] as f32],
                 shift: std::array::from_fn(|channel| shift.get(channel).copied().unwrap_or(0.0)),
@@ -954,6 +1044,9 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
             opacity: step.opacity,
             mask,
         });
+        if let Some(stretch) = stretch {
+            finish_stretches.push(stretch.rows);
+        }
     }
     // The shared masks the entries are behind: the entry's place in
     // `layers`, the mask, whether it is inverted, and a name to report.
@@ -1080,6 +1173,7 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
         layer_bands,
         layer_stretches,
         finish,
+        finish_stretches,
         heals,
         masks,
         omitted,
@@ -1256,6 +1350,96 @@ impl Studio {
 
     /// Each band's stretch analysis at these background strengths. An
     /// analysis is kept, so a pane that returns to a place does not wait.
+    /// What the canvas samples of the combined picture for the output
+    /// stretches that Seiza resolves from the picture. `None` leaves the
+    /// request the canvas has, because it already asks for the picture as
+    /// it is; `Some(None)` withdraws it, because the document has no such
+    /// stretch.
+    #[allow(clippy::option_option)]
+    fn picture_request(&mut self) -> Option<Option<Arc<PictureRequest>>> {
+        let wanted = self
+            .document
+            .stage(StageKind::Finish)
+            .steps
+            .iter()
+            .any(|step| {
+                let StepKind::Operation {
+                    operation,
+                    settings,
+                    ..
+                } = &step.kind
+                else {
+                    return false;
+                };
+                step.enabled
+                    && operation == flow_operations::OUTPUT_STRETCH
+                    && output_stretch::config_of(settings).is_some_and(|config| {
+                        output_stretch::needs_samples(&config)
+                            && !matches!(config.model, StretchModel::Layered(_))
+                    })
+            });
+        if !wanted {
+            return self.picture_wanted.take().map(|_| None);
+        }
+        let (mut scene, states) = scene(
+            &self.document,
+            &self.band_info,
+            &Place::Final.view(),
+            self.scene_version,
+            None,
+        );
+        scene.stretches = self.analysis(&states);
+        let crop = self.crop_rect();
+        let (width, height) = self.canvas.read(|shared| shared.canvas.document_size);
+        let rect = crop.unwrap_or([0.0, 0.0, width as f32, height as f32]);
+        let (patches, size) = picture_patches(rect);
+        // The picture is the scene's layers with their stretches, masks
+        // and heals, the inputs' states and the crop.
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        std::hash::Hash::hash(
+            &format!(
+                "{:?}{:?}{:?}{:?}{:?}{:?}{:?}{:?}",
+                scene.layers,
+                scene.layer_bands,
+                scene.layer_stretches,
+                scene.masks,
+                scene.computed,
+                scene.heals,
+                states,
+                crop,
+            ),
+            &mut hasher,
+        );
+        let id = std::hash::Hasher::finish(&hasher);
+        if self.picture_wanted == Some(id) {
+            return None;
+        }
+        self.picture_wanted = Some(id);
+        Some(Some(Arc::new(PictureRequest {
+            id,
+            scene,
+            patches,
+            size,
+        })))
+    }
+
+    /// Takes the samples of the combined picture the render thread read,
+    /// and draws the output stretches from them.
+    pub(super) fn follow_picture(&mut self) {
+        let Some((id, samples)) = self.canvas.read(|shared| shared.picture.clone()) else {
+            return;
+        };
+        if self
+            .picture_samples
+            .as_ref()
+            .is_some_and(|(known, _)| *known == id)
+        {
+            return;
+        }
+        self.picture_samples = Some((id, samples));
+        self.refresh_canvas();
+    }
+
     fn analysis(&mut self, states: &[BandState]) -> Arc<Vec<BandStretch>> {
         if let Some((_, known)) = self.analysed.iter().find(|(at, _)| at == states) {
             return known.clone();
@@ -1271,6 +1455,14 @@ impl Studio {
     /// per pane.
     pub(super) fn refresh_canvas(&mut self) {
         self.scene_version += 1;
+        let probe = self.picture_request();
+        // Samples of an earlier picture stand in until the new ones are
+        // read, so an output stretch keeps its place while the picture
+        // changes.
+        let samples = self
+            .picture_samples
+            .as_ref()
+            .map(|(_, samples)| samples.clone());
         let selected = self.selected.place(self.alone);
         let mut places = panes(self.split, &selected, &self.document);
         // While a mask is edited a person may watch the final picture in
@@ -1296,6 +1488,7 @@ impl Studio {
                     &self.band_info,
                     &place.view(),
                     self.scene_version,
+                    samples.as_deref().map(Vec::as_slice),
                 );
                 // The stretch is applied to the corrected samples, so each
                 // band's analysis follows its background strength.
@@ -1315,6 +1508,9 @@ impl Studio {
         let wipe = (self.split == Split::Wipe).then_some(self.wipe);
         let crop = self.crop_rect();
         self.canvas.edit(|canvas| {
+            if let Some(probe) = probe {
+                canvas.probe = probe;
+            }
             canvas.scenes = scenes;
             canvas.strokes = overlay;
             canvas.strokes_replaced += 1;
