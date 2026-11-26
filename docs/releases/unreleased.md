@@ -46,4 +46,5 @@
   prepares a picture can be stopped. A progress bar shows the tool that is
   running and how far it has got. Star removal can run on each input alone,
   or after registration on R, G and B together or on the narrowband lines
-  together.
+  together. **Show › Only** on a layer shows that layer by itself: one
+  input in gray, or a group such as R, G, B in color.

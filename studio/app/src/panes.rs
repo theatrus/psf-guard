@@ -873,10 +873,24 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
             },
         };
         let hidden = !layer.visible || base.is_some_and(|base| !base.visible);
+        // One input's layer on its own is drawn in gray at full strength.
+        let gray = planned.gray;
         layers.push(Layer {
-            color: layer.color.unwrap_or([1.0; 3]),
-            opacity: if hidden { 0.0 } else { layer.opacity },
-            blend: blend_of(layer.blend),
+            color: if gray {
+                [1.0; 3]
+            } else {
+                layer.color.unwrap_or([1.0; 3])
+            },
+            opacity: match (gray, hidden) {
+                (true, _) => 1.0,
+                (false, true) => 0.0,
+                (false, false) => layer.opacity,
+            },
+            blend: if gray {
+                Blend::Normal
+            } else {
+                blend_of(layer.blend)
+            },
             mask,
             clip: clip_mask,
             ..shown
@@ -1648,11 +1662,11 @@ impl Studio {
         let what = match &self.selected {
             Row::Input(channel) => format!("the input {}", channel_label(channel)),
             Row::InputStep { channel, step } => {
-                let shared = self
-                    .document
-                    .step(*step)
-                    .is_some_and(|(_, step)| step.band.is_none());
-                if shared {
+                let found = self.document.step(*step).map(|(_, step)| step);
+                let shared = found.is_some_and(|step| step.band.is_none());
+                if let Some(group) = found.and_then(|step| self.group_applies_to(step)) {
+                    format!("{}, of {group}", step_name(step))
+                } else if shared {
                     format!("{}, of every input", step_name(step))
                 } else {
                     format!(

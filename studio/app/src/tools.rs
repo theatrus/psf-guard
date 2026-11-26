@@ -403,6 +403,26 @@ impl Studio {
         (present.len() >= 2).then_some((band, present))
     }
 
+    /// The inputs a color group's tools step applies to, as a person reads
+    /// them: "Ha, OIII, SII together". `None` for any other step.
+    pub(super) fn group_applies_to(&self, step: &StepRecord) -> Option<String> {
+        if step.kind.name() != flow_operations::RC_ASTRO_COLOR {
+            return None;
+        }
+        let band = step.band.as_deref()?;
+        let (_, inputs) = crate::studio_model::COLOR_GROUPS
+            .iter()
+            .find(|(group, _)| *group == band)?;
+        let present: Vec<String> = self
+            .document
+            .channels()
+            .into_iter()
+            .filter(|channel| inputs.contains(&channel.as_str()))
+            .map(|channel| channel_label(&channel))
+            .collect();
+        Some(format!("{} together", present.join(", ")))
+    }
+
     /// The step that holds a color group's tools.
     fn group_step(&self, band: &str) -> Option<&StepRecord> {
         self.document

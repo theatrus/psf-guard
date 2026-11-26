@@ -152,6 +152,10 @@ pub struct ViewPlan {
     pub combined: bool,
     /// The layers drawn, bottom first, when the layers are blended.
     pub stack: Vec<StackEntry>,
+    /// Whether the view shows one input's layer on its own. Such a layer
+    /// is drawn in gray at full strength, as its input is, without its
+    /// color, opacity or blend mode. A group on its own keeps its colors.
+    pub gray: bool,
     /// The drawn layers' own edits that the view applies: those that are
     /// on, up to the view's limit for a layer that has one.
     pub own_steps: Vec<Uuid>,
@@ -321,6 +325,9 @@ pub fn plan(document: &Document, view: &View) -> ViewPlan {
     };
     // One member alone is shown as it is, not as its group blends it.
     let within_groups = drawn.len() != 1 || drawn[0].group.is_none();
+    let gray = matches!(view.subject, Subject::Layer(_))
+        && drawn.len() == 1
+        && matches!(drawn[0].source, LayerSource::Band { .. });
     // The layer a clipped layer is clipped to: the nearest layer beneath it
     // in the same group that shows pixels or is a group, and is not itself
     // clipped.
@@ -431,6 +438,7 @@ pub fn plan(document: &Document, view: &View) -> ViewPlan {
             Some(at) if matches!(layers[at].source, LayerSource::Adjustment { .. }) => {
                 format!("{} over the layers beneath it", layer_name(id))
             }
+            _ if gray => format!("The layer {} on its own, in gray", layer_name(id)),
             _ => format!("The layer {} on its own", layer_name(id)),
         },
         Subject::LayersUpTo(id) => format!("The layers up to {}", layer_name(id)),
@@ -465,6 +473,7 @@ pub fn plan(document: &Document, view: &View) -> ViewPlan {
         channels,
         combined,
         stack,
+        gray,
         own_steps,
         finish,
         description: format!("{what}, {reached}, drawn with {stretch}."),

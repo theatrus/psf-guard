@@ -161,7 +161,9 @@ impl Studio {
                     continue;
                 };
                 let id = listed.id;
-                let mut applies_to = if listed.shared {
+                let mut applies_to = if let Some(group) = self.group_applies_to(step) {
+                    group
+                } else if listed.shared {
                     "every input".to_string()
                 } else {
                     format!("{label} only")

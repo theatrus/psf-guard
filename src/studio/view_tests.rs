@@ -335,7 +335,10 @@ fn a_blended_view_draws_band_layers_and_adjustments_in_order() {
     );
     assert!(alone
         .description
-        .starts_with("The layer B as blue on its own"));
+        .starts_with("The layer B as blue on its own, in gray"));
+    // One input's layer on its own is drawn in gray; the stack is not.
+    assert!(alone.gray);
+    assert!(!up_to.gray);
 
     // An adjustment alone has nothing to show, so it comes with the layers
     // beneath it.

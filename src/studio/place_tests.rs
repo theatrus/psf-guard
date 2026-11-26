@@ -437,7 +437,9 @@ fn a_view_blends_a_group_on_its_own() {
         layer: group,
         alone: true,
     };
-    assert_eq!(entries(alone), ["begin", "band", "band", "end"]);
+    assert_eq!(entries(alone.clone()), ["begin", "band", "band", "end"]);
+    // A group on its own keeps its colors.
+    assert!(!plan(&document, &alone.view()).gray);
     // A view that stops inside the group shows the group so far.
     let part = Place::Layer {
         layer: ids[1],
@@ -449,7 +451,9 @@ fn a_view_blends_a_group_on_its_own() {
         layer: ids[1],
         alone: true,
     };
-    assert_eq!(entries(member), ["band"]);
+    assert_eq!(entries(member.clone()), ["band"]);
+    // A member on its own is one input, drawn in gray.
+    assert!(plan(&document, &member.view()).gray);
     // Before the group is the stack beneath its members.
     let whole = Place::Layer {
         layer: group,

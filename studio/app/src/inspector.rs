@@ -346,7 +346,9 @@ impl Studio {
         };
         let label = channel_label(channel);
         let shared = step.band.is_none();
-        let applies_to = if shared {
+        let applies_to = if let Some(group) = self.group_applies_to(step) {
+            format!("Applies to {group}: their registered inputs combined into one color image.")
+        } else if shared {
             "Applies to every input that has no step of its own of this kind.".to_string()
         } else {
             format!("Applies to {label} only.")
@@ -432,6 +434,10 @@ impl Studio {
                 layer.name.clone(),
                 "A layer of the picture: one input, in one color.",
             ))
+            .child(self.shows_block(
+                "Only shows this layer's input, in gray, without its color, opacity or blend.",
+                cx,
+            ))
             .child(Self::field(
                 "Input",
                 self.menu("layer-input", "Input", inputs, cx),
@@ -458,7 +464,6 @@ impl Studio {
                 cx,
             ))
             .child(self.blend_block(layer, cx))
-            .child(self.shows_block("This layer alone", cx))
             .child(self.mask_block(layer, cx))
             .child(self.shared_mask_block(layer, cx))
             .child(Self::heading("Clipping"))
@@ -562,19 +567,22 @@ impl Studio {
         Self::field("Blend", self.blend_menu(layer, cx))
     }
 
-    /// Whether the canvas shows the stack up to the selected layer, or the
-    /// selected layer alone.
-    fn shows_block(&self, alone_label: &'static str, cx: &mut Context<Self>) -> gpui::Div {
+    /// Whether the canvas shows the stack up to the selected layer, or
+    /// only the selected layer.
+    fn shows_block(&self, only_help: &'static str, cx: &mut Context<Self>) -> gpui::Div {
         let alone = self.alone;
-        column().child(Self::heading("View")).child(
-            Self::segmented()
-                .child(Self::act("Stack", "show-stack", !alone, cx, |this| {
-                    this.alone = false
-                }))
-                .child(Self::act(alone_label, "show-alone", alone, cx, |this| {
-                    this.alone = true
-                })),
-        )
+        column()
+            .child(Self::field(
+                "Show",
+                Self::segmented()
+                    .child(Self::act("Stack", "show-stack", !alone, cx, |this| {
+                        this.alone = false
+                    }))
+                    .child(Self::act("Only", "show-alone", alone, cx, |this| {
+                        this.alone = true
+                    })),
+            ))
+            .children(Self::help(only_help))
     }
 
     fn inspect_group(&self, layer: &LayerRecord, cx: &mut Context<Self>) -> AnyElement {
@@ -588,6 +596,10 @@ impl Studio {
                     super::panes::counted(members, "layer")
                 ),
             ))
+            .child(self.shows_block(
+                "Only shows the group's layers blended together, in color, without the layers beneath.",
+                cx,
+            ))
             .children(Self::help(
                 "Drag a layer onto the group, or into the gap under one of its layers, to add it. Drag it out to remove it.",
             ))
@@ -600,7 +612,6 @@ impl Studio {
             .child(self.blend_block(layer, cx))
             .child(self.palette_block(Some(id), cx))
             .child(Self::field("Layers", self.add_layer_menu(Some(id), cx)))
-            .child(self.shows_block("Alone", cx))
             .child(self.mask_block(layer, cx))
             .child(self.shared_mask_block(layer, cx))
             .child(Self::field("Adjust", self.adjustment_menu(

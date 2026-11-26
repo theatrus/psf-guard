@@ -1792,6 +1792,11 @@ to make, not one for what to edit and another for what to look at.
 - An input row shows the input as stacked; a step row shows the input
   after that step.
 - A layer row shows the stack up to that layer, or that layer alone.
+  **Show: Stack | Only**, first in the layer's inspector, chooses which.
+  A layer of one input shown alone is drawn in gray at full strength,
+  without its color, opacity or blend mode, so its tones can be judged as
+  the input's own. A group shown alone keeps its colors, as its members
+  blend together (`ViewPlan::gray`).
 - A row for one layer's own edit shows that layer alone, with its own
   edits up to and including that one (`Place::LayerEdit`). The row before
   it is the same layer without the edit, so a before and after of one edit
