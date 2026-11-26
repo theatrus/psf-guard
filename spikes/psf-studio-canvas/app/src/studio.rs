@@ -245,6 +245,9 @@ impl CanvasState {
                         // way, adds nothing.
                         let moved =
                             f64::from(self.sliders[(*band).min(MAX_LAYERS - 1)] - 1.0 / 3.0);
+                        if *band == panes::DISPLAY_ROW {
+                            return Some(crate::store_tiles::identity_table());
+                        }
                         Some(scene.stretches.get(*band)?.table(stages, 0.45 * moved))
                     })
                     .collect()

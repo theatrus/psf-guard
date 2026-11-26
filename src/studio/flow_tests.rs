@@ -260,3 +260,38 @@ fn settings_of_the_wrong_shape_are_refused() {
         );
     }
 }
+
+#[test]
+fn studio_starts_from_the_layered_stretch_and_keeps_a_chosen_one() {
+    let settings: Value =
+        serde_json::from_str(include_str!("../processing_setups/default_color.json")).unwrap();
+    let mut document = document_from_color_setup("Default", &settings, &["ha", "oiii"]).unwrap();
+    let kinds = |document: &Document| -> Vec<String> {
+        document
+            .stage(StageKind::Stretch)
+            .steps
+            .iter()
+            .filter(|step| step.kind.name() == op::STRETCH)
+            .filter_map(|step| match &step.kind {
+                StepKind::Operation { settings, .. } => {
+                    Some(settings["model"]["type"].as_str()?.to_string())
+                }
+                _ => None,
+            })
+            .collect()
+    };
+    assert!(kinds(&document).iter().all(|kind| kind == "auto-mtf"));
+    // One stretch a person chose stays.
+    let first = document.stage(StageKind::Stretch).steps[0].id;
+    document.set_step_settings(
+        first,
+        serde_json::json!({ "model": { "type": "asinh", "black": 0.0, "white": 1.0, "strength": 50.0 } }),
+    );
+    document.use_layered_stretch();
+    let after = kinds(&document);
+    assert_eq!(after[0], "asinh");
+    assert!(after[1..].iter().all(|kind| kind == "layered"));
+    assert_eq!(stretched_channel("ha"), "ha@stretched");
+    // PSF Guard's settings take the layered stretch as any other.
+    assert!(color_setup_from_document(&document).is_ok());
+}

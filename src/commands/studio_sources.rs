@@ -169,7 +169,11 @@ fn prepare_store(
         }
         None => {
             let processing = serde_json::from_str(DEFAULT_COLOR_SETTINGS)?;
-            document_from_processing("PSF Guard default color", &processing, &roles)?
+            let mut document =
+                document_from_processing("PSF Guard default color", &processing, &roles)?;
+            // Studio starts from the layered stretch.
+            document.use_layered_stretch();
+            document
         }
     };
     let processing = processing_from_document(&document)?;
@@ -234,7 +238,12 @@ fn prepare_store(
             gains[0], gains[2]
         ),
     }
-    let (display, star_stretch) = stretch_stars(&mut prepared, &document);
+    let (mut display, star_stretch) = stretch_stars(&mut prepared, &document);
+    let calibrated = matches!(calibration, Calibration::Done { .. });
+    for name in stretch_whole_images(&mut prepared, &processing.input_stretches, calibrated) {
+        println!("  {name}: stretched for display");
+        display.push(name);
+    }
     if let Some(amount) = star_stretch {
         println!("  Stars of red, green and blue stretched as one layer, amount {amount:.2}");
     }
@@ -529,4 +538,101 @@ fn stretch_stars(
             (Vec::new(), None)
         }
     }
+}
+
+/// Stretches each channel whose stretches include the layered stretch over
+/// the whole image, and adds the result as the channel's stretched plane.
+/// Returns the planes added.
+///
+/// The channel is stretched in its last linear state: with its background
+/// corrected when the store has that, else after its tools, else as
+/// stacked. Calibrated red, green and blue with the same stretches are
+/// stretched together as one color image, so their balance is kept.
+fn stretch_whole_images(
+    prepared: &mut RegisteredChannels,
+    stretches: &BTreeMap<
+        StackColorRole,
+        Vec<crate::server::stack_preview::stretch::StackStretchRequest>,
+    >,
+    calibrated: bool,
+) -> Vec<String> {
+    use crate::studio::{background_corrected_channel, stretched_channel, tools_channel};
+    use seiza_stretch::StretchModel;
+
+    let linear = |prepared: &RegisteredChannels, name: &str| {
+        prepared
+            .plane(&background_corrected_channel(name))
+            .or_else(|| prepared.plane(&tools_channel(name)))
+            .or_else(|| prepared.plane(name))
+    };
+    let layered: Vec<(StackColorRole, String)> = stretches
+        .iter()
+        .filter(|(_, stages)| {
+            stages
+                .iter()
+                .any(|stage| matches!(stage.model, StretchModel::Layered(_)))
+        })
+        .filter_map(|(role, _)| Some((*role, crate::studio_flow::role_name(*role).ok()?)))
+        .collect();
+    let mut added = Vec::new();
+    let rgb = [
+        StackColorRole::Red,
+        StackColorRole::Green,
+        StackColorRole::Blue,
+    ];
+    let same = |a: StackColorRole, b: StackColorRole| {
+        serde_json::to_value(&stretches[&a]).ok() == serde_json::to_value(&stretches[&b]).ok()
+    };
+    let together = calibrated
+        && rgb
+            .iter()
+            .all(|role| layered.iter().any(|(other, _)| other == role))
+        && same(rgb[0], rgb[1])
+        && same(rgb[1], rgb[2]);
+    if together {
+        let names = ["red", "green", "blue"];
+        if let [Some(red), Some(green), Some(blue)] = names.map(|name| linear(prepared, name)) {
+            let stretched =
+                crate::server::stack_preview::color_calibration::interleave(&red, &green, &blue)
+                    .and_then(|image| {
+                        crate::color_steps::stretch_for_display(&image, &stretches[&rgb[0]])
+                    });
+            match stretched {
+                Ok(image) => {
+                    for (channel, name) in names.into_iter().enumerate() {
+                        let samples = image
+                            .data
+                            .iter()
+                            .skip(channel)
+                            .step_by(3)
+                            .copied()
+                            .collect();
+                        let plane = stretched_channel(name);
+                        if prepared.add_plane(&plane, samples) {
+                            added.push(plane);
+                        }
+                    }
+                }
+                Err(error) => println!("  Red, green and blue were not stretched: {error}"),
+            }
+        }
+    }
+    for (role, name) in layered {
+        if together && rgb.contains(&role) {
+            continue;
+        }
+        let Some(image) = linear(prepared, &name) else {
+            continue;
+        };
+        match crate::color_steps::stretch_for_display(&image, &stretches[&role]) {
+            Ok(image) => {
+                let plane = stretched_channel(&name);
+                if prepared.add_plane(&plane, image.data) {
+                    added.push(plane);
+                }
+            }
+            Err(error) => println!("  {name} was not stretched: {error}"),
+        }
+    }
+    added
 }

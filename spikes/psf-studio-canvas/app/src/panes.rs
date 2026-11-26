@@ -72,6 +72,8 @@ pub(super) fn flow_document(inputs: &[String]) -> Document {
     let settings = serde_json::from_str(DEFAULT_COLOR_SETUP).expect("the default setup is JSON");
     let mut document = document_from_color_setup("PSF Guard default color", &settings, &channels)
         .expect("the default setup makes a document");
+    // Studio starts from the layered stretch.
+    document.use_layered_stretch();
     // When no palette fits the inputs, each still gets a layer in a color
     // of its own, so nothing a store holds is left out of the first picture.
     let plain: Vec<Uuid> = document
@@ -187,7 +189,7 @@ fn with_amount(operation: &str, settings: &serde_json::Value, amount: f32) -> se
 /// The stretches Seiza has that work on samples alone, as a person
 /// chooses between them: Seiza's name for the stretch, and a label. The
 /// layered stretch is not here: it needs the image, so the engine draws it.
-pub(super) const STRETCHES: [(&str, &str); 8] = [
+pub(super) const STRETCHES: [(&str, &str); 9] = [
     ("auto-mtf", "Automatic midtones"),
     ("median-anchor", "Median anchor"),
     ("ghs", "Generalized hyperbolic"),
@@ -196,12 +198,19 @@ pub(super) const STRETCHES: [(&str, &str); 8] = [
     ("percentile-asinh", "Asinh, by percentiles"),
     ("mtf", "Midtones"),
     ("identity", "None"),
+    ("layered", "Layered"),
 ];
 
 /// The settings of one of Seiza's stretches that a slider sets: Seiza's
 /// name for the setting, a label, and the range the slider covers.
 pub(super) fn stretch_settings(kind: &str) -> &'static [(&'static str, &'static str, f64, f64)] {
     match kind {
+        "layered" => &[
+            ("target_background", "Background", 0.05, 0.5),
+            ("aggressiveness", "Black point", 0.0, 1.0),
+            ("dynamic_range_compression", "Star cores", 0.0, 1.0),
+            ("contrast_recovery", "Contrast", 0.0, 1.0),
+        ],
         "auto-mtf" => &[
             ("target_median", "Background", 0.05, 0.5),
             ("shadows_clip", "Shadows clip", -5.0, 0.0),
@@ -264,6 +273,10 @@ pub(super) fn new_stretch(kind: &str) -> serde_json::Value {
             "type": kind, "black_percentile": 0.001, "white_percentile": 0.999, "strength": 50.0,
         }),
         "mtf" => json!({ "type": kind, "shadows": 0.0, "midtone": 0.25, "highlights": 1.0 }),
+        "layered" => json!({
+            "type": kind, "target_background": 0.15, "aggressiveness": 0.5,
+            "dynamic_range_compression": 0.0, "contrast_recovery": 0.0,
+        }),
         _ => json!({ "type": "identity" }),
     }
 }
@@ -312,7 +325,14 @@ pub(super) fn is_drawn(stage: StageKind, step: &StepRecord, bands: &Bands) -> bo
                     && band.is_some_and(|band| bands.has_tools(band)))
         }
         (StepKind::Operation { .. }, StageKind::Stretch) if stretch_model(step).is_some() => {
+            // The layered stretch is drawn when the store stretched the
+            // step's input over the whole image.
             !matches!(stretch_model(step), Some(StretchModel::Layered(_)))
+                || step
+                    .band
+                    .as_deref()
+                    .and_then(|band| bands.band_of(band))
+                    .is_some_and(|band| bands.stretched_plane(band).is_some())
         }
         (StepKind::Operation { operation, .. }, StageKind::Stretch) => {
             operation == flow_operations::STRETCH
@@ -330,6 +350,10 @@ pub(super) fn is_drawn(stage: StageKind, step: &StepRecord, bands: &Bands) -> bo
         _ => false,
     }
 }
+
+/// The band of a stretch table row that leaves samples as they are: the row
+/// of the planes a store holds stretched for display.
+pub(super) const DISPLAY_ROW: usize = usize::MAX;
 
 /// A stroke's path as the segments the canvas draws.
 fn segments(stroke: &Stroke) -> Vec<Segment> {
@@ -474,7 +498,13 @@ fn band_source(
     band: usize,
     plan: &ChannelPlan,
     omitted: &mut Vec<String>,
-) -> (BandState, usize, Option<(usize, f32)>, Vec<StretchModel>) {
+) -> (
+    BandState,
+    usize,
+    Option<(usize, f32)>,
+    Vec<StretchModel>,
+    bool,
+) {
     let label = channel_label(&plan.channel);
     let strength = plan
         .background
@@ -490,6 +520,29 @@ fn band_source(
             omitted.push(format!("the background of {label} without its tools"));
         }
         state.background = 0.0;
+    }
+    // A channel whose stretches need the whole image is drawn from the
+    // plane the store stretched, as it is.
+    if let (PlannedStretch::Document(steps), Some(stretched)) =
+        (&plan.stretch, bands.stretched_plane(band))
+    {
+        let layered = steps
+            .iter()
+            .filter_map(|id| document.step(*id))
+            .any(|(_, step)| matches!(stretch_model(step), Some(StretchModel::Layered(_))));
+        if layered {
+            return (state, stretched, None, Vec::new(), true);
+        }
+    }
+    // A band the store holds stretched for display has no stretch to draw.
+    if bands.is_display(band) {
+        return (
+            state,
+            plane,
+            corrected.map(|corrected| (corrected, state.background)),
+            Vec::new(),
+            false,
+        );
     }
     let stages = match &plan.stretch {
         PlannedStretch::Preview => Vec::new(),
@@ -510,6 +563,7 @@ fn band_source(
         plane,
         corrected.map(|corrected| (corrected, state.background)),
         stages,
+        false,
     )
 }
 
@@ -709,7 +763,7 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
         let Some(band) = bands.band_of(&channel.channel) else {
             continue;
         };
-        let (state, plane, blended, own_stages) =
+        let (state, plane, blended, own_stages, display) =
             band_source(document, bands, band, channel, &mut omitted);
         states[band] = state;
         // The stars a tool took out of an input are stretched as that
@@ -718,11 +772,14 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
         let stages = if stretched_as == band {
             own_stages
         } else {
-            let (like_state, _, _, stages) =
+            let (like_state, _, _, stages, _) =
                 band_source(document, bands, stretched_as, like, &mut omitted);
             states[stretched_as] = like_state;
             stages
         };
+        // A plane the store stretched has a table row of its own, which
+        // leaves its samples as they are.
+        let stretched_as = if display { DISPLAY_ROW } else { stretched_as };
         let shown = Layer {
             band: plane,
             blended,
@@ -873,7 +930,7 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
             else {
                 continue;
             };
-            let (state, plane, blended, own_stages) =
+            let (state, plane, blended, own_stages, display) =
                 band_source(document, bands, band, plan, &mut omitted);
             states[band] = state;
             // The stars a tool took out of an input are stretched as that
@@ -882,11 +939,14 @@ fn scene(document: &Document, bands: &Bands, view: &View, version: u64) -> (Scen
             let stages = if stretched_as == band {
                 own_stages
             } else {
-                let (like_state, _, _, stages) =
+                let (like_state, _, _, stages, _) =
                     band_source(document, bands, stretched_as, like, &mut omitted);
                 states[stretched_as] = like_state;
                 stages
             };
+            // A plane the store stretched has a table row of its own, which
+            // leaves its samples as they are.
+            let stretched_as = if display { DISPLAY_ROW } else { stretched_as };
             let known =
                 layer_bands
                     .iter()

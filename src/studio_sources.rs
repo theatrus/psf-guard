@@ -407,6 +407,20 @@ impl RegisteredChannels {
         .ok()
     }
 
+    /// Adds a plane under a new name. Returns whether `samples` is the
+    /// grid's size and the name is free.
+    pub fn add_plane(&mut self, name: &str, samples: Vec<f32>) -> bool {
+        if samples.len() != self.shape.width * self.shape.height
+            || self.names.iter().any(|other| other == name)
+        {
+            return false;
+        }
+        self.names.push(name.to_string());
+        self.planes.push(samples);
+        self.shape.channels = self.planes.len();
+        true
+    }
+
     /// Replaces one plane's samples. Returns whether the plane exists and
     /// `samples` is its size.
     pub fn replace_plane(&mut self, name: &str, samples: Vec<f32>) -> bool {

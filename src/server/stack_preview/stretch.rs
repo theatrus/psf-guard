@@ -82,7 +82,7 @@ pub struct StackViewProcessingRequest {
 }
 
 impl StackStretchRequest {
-    pub(super) fn config(&self) -> StretchConfig {
+    pub(crate) fn config(&self) -> StretchConfig {
         StretchConfig {
             model: self.model.clone(),
             color_strategy: self.color_strategy,

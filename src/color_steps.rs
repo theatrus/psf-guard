@@ -16,6 +16,7 @@ use crate::server::stack_preview::color_calibration::{
     StackColorCalibrationSkip, StackColorCalibrationSkipReason, StarPlacement,
 };
 use crate::server::stack_preview::rc_astro::{self, ProcessingChain, RcAstroOutcome};
+use crate::server::stack_preview::stretch::StackStretchRequest;
 use crate::server::stack_preview::StackSkyOrientation;
 use crate::server::workers::rc_astro::RcAstroRunner;
 use crate::server::workers::Workers;
@@ -602,4 +603,44 @@ pub fn stretch_star_layer(
         }
     }
     Ok(channels)
+}
+
+/// Runs a chain of stretches over a whole image, with Seiza's stretch
+/// stack, and returns the image stretched for display. A chain with the
+/// layered stretch needs this: that stretch blurs the image, so it cannot
+/// be resolved from samples. `image` has one channel, or three that are
+/// stretched together. Its samples are physical values, as a stack holds
+/// them.
+pub fn stretch_for_display(
+    image: &LinearImage,
+    stages: &[StackStretchRequest],
+) -> Result<LinearImage, String> {
+    use seiza_stretch::{SampleDomain, SampleNormalization};
+
+    // A stack holds physical values. They are brought to the range of 0
+    // to 1 first, by one scale for every sample, so three channels keep
+    // their balance.
+    let finite: Vec<f32> = image
+        .data
+        .iter()
+        .copied()
+        .filter(|sample| sample.is_finite())
+        .collect();
+    let domain = SampleDomain::PhysicalLinear {
+        normalization: SampleNormalization::default(),
+    }
+    .resolve(&finite, 1)
+    .map_err(|error| error.to_string())?;
+    let unit = domain
+        .apply(&image.data, 1)
+        .map_err(|error| error.to_string())?;
+    let stack =
+        seiza_stretch::StretchStack::new(stages.iter().map(StackStretchRequest::config).collect())
+            .map_err(|error| error.to_string())?;
+    let shape = seiza_stretch::ImageShape::new(image.width, image.height, image.channels);
+    let output = stack
+        .apply_f32_image(&unit, shape)
+        .map_err(|error| error.to_string())?;
+    LinearImage::new(image.width, image.height, image.channels, output.data)
+        .map_err(|error| error.to_string())
 }

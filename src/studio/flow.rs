@@ -66,6 +66,13 @@ pub fn tools_channel(channel: &str) -> String {
     format!("{channel}@tools")
 }
 
+/// The name of the channel that holds `channel` after its stretches, for a
+/// channel whose stretches need the whole image, as the layered stretch
+/// does. A store holds it so a canvas can draw the result as it is.
+pub fn stretched_channel(channel: &str) -> String {
+    format!("{channel}@stretched")
+}
+
 /// The name of the channel that holds the stars a star removal tool took
 /// out of `channel`.
 pub fn stars_channel(channel: &str) -> String {
@@ -374,4 +381,28 @@ pub fn color_setup_from_document(document: &Document) -> Result<Value, StudioErr
         Value::Array(output_stretches),
     );
     Ok(Value::Object(settings))
+}
+
+impl Document {
+    /// Gives every input the layered stretch in place of the automatic
+    /// midtones stretch: Studio's default. A stretch a person chose, of any
+    /// other kind, is left as it is.
+    pub fn use_layered_stretch(&mut self) {
+        let automatic: Vec<(uuid::Uuid, Value)> = self
+            .stage(StageKind::Stretch)
+            .steps
+            .iter()
+            .filter(|step| step.kind.name() == flow_operations::STRETCH)
+            .filter_map(|step| match &step.kind {
+                StepKind::Operation { settings, .. } if settings["model"]["type"] == "auto-mtf" => {
+                    Some((step.id, settings.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        for (id, mut settings) in automatic {
+            settings["model"] = serde_json::json!({ "type": "layered" });
+            self.set_step_settings(id, settings);
+        }
+    }
 }

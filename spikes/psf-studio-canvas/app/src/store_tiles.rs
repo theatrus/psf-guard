@@ -3,8 +3,8 @@
 
 use crate::image_steps::{Domain, ImageShape, Region};
 use crate::studio_model::{
-    background_corrected_channel, tools_channel, MemoryBudget, RegionReader, SampleFormat,
-    StoreLevel, StoreOptions, StudioError, TileStore,
+    background_corrected_channel, stretched_channel, tools_channel, MemoryBudget, RegionReader,
+    SampleFormat, StoreLevel, StoreOptions, StudioError, TileStore,
 };
 use seiza_stretch::{
     ResolvedSampleDomain, SampleDomain, SampleNormalization, StretchAnalysis, StretchConfig,
@@ -44,6 +44,15 @@ pub struct BandStretch {
     /// Whether the band is already stretched for display, so its table
     /// leaves its samples as they are.
     display: bool,
+}
+
+/// The stretch table that leaves a canvas sample as it is, for a plane
+/// that runs from 0 to 1 and is already stretched for display.
+pub fn identity_table() -> Vec<f32> {
+    let last = (STRETCH_TABLE_WIDTH - 1) as f32;
+    (0..STRETCH_TABLE_WIDTH)
+        .map(|index| (index as f32 / last).powi(2))
+        .collect()
 }
 
 /// The samples Seiza analyses per band, at most.
@@ -187,6 +196,9 @@ pub struct Bands {
     /// The bands whose stretches are resolved together: red, green and
     /// blue once color calibration has balanced them. Empty otherwise.
     linked: Vec<usize>,
+    /// Per band: the tile channel that holds it after its stretches, when
+    /// the store stretched it over the whole image.
+    pub stretched: Vec<Option<usize>>,
     /// The bands the store holds already stretched for display, such as
     /// stars after the star stretch. They are drawn as they are.
     display: Vec<usize>,
@@ -266,6 +278,12 @@ impl Bands {
             ),
             _ => String::new(),
         };
+    }
+
+    /// The tile channel that holds a band after its stretches, if the
+    /// store has one.
+    pub fn stretched_plane(&self, band: usize) -> Option<usize> {
+        self.stretched.get(band).copied().flatten()
     }
 
     /// Whether a band is already stretched for display.
@@ -466,6 +484,13 @@ impl StoreTiles {
             bands.names.push(name.unwrap_or_default());
             bands.tools.push(tools);
             bands.corrected.push(corrected);
+            bands.stretched.push(
+                bands
+                    .names
+                    .last()
+                    .and_then(|name| named(stretched_channel(name)))
+                    .filter(|plane| self.display.contains(&self.names[*plane])),
+            );
             bands.scales.push(scale);
             bands.samples.push([
                 Some(channels[channel].clone()),
@@ -476,7 +501,11 @@ impl StoreTiles {
         // A channel that is no band and no band's other state, such as the
         // stars a tool took out, keeps a scale of its own.
         for channel in 0..self.bands {
-            if !is_band(channel) && self.scales[channel] == 1.0 {
+            let display = self
+                .names
+                .get(channel)
+                .is_some_and(|name| self.display.contains(name));
+            if !is_band(channel) && self.scales[channel] == 1.0 && !display {
                 self.scales[channel] = largest(&channels[channel]);
             }
         }

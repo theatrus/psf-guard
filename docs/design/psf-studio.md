@@ -2253,8 +2253,21 @@ are. A change of the amount is applied by preparing the store again
 (“Run tools”). PSF Guard's star reduction and its saving of the amount in
 the `narrowband` settings are not carried over yet.
 
-Not built: tools per input in one table, continuum subtraction, the
-layered stretch, groups in groups, and a recipe's small picture of its
+**The layered stretch** is Studio's default in place of the automatic
+midtones stretch: a new document's stretches are changed by
+`Document::use_layered_stretch`, and PSF Guard's own default setup is not.
+The layered stretch blurs the image, so it cannot be a table resolved from
+samples. The preparation runs each such channel's whole stretch chain with
+Seiza's stretch stack (`color_steps::stretch_for_display`) on the
+channel's last linear state and adds the result as `<channel>@stretched`.
+Calibrated red, green and blue with the same stretches are stretched
+together as one color image. The spike draws a stretched plane as it is
+wherever the view applies the channel's stretches. Changing a layered
+stretch's settings takes effect when the store is prepared again. A star
+layer that was not star-stretched still follows its input's table
+stretches only.
+
+Not built: tools per input in one table, continuum subtraction, groups in groups, and a recipe's small picture of its
 parts. No luminance stack was at hand, so the Luminance part is covered
 by tests only.
 
