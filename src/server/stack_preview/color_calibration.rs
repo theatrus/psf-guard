@@ -471,9 +471,6 @@ pub(super) fn calibration_outdated(
     if recorded.mosaic_canvas != now.mosaic_canvas {
         return Some("Out of date — mosaic color calibration now uses the canvas plate solve");
     }
-    if recorded.compose_version != now.compose_version {
-        return Some("Out of date — Seiza's color calibration changed");
-    }
     match (&recorded.catalog, &now.catalog) {
         (None, Some(_)) => return Some("Out of date — Gaia colors were installed"),
         (Some(_), None) => return Some("Out of date — Gaia colors were removed"),
@@ -487,12 +484,15 @@ pub(super) fn calibration_outdated(
         return Some("Out of date — the reference frame changed");
     }
     match (&recorded.solution_fingerprint, &now.solution_fingerprint) {
-        (None, Some(_)) => Some("Out of date — the reference frame is now plate solved"),
+        (None, Some(_)) => return Some("Out of date — the reference frame is now plate solved"),
         (then, now) if then != now => {
-            Some("Out of date — the reference frame's plate solve changed")
+            return Some("Out of date — the reference frame's plate solve changed");
         }
-        _ => None,
+        _ => {}
     }
+    // Last, so a change the person can act on is named first.
+    (recorded.compose_version != now.compose_version)
+        .then_some("Out of date — Seiza's color calibration changed")
 }
 
 /// Calibrate a linear RGB stack, as a one-shot-color camera made it, on its
@@ -1124,6 +1124,11 @@ pub(super) mod tests {
             assert_eq!(
                 calibration_outdated(Some(&older), None, &ready),
                 Some("Out of date — Seiza's color calibration changed")
+            );
+            // A change the person can act on is named first.
+            assert_eq!(
+                calibration_outdated(Some(&older), None, &source(true, None)),
+                Some("Out of date — Gaia colors were removed")
             );
         }
         // A solve made since, or a different one.
