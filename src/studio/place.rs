@@ -88,6 +88,13 @@ pub fn input_steps(document: &Document, channel: &str) -> Vec<InputStep> {
         .flat_map(|stage| {
             let steps = &document.stage(stage).steps;
             steps.iter().filter_map(move |step| match &step.band {
+                // The star stretch belongs to the stars of red, green and
+                // blue, and to no other input.
+                None if step.kind.name() == super::flow_operations::STAR_STRETCH
+                    && !["red@stars", "green@stars", "blue@stars"].contains(&channel) =>
+                {
+                    None
+                }
                 Some(band) if band == channel => Some(InputStep {
                     id: step.id,
                     shared: false,

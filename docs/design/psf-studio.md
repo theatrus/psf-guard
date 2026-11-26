@@ -2221,16 +2221,37 @@ Also tried on a store of Ha, OIII, SII, R, G and B with star removal on
 all six: the recipe “Narrowband with RGB stars” gives a starless SHO
 nebula with the stars of R, G and B screened over it.
 
-**Gaia calibration of the RGB stars is not applied yet.** The document
-records the Color calibration step, and neither the store preparation nor
-the canvas runs it, so the star colors are each channel's own stretch.
-It needs three things: the reference frame's plate solve fetched with the
-sources, PSF Guard's calibration step shared through `color_steps` and
-run on R, G and B in the preparation (gains on every plane of a channel,
-sky offsets on all but its stars), and one linked stretch for R, G, B and
-their stars, since separate stretches undo the balance. It also needs a
-Gaia photometry catalog and a solve to test against; the spike's computer
-has neither.
+**Gaia calibration of R, G and B** runs in the store preparation
+(`calibrate_colors` in `src/commands/studio_sources.rs`, on the shared step
+`color_steps::measure_color_gains`):
+
+- `studio-sources` fetches the plate solve of the first stack's reference
+  frame, asking the server to solve it when it has none, and keeps it in
+  the sources folder as `reference-solve.json`.
+- The preparation measures the gains on red, green and blue as stacked
+  and registered, where they still have their stars, through the solve
+  carried to the stacks' grid and the installed Gaia colors.
+- The gains are applied to every state of a channel: as stacked, after
+  its tools, its stars, and with its background corrected. Then the sky
+  of red and blue is levelled to green's in every state that has a sky,
+  because a gain scales the sky too.
+- `<store>.prepared.json` records what happened. The spike reads it, and
+  resolves the stretches of calibrated red, green and blue from their
+  samples together, so one stretch serves the three and the balance is
+  kept. A document whose Color calibration step is off is left alone.
+
+On the Sh2-157 stacks: the reference frame solved with 278 stars at
+0.31 arcsec RMS, and 523 Gaia stars gave red x1.027 and blue x1.303.
+
+**The star stretch** is the step “Star stretch” in the Stretch stage, with
+an amount from 0 to 8. The RGB stars part adds it. The preparation runs
+Seiza's `stretch_rgb_stars`, the call PSF Guard's RGB stars use, on the
+calibrated channels with and without their stars, and writes the result
+as the three stars planes: one linked display layer. The record lists
+those planes as stretched for display, and the spike draws them as they
+are. A change of the amount is applied by preparing the store again
+(“Run tools”). PSF Guard's star reduction and its saving of the amount in
+the `narrowband` settings are not carried over yet.
 
 Not built: tools per input in one table, continuum subtraction, the
 layered stretch, groups in groups, and a recipe's small picture of its

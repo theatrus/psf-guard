@@ -38,6 +38,10 @@ pub mod flow_operations {
     pub const COLOR_CALIBRATION: &str = "Color calibration";
     /// One display stretch of one channel.
     pub const STRETCH: &str = "Stretch";
+    /// The stretch of the stars of red, green and blue, as one linked
+    /// display layer: Seiza's star stretch, as PSF Guard's RGB stars use.
+    /// Its `amount` is from 0 to 8.
+    pub const STAR_STRETCH: &str = "Star stretch";
     /// Narrowband stretches, balance, star masks and green reduction.
     pub const NARROWBAND: &str = "Narrowband balance and stars";
     /// One display stretch of the composed image.

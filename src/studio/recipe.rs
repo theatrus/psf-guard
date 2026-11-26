@@ -15,8 +15,10 @@ use std::collections::BTreeMap;
 
 use uuid::Uuid;
 
-use super::document::{BlendMode, Document, LayerRecord, LayerSource};
-use super::flow::stars_channel;
+use super::document::{
+    BlendMode, Document, LayerRecord, LayerSource, StageKind, StepKind, StepRecord,
+};
+use super::flow::{flow_operations, stars_channel};
 use super::palette::{band_layer, default_palette, Palette, PALETTES};
 
 /// The narrowband inputs PSF Guard knows, with the hue each gets when it is
@@ -326,6 +328,7 @@ impl Document {
                     .map(|name| (name.to_string(), stars_channel(name)))
                     .collect();
                 self.apply_palette_in(Some(group), rgb(), &stars);
+                self.add_star_stretch();
                 group
             }
             PartKind::Lines => {
@@ -339,6 +342,28 @@ impl Document {
             PartKind::Empty => self.add_group("Part", BlendMode::Normal),
         };
         Some(group)
+    }
+
+    /// Adds the Star stretch step, at Seiza's usual amount, unless the
+    /// document has one. With it the stars of red, green and blue are one
+    /// linked display layer, as PSF Guard's RGB stars are.
+    pub fn add_star_stretch(&mut self) {
+        let has = self
+            .stage(StageKind::Stretch)
+            .steps
+            .iter()
+            .any(|step| step.kind.name() == flow_operations::STAR_STRETCH);
+        if has {
+            return;
+        }
+        let step = StepRecord::new(StepKind::Operation {
+            operation: flow_operations::STAR_STRETCH.to_string(),
+            accepts: crate::image_steps::Accepts::Linear,
+            settings: serde_json::json!({ "amount": 5.0 }),
+        });
+        // A step the stage refuses leaves the stars with their inputs'
+        // stretch, which is what they had.
+        let _ = self.insert_step(StageKind::Stretch, usize::MAX, step);
     }
 
     /// Replaces the layers that show inputs, and every group, with a

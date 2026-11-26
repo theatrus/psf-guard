@@ -395,6 +395,31 @@ impl RegisteredChannels {
         .ok()
     }
 
+    /// One plane by its name, such as `red@tools`, on the reference grid.
+    pub fn plane(&self, name: &str) -> Option<LinearImage> {
+        let plane = self.names.iter().position(|other| other == name)?;
+        LinearImage::new(
+            self.shape.width,
+            self.shape.height,
+            1,
+            self.planes[plane].clone(),
+        )
+        .ok()
+    }
+
+    /// Replaces one plane's samples. Returns whether the plane exists and
+    /// `samples` is its size.
+    pub fn replace_plane(&mut self, name: &str, samples: Vec<f32>) -> bool {
+        let Some(plane) = self.names.iter().position(|other| other == name) else {
+            return false;
+        };
+        if self.planes[plane].len() != samples.len() {
+            return false;
+        }
+        self.planes[plane] = samples;
+        true
+    }
+
     /// Multiplies every state of one channel by `gain`: the channel as
     /// stacked, after its tools, its stars, and with its background
     /// corrected. Color calibration's gains are applied this way, so every

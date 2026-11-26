@@ -24,6 +24,8 @@ pub struct StoreTiles {
     scales: Vec<f32>,
     /// The channels' names, when the store has them.
     names: Vec<String>,
+    /// The channels that are already stretched for display, by name.
+    display: Vec<String>,
 }
 
 /// What a band's stretch is resolved from: Seiza's analysis of a sample of
@@ -39,6 +41,9 @@ pub struct BandStretch {
     /// The analysed samples, from 0 to 1: what a second stretch of a chain
     /// is resolved from, after the first has been applied to them.
     unit: Vec<f32>,
+    /// Whether the band is already stretched for display, so its table
+    /// leaves its samples as they are.
+    display: bool,
 }
 
 /// The samples Seiza analyses per band, at most.
@@ -74,6 +79,7 @@ impl BandStretch {
             domain,
             analysis,
             unit,
+            display: false,
         })
     }
 
@@ -90,6 +96,12 @@ impl BandStretch {
     /// A stage Seiza refuses is left out. The layered stretch is one: it
     /// needs the image, not samples of it.
     pub fn table(&self, stages: &[StretchModel], nudge: f64) -> Vec<f32> {
+        if self.display {
+            let last = (STRETCH_TABLE_WIDTH - 1) as f32;
+            return (0..STRETCH_TABLE_WIDTH)
+                .map(|index| ((index as f32 / last).powi(2) * self.scale).clamp(0.0, 1.0))
+                .collect();
+        }
         let preview = [StretchModel::AutoMtf(StretchParams::default())];
         let stages = if stages.is_empty() { &preview } else { stages };
         let last = (STRETCH_TABLE_WIDTH - 1) as f32;
@@ -175,6 +187,9 @@ pub struct Bands {
     /// The bands whose stretches are resolved together: red, green and
     /// blue once color calibration has balanced them. Empty otherwise.
     linked: Vec<usize>,
+    /// The bands the store holds already stretched for display, such as
+    /// stars after the star stretch. They are drawn as they are.
+    display: Vec<usize>,
     /// What color calibration did when the store was prepared, in words.
     /// Empty when it was not asked for.
     pub calibration: String,
@@ -214,13 +229,23 @@ impl Bands {
     /// stretch of each channel on its own pulls each toward its own median
     /// and undoes the balance.
     fn read_calibration(&mut self, store: &Path) {
-        let record = store.with_extension("calibration.json");
+        let record = store.with_extension("prepared.json");
         let Some(record) = std::fs::read_to_string(record)
             .ok()
             .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
         else {
             return;
         };
+        self.display = record["display"]
+            .as_array()
+            .map(|planes| {
+                planes
+                    .iter()
+                    .filter_map(|plane| self.band_of(plane.as_str()?))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let record = &record["calibration"];
         self.calibration = match record["status"].as_str() {
             Some("done") => {
                 let rgb: Vec<usize> = ["red", "green", "blue"]
@@ -241,6 +266,16 @@ impl Bands {
             ),
             _ => String::new(),
         };
+    }
+
+    /// Whether a band is already stretched for display.
+    pub fn is_display(&self, band: usize) -> bool {
+        self.display.contains(&band)
+    }
+
+    /// Whether the store holds stars already stretched for display.
+    pub fn has_star_layer(&self) -> bool {
+        !self.display.is_empty()
     }
 
     /// Whether red, green and blue were calibrated and share one stretch.
@@ -317,11 +352,13 @@ impl Bands {
             .zip(&self.scales)
             .enumerate()
             .map(|(band, (own, scale))| {
-                if self.linked.contains(&band) {
+                let mut stretch = if self.linked.contains(&band) {
                     BandStretch::analyse(&together, Some(*scale))
                 } else {
                     BandStretch::analyse(own, Some(*scale))
-                }
+                }?;
+                stretch.display = self.display.contains(&band);
+                Ok(stretch)
             })
             .collect()
     }
@@ -344,6 +381,7 @@ impl StoreTiles {
             names: store.channel_names().to_vec(),
             levels,
             scales: vec![1.0; shape.channels],
+            display: Vec::new(),
         })
     }
 
@@ -412,6 +450,15 @@ impl StoreTiles {
                 .and_then(|name| name.strip_suffix("@stars"))
                 .and_then(|input| bands.names.iter().position(|other| other == input))
                 .map_or(scale, |input| bands.scales[input]);
+            // A plane stretched for display runs from 0 to 1 as it is.
+            let scale = if name
+                .as_ref()
+                .is_some_and(|name| self.display.contains(name))
+            {
+                1.0
+            } else {
+                scale
+            };
             for plane in [Some(channel), tools, corrected].into_iter().flatten() {
                 self.scales[plane] = scale;
             }
@@ -596,6 +643,20 @@ pub fn source(open: Option<&Path>) -> Result<(Arc<dyn TileSource>, Bands), Strin
     match open {
         Some(path) => {
             let mut store = StoreTiles::open(path).map_err(|error| error.to_string())?;
+            // The planes already stretched for display keep a scale of 1.
+            store.display = std::fs::read_to_string(path.with_extension("prepared.json"))
+                .ok()
+                .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+                .and_then(|record| {
+                    Some(
+                        record["display"]
+                            .as_array()?
+                            .iter()
+                            .filter_map(|plane| Some(plane.as_str()?.to_string()))
+                            .collect(),
+                    )
+                })
+                .unwrap_or_default();
             let mut bands = store.analyse()?;
             bands.read_calibration(path);
             Ok((Arc::new(store), bands))

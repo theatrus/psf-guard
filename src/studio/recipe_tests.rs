@@ -86,6 +86,30 @@ fn a_recipe_makes_its_parts_and_keeps_adjustment_layers_above_them() {
     assert_eq!(stars.palette.as_ref().unwrap().name, "RGB");
     assert_eq!(document.parts()[0].palette.as_ref().unwrap().name, "HOO");
 
+    // RGB stars bring the Star stretch step, once, and it is listed for
+    // the stars of red, green and blue only.
+    let star_stretches = |document: &Document| {
+        document
+            .stage(StageKind::Stretch)
+            .steps
+            .iter()
+            .filter(|step| step.kind.name() == flow_operations::STAR_STRETCH)
+            .map(|step| step.id)
+            .collect::<Vec<_>>()
+    };
+    let stretch = star_stretches(&document);
+    assert_eq!(stretch.len(), 1);
+    let listed = |channel: &str| {
+        input_steps(&document, channel)
+            .iter()
+            .any(|step| step.id == stretch[0])
+    };
+    assert!(listed("red@stars") && listed("blue@stars"));
+    assert!(!listed("red") && !listed("ha") && !listed("ha@stars"));
+    let mut again = document.clone();
+    assert!(again.use_recipe(recipe("Narrowband with RGB stars"), &inputs));
+    assert_eq!(star_stretches(&again).len(), 1);
+
     // A recipe the inputs cannot fill changes nothing.
     let before = document.clone();
     assert!(!document.use_recipe(recipe("LRGB"), &inputs));

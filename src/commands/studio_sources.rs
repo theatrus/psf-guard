@@ -234,10 +234,20 @@ fn prepare_store(
             gains[0], gains[2]
         ),
     }
+    let (display, star_stretch) = stretch_stars(&mut prepared, &document);
+    if let Some(amount) = star_stretch {
+        println!("  Stars of red, green and blue stretched as one layer, amount {amount:.2}");
+    }
     // Beside the store, so whatever opens it knows whether red, green and
-    // blue are balanced and may share one stretch.
-    let record = output.with_extension("calibration.json");
-    std::fs::write(&record, serde_json::to_string(&calibration)?)
+    // blue are balanced and may share one stretch, and which planes are
+    // already stretched for display.
+    let record = output.with_extension("prepared.json");
+    let prepared_record = serde_json::json!({
+        "calibration": calibration,
+        "display": display,
+        "star_stretch": star_stretch,
+    });
+    std::fs::write(&record, serde_json::to_string(&prepared_record)?)
         .with_context(|| format!("writing {}", record.display()))?;
     for (role, chain) in &prepared.tools {
         let ran: Vec<&str> = chain
@@ -456,5 +466,67 @@ fn calibrate_colors(
         (Outcome::Calibrated(_), None) => Calibration::Skipped {
             why: "no gains were measured".into(),
         },
+    }
+}
+
+/// Runs the document's Star stretch step: replaces the stars of red, green
+/// and blue with one linked display layer. Returns the planes that are
+/// stretched for display from then on, and the amount used.
+///
+/// The step needs each of the three channels as stacked and after a star
+/// removal. Without those, or without the step, nothing changes.
+fn stretch_stars(
+    prepared: &mut RegisteredChannels,
+    document: &Document,
+) -> (Vec<String>, Option<f64>) {
+    use crate::studio::{flow_operations, stars_channel, tools_channel, StageKind, StepKind};
+
+    let Some(step) = document
+        .stage(StageKind::Stretch)
+        .steps
+        .iter()
+        .find(|step| step.enabled && step.kind.name() == flow_operations::STAR_STRETCH)
+    else {
+        return (Vec::new(), None);
+    };
+    let amount = match &step.kind {
+        StepKind::Operation { settings, .. } => settings["amount"].as_f64().unwrap_or(5.0),
+        _ => 5.0,
+    }
+    .clamp(0.0, 8.0);
+    let names = ["red", "green", "blue"];
+    if names
+        .iter()
+        .any(|name| !prepared.names.contains(&stars_channel(name)))
+    {
+        return (Vec::new(), None);
+    }
+    let [Some(red), Some(green), Some(blue)] = names.map(|name| prepared.plane(name)) else {
+        return (Vec::new(), None);
+    };
+    let [Some(red_less), Some(green_less), Some(blue_less)] =
+        names.map(|name| prepared.plane(&tools_channel(name)))
+    else {
+        return (Vec::new(), None);
+    };
+    match crate::color_steps::stretch_star_layer(
+        [&red, &green, &blue],
+        [&red_less, &green_less, &blue_less],
+        amount,
+    ) {
+        Ok(layer) => {
+            let mut display = Vec::new();
+            for (name, samples) in names.into_iter().zip(layer) {
+                let plane = stars_channel(name);
+                if prepared.replace_plane(&plane, samples) {
+                    display.push(plane);
+                }
+            }
+            (display, Some(amount))
+        }
+        Err(error) => {
+            println!("  The stars were not stretched: {error}");
+            (Vec::new(), None)
+        }
     }
 }

@@ -133,6 +133,7 @@ pub(super) fn amount_range(operation: &str) -> Option<(f32, f32)> {
         "Curves" => Some((-1.0, 1.0)),
         "Saturation" => Some((0.0, 2.0)),
         flow_operations::BACKGROUND => Some((0.0, 1.0)),
+        flow_operations::STAR_STRETCH => Some((0.0, 8.0)),
         _ => None,
     }
 }
@@ -153,6 +154,7 @@ pub(super) fn amount_in(operation: &str, settings: &serde_json::Value) -> f32 {
     let start = match operation {
         "Saturation" => 1.4,
         flow_operations::BACKGROUND => 1.0,
+        flow_operations::STAR_STRETCH => 5.0,
         _ => 0.5,
     };
     settings
@@ -314,6 +316,7 @@ pub(super) fn is_drawn(stage: StageKind, step: &StepRecord, bands: &Bands) -> bo
         }
         (StepKind::Operation { operation, .. }, StageKind::Stretch) => {
             operation == flow_operations::STRETCH
+                || (operation == flow_operations::STAR_STRETCH && bands.has_star_layer())
         }
         (StepKind::Operation { operation, .. }, StageKind::Combine) => {
             adjustment_kind(operation).is_some()
@@ -520,6 +523,9 @@ fn stretch_source<'a>(
 ) -> (usize, &'a ChannelPlan) {
     plan.channel
         .strip_suffix("@stars")
+        // Stars the store holds stretched for display are drawn as they
+        // are, not through their input's stretch.
+        .filter(|_| !bands.is_display(band))
         .and_then(|input| {
             Some((
                 bands.band_of(input)?,

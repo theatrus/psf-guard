@@ -581,7 +581,7 @@ pub(super) fn mark_stretched_separately(outcome: &mut StackColorCalibrationOutco
 }
 
 /// Interleave three mono channels on one grid into an RGB image.
-pub(super) fn interleave(
+pub(crate) fn interleave(
     red: &LinearImage,
     green: &LinearImage,
     blue: &LinearImage,

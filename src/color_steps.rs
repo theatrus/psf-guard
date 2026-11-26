@@ -12,7 +12,7 @@
 use crate::astrometry::AstrometrySolutionResponse;
 use crate::server::stack_preview::color::{StackBackgroundExtraction, StackColorRole};
 use crate::server::stack_preview::color_calibration::{
-    calibrate_channels, StackColorCalibration, StackColorCalibrationOutcome,
+    calibrate_channels, interleave, StackColorCalibration, StackColorCalibrationOutcome,
     StackColorCalibrationSkip, StackColorCalibrationSkipReason, StarPlacement,
 };
 use crate::server::stack_preview::rc_astro::{self, ProcessingChain, RcAstroOutcome};
@@ -571,4 +571,35 @@ pub fn measure_color_gains(
         measured.map(|gain| gain / green)
     });
     ColorGains { outcome, gains }
+}
+
+/// Stretches the stars of calibrated red, green and blue into one display
+/// layer, with Seiza's star stretch: the step PSF Guard's RGB stars use.
+///
+/// `original` holds the three channels with their stars and `starless` the
+/// same channels after star removal, both linear and with the same
+/// calibration. `amount` is from 0 to 8. The result is each channel's stars
+/// from 0 to 1, ready to screen over a picture; the three share one scale,
+/// so the stars keep their colors.
+pub fn stretch_star_layer(
+    original: [&LinearImage; 3],
+    starless: [&LinearImage; 3],
+    amount: f64,
+) -> Result<[Vec<f32>; 3], String> {
+    let original = interleave(original[0], original[1], original[2])?;
+    let starless = interleave(starless[0], starless[1], starless[2])?;
+    let layer = seiza_stacking::stretch_rgb_stars(&original, &starless, amount)
+        .map_err(|error| error.to_string())?;
+    let pixels = layer.data.len() / 3;
+    let mut channels = [
+        Vec::with_capacity(pixels),
+        Vec::with_capacity(pixels),
+        Vec::with_capacity(pixels),
+    ];
+    for pixel in layer.data.as_chunks::<3>().0 {
+        for (channel, value) in channels.iter_mut().zip(pixel) {
+            channel.push(*value);
+        }
+    }
+    Ok(channels)
 }
