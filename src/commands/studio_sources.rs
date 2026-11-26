@@ -474,15 +474,16 @@ fn prepare_store(
             deconvolutions.insert(stack.role, deconvolution);
         }
     }
-    // One line per tool and per tenth of its channel's chain.
+    // One line per tool and per hundredth of its channel's chain, which
+    // PSF Studio shows as a progress bar.
     let reported = std::cell::RefCell::new((String::new(), u32::MAX));
     let report = |channel: &str, tool: &str, fraction: f32| {
-        let tenth = (fraction.clamp(0.0, 1.0) * 10.0) as u32;
+        let percent = (fraction.clamp(0.0, 1.0) * 100.0) as u32;
         let line = format!("{channel}: {tool}");
         let mut last = reported.borrow_mut();
-        if *last != (line.clone(), tenth) {
-            println!("  {line} ({}%)", tenth * 10);
-            *last = (line, tenth);
+        if *last != (line.clone(), percent) {
+            println!("  {line} ({percent}%)");
+            *last = (line, percent);
         }
     };
     let tools = ChannelTools {

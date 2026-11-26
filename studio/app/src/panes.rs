@@ -1766,8 +1766,33 @@ impl Studio {
                     .overflow_hidden()
                     .text_xs()
                     .text_color(rgb(QUIET))
-                    .when(self.is_running(), |status| {
-                        status.child(self.run_status().to_string())
+                    .when_some(self.run_progress(), |status, (what, share, elapsed)| {
+                        let seconds = elapsed.as_secs();
+                        status
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .w(px(120.0))
+                                    .h(px(6.0))
+                                    .rounded_sm()
+                                    .bg(rgb(CONTROL))
+                                    .child(
+                                        div()
+                                            .h_full()
+                                            .rounded_sm()
+                                            .bg(rgb(SELECTED))
+                                            // Without a share, the bar fills
+                                            // and empties each second.
+                                            .w(relative(share.unwrap_or(
+                                                (elapsed.as_millis() % 1000) as f32 / 1000.0,
+                                            ))),
+                                    ),
+                            )
+                            .child(format!("{}:{:02}", seconds / 60, seconds % 60))
+                            .child(div().overflow_hidden().child(what))
                     })
                     .when(
                         !self.is_running() && self.run_status().starts_with("Not "),

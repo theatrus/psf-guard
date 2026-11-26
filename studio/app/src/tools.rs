@@ -88,7 +88,6 @@ type Listed = Option<Result<Vec<ToolInfo>, String>>;
 
 /// A run of `psf-guard studio-prepare`, as the thread that reads it
 /// reports it.
-#[derive(Default)]
 struct Run {
     /// The last line the program printed.
     line: String,
@@ -101,6 +100,8 @@ struct Run {
     chains: Option<serde_json::Value>,
     /// The program's process, while it runs, so a person can stop it.
     process: Option<u32>,
+    /// When the run started.
+    started: std::time::Instant,
     /// Whether a person stopped the run.
     stopped: bool,
 }
@@ -566,6 +567,25 @@ impl Studio {
         self.tools.run.is_some()
     }
 
+    /// How far the run in hand has got: what it is doing, the share of
+    /// that done when the program reports one, and the time since it
+    /// started. `psf-guard` reports a tool's progress as a line such as
+    /// `ha: RC-Astro StarXTerminator (40%)`.
+    pub(super) fn run_progress(&self) -> Option<(String, Option<f32>, std::time::Duration)> {
+        let run = self.tools.run.as_ref()?;
+        let run = run.lock().expect("tool run");
+        let line = run.line.trim();
+        let share = line
+            .strip_suffix("%)")
+            .and_then(|head| head.rsplit_once(" ("))
+            .and_then(|(what, percent)| Some((what, percent.trim().parse::<f32>().ok()?)));
+        let (what, share) = match share {
+            Some((what, percent)) => (what.to_string(), Some((percent / 100.0).clamp(0.0, 1.0))),
+            None => (line.to_string(), None),
+        };
+        Some((what, share, run.started.elapsed()))
+    }
+
     /// What the run in hand, or the last one, said.
     pub(super) fn run_status(&self) -> &str {
         &self.tools.status
@@ -590,6 +610,7 @@ impl Studio {
             chains: None,
             process: None,
             stopped: false,
+            started: std::time::Instant::now(),
         }));
         self.tools.run = Some(run.clone());
         std::thread::spawn(move || {
