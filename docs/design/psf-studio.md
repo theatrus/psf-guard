@@ -1970,25 +1970,31 @@ Asked for: final adjustments of the picture such as a stretch, the tone
 and color controls Adobe Camera Raw has around its histogram, and saving
 the final picture as FITS or TIFF without leaving 16-bit precision.
 
-**Tone.** A Finish step, **Tone**, has Camera Raw's Basic controls:
+**Tone.** A Finish step, **Tone and color**, has Camera Raw's Basic
+controls, in its order:
 
 | Control | Range | What it does |
 |---|---|---|
 | Exposure | −3 to +3 stops | Multiplies the picture by 2^exposure. |
 | Contrast | −1 to +1 | An S-curve around the middle, or a flattening one. |
-| Highlights | −1 to +1 | Raises or lowers the bright tones, most at two thirds of the way up. |
-| Shadows | −1 to +1 | Raises or lowers the dark tones, most at a third of the way up. |
+| Highlights | −1 to +1 | Raises or lowers the bright areas' tones, most at two thirds of the way up, keeping the detail in them. |
+| Shadows | −1 to +1 | Raises or lowers the dark areas' tones, most at a third of the way up, keeping the detail in them. |
 | Whites | −1 to +1 | Moves the white point: up clips more of the brightest tones to white. |
 | Blacks | −1 to +1 | Moves the black point: down clips more of the darkest tones to black. |
+| Texture | −1 to +1 | Raises or lowers fine detail, over a few pixels. |
+| Clarity | −1 to +1 | Raises or lowers the contrast of larger structures, most in the midtones. |
+| Dehaze | −1 to +1 | Takes away a gray veil such as sky glow, keeping colored nebulae; negative adds one. |
 | Vibrance | −1 to +1 | Saturation that changes muted colors more than vivid ones. |
 | Saturation | −1 to +1 | Saturation of every color alike. |
 
-The tone controls make one curve of the luminance, Seiza's
-`seiza_compose::tone::Tone`. It is applied as a luminance-preserving output
-stretch is: each pixel is scaled by one factor, kept in gamut, so the curve
-changes brightness and not hue. Highlights and Shadows are global here;
-Camera Raw's are local, which needs the blurred image that a clarity
-control would also need.
+Seiza's `seiza_compose::tone::Tone` does the work, on the canvas and in an
+export. Each pixel's luminance changes with its color kept, scaled by one
+factor and kept in gamut. Highlights, Shadows, Texture, Clarity and Dehaze
+read the pixel's neighborhood, 97 pixels across for the area and 7 for
+fine detail, through an edge-preserving base, so a star gets no halo; see
+Seiza's compositor design record. On the canvas the windows are measured in
+screen pixels, so zoomed out they cover the same part of the picture at the
+canvas's resolution.
 
 **Histogram.** The inspector of the Final picture, of a Tone step and of an
 output stretch shows the histogram of the final picture: red, green, blue
@@ -2023,10 +2029,13 @@ most: half-float rounding, since a half float's step at 0.5 is 4.9e-4.
 
 Built and tried on that store: Tone and color with every control, the
 histogram following each change, and an export of the whole 6135 × 4038
-picture to a 16-bit TIFF of 148.6 MB, which matches the canvas. Not built:
-Camera Raw's local Highlights, Shadows, Texture, Clarity and Dehaze; a
-histogram limited to a masked step's area; choosing an ICC profile for an
-export, which holds the canvas's working-space values without one.
+picture to a 16-bit TIFF of 148.6 MB. With no control that reads a
+neighborhood, that export differs from Studio's earlier CPU render by at
+most 6 16-bit steps, and by at most one in 99.9% of samples. On that
+noisy stack, Texture also raises the sky's noise: the noise is stronger
+than the detail Texture leaves alone. Not built: a histogram limited to a
+masked step's area; choosing an ICC profile for an export, which holds the
+canvas's working-space values without one.
 
 **Where the code lives.** Seiza draws the picture. `seiza-compose` holds
 the description of a picture (`Picture`: layers reading inputs through
