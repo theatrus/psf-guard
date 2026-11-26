@@ -37,3 +37,10 @@
   it only on a server that needs none. For a server that needs sign-in, run
   `psf-guard studio` with `--token` on the computer you browse from; see
   the stacking guide.
+- PSF Studio, the experimental color editor, now runs an input's
+  deconvolution before its processing tools, can subtract the continuum
+  under Ha, OIII and SII from the R, G and B stacks (using each stack's
+  clipping map from PSF Guard), and crops the picture to the area every
+  input covers, or to a rectangle drawn with its new Crop tool. Mask
+  editing gains a brush size, Erase, Undo stroke and Blur, and a run that
+  prepares a picture can be stopped.
