@@ -14,7 +14,6 @@
 
 use super::{picture_patches, Bands, Drag, PictureRequest, Scene, SliderId, Studio, Tool};
 use crate::image_steps::Accepts;
-use crate::output_stretch;
 use crate::store_tiles::{BandState, BandStretch};
 use crate::studio_model::{
     band_layer, channel_label, color_from_hue, document_from_color_setup, flow_operations, hue_of,
@@ -26,6 +25,7 @@ use gpui::{
     canvas, div, img, prelude::*, px, relative, rgb, AnyElement, Context, MouseButton,
     MouseDownEvent, Rgba, SharedString, Window,
 };
+use psf_studio_canvas::output_stretch;
 use psf_studio_render::{
     Adjustment, Blend, ComputedMask, FinishKind, FinishStep, Layer, LayerHeal, Mark, MaskBand,
     Segment, MAX_COMPUTED_MASKS, MAX_FINISH_STEPS, MAX_HEALED_LAYERS, MAX_HEALS, MAX_LAYERS,
@@ -420,6 +420,7 @@ pub(super) fn is_drawn(stage: StageKind, step: &StepRecord, bands: &Bands) -> bo
         ) => {
             operation == "Curves"
                 || operation == "Saturation"
+                || operation == psf_studio_canvas::tone::OPERATION
                 // The layered stretch needs the whole image.
                 || (operation == flow_operations::OUTPUT_STRETCH
                     && output_stretch::config_of(settings)
@@ -1022,7 +1023,22 @@ fn scene(
             omitted.push(step.kind.name().to_string());
             continue;
         };
+        let tone = match &step.kind {
+            StepKind::Operation {
+                operation,
+                settings,
+                ..
+            } if operation == psf_studio_canvas::tone::OPERATION => {
+                Some(psf_studio_canvas::tone::Tone::from_settings(settings))
+            }
+            _ => None,
+        };
         let kind = match &step.kind {
+            _ if let Some(tone) = tone => FinishKind::Tone {
+                table: finish_stretches.len(),
+                vibrance: tone.vibrance,
+                saturation: tone.saturation,
+            },
             _ if stretch.is_some() => FinishKind::Stretch {
                 table: finish_stretches.len(),
                 luminance: stretch.as_ref().is_some_and(|stretch| stretch.luminance),
@@ -1048,6 +1064,9 @@ fn scene(
         });
         if let Some(stretch) = stretch {
             finish_stretches.push(stretch.rows);
+        } else if let Some(tone) = tone {
+            let row = psf_studio_canvas::tone::curve_row(&tone);
+            finish_stretches.push([row.clone(), row.clone(), row]);
         }
     }
     // The shared masks the entries are behind: the entry's place in
@@ -1378,6 +1397,8 @@ impl Studio {
                             && !matches!(config.model, StretchModel::Layered(_))
                     })
             });
+        // The histogram of the final picture is made from the samples too.
+        let wanted = wanted || self.histogram_wanted();
         if !wanted {
             self.picture_samples = None;
             return self.picture_wanted.take().map(|_| None);
@@ -1438,6 +1459,12 @@ impl Studio {
             patches,
             size,
         })))
+    }
+
+    /// Whether the inspector shows the histogram of the final picture: for
+    /// the Final picture and for a Finish step.
+    pub(super) fn histogram_wanted(&self) -> bool {
+        matches!(self.selected, Row::Final | Row::Finish(_))
     }
 
     /// Takes the samples of the combined picture the render thread read,
@@ -1516,6 +1543,33 @@ impl Studio {
                 scene
             })
             .collect();
+        self.histogram = self.histogram_wanted().then_some(()).and_then(|()| {
+            let (_, samples) = samples.as_ref()?;
+            let (scene, _) = scene(
+                &self.document,
+                &self.band_info,
+                &Place::Final.view(),
+                self.scene_version,
+                self.picture_samples
+                    .as_ref()
+                    .map(|(id, samples)| (*id, samples.as_slice())),
+                &mut chains,
+            );
+            // Every fourth pixel of the samples is plenty for a histogram,
+            // and keeps a slider's drag smooth.
+            let mut every: Vec<f32> = samples
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .step_by(4)
+                .flatten()
+                .copied()
+                .collect();
+            psf_studio_render::cpu::finish_samples(&scene.pane(&[]), &mut every);
+            Some(Arc::new(psf_studio_canvas::histogram::Histogram::of(
+                &every, 1,
+            )))
+        });
         self.resolved_chains = chains;
         self.places = places;
         let scenes = Arc::new(scenes);
@@ -1611,6 +1665,26 @@ impl Studio {
     pub(super) fn slider_moved(&mut self, slider: SliderId, position: f32) {
         match slider {
             SliderId::ToolParam(index) => self.tool_slider_moved(index, position),
+            SliderId::FinishParam(index) => {
+                let Some(id) = self.selected_step() else {
+                    return;
+                };
+                let Some((_, step)) = self.document.step(id) else {
+                    return;
+                };
+                let StepKind::Operation { settings, .. } = &step.kind else {
+                    return;
+                };
+                let Some((key, _, low, high)) = psf_studio_canvas::tone::CONTROLS.get(index) else {
+                    return;
+                };
+                let mut settings = settings.clone();
+                if !settings.is_object() {
+                    settings = psf_studio_canvas::tone::Tone::new_settings();
+                }
+                settings[*key] = f64::from(low + (high - low) * position).into();
+                self.document.set_step_settings(id, settings);
+            }
             SliderId::StretchParam(index) => {
                 let Some(id) = self.selected_step() else {
                     return;

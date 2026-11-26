@@ -7,7 +7,8 @@
 //! Vibrance and Saturation are applied per pixel after the curve; the
 //! Finish shader and the CPU render each do that, with the same formula.
 
-use psf_studio_render::STRETCH_TABLE_WIDTH;
+use crate::cpu::contrast_curve;
+use crate::STRETCH_TABLE_WIDTH;
 
 /// The name of the step in a document.
 pub const OPERATION: &str = "Tone and color";
@@ -92,18 +93,6 @@ impl Tone {
         y += SHIFT * self.shadows * 6.75 * y * (1.0 - y) * (1.0 - y);
         y += SHIFT * self.highlights * 6.75 * y * y * (1.0 - y);
         contrast_curve(y.clamp(0.0, 1.0), self.contrast)
-    }
-}
-
-/// The canvas's contrast curve, as the shaders' `contrast_curve` is: an
-/// S-curve for a positive amount, a flattening one for a negative amount.
-pub fn contrast_curve(x: f32, amount: f32) -> f32 {
-    let x = x.clamp(0.0, 1.0);
-    if amount >= 0.0 {
-        let smooth = x * x * (3.0 - 2.0 * x);
-        x + (smooth - x) * amount.min(1.0)
-    } else {
-        x + (0.5 - x) * (-amount).min(1.0) * 0.5
     }
 }
 

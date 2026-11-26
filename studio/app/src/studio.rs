@@ -96,6 +96,9 @@ enum SliderId {
     /// One setting of one processing tool of the selected input, by its
     /// place in the list of the input's tool settings.
     ToolParam(usize),
+    /// One control of the selected Tone and color step, by its place in
+    /// [`psf_studio_canvas::tone::CONTROLS`].
+    FinishParam(usize),
     /// The selected shared mask's reach.
     Reach,
     /// How far the selected shared mask is smoothed.
@@ -344,6 +347,24 @@ pub struct Scene {
     stretches: Arc<Vec<BandStretch>>,
     /// Different for every scene, so the renderer uploads masks once.
     version: u64,
+}
+
+impl Scene {
+    /// The scene as the renderer takes it, with `stretches` as its layers'
+    /// stretch tables, for work away from the screen.
+    pub(super) fn pane<'a>(&'a self, stretches: &'a [Vec<f32>]) -> Pane<'a> {
+        Pane {
+            layers: &self.layers,
+            stretches,
+            finish: &self.finish,
+            finish_stretches: &self.finish_stretches,
+            masks: &self.masks,
+            heals: &self.heals,
+            computed: &self.computed,
+            viewport: [0, 0, 1, 1],
+            scissor: [0, 0, 1, 1],
+        }
+    }
 }
 
 /// What the render thread reports back for the panel.
@@ -682,7 +703,9 @@ pub struct Studio {
     /// that is prepared again.
     source_generation: u64,
     /// Output stretches resolved lately.
-    resolved_chains: crate::output_stretch::ResolvedChains,
+    resolved_chains: psf_studio_canvas::output_stretch::ResolvedChains,
+    /// The histogram of the final picture, while the inspector shows it.
+    histogram: Option<Arc<psf_studio_canvas::histogram::Histogram>>,
     /// The levels in the document's pyramid.
     levels: u8,
     /// The processing tools: which this computer has, and the run in hand.
@@ -824,6 +847,7 @@ impl Studio {
                         [SliderId::ToneHue(layer), SliderId::ToneSaturation(layer)]
                     }))
                     .chain((0..8).map(SliderId::StretchParam))
+                    .chain((0..psf_studio_canvas::tone::CONTROLS.len()).map(SliderId::FinishParam))
                     .chain((0..tools::MAX_TOOL_SETTINGS).map(SliderId::ToolParam))
                     .map(|id| (id, Rc::default()))
                     .collect(),
@@ -854,6 +878,7 @@ impl Studio {
                 picture_wanted: None,
                 source_generation: 0,
                 resolved_chains: Default::default(),
+                histogram: None,
                 levels,
                 tools,
             };

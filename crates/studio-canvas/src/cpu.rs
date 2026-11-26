@@ -18,7 +18,7 @@
 //! - The overlay of a stroke being drawn and the display transform are not
 //!   part of the picture, and are left out.
 
-use crate::renderer::{
+use crate::{
     Adjustment, Blend, ComputedMask, FinishKind, Layer, Mark, MaskBand, Pane, Segment,
     MAX_COMPUTED_MASKS, MAX_FINISH_STEPS, MAX_HEALED_LAYERS, MAX_HEALS, MAX_LAYERS, MAX_MASKS,
 };
@@ -102,8 +102,8 @@ pub fn render(
 }
 
 /// The combined picture of `rect`, before the Finish steps, as the canvas's
-/// combined texture holds it: what [`crate::Renderer::sample_picture`]
-/// reads back, for comparing the two renders.
+/// combined texture holds it: what the canvas's `sample_picture` reads
+/// back, for comparing the two renders.
 pub fn render_combined(
     pane: &Pane,
     reader: &dyn SampleReader,
@@ -929,7 +929,7 @@ fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::renderer::{FinishStep, LayerHeal, STRETCH_TABLE_WIDTH};
+    use crate::{FinishStep, LayerHeal, STRETCH_TABLE_WIDTH};
 
     /// A document of two bands: a smooth gradient and a pattern of dots.
     struct Synthetic {

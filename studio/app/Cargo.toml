@@ -7,6 +7,8 @@ license.workspace = true
 
 [dependencies]
 psf-studio-render = { path = "../render" }
+# What a canvas draws and the math of its steps, shared with PSF Guard.
+psf-studio-canvas = { path = "../../crates/studio-canvas" }
 psf-studio-color = { path = "../color" }
 wgpu.workspace = true
 gpui = { git = "https://github.com/zed-industries/zed", rev = "f98c2c100d217ace3ca99564cfc4573612d43d47" }
