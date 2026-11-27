@@ -1296,7 +1296,7 @@ impl Studio {
         f32::from(position.x - bounds.origin.x) / f32::from(bounds.size.width).max(1.0)
     }
 
-    fn canvas_down(&mut self, event: &MouseDownEvent, _: &mut Window, _: &mut Context<Self>) {
+    fn canvas_down(&mut self, event: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
         // A press on a wipe's divider moves the divider.
         let on_divider = self.split == Split::Wipe && {
             let reach = 8.0 / f32::from(self.canvas_bounds.get().size.width).max(1.0);
@@ -1322,6 +1322,9 @@ impl Studio {
             self.heal_source = Some(self.to_document(event.position));
             self.heal_offset = None;
             self.drag = None;
+            // The canvas marks the source.
+            self.refresh_canvas();
+            cx.notify();
             return;
         }
         if self.tool != Tool::Pan {
@@ -1718,6 +1721,8 @@ fn adopt(document: &mut Document) {
 mod control;
 #[path = "export.rs"]
 mod export;
+#[path = "heal.rs"]
+mod heal;
 #[path = "history.rs"]
 mod history;
 #[path = "inspector.rs"]

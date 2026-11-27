@@ -704,22 +704,17 @@ fn push_step_layer(
     let Some(kind) = finish_kind(step, stretches, context, &before, omitted) else {
         return Pushed::Nothing;
     };
-    // A heal is limited to its stroke. Seiza draws one beneath other
-    // layers, in a group or not, when it has no other mask.
+    // A heal is limited to its stroke, then to its layer's painted mask, as
+    // a clip, and its shared mask.
     let heal = matches!(step.kind, StepKind::Heal { .. });
-    if heal && layer.mask.is_some() {
-        omitted.push(format!(
-            "{}, a heal with a mask of its layer, which the canvas does not draw yet",
-            layer.name
-        ));
-        return Pushed::Nothing;
-    }
-    let mask = if heal {
+
+    let masks = if heal {
         mask_for(step_strokes(step))
+            .and_then(|stroke| Ok((stroke, mask_for(mask_strokes(&layer.mask))?)))
     } else {
-        mask_for(mask_strokes(&layer.mask))
+        mask_for(mask_strokes(&layer.mask)).map(|mask| (mask, None))
     };
-    let Ok(mask) = mask else {
+    let Ok((mask, clip)) = masks else {
         omitted.push(layer.name.clone());
         return Pushed::Nothing;
     };
@@ -736,6 +731,7 @@ fn push_step_layer(
         mark: Mark::Step(parts.steps.len()),
         opacity: layer.opacity,
         mask,
+        clip,
         ..plain_layer()
     });
     parts.steps.push(kind);
@@ -2371,6 +2367,31 @@ impl Studio {
             let zoom = self.canvas.read(|shared| shared.canvas.view.zoom);
             overlay.extend(self.protected_outlines((1.5 * self.scale_factor as f64 / zoom) as f32));
         }
+        // Where a heal copies from: the source an Option-click set, as a
+        // cross, and the selected heal's source area at half strength.
+        let zoom = self.canvas.read(|shared| shared.canvas.view.zoom);
+        let line = (1.5 * self.scale_factor as f64 / zoom) as f32;
+        if self.tool == Tool::Heal
+            && let Some(source) = self.heal_source
+        {
+            overlay.extend(super::heal::source_cross(source, self.brush_radius(), line));
+        }
+        if let Some((_, step)) = self.selected_step().and_then(|id| self.document.step(id))
+            && let StepKind::Heal { offset, .. } = &step.kind
+        {
+            overlay.extend(step_strokes(step).into_iter().map(|segment| Segment {
+                from: [
+                    segment.from[0] + offset[0] as f32,
+                    segment.from[1] + offset[1] as f32,
+                ],
+                to: [
+                    segment.to[0] + offset[0] as f32,
+                    segment.to[1] + offset[1] as f32,
+                ],
+                value: 0.5,
+                ..segment
+            }));
+        }
         let wipe = (self.split == Split::Wipe).then_some(self.wipe);
         let crop = self.crop_rect();
         self.canvas.edit(|canvas| {
@@ -2452,13 +2473,14 @@ impl Studio {
     /// selected adjustment, or on top of the picture. Returns the row it
     /// added, or `None` when the selection has nothing to heal.
     pub(super) fn add_heal(&mut self, stroke: Stroke, offset: [i64; 2]) -> Option<Row> {
-        // The brightness shift is measured by the engine from the image,
-        // which the canvas cannot read yet, so the copy is not matched to its
-        // surroundings.
+        // Matched to its surroundings: the difference between the ring
+        // around the stroke and the ring around its source, measured on the
+        // picture the heal reads before it is added.
+        let shift = self.measure_heal_shift(&stroke, offset);
         let step = StepRecord::new(StepKind::Heal {
             stroke,
             offset,
-            shift: Vec::new(),
+            shift,
         });
         let id = step.id;
         match self.selected.clone() {
@@ -2490,17 +2512,22 @@ impl Studio {
     }
 
     /// Puts a heal layer right above `layer`, in its group, and returns the
-    /// heal layer's id. `None` when `layer` is gone or is a group.
+    /// heal layer's id. A group's heal is its top member, on what its
+    /// members make. `None` when `layer` is gone.
     fn heal_above(&mut self, layer: Uuid, step: StepRecord) -> Option<Uuid> {
         let layers = self.document.layers();
         let at = layers.iter().position(|other| other.id == layer)?;
-        if layers[at].source == LayerSource::Group {
-            return None;
-        }
         let mut heal = crate::studio_model::adjustment_layer(step);
-        heal.group = layers[at].group;
+        let at = if layers[at].source == LayerSource::Group {
+            // A group's members are directly beneath it.
+            heal.group = Some(layer);
+            at
+        } else {
+            heal.group = layers[at].group;
+            at + 1
+        };
         let id = heal.id;
-        self.document.insert_layer(at + 1, heal).ok()?;
+        self.document.insert_layer(at, heal).ok()?;
         Some(id)
     }
 
@@ -3503,20 +3530,25 @@ mod tests {
             layer.mark,
             Mark::Step(index) if matches!(under.steps[index], FinishKind::Heal { .. })
         )));
-        // In a group, or with a mask of its layer, it is listed as not
-        // drawn, never drawn without it.
-        document.layer_mut(heal_layer).unwrap().mask =
-            document.layers()[0]
-                .mask
-                .clone()
-                .or(Some(crate::studio_model::MaskRecord::Painted(
-                    Default::default(),
-                )));
+        // With a mask of its layer, it is limited by that mask too: Seiza
+        // works out a staged step's whole cover.
+        document.layer_mut(heal_layer).unwrap().mask = Some(
+            crate::studio_model::MaskRecord::Painted(crate::studio_model::PaintedMask {
+                strokes: vec![Stroke {
+                    points: vec![[12.0, 12.0]],
+                    radius: 6.0,
+                    hardness: 0.5,
+                    mode: StrokeMode::Add,
+                }],
+                ..Default::default()
+            }),
+        );
         let masked = draw(&document);
-        assert!(masked
-            .omitted
-            .iter()
-            .any(|words| words.contains("with a mask of its layer")));
+        assert!(masked.omitted.iter().all(|words| !words.contains("heal")));
+        assert!(masked.layers.iter().any(|layer| matches!(
+            layer.mark,
+            Mark::Step(index) if matches!(masked.steps[index], FinishKind::Heal { .. })
+        ) && layer.clip.is_some()));
         // The hidden layer's step is drawn nowhere.
         document.layer_mut(tone_layer).unwrap().visible = false;
         let hidden = draw(&document);
