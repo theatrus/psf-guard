@@ -960,6 +960,13 @@ impl Studio {
     /// `ha: RC-Astro StarXTerminator (40%)`.
     pub(super) fn run_progress(&self) -> Option<(String, Option<f32>, std::time::Duration)> {
         let Some(run) = self.tools.run.as_ref() else {
+            if let Some(task) = &self.store_opening {
+                return Some((
+                    "Opening the store".to_string(),
+                    None,
+                    task.started.elapsed(),
+                ));
+            }
             if let Some(task) = &self.whole_samples {
                 return Some((
                     "Sampling each band over the whole image".to_string(),
@@ -1133,36 +1140,75 @@ impl Studio {
         }
     }
 
-    /// Draws the store again from its file, after a run prepared it.
-    /// Shows a picture a run prepared: its document, then its store.
+    /// Shows a picture a run prepared: its document, then its store, once
+    /// the store is open.
     fn show_picture(&mut self, store: PathBuf, document: PathBuf) {
-        // The picture on screen keeps its last edits.
-        self.save_document();
         let opened = std::fs::read_to_string(&document)
             .map_err(|error| error.to_string())
             .and_then(|text| {
                 crate::studio_model::Document::from_json(&text).map_err(|error| error.to_string())
             });
-        let opened = match opened {
-            Ok(opened) => opened,
+        match opened {
+            Ok(opened) => self.open_store(store, Some((document, opened))),
             Err(error) => {
                 self.tools.status = format!("Not opened: the document could not be read ({error})");
-                return;
             }
+        }
+    }
+
+    /// Draws the store again from its file, after a run prepared it.
+    fn reload_store(&mut self) {
+        if let Some(path) = self.tools.store.clone() {
+            self.open_store(path, None);
+        }
+    }
+
+    /// Opens the store at `path` on a thread of its own, with `document`
+    /// to show with it. The canvas keeps the picture it shows until the
+    /// store is open; an opening started later replaces this one.
+    fn open_store(
+        &mut self,
+        path: PathBuf,
+        document: Option<(PathBuf, crate::studio_model::Document)>,
+    ) {
+        self.store_opening = Some(StoreOpening::start(path, document));
+    }
+
+    /// Shows the store the opening task opened, once it is open.
+    pub(super) fn follow_store_opening(&mut self) {
+        let opened = self
+            .store_opening
+            .as_ref()
+            .and_then(|task| task.done.lock().expect("store opening").take());
+        let Some(opened) = opened else {
+            return;
         };
-        // The store is opened first, so a store that cannot be opened
-        // leaves the picture on screen as it was.
-        let (source, bands) = match crate::store_tiles::source(Some(&store)) {
-            Ok(source) => source,
+        let task = self.store_opening.take().expect("an opening");
+        if super::timing() {
+            eprintln!(
+                "store: opened in {:.1} ms off the UI thread",
+                task.started.elapsed().as_secs_f64() * 1e3
+            );
+        }
+        // A store that cannot be opened leaves the picture on screen as it
+        // was.
+        let (source, bands) = match opened {
+            Ok(opened) => opened,
             Err(error) => {
                 self.tools.status = format!("Not opened: the store could not be read ({error})");
                 return;
             }
         };
-        self.document = opened;
+        let Some((document_path, document)) = task.document else {
+            self.show_source(source, bands);
+            return;
+        };
+        // The picture on screen keeps its last edits.
+        self.save_document();
+        self.document = document;
         self.document_is_saved();
-        self.tools.store = Some(store);
-        self.tools.document = Some(document);
+        self.tools.store = Some(task.path);
+        self.tools.document = Some(document_path);
         self.tools.status = String::new();
         self.selected = crate::studio_model::Row::Combined;
         self.pins.clear();
@@ -1173,20 +1219,6 @@ impl Studio {
         self.mask_shown = false;
         self.show_source(source, bands);
         self.canvas.edit(|canvas| canvas.fit());
-    }
-
-    fn reload_store(&mut self) {
-        let Some(path) = self.tools.store.clone() else {
-            return;
-        };
-        let (source, bands) = match crate::store_tiles::source(Some(&path)) {
-            Ok(opened) => opened,
-            Err(error) => {
-                self.tools.status = format!("Not opened: the store could not be read ({error})");
-                return;
-            }
-        };
-        self.show_source(source, bands);
     }
 
     /// Draws a store's tiles from now on.
@@ -1452,6 +1484,44 @@ fn remove_partial_stores(store: &std::path::Path) {
     for entry in entries.flatten() {
         if entry.file_name().to_string_lossy().starts_with(&prefix) {
             let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// What opening a store gives: the canvas's tile source and its bands.
+type Opened = Result<
+    (
+        Arc<dyn psf_studio_render::TileSource>,
+        crate::store_tiles::Bands,
+    ),
+    String,
+>;
+
+/// A store being opened and analysed on a thread of its own.
+pub(super) struct StoreOpening {
+    path: PathBuf,
+    /// The document to show with the store, and where it is saved.
+    document: Option<(PathBuf, crate::studio_model::Document)>,
+    done: Arc<Mutex<Option<Opened>>>,
+    started: std::time::Instant,
+}
+
+impl StoreOpening {
+    fn start(path: PathBuf, document: Option<(PathBuf, crate::studio_model::Document)>) -> Self {
+        let done = Arc::new(Mutex::new(None));
+        let (result, at) = (done.clone(), path.clone());
+        std::thread::Builder::new()
+            .name("open store".into())
+            .spawn(move || {
+                let opened = crate::store_tiles::source(Some(&at));
+                *result.lock().expect("store opening") = Some(opened);
+            })
+            .expect("spawning a task");
+        Self {
+            path,
+            document,
+            done,
+            started: std::time::Instant::now(),
         }
     }
 }

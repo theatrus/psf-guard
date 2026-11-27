@@ -263,13 +263,62 @@ struct PictureProbe {
     size: u32,
     samples: Vec<Option<Vec<f32>>>,
     targets: GpuTargets,
+    /// Patches drawn and copied out, while the GPU finishes them.
+    reading: Option<ProbeReading>,
+}
+
+/// Patches copied into a buffer that is being mapped for reading. The
+/// render thread draws on and takes the samples once the buffer is mapped,
+/// so it never waits for the GPU.
+struct ProbeReading {
+    buffer: wgpu::Buffer,
+    /// The patch each part of the buffer holds, in order.
+    drawn: Vec<usize>,
+    /// Set once the buffer is mapped, or failed to map.
+    mapped: Arc<std::sync::Mutex<Option<Result<(), wgpu::BufferAsyncError>>>>,
+    row_bytes: u32,
+    patch_bytes: u64,
 }
 
 /// The patches one call of [`Renderer::sample_picture`] draws, at most, so a
 /// frame is not held up.
 const PROBE_PATCHES_PER_CALL: usize = 8;
+/// Marks a sampling's scene version, so it differs from the canvas panes'
+/// versions, which count up from 0.
+const PROBE_VERSION: u64 = 1 << 63;
 /// The tiles the sampling asks for at once, at most.
 const PROBE_TILES_WANTED: usize = 16;
+
+/// Takes the samples of the patches `reading` copied out, from its mapped
+/// buffer, into `probe`.
+fn take_patches(probe: &mut PictureProbe, reading: &ProbeReading, size: u32) {
+    {
+        let Ok(mapped) = reading.buffer.slice(..).get_mapped_range() else {
+            return;
+        };
+        let patch_bytes = reading.patch_bytes as usize;
+        for (place, index) in reading.drawn.iter().enumerate() {
+            let Some(slot) = probe.samples.get_mut(*index) else {
+                continue;
+            };
+            let start = place * patch_bytes;
+            let patch = &mapped[start..start + patch_bytes];
+            let mut samples = Vec::with_capacity(size as usize * size as usize * 3);
+            for row in patch.chunks(reading.row_bytes as usize) {
+                let pixels: &[u16] = bytemuck::cast_slice(&row[..size as usize * 8]);
+                for pixel in pixels.as_chunks::<4>().0 {
+                    samples.extend(
+                        pixel[..3]
+                            .iter()
+                            .map(|bits| half::f16::from_bits(*bits).to_f32()),
+                    );
+                }
+            }
+            *slot = Some(samples);
+        }
+    }
+    reading.buffer.unmap();
+}
 
 impl Renderer {
     pub async fn new(
@@ -850,13 +899,38 @@ impl Renderer {
                 size,
                 samples: vec![None; patches.len()],
                 targets: self.compositor.targets(size, size),
+                reading: None,
             });
         }
         let mut probe = self.probes[at].take().expect("a sampling");
         probe.samples.resize(patches.len(), None);
+        // Patches already drawn are taken once the GPU has finished them;
+        // until then nothing more is drawn.
+        if let Some(reading) = probe.reading.take() {
+            let _ = self.device.poll(wgpu::PollType::Poll);
+            let mapped = reading.mapped.lock().expect("probe mapping").take();
+            match mapped {
+                None => {
+                    probe.reading = Some(reading);
+                    let done = probe
+                        .samples
+                        .iter()
+                        .filter(|samples| samples.is_some())
+                        .count();
+                    self.probes[at] = Some(probe);
+                    return Sampled::Pending {
+                        done,
+                        of: patches.len(),
+                    };
+                }
+                Some(Ok(())) => take_patches(&mut probe, &reading, size),
+                // A buffer that could not be mapped is drawn again.
+                Some(Err(_)) => {}
+            }
+        }
         self.probe_wanted[at].clear();
-        // The patches drawn in this call are copied into one buffer, read
-        // once at the end, so the call waits for the GPU once.
+        // The patches drawn in this call are copied into one buffer, which
+        // is mapped while the render thread draws on.
         let row_bytes = (size * 8).next_multiple_of(256);
         let patch_bytes = u64::from(row_bytes) * u64::from(size);
         let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -900,11 +974,12 @@ impl Renderer {
             let half = f64::from(size) / 2.0;
             let whole = [0, 0, size, size];
             let draws = tile_draws(&self.cache, &chosen);
-            // Not versioned: the view's tables and masks go up again on
-            // the next frame.
+            // The sampling's tables and masks go up once for all its
+            // patches; they are the same at every place. The canvas's next
+            // frame, of another version, puts its own back.
             self.compositor.draw(
                 scene,
-                None,
+                Some(id ^ PROBE_VERSION),
                 &probe.targets,
                 GpuView {
                     center: [f64::from(origin[0]) + half, f64::from(origin[1]) + half],
@@ -942,33 +1017,28 @@ impl Renderer {
             drawn.push(index);
         }
         if !drawn.is_empty() {
-            buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
-            let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
-            if let Ok(mapped) = buffer.slice(..).get_mapped_range() {
-                for (place, index) in drawn.iter().enumerate() {
-                    let start = place * patch_bytes as usize;
-                    let patch = &mapped[start..start + patch_bytes as usize];
-                    let mut samples = Vec::with_capacity(size as usize * size as usize * 3);
-                    for row in patch.chunks(row_bytes as usize) {
-                        let pixels: &[u16] = bytemuck::cast_slice(&row[..size as usize * 8]);
-                        for pixel in pixels.as_chunks::<4>().0 {
-                            samples.extend(
-                                pixel[..3]
-                                    .iter()
-                                    .map(|bits| half::f16::from_bits(*bits).to_f32()),
-                            );
-                        }
-                    }
-                    probe.samples[*index] = Some(samples);
-                }
-            }
+            let mapped = Arc::new(std::sync::Mutex::new(None));
+            let flag = mapped.clone();
+            buffer
+                .slice(..)
+                .map_async(wgpu::MapMode::Read, move |result| {
+                    *flag.lock().expect("probe mapping") = Some(result);
+                });
+            let _ = self.device.poll(wgpu::PollType::Poll);
+            probe.reading = Some(ProbeReading {
+                buffer,
+                drawn,
+                mapped,
+                row_bytes,
+                patch_bytes,
+            });
         }
         let done = probe
             .samples
             .iter()
             .filter(|samples| samples.is_some())
             .count();
-        let result = if done == patches.len() {
+        let result = if done == patches.len() && probe.reading.is_none() {
             self.probe_wanted[at].clear();
             Sampled::Ready(probe.samples.iter().flatten().flatten().copied().collect())
         } else {

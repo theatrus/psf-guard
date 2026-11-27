@@ -844,6 +844,8 @@ pub struct Studio {
     /// The task that samples every band over the whole image, for the
     /// stretches, while it runs.
     whole_samples: Option<WholeSampling>,
+    /// The store being opened, while it is.
+    store_opening: Option<tools::StoreOpening>,
     /// Stretch analyses already made, by each band's background strength.
     analysed: Vec<(Vec<BandState>, Arc<Vec<BandStretch>>)>,
     /// The latest samples of the combined picture, with the id of the
@@ -935,7 +937,14 @@ impl Studio {
             .clone()
             .or_else(|| Some(options.open.as_ref()?.with_extension("json")));
         let tools = tools::Tools::new(&options);
+        let opening = Instant::now();
         let source = crate::store_tiles::source(options.open.as_deref());
+        if timing() {
+            eprintln!(
+                "store: opened in {:.1} ms before the window",
+                opening.elapsed().as_secs_f64() * 1e3
+            );
+        }
         let (source, band_info) = match source {
             Ok((source, bands)) => (Ok(source), Arc::new(bands)),
             Err(error) => (Err(error), Arc::<Bands>::default()),
@@ -986,6 +995,7 @@ impl Studio {
                 this.follow_scenes();
                 this.follow_export();
                 this.follow_derived();
+                this.follow_store_opening();
                 // Every change is kept: the document is saved as soon as it
                 // differs from the file.
                 this.save_document();
@@ -1064,6 +1074,7 @@ impl Studio {
                 derived: Vec::new(),
                 derive_tasks: Vec::new(),
                 whole_samples: None,
+                store_opening: None,
                 picture_samples: None,
                 picture_wanted: None,
                 source_generation: 0,

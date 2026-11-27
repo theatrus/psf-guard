@@ -2058,7 +2058,12 @@ drawn as the canvas draws it, at the same full-resolution patches the
 combined picture is sampled at, and Studio only counts the samples. It
 used to work the Finish steps out again on the CPU, which took about a
 second on the main thread for each slider move; counting now takes a few
-milliseconds, and the GPU's sampling about 30 ms between frames. Set
+milliseconds. The render thread draws up to 8 patches between frames and
+copies them to a buffer it maps without waiting; it takes the samples on a
+later frame, once the GPU has finished. All patches of one sampling share
+one upload of the scene's tables and masks. On the Cat's Eye each call
+takes about 8 ms on the render thread, down from about 64 ms when every
+patch uploaded them again and the thread waited for the copy. Set
 `PSF_STUDIO_TIMING` to print where an edit's time goes.
 
 **Scenes off the UI thread.** An edit hands a copy of the document to the
@@ -2070,6 +2075,13 @@ scenes a newer edit replaces before they are written are dropped. On the
 Cat's Eye, an analysis takes 60–100 ms on that thread; the UI thread spends
 under 0.1 ms per slider move. Export and the parity check still build their
 scene on the UI thread, once per click.
+
+A store a tool run prepared opens on a thread of its own as well, with
+**Opening the store** in the status line. The canvas shows the picture it
+had until the store is open, then the new document and store together. A
+store that cannot be opened leaves the picture as it was. The store given
+when Studio starts opens before the window appears, in about 260 ms for the
+Cat's Eye.
 
 **Export.** **Export** in the Final picture's inspector writes the whole
 picture, cropped, at full resolution: TIFF at 16 bits per channel or as
