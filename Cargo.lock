@@ -1250,7 +1250,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d045de693cb712d0b22c6a64be5b953f67b3ce00ab5ad3dd5d8b441886ab8e1a"
 dependencies = [
  "quote",
- "syn 3.0.9",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -5751,7 +5751,7 @@ dependencies = [
 [[package]]
 name = "seiza-stats"
 version = "0.1.2"
-source = "git+https://github.com/theatrus/seiza?rev=331359253dd301b3abb6eb6b423ba3b5200fa18e#331359253dd301b3abb6eb6b423ba3b5200fa18e"
+source = "git+https://github.com/theatrus/seiza?rev=4f523e03f3e5d7a779a0b5cecfaaefdefe4714b5#4f523e03f3e5d7a779a0b5cecfaaefdefe4714b5"
 dependencies = [
  "bytemuck",
 ]
@@ -5759,7 +5759,7 @@ dependencies = [
 [[package]]
 name = "seiza-stretch"
 version = "0.4.0"
-source = "git+https://github.com/theatrus/seiza?rev=331359253dd301b3abb6eb6b423ba3b5200fa18e#331359253dd301b3abb6eb6b423ba3b5200fa18e"
+source = "git+https://github.com/theatrus/seiza?rev=4f523e03f3e5d7a779a0b5cecfaaefdefe4714b5#4f523e03f3e5d7a779a0b5cecfaaefdefe4714b5"
 dependencies = [
  "rayon",
  "seiza-stats",

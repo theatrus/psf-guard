@@ -259,6 +259,7 @@ pub(super) fn stretch_settings(kind: &str) -> &'static [(&'static str, &'static 
             ("aggressiveness", "Black point", 0.0, 1.0),
             ("dynamic_range_compression", "Star cores", 0.0, 1.0),
             ("contrast_recovery", "Contrast", 0.0, 1.0),
+            ("sky_floor", "Sky floor", 0.0, 0.5),
         ],
         "layered-hdr" => &[
             ("target_background", "Background", 0.05, 0.5),
@@ -273,6 +274,7 @@ pub(super) fn stretch_settings(kind: &str) -> &'static [(&'static str, &'static 
                 500.0,
             ),
             ("core_scale", "Compressed structure, pixels", 2.0, 64.0),
+            ("sky_floor", "Sky floor", 0.0, 0.5),
         ],
         "auto-mtf" => &[
             ("target_median", "Background", 0.05, 0.5),
