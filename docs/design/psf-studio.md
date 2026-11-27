@@ -1999,16 +1999,23 @@ canvas's resolution.
 **HDR.** Tone and color has an HDR switch and a Headroom, 0 to 4 stops
 (2 to start). With HDR on, Seiza lifts the brightest areas above SDR
 white toward the headroom instead of clipping them; Exposure and Whites
-put areas there. Above SDR white a value is linear light, a multiple of
-SDR white's, so two stops of headroom is four times its light. On an EDR
+put areas there. Above SDR white a value continues on the extended sRGB
+curve that macOS's extended color spaces use, so two stops of headroom
+peaks at the value whose light is four times SDR white's, about 1.82.
+Seiza's `Picture::peak` gives the picture's peak: a later Curves or
+Stretch step over the whole picture brings it back to 1. The canvas, the
+histogram and every export clip values at the peak, so an SDR picture
+never shows above white, whatever its blends or Saturation give. On an EDR
 surface (`--output p3-extended`, as on a Pro Display XDR) the canvas shows
-those values brighter than white. Export to a name ending `.avif` writes an
-HDR AVIF: the picture in linear Rec. 2020 through the working space's ICC
-profile, PQ, 10 bits, with its content light levels. The histogram of an
-HDR picture counts clipping at the headroom's peak and gives the share
-above SDR white apart. Tried on the Cat's Eye (NGC 6543) from the C925:
-with Exposure +1.5 and a 2-stop headroom, the export's brightest light is
-610 cd/m², under the 812 cd/m² the headroom allows.
+values above 1 brighter than white, with or without a working profile.
+Export to a name ending `.avif` writes an HDR AVIF: the picture in linear
+Rec. 2020 through the working space's ICC profile, PQ, 10 bits, with its
+content light levels. A 32-bit float TIFF keeps the values above 1 as
+they are. The histogram of an HDR picture counts clipping at the peak and
+gives the share above SDR white apart. Tried on the Cat's Eye (NGC 6543)
+from the C925: with Exposure +1.5 and a 2-stop headroom, the AVIF's
+brightest light is 808 cd/m², within the 812 cd/m² the headroom allows,
+and the float TIFF's brightest value is 1.825.
 
 **Texture and noise.** Studio measures the picture's noise from its
 samples, as the Finish steps before Tone leave them, and gives it to Tone,

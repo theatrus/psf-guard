@@ -305,10 +305,14 @@ impl CanvasState {
     /// Each pane's scene packed for the GPU, with its stretches: Seiza's
     /// stretch of each layer's band, with the background placed where the
     /// scene says.
-    fn gpu_scenes(&self) -> Vec<GpuScene> {
+    /// Each scene packed for the GPU, with its picture's peak.
+    fn gpu_scenes(&self) -> Vec<(GpuScene, f32)> {
         self.scenes
             .iter()
-            .map(|scene| GpuScene::new(&scene.picture(&self.nudges()), &self.inputs))
+            .map(|scene| {
+                let picture = scene.picture(&self.nudges());
+                (GpuScene::new(&picture, &self.inputs), picture.peak())
+            })
             .collect()
     }
 
@@ -450,7 +454,7 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
         .is_some()
         .then(|| Bench::new(options.bench_frames));
     let mut last_frame: Option<Instant> = None;
-    let mut gpu_scenes: Vec<GpuScene> = Vec::new();
+    let mut gpu_scenes: Vec<(GpuScene, f32)> = Vec::new();
     let mut stretched_for = None;
     let mut stretches_version = 0u64;
     let mut animate = true;
@@ -522,10 +526,11 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
         let panes: Vec<Pane> = gpu_scenes
             .iter()
             .enumerate()
-            .map(|(index, scene)| {
+            .map(|(index, (scene, peak))| {
                 let (viewport, scissor) = canvas.pane_rects(index);
                 Pane {
                     scene,
+                    peak: *peak,
                     // Each pane's packing is its own. The compositor keeps
                     // one pane's tables and masks, so a single pane uploads
                     // them only when they change; with several panes they

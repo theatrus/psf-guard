@@ -222,6 +222,13 @@ fn export(
         seiza_compose::Error::Cancelled => "it was stopped".to_string(),
         error => error.to_string(),
     })?;
+    // Values above the picture's peak, SDR white unless HDR Tone lifts it,
+    // are clipped there, as the canvas shows them.
+    let mut image = image;
+    let peak = picture.peak();
+    for value in &mut image.data {
+        *value = value.min(peak);
+    }
     match extension(&run.path).as_deref() {
         Some("avif") => {
             return save_hdr(&run.path, image.width, image.height, &image.data, working);
@@ -254,8 +261,8 @@ fn extension(path: &Path) -> Option<String> {
 
 /// Writes interleaved RGB in the working space, where 1 is SDR white, as
 /// an HDR AVIF: converted to linear Rec. 2020 through the working space's
-/// ICC profile (sRGB when Studio was given none). Above 1 a value is linear
-/// light already, a multiple of SDR white's, as Tone's HDR headroom is.
+/// ICC profile (sRGB when Studio was given none). Above 1 a value continues
+/// on the extended sRGB curve, as Tone's HDR headroom gives it.
 fn save_hdr(
     path: &Path,
     width: usize,
@@ -278,7 +285,7 @@ fn save_hdr(
 }
 
 /// `rgb` in the working space as linear light in the curves' target: each
-/// channel decoded by the curve within 0 to 1 and taken as linear light
+/// channel decoded by the curve within 0 to 1 and by the extended sRGB curve
 /// above it, then through the matrix. Uncovered pixels are black.
 fn to_linear(rgb: &[f32], curves: &psf_studio_render::display::DisplayCurves) -> Vec<f32> {
     let last = (curves.width.max(2) - 1) as f32;
@@ -287,7 +294,7 @@ fn to_linear(rgb: &[f32], curves: &psf_studio_render::display::DisplayCurves) ->
             return 0.0;
         }
         if value > 1.0 {
-            return value;
+            return seiza_compose::tone::extended_srgb_decode(value);
         }
         let place = value * last;
         let low = place.floor() as usize;
@@ -478,9 +485,10 @@ mod tests {
             assert!((channel - 1.0).abs() < 0.01, "{linear:?}");
         }
         assert!((linear[3] - 0.214).abs() < 0.01, "{linear:?}");
-        // Above SDR white a value is linear light: twice SDR white's.
+        // Above SDR white a value continues on the extended sRGB curve.
+        let light = ((2.0_f32 + 0.055) / 1.055).powf(2.4);
         for channel in &linear[6..9] {
-            assert!((channel - 2.0).abs() < 0.03, "{linear:?}");
+            assert!((channel - light).abs() < 0.03 * light, "{linear:?}");
         }
         // Pure sRGB red is inside Rec. 2020: mostly red, some green.
         let red = to_linear(&[1.0, 0.0, 0.0], &curves);

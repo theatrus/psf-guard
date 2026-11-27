@@ -80,8 +80,8 @@ mod tests {
     fn hdr_and_its_headroom_are_read() {
         let tone = from_settings(&json!({ "hdr": true, "headroom": 3.0 }));
         assert!(tone.hdr);
-        assert_eq!(tone.peak(), 8.0);
-        assert_eq!(from_settings(&json!({ "hdr": true })).peak(), 4.0);
+        assert_eq!(tone.headroom, 3.0);
+        assert_eq!(from_settings(&json!({ "hdr": true })).headroom, 2.0);
         assert_eq!(control(CONTROLS.len()), Some(HEADROOM));
         assert_eq!(control(CONTROLS.len() + 1), None);
     }

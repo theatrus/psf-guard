@@ -46,7 +46,15 @@ pub struct Pane<'a> {
     /// The part of the surface the pane draws to. It is the viewport for a
     /// pane of its own, and a part of it for one side of a wipe.
     pub scissor: [u32; 4],
+    /// The brightest value the pane's picture shows, its
+    /// `seiza_compose::picture::Picture::peak`: 1 for SDR. The present pass
+    /// clips the pane's values there.
+    pub peak: f32,
 }
+
+/// The most panes whose peaks the present pass keeps apart. A surface with
+/// more clips every pane at the brightest of their peaks.
+const PRESENT_PANES: usize = 8;
 
 pub struct Frame<'a> {
     /// Where the document sits in each pane. The panes share it, so they
@@ -145,7 +153,13 @@ struct PresentUniform {
     /// `mat3x3f`.
     to_target: [f32; 12],
     /// x: samples per display curve, or 0 for no display transform.
+    /// y: 1 when the surface takes values above SDR white (EDR).
+    /// z: how many of `panes` are in use. w: the peak outside them.
     display: [f32; 4],
+    /// Each pane's scissor: x, y, width and height in surface pixels.
+    panes: [[f32; 4]; PRESENT_PANES],
+    /// Each pane's peak, four to an entry.
+    peaks: [[f32; 4]; PRESENT_PANES / 4],
 }
 
 /// One input tile chosen for a draw: the tile whose textures are read, and
@@ -180,6 +194,8 @@ pub struct Renderer {
     present_pipeline: wgpu::RenderPipeline,
     present_layout: wgpu::BindGroupLayout,
     present_uniform: wgpu::Buffer,
+    /// The present uniform's display transform; each frame adds its panes.
+    present_base: PresentUniform,
     sampler: wgpu::Sampler,
     display_curves: wgpu::TextureView,
     /// The finished picture, the uniform and the display curves, for the
@@ -412,13 +428,19 @@ impl Renderer {
         } else {
             0.0
         };
-        let uniform = output
-            .curves
-            .as_ref()
-            .map_or(PresentUniform::zeroed(), |curves| PresentUniform {
-                to_target: curves.matrix_uniform(),
-                display: [curves.width as f32, extended, 0.0, 0.0],
-            });
+        let uniform = PresentUniform {
+            to_target: output.curves.as_ref().unwrap_or(&identity).matrix_uniform(),
+            display: [
+                output
+                    .curves
+                    .as_ref()
+                    .map_or(0.0, |curves| curves.width as f32),
+                extended,
+                0.0,
+                1.0,
+            ],
+            ..PresentUniform::zeroed()
+        };
         let present_uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("present"),
             size: size_of::<PresentUniform>() as u64,
@@ -456,6 +478,7 @@ impl Renderer {
             present_pipeline,
             present_layout,
             present_uniform,
+            present_base: uniform,
             sampler,
             display_curves,
             present_inputs,
@@ -669,6 +692,27 @@ impl Renderer {
                 index == 0,
             );
         }
+
+        // Each pane's values are clipped at its picture's peak.
+        let mut uniform = self.present_base;
+        let brightest = frame
+            .panes
+            .iter()
+            .map(|pane| pane.peak)
+            .fold(1.0_f32, f32::max);
+        let kept = if frame.panes.len() <= PRESENT_PANES {
+            frame.panes.len()
+        } else {
+            0
+        };
+        for (index, pane) in frame.panes.iter().take(kept).enumerate() {
+            uniform.panes[index] = within_surface(pane.scissor, surface).map(|value| value as f32);
+            uniform.peaks[index / 4][index % 4] = pane.peak.max(1.0);
+        }
+        uniform.display[2] = kept as f32;
+        uniform.display[3] = brightest;
+        self.queue
+            .write_buffer(&self.present_uniform, 0, bytemuck::bytes_of(&uniform));
 
         let target_view = target
             .texture
