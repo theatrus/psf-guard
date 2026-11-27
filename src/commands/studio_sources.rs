@@ -852,25 +852,20 @@ pub fn studio_tool(options: StudioToolOptions) -> Result<()> {
     let started = Instant::now();
     let mut outcome = run(&frame.image, &digest, "")?;
     if options.shifted {
-        use crate::studio_sources::{average, shift_mirrored, unshift, SHIFTED_PASS};
-        let moved = shift_mirrored(&frame.image, SHIFTED_PASS)?;
-        let second = run(
-            &moved,
-            &format!("{digest}:shifted:{SHIFTED_PASS}"),
-            ", shifted",
-        )?;
-        let (width, height) = (frame.image.width, frame.image.height);
-        outcome.image = average(
-            &outcome.image,
-            &unshift(&second.image, SHIFTED_PASS, width, height)?,
-        )?;
-        outcome.stars = match (outcome.stars, second.stars) {
-            (Some(first), Some(stars)) => Some(average(
-                &first,
-                &unshift(&stars, SHIFTED_PASS, width, height)?,
-            )?),
-            (first, _) => first,
+        use crate::studio_sources::{shifted_passes, Pass};
+        let first = Pass {
+            image: outcome.image,
+            stars: outcome.stars,
         };
+        let both = shifted_passes(&frame.image, first, &mut |image, suffix| {
+            let moved = run(image, &format!("{digest}:{suffix}"), ", shifted")?;
+            Ok(Pass {
+                image: moved.image,
+                stars: moved.stars,
+            })
+        })?;
+        outcome.image = both.image;
+        outcome.stars = both.stars;
     }
     if scale > 1.0 {
         for image in std::iter::once(&mut outcome.image).chain(outcome.stars.as_mut()) {

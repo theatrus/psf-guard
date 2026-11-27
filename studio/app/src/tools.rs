@@ -1861,7 +1861,7 @@ impl Studio {
                     flag(crate::studio_model::SHIFTED_PASS_KEY, on),
                 ))
                 .children(Self::help(
-                    "Runs the tool a second time on the image moved by half a tile, and averages the two, so the seams between BlurXTerminator's tiles fall in different places.",
+                    "Runs the tool a second time on the image moved, and averages the two, so the seams between BlurXTerminator's tiles fall in different places. Studio measures how far apart the seams are from the two passes, and when the move was not half that, runs once more moved by half of it.",
                 ));
         }
         // A tool layer's stars are a layer of their own, which is shown,

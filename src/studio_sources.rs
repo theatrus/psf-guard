@@ -409,14 +409,15 @@ impl Track {
     }
 }
 
-/// How far a tool's shifted second pass moves the channel, down and right,
-/// in pixels: about half the spacing of the seams BlurXTerminator leaves
-/// between its tiles (350 to 415 pixels apart on the Cat's Eye).
+/// How far a tool's shifted second pass first moves the channel, down and
+/// right, in pixels: about half the spacing of the seams BlurXTerminator
+/// leaves between its tiles. [`shifted_passes`] measures the spacing from
+/// the two passes and moves by half of it when this is far from that.
 pub const SHIFTED_PASS: usize = 192;
 
-/// `image` moved `by` pixels down and right on a canvas that much larger,
+/// `image` moved `by` pixels right and down on a canvas that much larger,
 /// with the edges it uncovers filled by mirroring the image.
-pub(crate) fn shift_mirrored(image: &LinearImage, by: usize) -> Result<LinearImage> {
+pub(crate) fn shift_mirrored(image: &LinearImage, by: [usize; 2]) -> Result<LinearImage> {
     let (width, height, channels) = (image.width, image.height, image.channels);
     let mirror = |at: isize, size: usize| -> usize {
         let size = size as isize;
@@ -429,12 +430,13 @@ pub(crate) fn shift_mirrored(image: &LinearImage, by: usize) -> Result<LinearIma
         }
         at.clamp(0, size - 1) as usize
     };
-    let (out_width, out_height) = (width + by, height + by);
+    let [across, down] = by;
+    let (out_width, out_height) = (width + across, height + down);
     let mut data = Vec::with_capacity(out_width * out_height * channels);
     for y in 0..out_height {
-        let row = mirror(y as isize - by as isize, height);
+        let row = mirror(y as isize - down as isize, height);
         for x in 0..out_width {
-            let at = (row * width + mirror(x as isize - by as isize, width)) * channels;
+            let at = (row * width + mirror(x as isize - across as isize, width)) * channels;
             data.extend_from_slice(&image.data[at..at + channels]);
         }
     }
@@ -442,23 +444,144 @@ pub(crate) fn shift_mirrored(image: &LinearImage, by: usize) -> Result<LinearIma
 }
 
 /// The part of `image` that [`shift_mirrored`] moved: `width` by `height`
-/// from `by` pixels in, in each channel.
+/// from `by` pixels in, right and down, in each channel.
 pub(crate) fn unshift(
     image: &LinearImage,
-    by: usize,
+    by: [usize; 2],
     width: usize,
     height: usize,
 ) -> Result<LinearImage> {
     let channels = image.channels;
-    if image.width < width + by || image.height < height + by {
+    let [across, down] = by;
+    if image.width < width + across || image.height < height + down {
         bail!("a shifted pass came back smaller than it went");
     }
     let mut data = Vec::with_capacity(width * height * channels);
     for y in 0..height {
-        let start = ((y + by) * image.width + by) * channels;
+        let start = ((y + down) * image.width + across) * channels;
         data.extend_from_slice(&image.data[start..start + width * channels]);
     }
     Ok(LinearImage::new(width, height, channels, data)?)
+}
+
+/// What one pass of a tool made: its image, and the stars a star removal
+/// took out.
+pub(crate) struct Pass {
+    pub image: LinearImage,
+    pub stars: Option<LinearImage>,
+}
+
+/// The seams' spacing BlurXTerminator leaves between its tiles, across and
+/// down, measured from two passes of it on one image shifted apart: the
+/// difference holds the seams of both, and the seams of one pass repeat at
+/// the tiles' spacing. `None` along an axis where no spacing stands out.
+pub(crate) fn seam_spacing(a: &LinearImage, b: &LinearImage) -> [Option<usize>; 2] {
+    if a.data.len() != b.data.len() || a.width < 64 || a.height < 64 {
+        return [None, None];
+    }
+    let (width, height, channels) = (a.width, a.height, a.channels);
+    // The difference's size at each column, and at each row.
+    let mut across = vec![0.0_f64; width];
+    let mut down = vec![0.0_f64; height];
+    for (y, row) in down.iter_mut().enumerate() {
+        for (x, column) in across.iter_mut().enumerate() {
+            let at = (y * width + x) * channels;
+            let difference = (f64::from(a.data[at]) - f64::from(b.data[at])).abs();
+            if difference.is_finite() {
+                *column += difference;
+                *row += difference;
+            }
+        }
+    }
+    let spacing = |profile: &[f64]| -> Option<usize> {
+        // Each value less the mean around it, so the seams stand out of the
+        // picture's slow changes.
+        let reach = 24;
+        let length = profile.len();
+        let detail: Vec<f64> = (0..length)
+            .map(|at| {
+                let low = at.saturating_sub(reach);
+                let high = (at + reach + 1).min(length);
+                let mean = profile[low..high].iter().sum::<f64>() / (high - low) as f64;
+                profile[at] - mean
+            })
+            .collect();
+        // Tiles are a few hundred pixels apart.
+        let (shortest, longest) = (128, 1024.min(length / 2));
+        if longest <= shortest {
+            return None;
+        }
+        let correlation = |lag: usize| -> f64 {
+            detail[..length - lag]
+                .iter()
+                .zip(&detail[lag..])
+                .map(|(a, b)| a * b)
+                .sum::<f64>()
+                / (length - lag) as f64
+        };
+        let scores: Vec<(usize, f64)> = (shortest..=longest)
+            .map(|lag| (lag, correlation(lag)))
+            .collect();
+        let (_, best) = scores.iter().copied().max_by(|a, b| a.1.total_cmp(&b.1))?;
+        // A multiple of the spacing correlates as well as the spacing: the
+        // shortest lag that scores nearly as high is the spacing, at the
+        // top of its own peak.
+        let first = scores.iter().position(|(_, score)| *score >= 0.8 * best)?;
+        let (lag, _) = scores[first..]
+            .iter()
+            .copied()
+            .take_while(|(_, score)| *score >= 0.5 * best)
+            .max_by(|a, b| a.1.total_cmp(&b.1))?;
+        // It must stand well above the lags around it.
+        let mut others: Vec<f64> = scores.iter().map(|(_, score)| score.abs()).collect();
+        others.sort_unstable_by(f64::total_cmp);
+        let typical = others[others.len() / 2];
+        (best > 4.0 * typical && best > 0.0).then_some(lag)
+    };
+    [spacing(&across), spacing(&down)]
+}
+
+/// A tool's result averaged with a second pass on the image shifted, so the
+/// seams between BlurXTerminator's tiles fall in different places and
+/// average out. `run` runs the tool on an image, named with a suffix for
+/// its cache. The second pass is shifted by [`SHIFTED_PASS`]; the seams are
+/// measured from the two, and when half their spacing is more than 24
+/// pixels from that shift, a third pass shifted by half their spacing on
+/// each axis is averaged with the first in its place.
+pub(crate) fn shifted_passes(
+    start: &LinearImage,
+    first: Pass,
+    run: &mut dyn FnMut(&LinearImage, &str) -> Result<Pass>,
+) -> Result<Pass> {
+    let (width, height) = (start.width, start.height);
+    let pass =
+        |run: &mut dyn FnMut(&LinearImage, &str) -> Result<Pass>, by: [usize; 2]| -> Result<Pass> {
+            let suffix = if by[0] == by[1] {
+                format!("shifted:{}", by[0])
+            } else {
+                format!("shifted:{}x{}", by[0], by[1])
+            };
+            let moved = run(&shift_mirrored(start, by)?, &suffix)?;
+            Ok(Pass {
+                image: unshift(&moved.image, by, width, height)?,
+                stars: moved
+                    .stars
+                    .map(|stars| unshift(&stars, by, width, height))
+                    .transpose()?,
+            })
+        };
+    let second = pass(run, [SHIFTED_PASS; 2])?;
+    let spacing = seam_spacing(&first.image, &second.image);
+    let matched = spacing.map(|spacing| spacing.map(|spacing| spacing / 2).unwrap_or(SHIFTED_PASS));
+    let off = matched.iter().any(|half| half.abs_diff(SHIFTED_PASS) > 24);
+    let second = if off { pass(run, matched)? } else { second };
+    Ok(Pass {
+        image: average(&first.image, &second.image)?,
+        stars: match (first.stars, second.stars) {
+            (Some(first), Some(second)) => Some(average(&first, &second)?),
+            (first, _) => first,
+        },
+    })
 }
 
 /// The mean of two images of one size.
@@ -698,48 +821,55 @@ impl RegisteredChannels {
                     .map_err(|error| anyhow!("the tools of {label}: {error}"))?;
                     let mut outcome = outcome;
                     if *shifted {
-                        // The second pass, on the channel shifted down and
-                        // right, mirrored at its edges, kept by its own id.
-                        let revision = format!("{}:shifted:{SHIFTED_PASS}", track.revision);
-                        let second = ToolChain::resolve(
-                            program.workers,
-                            &ProcessingChain {
-                                steps: chain.clone(),
-                            },
-                            "studio",
-                            source,
-                            &revision,
-                            track.deconvolution.as_deref(),
-                        )
-                        .map_err(|error| anyhow!("the tools of {label}: {error}"))?;
-                        let padded = shift_mirrored(&track.start, SHIFTED_PASS)?;
-                        let moved = run_tool_chain(
-                            RcAstroRunner {
-                                workers: program.workers,
-                                person: true,
-                            },
-                            program.cache,
-                            &second,
-                            &padded,
-                            &frames[channel].headers,
-                            None,
-                            |ToolEvent::Running {
-                                 label: running,
-                                 fraction,
-                             }| {
-                                (program.progress)(label, &format!("{running}, shifted"), fraction)
-                            },
-                            &mut || Ok(()),
-                        )
-                        .map_err(|error| anyhow!("the tools of {label}: {error}"))?;
-                        let back = |image: &LinearImage| {
-                            unshift(image, SHIFTED_PASS, track.start.width, track.start.height)
+                        // More passes, on the channel shifted down and right,
+                        // mirrored at its edges, each kept by its own id.
+                        let first = Pass {
+                            image: outcome.image,
+                            stars: outcome.stars,
                         };
-                        outcome.image = average(&outcome.image, &back(&moved.image)?)?;
-                        outcome.stars = match (outcome.stars, moved.stars) {
-                            (Some(first), Some(second)) => Some(average(&first, &back(&second)?)?),
-                            (first, _) => first,
-                        };
+                        let both = shifted_passes(&track.start, first, &mut |image, suffix| {
+                            let revision = format!("{}:{suffix}", track.revision);
+                            let again = ToolChain::resolve(
+                                program.workers,
+                                &ProcessingChain {
+                                    steps: chain.clone(),
+                                },
+                                "studio",
+                                source,
+                                &revision,
+                                track.deconvolution.as_deref(),
+                            )
+                            .map_err(|error| anyhow!("the tools of {label}: {error}"))?;
+                            let moved = run_tool_chain(
+                                RcAstroRunner {
+                                    workers: program.workers,
+                                    person: true,
+                                },
+                                program.cache,
+                                &again,
+                                image,
+                                &frames[channel].headers,
+                                None,
+                                |ToolEvent::Running {
+                                     label: running,
+                                     fraction,
+                                 }| {
+                                    (program.progress)(
+                                        label,
+                                        &format!("{running}, shifted"),
+                                        fraction,
+                                    )
+                                },
+                                &mut || Ok(()),
+                            )
+                            .map_err(|error| anyhow!("the tools of {label}: {error}"))?;
+                            Ok(Pass {
+                                image: moved.image,
+                                stars: moved.stars,
+                            })
+                        })?;
+                        outcome.image = both.image;
+                        outcome.stars = both.stars;
                     }
                     if *shifted {
                         // The average is no chain's result: what follows
@@ -1481,17 +1611,51 @@ mod tests {
     #[test]
     fn a_shifted_pass_comes_back_to_where_it_was() {
         let image = LinearImage::new(5, 4, 1, (0..20).map(|value| value as f32).collect()).unwrap();
-        let moved = shift_mirrored(&image, 2).unwrap();
+        let moved = shift_mirrored(&image, [2, 2]).unwrap();
         assert_eq!((moved.width, moved.height), (7, 6));
         // The image sits 2 pixels down and right; the edges uncovered
         // mirror it.
         assert_eq!(moved.data[2 * 7 + 2], 0.0);
         assert_eq!(moved.data[2 * 7], 1.0);
         assert_eq!(moved.data[0], 6.0);
-        assert_eq!(unshift(&moved, 2, 5, 4).unwrap().data, image.data);
+        assert_eq!(unshift(&moved, [2, 2], 5, 4).unwrap().data, image.data);
+        // Shifted by different amounts across and down.
+        let apart = shift_mirrored(&image, [3, 1]).unwrap();
+        assert_eq!((apart.width, apart.height), (8, 5));
+        assert_eq!(unshift(&apart, [3, 1], 5, 4).unwrap().data, image.data);
         let doubled =
             LinearImage::new(5, 4, 1, image.data.iter().map(|v| v * 3.0).collect()).unwrap();
         assert_eq!(average(&image, &doubled).unwrap().data[3], 6.0);
+    }
+
+    /// Seams 446 pixels apart across and 348 down, as BlurXTerminator left
+    /// on the Cat's Eye, are found in the difference of two passes.
+    #[test]
+    fn the_seams_spacing_is_measured_from_two_passes() {
+        let (width, height) = (2400, 1800);
+        let seams = |offset: usize| -> LinearImage {
+            let data = (0..width * height)
+                .map(|at| {
+                    let (x, y) = (at % width, at / width);
+                    let smooth = (x as f32 / width as f32) * 0.3 + (y as f32 / height as f32) * 0.2;
+                    let seam = |position: usize, spacing: usize| {
+                        let phase = (position + offset) % spacing;
+                        if phase < 3 {
+                            0.002
+                        } else {
+                            0.0
+                        }
+                    };
+                    smooth + seam(x, 446) + seam(y, 348)
+                })
+                .collect();
+            LinearImage::new(width, height, 1, data).unwrap()
+        };
+        let [across, down] = seam_spacing(&seams(0), &seams(192));
+        assert_eq!(across, Some(446));
+        assert_eq!(down, Some(348));
+        // Two passes alike have no seams to tell apart.
+        assert_eq!(seam_spacing(&seams(0), &seams(0)), [None, None]);
     }
 
     #[test]
