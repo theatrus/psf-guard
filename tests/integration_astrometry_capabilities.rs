@@ -16,18 +16,27 @@ use tempfile::tempdir;
 use tower::ServiceExt;
 
 fn locked_version(name: &str) -> String {
+    locked(name).0
+}
+
+/// A crate's version in the lock file, and where it comes from: `None` for
+/// a registry, the source for one pinned to a git commit.
+fn locked(name: &str) -> (String, Option<String>) {
     let lock = include_str!("../Cargo.lock")
         .parse::<toml_edit::DocumentMut>()
         .unwrap();
-    lock["package"]
+    let package = lock["package"]
         .as_array_of_tables()
         .unwrap()
         .iter()
         .find(|package| package["name"].as_str() == Some(name))
-        .unwrap()["version"]
-        .as_str()
-        .unwrap()
-        .to_owned()
+        .unwrap();
+    let source = package
+        .get("source")
+        .and_then(|source| source.as_str())
+        .filter(|source| source.starts_with("git+"))
+        .map(str::to_owned);
+    (package["version"].as_str().unwrap().to_owned(), source)
 }
 
 #[test]
@@ -59,10 +68,21 @@ fn stack_caches_follow_seiza_stacking_output_not_its_version() {
             .map(|part| part.parse::<u64>().unwrap())
             .collect::<Vec<_>>()
     };
+    // A crate from the registry is at least the release its output version
+    // names. A crate pinned to an unreleased Seiza commit may name the next
+    // minor release, as Seiza's rule for a change of output says: the
+    // release that ships the change bumps the crate to it.
+    let covered = |output: &str, name: &str| {
+        let (locked, git) = locked(name);
+        let locked = parse(&locked);
+        let output = parse(output);
+        let next_minor = vec![locked[0], locked[1] + 1, 0];
+        output <= locked || (git.is_some() && output <= next_minor)
+    };
     let output = psf_guard::server::stack_preview::SEIZA_STACKING_OUTPUT_VERSION;
     assert_eq!(output, seiza_stacking::OUTPUT_VERSION);
-    assert!(parse(output) <= parse(&locked_version("seiza-stacking")));
-    assert!(parse(seiza_stretch::OUTPUT_VERSION) <= parse(&locked_version("seiza-stretch")));
+    assert!(covered(output, "seiza-stacking"));
+    assert!(covered(seiza_stretch::OUTPUT_VERSION, "seiza-stretch"));
 }
 
 fn build_app(state: Arc<AppState>) -> Router {
