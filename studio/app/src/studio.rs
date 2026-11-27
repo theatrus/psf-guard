@@ -195,11 +195,11 @@ pub struct PictureRequest {
     size: u32,
 }
 
-/// Patches of the combined picture sampled for its stretch: an eight by
-/// eight grid of squares spread across `rect`, as each input is sampled.
 /// How many patches a sampling of the picture reads: an eight by eight grid.
 pub(super) const PICTURE_PATCHES: usize = 64;
 
+/// Patches of the combined picture sampled for its stretch: an eight by
+/// eight grid of squares spread across `rect`, as each input is sampled.
 pub(super) fn picture_patches(rect: [f32; 4]) -> (Vec<[u32; 2]>, u32) {
     let [left, top, right, bottom] = rect.map(|value| value.max(0.0) as u32);
     let (width, height) = (right.saturating_sub(left), bottom.saturating_sub(top));
@@ -867,7 +867,7 @@ impl Studio {
                         [SliderId::ToneHue(layer), SliderId::ToneSaturation(layer)]
                     }))
                     .chain((0..8).map(SliderId::StretchParam))
-                    .chain((0..seiza_compose::tone::CONTROLS.len()).map(SliderId::FinishParam))
+                    .chain((0..=seiza_compose::tone::CONTROLS.len()).map(SliderId::FinishParam))
                     .chain((0..tools::MAX_TOOL_SETTINGS).map(SliderId::ToolParam))
                     .map(|id| (id, Rc::default()))
                     .collect(),

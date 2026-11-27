@@ -259,7 +259,15 @@ pub fn picture_noise(before: &[FinishStep], samples: &[f32], patches: usize) -> 
     if size < 3 {
         return 0.0;
     }
-    let finished = finished_samples(before, samples);
+    // Every fourth patch is plenty for a median, and keeps the CPU render
+    // of the steps before small.
+    let chosen: Vec<f32> = samples
+        .chunks_exact(size * size * 3)
+        .step_by(4)
+        .flatten()
+        .copied()
+        .collect();
+    let finished = finished_samples(before, &chosen);
     let mut measured: Vec<f32> = finished
         .chunks_exact(size * size * 3)
         .map(|patch| seiza_compose::tone::luminance_noise(patch, size, size))
@@ -396,8 +404,9 @@ mod tests {
 
     #[test]
     fn the_picture_s_noise_is_the_median_of_its_patches() {
-        // Five patches of 32 × 32: four with noise of about 0.01, one a
-        // sharp checkerboard, which the median leaves out.
+        // Nine patches of 32 × 32: noise of about 0.01, and a sharp
+        // checkerboard in the fifth, which the median of every fourth
+        // patch (the first, fifth and ninth) leaves out.
         let size = 32;
         let uniform = |index: u64| {
             // splitmix64, so neighboring pixels are independent.
@@ -407,7 +416,7 @@ mod tests {
             (z ^ (z >> 31)) as f32 / u64::MAX as f32
         };
         let mut samples = Vec::new();
-        for patch in 0..5_u64 {
+        for patch in 0..9_u64 {
             for at in 0..(size * size) as u64 {
                 let value = if patch == 4 {
                     if (at / size as u64 + at % size as u64).is_multiple_of(2) {
@@ -424,7 +433,7 @@ mod tests {
                 samples.extend([value; 3]);
             }
         }
-        let noise = picture_noise(&[], &samples, 5);
+        let noise = picture_noise(&[], &samples, 9);
         assert!((noise - 0.01).abs() < 0.0015, "{noise}");
         assert_eq!(picture_noise(&[], &[], 4), 0.0);
     }

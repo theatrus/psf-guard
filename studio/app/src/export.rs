@@ -115,8 +115,11 @@ impl Studio {
             None => [0, 0, width, height],
         };
         let region = within(rect, (width, height));
-        // A TIFF or PNG names the working space its values are in.
-        let profile = match &self.working_profile {
+        // A TIFF or PNG names the working space its values are in; other
+        // files hold no profile.
+        let raster = extension(&path)
+            .is_some_and(|extension| matches!(extension.as_str(), "tif" | "tiff" | "png"));
+        let profile = match self.working_profile.as_ref().filter(|_| raster) {
             Some(path) => match std::fs::read(path) {
                 Ok(bytes) => Some(bytes),
                 Err(error) => {
@@ -129,6 +132,7 @@ impl Studio {
             },
             None => None,
         };
+        let working = self.working_profile.clone();
         let run = Arc::new(ExportRun {
             path: path.clone(),
             progress: AtomicU32::new(0),
@@ -138,7 +142,14 @@ impl Studio {
         self.export = Some(run.clone());
         self.tell_export(&format!("Exporting {}…", file_name(&path)));
         std::thread::spawn(move || {
-            let result = export(&picture, &store, region, profile.as_deref(), &run);
+            let result = export(
+                &picture,
+                &store,
+                region,
+                profile.as_deref(),
+                working.as_deref(),
+                &run,
+            );
             *run.done.lock().expect("export result") = Some(result);
         });
     }
@@ -186,6 +197,7 @@ fn export(
     store: &Path,
     region: ReferenceRegion,
     profile: Option<&[u8]>,
+    working: Option<&Path>,
     run: &ExportRun,
 ) -> Result<(), String> {
     let (store, _) = crate::store_tiles::open_store(store)?;
@@ -207,7 +219,75 @@ fn export(
         seiza_compose::Error::Cancelled => "it was stopped".to_string(),
         error => error.to_string(),
     })?;
+    if extension(&run.path).as_deref() == Some("avif") {
+        return save_hdr(&run.path, image.width, image.height, &image.data, working);
+    }
     save(&run.path, image.width, image.height, &image.data, profile)
+}
+
+/// A path's extension, in lower case.
+fn extension(path: &Path) -> Option<String> {
+    Some(path.extension()?.to_str()?.to_ascii_lowercase())
+}
+
+/// Writes interleaved RGB in the working space, where 1 is SDR white, as
+/// an HDR AVIF: converted to linear Rec. 2020 through the working space's
+/// ICC profile (sRGB when Studio was given none), values above 1 decoded on
+/// the extended sRGB curve, as an HDR display shows them.
+fn save_hdr(
+    path: &Path,
+    width: usize,
+    height: usize,
+    rgb: &[f32],
+    working: Option<&Path>,
+) -> Result<(), String> {
+    let system = Path::new(psf_studio_color::SYSTEM_PROFILES);
+    let source = working.map_or_else(|| system.join("sRGB Profile.icc"), Path::to_path_buf);
+    let curves = psf_studio_color::curves_between(&source, &system.join("ITU-2020.icc"))?;
+    let linear = to_linear(rgb, &curves);
+    seiza_image_io::save_hdr_avif(
+        path,
+        width,
+        height,
+        &linear,
+        &seiza_image_io::HdrAvifOptions::default(),
+    )
+    .map_err(|error| error.to_string())
+}
+
+/// `rgb` in the working space as linear light in the curves' target: each
+/// channel decoded (by the curve within 0 to 1, by the extended sRGB curve
+/// above it), then through the matrix. Uncovered pixels are black.
+fn to_linear(rgb: &[f32], curves: &psf_studio_render::display::DisplayCurves) -> Vec<f32> {
+    let last = (curves.width.max(2) - 1) as f32;
+    let decode = |value: f32, channel: usize| -> f32 {
+        if !value.is_finite() || value <= 0.0 {
+            return 0.0;
+        }
+        if value > 1.0 {
+            return ((value + 0.055) / 1.055).powf(2.4);
+        }
+        let place = value * last;
+        let low = place.floor() as usize;
+        let high = (low + 1).min(curves.decode.len() - 1);
+        let share = place - low as f32;
+        curves.decode[low][channel] * (1.0 - share) + curves.decode[high][channel] * share
+    };
+    let matrix = curves.to_target;
+    rgb.as_chunks::<3>()
+        .0
+        .iter()
+        .flat_map(|pixel| {
+            let linear: [f32; 3] = std::array::from_fn(|channel| decode(pixel[channel], channel));
+            // The matrix is column-major: column c is source channel c.
+            std::array::from_fn::<f32, 3, _>(|row| {
+                (0..3)
+                    .map(|column| matrix[column][row] * linear[column])
+                    .sum::<f32>()
+                    .max(0.0)
+            })
+        })
+        .collect()
 }
 
 /// Writes interleaved RGB to `path` in the format its extension names,
@@ -358,5 +438,28 @@ mod tests {
         let samples = &read.samples;
         assert!((samples[0] - 0.5).abs() < step);
         assert!(samples[3] > samples[0]);
+    }
+
+    #[test]
+    fn an_hdr_export_is_linear_rec_2020_with_sdr_white_at_one() {
+        let system = Path::new(psf_studio_color::SYSTEM_PROFILES);
+        let Ok(curves) = psf_studio_color::curves_between(
+            &system.join("sRGB Profile.icc"),
+            &system.join("ITU-2020.icc"),
+        ) else {
+            eprintln!("no system profiles: not checked");
+            return;
+        };
+        // SDR white, mid gray, and a highlight two stops up, in sRGB.
+        let linear = to_linear(&[1.0, 1.0, 1.0, 0.5, 0.5, 0.5, 2.0, 2.0, 2.0], &curves);
+        for channel in &linear[..3] {
+            assert!((channel - 1.0).abs() < 0.01, "{linear:?}");
+        }
+        assert!((linear[3] - 0.214).abs() < 0.01, "{linear:?}");
+        let above = ((2.0_f32 + 0.055) / 1.055).powf(2.4);
+        assert!((linear[6] - above).abs() < 0.05 * above, "{linear:?}");
+        // Pure sRGB red is inside Rec. 2020: mostly red, some green.
+        let red = to_linear(&[1.0, 0.0, 0.0], &curves);
+        assert!(red[0] > 0.6 && red[1] > 0.03 && red[2] < 0.05, "{red:?}");
     }
 }

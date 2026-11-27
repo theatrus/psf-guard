@@ -403,12 +403,21 @@ impl Renderer {
                 .as_ref()
                 .unwrap_or(&identity)
                 .upload(&device, &queue, table_format);
+        // An extended surface takes values above SDR white (EDR).
+        let extended = if matches!(
+            color_space,
+            wgpu::SurfaceColorSpace::ExtendedSrgb | wgpu::SurfaceColorSpace::ExtendedDisplayP3
+        ) {
+            1.0
+        } else {
+            0.0
+        };
         let uniform = output
             .curves
             .as_ref()
             .map_or(PresentUniform::zeroed(), |curves| PresentUniform {
                 to_target: curves.matrix_uniform(),
-                display: [curves.width as f32, 0.0, 0.0, 0.0],
+                display: [curves.width as f32, extended, 0.0, 0.0],
             });
         let present_uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("present"),

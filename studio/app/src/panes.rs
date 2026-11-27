@@ -1458,6 +1458,25 @@ impl Studio {
         })))
     }
 
+    /// Turns the selected Tone and color step's HDR on or off.
+    pub(super) fn set_tone_hdr(&mut self, on: bool) {
+        let Some(id) = self.selected_step() else {
+            return;
+        };
+        let Some((_, step)) = self.document.step(id) else {
+            return;
+        };
+        let StepKind::Operation { settings, .. } = &step.kind else {
+            return;
+        };
+        let mut settings = settings.clone();
+        if !settings.is_object() {
+            settings = tone_step::new_settings();
+        }
+        settings["hdr"] = on.into();
+        self.document.set_step_settings(id, settings);
+    }
+
     /// How much the selected Finish step's mask covers each of the
     /// picture's `samples` samples, patch after patch, as the sampling read
     /// them. `None` when the selected row is not a Finish step with a mask,
@@ -1466,6 +1485,11 @@ impl Studio {
         let Row::Finish(id) = &self.selected else {
             return None;
         };
+        // Samples of an earlier sampling stand in while new ones are read;
+        // they may be of another crop, so their patches are not these.
+        if self.picture_samples.as_ref().map(|(id, _)| *id) != self.picture_wanted {
+            return None;
+        }
         let (_, step) = self.document.step(*id)?;
         let strokes = step_strokes(step);
         if strokes.is_empty() {
@@ -1716,14 +1740,14 @@ impl Studio {
                 let StepKind::Operation { settings, .. } = &step.kind else {
                     return;
                 };
-                let Some((key, _, low, high)) = seiza_compose::tone::CONTROLS.get(index) else {
+                let Some((key, _, low, high)) = tone_step::control(index) else {
                     return;
                 };
                 let mut settings = settings.clone();
                 if !settings.is_object() {
                     settings = tone_step::new_settings();
                 }
-                settings[*key] = f64::from(low + (high - low) * position).into();
+                settings[key] = f64::from(low + (high - low) * position).into();
                 self.document.set_step_settings(id, settings);
             }
             SliderId::StretchParam(index) => {

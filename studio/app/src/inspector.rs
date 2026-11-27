@@ -370,8 +370,28 @@ impl Studio {
                 cx,
             ));
         }
+        // HDR: the brightest areas rise above SDR white, up to the headroom.
+        block = block.child(Self::heading("HDR")).child(Self::field(
+            "HDR",
+            Self::act(
+                if tone.hdr { "On" } else { "Off" },
+                "tone-hdr",
+                tone.hdr,
+                cx,
+                move |this| this.set_tone_hdr(!tone.hdr),
+            ),
+        ));
+        if tone.hdr {
+            let (_, label, low, high) = crate::tone_step::HEADROOM;
+            block = block.child(self.labelled_slider(
+                format!("{label} {:.1} stops", tone.headroom),
+                SliderId::FinishParam(seiza_compose::tone::CONTROLS.len()),
+                (tone.headroom - low) / (high - low),
+                cx,
+            ));
+        }
         block.children(Self::help(
-            "Exposure, Contrast, Highlights, Shadows, Whites and Blacks change the brightness and keep each pixel's color. Whites up and Blacks down clip more of the picture to white and to black. Highlights and Shadows move the tones of each area and keep the detail in it, so a star stays as bright above a lifted sky. Texture raises or lowers fine detail, Clarity the contrast of larger structures in the midtones, and Dehaze takes away a gray veil such as sky glow while keeping colored nebulae.",
+            "Exposure, Contrast, Highlights, Shadows, Whites and Blacks change the brightness and keep each pixel's color. Whites up and Blacks down clip more of the picture to white and to black. Highlights and Shadows move the tones of each area and keep the detail in it, so a star stays as bright above a lifted sky. Texture raises or lowers fine detail, Clarity the contrast of larger structures in the midtones, and Dehaze takes away a gray veil such as sky glow while keeping colored nebulae. With HDR on, the brightest areas rise above SDR white, up to the headroom, instead of clipping; raise Exposure or Whites to put them there. An HDR display shows them brighter than white; export them as AVIF.",
         ))
     }
 
@@ -1285,6 +1305,7 @@ impl Studio {
                 .child(Self::note("Reading the picture…"));
         };
         let (black, white) = (histogram.black * 100.0, histogram.white * 100.0);
+        let empty = histogram.masked && histogram.pixels == 0;
         let title = if histogram.masked {
             "Histogram of the masked area"
         } else {
@@ -1320,6 +1341,11 @@ impl Studio {
         .h(gpui::px(80.0));
         column()
             .child(Self::heading(title))
+            .when(empty, |block| {
+                block.child(Self::note(
+                    "The mask covers none of the sampled picture. Paint it larger, or move it, to see its area here.",
+                ))
+            })
             .child(div().bg(gpui::rgb(0x111316)).child(chart))
             .child(Self::note(format!(
                 "Clipped: {black:.2}% to black, {white:.2}% to white"
@@ -1350,7 +1376,7 @@ impl Studio {
                 block.child(Self::note(self.export_line.clone()))
             })
             .children(Self::help(
-                "Saves the picture as the canvas shows it, cropped, at full resolution: TIFF or PNG at 16 bits per channel, or FITS or XISF as 32-bit floats. Name the file with the extension you want. When Studio was started with a working space's ICC profile, a TIFF or PNG carries it.",
+                "Saves the picture as the canvas shows it, cropped, at full resolution: TIFF or PNG at 16 bits per channel, FITS or XISF as 32-bit floats, or AVIF as HDR (PQ, Rec. 2020), which keeps an HDR picture's brightest areas above SDR white. Name the file with the extension you want. When Studio was started with a working space's ICC profile, a TIFF or PNG carries it.",
             ))
     }
 
