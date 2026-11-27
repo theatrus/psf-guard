@@ -657,10 +657,31 @@ impl Studio {
 
     /// The settings of an input's tools that a person can set, in the
     /// order they are listed: the tool, the setting, and its value now.
+    /// The kind of tool the selected row is a step of, when it is a tool
+    /// step: its Tools block shows that kind alone.
+    fn selected_tool_kind(&self) -> Option<&'static str> {
+        let (_, step) = self.document.step(self.selected_step()?)?;
+        let provider = Self::provider_of(crate::studio_model::tool_of(step)?).to_string();
+        let category = self
+            .tools
+            .tools
+            .iter()
+            .find(|tool| tool.key == provider)
+            .map(|tool| tool.category.clone())?;
+        CATEGORIES
+            .iter()
+            .find(|(key, _)| *key == category)
+            .map(|(key, _)| *key)
+    }
+
     fn tool_settings(&self, channel: &str) -> Vec<(String, Setting, serde_json::Value)> {
         let mut listed = Vec::new();
+        let kind = self.selected_tool_kind();
         for step in self.shown_chain(channel) {
             let provider = Self::provider_of(&step).to_string();
+            if kind.is_some_and(|kind| !self.is_of(&provider, kind)) {
+                continue;
+            }
             let Some(schema) = self
                 .tools
                 .tools
@@ -1313,7 +1334,12 @@ impl Studio {
         } else if self.tools.tools.is_empty() {
             block = block.child(Self::note("Looking for the tools this computer has…"));
         }
-        for (at, (category, title)) in CATEGORIES.iter().enumerate() {
+        let kind = self.selected_tool_kind();
+        for (at, (category, title)) in CATEGORIES
+            .iter()
+            .enumerate()
+            .filter(|(_, (category, _))| kind.is_none_or(|kind| kind == *category))
+        {
             let offered: Vec<&ToolInfo> = self
                 .tools
                 .tools
