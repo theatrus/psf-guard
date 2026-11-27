@@ -133,6 +133,7 @@ impl Studio {
             None => None,
         };
         let working = self.working_profile.clone();
+        let tiff_float = self.tiff_float;
         let run = Arc::new(ExportRun {
             path: path.clone(),
             progress: AtomicU32::new(0),
@@ -148,6 +149,7 @@ impl Studio {
                 region,
                 profile.as_deref(),
                 working.as_deref(),
+                tiff_float,
                 &run,
             );
             *run.done.lock().expect("export result") = Some(result);
@@ -198,6 +200,7 @@ fn export(
     region: ReferenceRegion,
     profile: Option<&[u8]>,
     working: Option<&Path>,
+    tiff_float: bool,
     run: &ExportRun,
 ) -> Result<(), String> {
     let (store, _) = crate::store_tiles::open_store(store)?;
@@ -219,8 +222,27 @@ fn export(
         seiza_compose::Error::Cancelled => "it was stopped".to_string(),
         error => error.to_string(),
     })?;
-    if extension(&run.path).as_deref() == Some("avif") {
-        return save_hdr(&run.path, image.width, image.height, &image.data, working);
+    match extension(&run.path).as_deref() {
+        Some("avif") => {
+            return save_hdr(&run.path, image.width, image.height, &image.data, working);
+        }
+        Some("tif" | "tiff") if tiff_float => {
+            // Uncovered pixels as black; every other value as it is.
+            let rgb: Vec<f32> = image
+                .data
+                .iter()
+                .map(|value| if value.is_finite() { *value } else { 0.0 })
+                .collect();
+            return seiza_image_io::save_float_tiff(
+                &run.path,
+                image.width,
+                image.height,
+                seiza_fits::F32ImageData::RgbInterleaved(&rgb),
+                profile,
+            )
+            .map_err(|error| error.to_string());
+        }
+        _ => {}
     }
     save(&run.path, image.width, image.height, &image.data, profile)
 }

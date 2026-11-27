@@ -717,6 +717,8 @@ pub struct Studio {
     export: Option<Arc<export::ExportRun>>,
     /// What the last export said: how far it has got, or how it ended.
     export_line: String,
+    /// Whether a TIFF export holds 32-bit floats, in place of 16 bits.
+    tiff_float: bool,
     /// Where to write the parity report, until it is written.
     parity_report: Option<PathBuf>,
     /// The ICC profile of the document's working space, which an export
@@ -901,6 +903,7 @@ impl Studio {
                 histogram: None,
                 export: None,
                 export_line: String::new(),
+                tiff_float: false,
                 parity_report,
                 working_profile,
                 levels,
