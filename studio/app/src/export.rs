@@ -115,6 +115,20 @@ impl Studio {
             None => [0, 0, width, height],
         };
         let region = within(rect, (width, height));
+        // A TIFF or PNG names the working space its values are in.
+        let profile = match &self.working_profile {
+            Some(path) => match std::fs::read(path) {
+                Ok(bytes) => Some(bytes),
+                Err(error) => {
+                    self.tell_export(&format!(
+                        "The working space's profile {} could not be read: {error}",
+                        path.display()
+                    ));
+                    return;
+                }
+            },
+            None => None,
+        };
         let run = Arc::new(ExportRun {
             path: path.clone(),
             progress: AtomicU32::new(0),
@@ -124,7 +138,7 @@ impl Studio {
         self.export = Some(run.clone());
         self.tell_export(&format!("Exporting {}…", file_name(&path)));
         std::thread::spawn(move || {
-            let result = export(&picture, &store, region, &run);
+            let result = export(&picture, &store, region, profile.as_deref(), &run);
             *run.done.lock().expect("export result") = Some(result);
         });
     }
@@ -171,6 +185,7 @@ fn export(
     picture: &Picture,
     store: &Path,
     region: ReferenceRegion,
+    profile: Option<&[u8]>,
     run: &ExportRun,
 ) -> Result<(), String> {
     let (store, _) = crate::store_tiles::open_store(store)?;
@@ -192,19 +207,26 @@ fn export(
         seiza_compose::Error::Cancelled => "it was stopped".to_string(),
         error => error.to_string(),
     })?;
-    save(&run.path, image.width, image.height, &image.data)
+    save(&run.path, image.width, image.height, &image.data, profile)
 }
 
 /// Writes interleaved RGB to `path` in the format its extension names,
 /// through Seiza: TIFF or PNG at 16 bits per channel, kept within 0 to 1,
-/// or FITS or XISF as 32-bit floats as they are, FITS rows top-down. A
-/// pixel no input covers is written as black.
-fn save(path: &Path, width: usize, height: usize, rgb: &[f32]) -> Result<(), String> {
+/// with `profile` embedded when there is one, or FITS or XISF as 32-bit
+/// floats as they are, FITS rows top-down. A pixel no input covers is
+/// written as black.
+fn save(
+    path: &Path,
+    width: usize,
+    height: usize,
+    rgb: &[f32],
+    profile: Option<&[u8]>,
+) -> Result<(), String> {
     let rgb: Vec<f32> = rgb
         .iter()
         .map(|value| if value.is_finite() { *value } else { 0.0 })
         .collect();
-    seiza_image_io::save_f32(
+    seiza_image_io::save_f32_with_profile(
         path,
         width,
         height,
@@ -213,6 +235,7 @@ fn save(path: &Path, width: usize, height: usize, rgb: &[f32]) -> Result<(), Str
             fits_top_down: true,
             ..Default::default()
         },
+        profile,
     )
     .map_err(|error| error.to_string())
 }
@@ -330,7 +353,7 @@ mod tests {
         // Two values one 16-bit step apart, which 8 bits could not tell apart.
         let step = 1.0 / 65535.0;
         let rgb = [0.5, 0.5, 0.5, 0.5 + step, 0.5 + step, 0.5 + step];
-        save(&path, 2, 1, &rgb).unwrap();
+        save(&path, 2, 1, &rgb, None).unwrap();
         let read = seiza_image_io::open(&path).unwrap();
         let samples = &read.samples;
         assert!((samples[0] - 0.5).abs() < step);

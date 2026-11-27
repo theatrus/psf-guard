@@ -78,10 +78,12 @@ pub fn resolve_chain(
 
 /// A resolved chain for each chain of output stretches seen lately, so a
 /// refresh of the canvas that changes no output stretch and no samples does
-/// not resolve them again.
+/// not resolve them again; and the noise measured lately for a Tone step's
+/// Texture, for the same reason.
 #[derive(Default)]
 pub struct ResolvedChains {
     entries: Vec<ResolvedChain>,
+    noise: Vec<(u64, String, f32)>,
 }
 
 /// One chain resolved: the id of the samples it was resolved from (none
@@ -96,6 +98,29 @@ type ResolvedChain = (
 impl ResolvedChains {
     /// The chains a cache keeps.
     const KEPT: usize = 8;
+
+    /// The noise of the picture as the Finish steps `before` leave it,
+    /// measured by `measure` from the samples of sampling `id`, or as it was
+    /// measured before from the same samples and steps.
+    pub fn noise(
+        &mut self,
+        id: u64,
+        before: &[seiza_compose::picture::FinishStep],
+        measure: impl FnOnce() -> f32,
+    ) -> f32 {
+        let key = format!("{before:?}");
+        if let Some((_, _, noise)) = self
+            .noise
+            .iter()
+            .find(|(at, steps, _)| *at == id && *steps == key)
+        {
+            return *noise;
+        }
+        let noise = measure();
+        self.noise.insert(0, (id, key, noise));
+        self.noise.truncate(Self::KEPT);
+        noise
+    }
 
     /// [`resolve_chain`], from the cache when this chain was resolved from
     /// these samples before. `samples` carry the id of the sampling they

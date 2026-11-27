@@ -248,6 +248,30 @@ pub fn finished_samples(finish: &[FinishStep], rgb: &[f32]) -> Vec<f32> {
     }
 }
 
+/// The noise of the picture as the Finish steps `before` leave it, from
+/// `samples`: `patches` square patches of RGB samples of the combined
+/// picture, patch after patch. The median of each patch's measurement, so a
+/// patch full of stars or nebula edges does not count for more. 0 when
+/// there are no samples.
+pub fn picture_noise(before: &[FinishStep], samples: &[f32], patches: usize) -> f32 {
+    let pixels = samples.len() / 3 / patches.max(1);
+    let size = (pixels as f64).sqrt() as usize;
+    if size < 3 {
+        return 0.0;
+    }
+    let finished = finished_samples(before, samples);
+    let mut measured: Vec<f32> = finished
+        .chunks_exact(size * size * 3)
+        .map(|patch| seiza_compose::tone::luminance_noise(patch, size, size))
+        .filter(|noise| noise.is_finite() && *noise > 0.0)
+        .collect();
+    if measured.is_empty() {
+        return 0.0;
+    }
+    measured.sort_by(f32::total_cmp);
+    measured[measured.len() / 2]
+}
+
 /// Interleaved RGB samples as three inputs one pixel high.
 struct InterleavedSource<'a> {
     rgb: &'a [f32],
@@ -368,5 +392,40 @@ mod tests {
         let finished = finished_samples(&brighter, &rgb);
         assert!(finished[0] > rgb[0] * 1.5, "{finished:?}");
         assert!(finished[3] > 0.9, "{finished:?}");
+    }
+
+    #[test]
+    fn the_picture_s_noise_is_the_median_of_its_patches() {
+        // Five patches of 32 × 32: four with noise of about 0.01, one a
+        // sharp checkerboard, which the median leaves out.
+        let size = 32;
+        let uniform = |index: u64| {
+            // splitmix64, so neighboring pixels are independent.
+            let mut z = index.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            (z ^ (z >> 31)) as f32 / u64::MAX as f32
+        };
+        let mut samples = Vec::new();
+        for patch in 0..5_u64 {
+            for at in 0..(size * size) as u64 {
+                let value = if patch == 4 {
+                    if (at / size as u64 + at % size as u64).is_multiple_of(2) {
+                        0.9
+                    } else {
+                        0.1
+                    }
+                } else {
+                    let sum: f32 = (0..12)
+                        .map(|draw| uniform((patch * 100_000 + at) * 12 + draw))
+                        .sum();
+                    0.3 + (sum - 6.0) * 0.01
+                };
+                samples.extend([value; 3]);
+            }
+        }
+        let noise = picture_noise(&[], &samples, 5);
+        assert!((noise - 0.01).abs() < 0.0015, "{noise}");
+        assert_eq!(picture_noise(&[], &[], 4), 0.0);
     }
 }

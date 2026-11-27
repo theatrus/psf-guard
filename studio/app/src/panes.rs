@@ -1028,7 +1028,17 @@ pub(super) fn scene(
                 settings,
                 ..
             } if operation == tone_step::OPERATION => {
-                FinishKind::Tone(tone_step::from_settings(settings))
+                let mut tone = tone_step::from_settings(settings);
+                // Texture leaves the picture's noise alone: measured from
+                // the samples, as the steps before this one leave them.
+                if tone.texture != 0.0
+                    && let Some((id, samples)) = picture_samples
+                {
+                    tone.noise = chains.noise(id, &finish, || {
+                        crate::canvas::picture_noise(&finish, samples, super::PICTURE_PATCHES)
+                    });
+                }
+                FinishKind::Tone(tone)
             }
             StepKind::Heal { offset, shift, .. } => FinishKind::Heal {
                 offset: *offset,
@@ -1373,12 +1383,17 @@ impl Studio {
                 else {
                     return false;
                 };
-                step.enabled
-                    && operation == flow_operations::OUTPUT_STRETCH
+                // An output stretch resolved from the picture's statistics,
+                // and Texture, which measures the picture's noise, read
+                // samples of the picture.
+                let stretch = operation == flow_operations::OUTPUT_STRETCH
                     && output_stretch::config_of(settings).is_some_and(|config| {
                         output_stretch::needs_samples(&config)
                             && !matches!(config.model, StretchModel::Layered(_))
-                    })
+                    });
+                let texture = operation == tone_step::OPERATION
+                    && tone_step::from_settings(settings).texture != 0.0;
+                step.enabled && (stretch || texture)
             });
         // The histogram of the final picture is made from the samples too.
         let wanted = wanted || self.histogram_wanted();
@@ -1441,6 +1456,42 @@ impl Studio {
             patches,
             size,
         })))
+    }
+
+    /// How much the selected Finish step's mask covers each of the
+    /// picture's `samples` samples, patch after patch, as the sampling read
+    /// them. `None` when the selected row is not a Finish step with a mask,
+    /// or the samples are not of the current patches.
+    fn masked_area(&self, samples: usize) -> Option<Vec<f32>> {
+        let Row::Finish(id) = &self.selected else {
+            return None;
+        };
+        let (_, step) = self.document.step(*id)?;
+        let strokes = step_strokes(step);
+        if strokes.is_empty() {
+            return None;
+        }
+        let (width, height) = self.canvas.read(|shared| shared.canvas.document_size);
+        let rect = self
+            .crop_rect()
+            .unwrap_or([0.0, 0.0, width as f32, height as f32]);
+        let (patches, size) = picture_patches(rect);
+        let size = size as usize;
+        let covers: Vec<f32> = patches
+            .iter()
+            .flat_map(|origin| {
+                seiza_compose::render::paint_mask(
+                    &strokes,
+                    seiza_compose::ReferenceRegion {
+                        x: origin[0] as usize,
+                        y: origin[1] as usize,
+                        width: size,
+                        height: size,
+                    },
+                )
+            })
+            .collect();
+        (covers.len() == samples).then_some(covers)
     }
 
     /// Whether the inspector shows the histogram of the final picture: for
@@ -1540,18 +1591,25 @@ impl Studio {
                     .map(|(id, samples)| (*id, samples.as_slice())),
                 &mut chains,
             );
-            // Every fourth pixel of the samples is plenty for a histogram,
-            // and keeps a slider's drag smooth.
-            let every: Vec<f32> = samples
-                .as_chunks::<3>()
-                .0
-                .iter()
-                .step_by(4)
-                .flatten()
-                .copied()
-                .collect();
-            let finished = crate::canvas::finished_samples(&scene.finish, &every);
-            Some(Arc::new(crate::histogram::Histogram::of(&finished, 1)))
+            // A Finish step with a mask shows the histogram of its area: the
+            // samples its strokes cover at least half.
+            let covers = self.masked_area(samples.len() / 3);
+            let pixels = samples.as_chunks::<3>().0;
+            let chosen: Vec<f32> = match &covers {
+                Some(covers) => pixels
+                    .iter()
+                    .zip(covers)
+                    .filter(|(_, cover)| **cover >= 0.5)
+                    .flat_map(|(pixel, _)| *pixel)
+                    .collect(),
+                // Every fourth pixel of the samples is plenty for a
+                // histogram, and keeps a slider's drag smooth.
+                None => pixels.iter().step_by(4).flatten().copied().collect(),
+            };
+            let finished = crate::canvas::finished_samples(&scene.finish, &chosen);
+            let mut histogram = crate::histogram::Histogram::of(&finished, 1);
+            histogram.masked = covers.is_some();
+            Some(Arc::new(histogram))
         });
         self.resolved_chains = chains;
         self.places = places;

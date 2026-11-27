@@ -197,11 +197,14 @@ pub struct PictureRequest {
 
 /// Patches of the combined picture sampled for its stretch: an eight by
 /// eight grid of squares spread across `rect`, as each input is sampled.
+/// How many patches a sampling of the picture reads: an eight by eight grid.
+pub(super) const PICTURE_PATCHES: usize = 64;
+
 pub(super) fn picture_patches(rect: [f32; 4]) -> (Vec<[u32; 2]>, u32) {
     let [left, top, right, bottom] = rect.map(|value| value.max(0.0) as u32);
     let (width, height) = (right.saturating_sub(left), bottom.saturating_sub(top));
     let size = 128.min(width).min(height).max(1);
-    let mut patches = Vec::with_capacity(64);
+    let mut patches = Vec::with_capacity(PICTURE_PATCHES);
     for row in 0..8 {
         for column in 0..8 {
             patches.push([
@@ -716,6 +719,9 @@ pub struct Studio {
     export_line: String,
     /// Where to write the parity report, until it is written.
     parity_report: Option<PathBuf>,
+    /// The ICC profile of the document's working space, which an export
+    /// embeds, when Studio was given one.
+    working_profile: Option<PathBuf>,
     /// The levels in the document's pyramid.
     levels: u8,
     /// The processing tools: which this computer has, and the run in hand.
@@ -725,6 +731,7 @@ pub struct Studio {
 impl Studio {
     fn new(options: Options, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let parity_report = options.parity_report.clone();
+        let working_profile = options.working_profile.clone();
         // SAFETY: `NSView` is an AppKit class, windows are opened on the main
         // thread, and the new view is in no other view hierarchy.
         let (native_view, ns_view) = unsafe {
@@ -895,6 +902,7 @@ impl Studio {
                 export: None,
                 export_line: String::new(),
                 parity_report,
+                working_profile,
                 levels,
                 tools,
             };

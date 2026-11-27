@@ -1285,6 +1285,11 @@ impl Studio {
                 .child(Self::note("Reading the picture…"));
         };
         let (black, white) = (histogram.black * 100.0, histogram.white * 100.0);
+        let title = if histogram.masked {
+            "Histogram of the masked area"
+        } else {
+            "Histogram"
+        };
         let chart = gpui::canvas(
             |_, _, _| (),
             move |bounds, (), window, _| {
@@ -1314,7 +1319,7 @@ impl Studio {
         .w_full()
         .h(gpui::px(80.0));
         column()
-            .child(Self::heading("Histogram"))
+            .child(Self::heading(title))
             .child(div().bg(gpui::rgb(0x111316)).child(chart))
             .child(Self::note(format!(
                 "Clipped: {black:.2}% to black, {white:.2}% to white"
@@ -1345,7 +1350,7 @@ impl Studio {
                 block.child(Self::note(self.export_line.clone()))
             })
             .children(Self::help(
-                "Saves the picture as the canvas shows it, cropped, at full resolution: TIFF or PNG at 16 bits per channel, or FITS or XISF as 32-bit floats. Name the file with the extension you want.",
+                "Saves the picture as the canvas shows it, cropped, at full resolution: TIFF or PNG at 16 bits per channel, or FITS or XISF as 32-bit floats. Name the file with the extension you want. When Studio was started with a working space's ICC profile, a TIFF or PNG carries it.",
             ))
     }
 

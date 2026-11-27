@@ -20,6 +20,8 @@ pub struct Histogram {
     pub white: f32,
     /// The share of pixels with every channel at black.
     pub black: f32,
+    /// Whether the histogram is of a masked step's area alone.
+    pub masked: bool,
 }
 
 impl Histogram {
@@ -52,6 +54,7 @@ impl Histogram {
             pixels,
             white: share(white),
             black: share(black),
+            masked: false,
         }
     }
 
