@@ -828,6 +828,11 @@ pub struct Studio {
     stroke: Option<Stroke>,
     /// Counts the scenes sent to the canvas.
     scene_version: u64,
+    /// The thread that builds the canvas's scenes.
+    scene_worker: scene_worker::SceneWorker,
+    /// Counts the changes to the bands' samples, so the scene worker makes
+    /// its stretch analyses again.
+    bands_generation: u64,
     /// Where each band is in a tile, and its samples for the stretch.
     band_info: Arc<Bands>,
     /// The store's bands as opened, without the planes worked out from it.
@@ -978,6 +983,7 @@ impl Studio {
                 this.follow_tools();
                 this.follow_links();
                 this.follow_picture();
+                this.follow_scenes();
                 this.follow_export();
                 this.follow_derived();
                 // Every change is kept: the document is saved as soon as it
@@ -1011,6 +1017,7 @@ impl Studio {
         let was_opened = opened.is_some();
         let mut document = opened.unwrap_or_else(|| panes::flow_document(&band_info.names));
         crate::tone_step::adopt_headroom(&mut document);
+        let scene_worker = scene_worker::SceneWorker::start(canvas.clone());
         let mut studio =
             Self {
                 native_view,
@@ -1049,6 +1056,8 @@ impl Studio {
                 toggled: HashSet::new(),
                 stroke: None,
                 scene_version: 0,
+                scene_worker,
+                bands_generation: 0,
                 base_bands: band_info.clone(),
                 band_info,
                 analysed: Vec::new(),
@@ -1490,6 +1499,8 @@ mod open;
 mod panes;
 #[path = "parts.rs"]
 mod parts;
+#[path = "scene_worker.rs"]
+mod scene_worker;
 #[path = "tools.rs"]
 mod tools;
 #[path = "tree.rs"]

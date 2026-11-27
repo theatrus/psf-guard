@@ -872,6 +872,7 @@ impl Studio {
                     self.base_bands = Arc::new(self.base_bands.with_whole_samples(&channels));
                     self.band_info = Arc::new(self.base_bands.with_derived(&self.derived));
                     self.analysed.clear();
+                    self.bands_generation += 1;
                     self.refresh_canvas();
                 }
                 Err(error) => {
@@ -1204,6 +1205,7 @@ impl Studio {
         self.derive_tasks.clear();
         self.derived.clear();
         self.analysed.clear();
+        self.bands_generation += 1;
         self.start_whole_samples();
         self.source_generation += 1;
         self.levels = pyramid.levels;

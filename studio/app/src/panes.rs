@@ -12,7 +12,7 @@
 //! decided in `src/studio/place.rs`, which knows of no toolkit. These files
 //! only lay that out with GPUI, and turn a place into what the canvas draws.
 
-use super::{picture_patches, Bands, Drag, PictureRequest, Scene, SliderId, Studio, Tool};
+use super::{picture_patches, Bands, Drag, Scene, SliderId, Studio, Tool};
 use crate::canvas::{Adjustment, ComputedMask, Layer, Mark, MaskBand};
 use crate::image_steps::Accepts;
 use crate::output_stretch::needs_image;
@@ -706,6 +706,72 @@ fn push_heal(
     }
 }
 
+/// Whether the document reads samples of its picture: an output stretch
+/// resolved from the picture's statistics, or Texture, which measures the
+/// picture's noise.
+pub(super) fn needs_picture(document: &Document) -> bool {
+    document.stage(StageKind::Finish).steps.iter().any(|step| {
+        let StepKind::Operation {
+            operation,
+            settings,
+            ..
+        } = &step.kind
+        else {
+            return false;
+        };
+        let stretch = operation == flow_operations::OUTPUT_STRETCH
+            && output_stretch::config_of(settings).is_some_and(|config| {
+                output_stretch::needs_samples(&config) && !needs_image(&config.model)
+            });
+        let texture =
+            operation == tone_step::OPERATION && tone_step::from_settings(settings).texture != 0.0;
+        step.enabled && (stretch || texture)
+    })
+}
+
+impl Scene {
+    /// What the combined picture is made of, as a number that changes when
+    /// it does: the store's tiles, the layers with their stretches, masks
+    /// and heals, the inputs' states and the crop.
+    pub(super) fn picture_id(
+        &self,
+        source_generation: u64,
+        states: &[BandState],
+        crop: Option<[f32; 4]>,
+    ) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        std::hash::Hash::hash(&source_generation, &mut hasher);
+        std::hash::Hash::hash(
+            &format!(
+                "{:?}{:?}{:?}{:?}{:?}{:?}{:?}",
+                self.layers,
+                self.layer_bands,
+                self.layer_stretches,
+                self.computed,
+                self.heals,
+                states,
+                crop,
+            ),
+            &mut hasher,
+        );
+        // A painted mask can have many segments; their numbers are hashed
+        // as they are.
+        for segment in self.masks.iter().flatten() {
+            let Segment {
+                from,
+                to,
+                radius,
+                hardness,
+                value,
+            } = segment;
+            for number in [from[0], from[1], to[0], to[1], *radius, *hardness, *value] {
+                std::hash::Hash::hash(&number.to_bits(), &mut hasher);
+            }
+        }
+        std::hash::Hasher::finish(&hasher)
+    }
+}
+
 /// What the document asks the canvas to draw for a view. Returns the scene,
 /// without its stretch analyses, and each band's background strength in it.
 /// What one frame has no room for is listed in the scene, never drawn
@@ -1382,103 +1448,6 @@ impl Studio {
 
     // ---- the canvas -----------------------------------------------------
 
-    /// What the canvas samples of the combined picture for the output
-    /// stretches that Seiza resolves from the picture. `None` leaves the
-    /// request the canvas has, because it already asks for the picture as
-    /// it is; `Some(None)` withdraws it, because the document has no such
-    /// stretch.
-    #[allow(clippy::option_option)]
-    fn picture_request(&mut self) -> Option<Option<Arc<PictureRequest>>> {
-        let wanted = self
-            .document
-            .stage(StageKind::Finish)
-            .steps
-            .iter()
-            .any(|step| {
-                let StepKind::Operation {
-                    operation,
-                    settings,
-                    ..
-                } = &step.kind
-                else {
-                    return false;
-                };
-                // An output stretch resolved from the picture's statistics,
-                // and Texture, which measures the picture's noise, read
-                // samples of the picture.
-                let stretch = operation == flow_operations::OUTPUT_STRETCH
-                    && output_stretch::config_of(settings).is_some_and(|config| {
-                        output_stretch::needs_samples(&config) && !needs_image(&config.model)
-                    });
-                let texture = operation == tone_step::OPERATION
-                    && tone_step::from_settings(settings).texture != 0.0;
-                step.enabled && (stretch || texture)
-            });
-        // The histogram of the final picture is made from the samples too.
-        let wanted = wanted || self.histogram_wanted();
-        if !wanted {
-            self.picture_samples = None;
-            return self.picture_wanted.take().map(|_| None);
-        }
-        let (mut scene, states) = scene(
-            &self.document,
-            &self.band_info,
-            &Place::Final.view(),
-            self.scene_version,
-            None,
-            &mut output_stretch::ResolvedChains::default(),
-            &self.view_stretch_stages(),
-        );
-        scene.stretches = self.analysis(&states);
-        let crop = self.crop_rect();
-        let (width, height) = self.canvas.read(|shared| shared.canvas.document_size);
-        let rect = crop.unwrap_or([0.0, 0.0, width as f32, height as f32]);
-        let (patches, size) = picture_patches(rect);
-        // The picture is the store's tiles, the scene's layers with their
-        // stretches, masks and heals, the inputs' states and the crop.
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        std::hash::Hash::hash(&self.source_generation, &mut hasher);
-        std::hash::Hash::hash(
-            &format!(
-                "{:?}{:?}{:?}{:?}{:?}{:?}{:?}",
-                scene.layers,
-                scene.layer_bands,
-                scene.layer_stretches,
-                scene.computed,
-                scene.heals,
-                states,
-                crop,
-            ),
-            &mut hasher,
-        );
-        // A painted mask can have many segments; their numbers are hashed
-        // as they are.
-        for segment in scene.masks.iter().flatten() {
-            let Segment {
-                from,
-                to,
-                radius,
-                hardness,
-                value,
-            } = segment;
-            for number in [from[0], from[1], to[0], to[1], *radius, *hardness, *value] {
-                std::hash::Hash::hash(&number.to_bits(), &mut hasher);
-            }
-        }
-        let id = std::hash::Hasher::finish(&hasher);
-        if self.picture_wanted == Some(id) {
-            return None;
-        }
-        self.picture_wanted = Some(id);
-        Some(Some(Arc::new(PictureRequest {
-            id,
-            scene,
-            patches,
-            size,
-        })))
-    }
-
-    /// Turns the selected Tone and color step's HDR on or off.
     /// The view stretch, as the stretches of a channel nothing stretches
     /// yet. Seiza's automatic midtones stretch if its settings do not read.
     pub(super) fn view_stretch_stages(&self) -> Vec<StretchModel> {
@@ -1540,8 +1509,6 @@ impl Studio {
         matches!(self.selected, Row::Final | Row::Finish(_))
     }
 
-    /// Takes the samples of the combined picture the render thread read,
-    /// and draws the output stretches from them.
     /// The histogram of the final picture's samples, once the GPU has read
     /// the ones the picture now asks for. Until then the last one stays.
     pub(super) fn update_histogram(&mut self) {
@@ -1615,13 +1582,6 @@ impl Studio {
     pub(super) fn refresh_canvas(&mut self) {
         let started = std::time::Instant::now();
         self.scene_version += 1;
-        let probe = self.picture_request();
-        let requested = started.elapsed();
-        // Samples of an earlier picture stand in until the new ones are
-        // read, so an output stretch keeps its place while the picture
-        // changes.
-        let samples = self.picture_samples.clone();
-        let mut chains = std::mem::take(&mut self.resolved_chains);
         let selected = self.selected.place(self.alone);
         let mut places = panes(self.split, &selected, &self.document);
         // While a mask is edited a person may watch the final picture in
@@ -1639,95 +1599,24 @@ impl Studio {
                 *place = pinned.clone();
             }
         }
-        let view_stretch = self.view_stretch_stages();
-        let scenes: Vec<Scene> = places
-            .iter()
-            .map(|place| {
-                let (mut scene, states) = scene(
-                    &self.document,
-                    &self.band_info,
-                    &place.view(),
-                    self.scene_version,
-                    samples
-                        .as_ref()
-                        .map(|(id, samples)| (*id, samples.as_slice())),
-                    &mut chains,
-                    &view_stretch,
-                );
-                // The stretch is applied to the corrected samples, so each
-                // band's analysis follows its background strength.
-                scene.stretches = self.analysis(&states);
-                scene
-            })
-            .collect();
-        let built = started.elapsed();
-        // The histogram counts the final picture as the GPU draws it, at the
-        // patches the combined picture is sampled at: its Finish steps are
-        // the GPU's, not worked out again here.
-        let final_request = self.histogram_wanted().then_some(()).and_then(|()| {
-            let picture = self.picture_wanted?;
-            let (mut scene, states) = scene(
-                &self.document,
-                &self.band_info,
-                &Place::Final.view(),
-                self.scene_version,
-                self.picture_samples
-                    .as_ref()
-                    .map(|(id, samples)| (*id, samples.as_slice())),
-                &mut chains,
-                &view_stretch,
-            );
-            scene.stretches = self.analysis(&states);
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            std::hash::Hash::hash(&picture, &mut hasher);
-            std::hash::Hash::hash(
-                &format!("{:?}{:?}", scene.finish, scene.headroom),
-                &mut hasher,
-            );
-            Some((std::hash::Hasher::finish(&hasher), scene))
+        // The scenes are built off this thread; samples of an earlier
+        // picture stand in until the new ones are read, so an output
+        // stretch keeps its place while the picture changes.
+        let (width, height) = self.canvas.read(|shared| shared.canvas.document_size);
+        self.scene_worker.submit(super::scene_worker::SceneJob {
+            document: self.document.clone(),
+            band_info: self.band_info.clone(),
+            bands_generation: self.bands_generation,
+            places: places.clone(),
+            view_stretch: self.view_stretch_stages(),
+            picture_samples: self.picture_samples.clone(),
+            scene_version: self.scene_version,
+            histogram_wanted: self.histogram_wanted(),
+            source_generation: self.source_generation,
+            crop: self.crop_rect(),
+            document_size: (width, height),
         });
-        match final_request {
-            Some((id, scene)) if self.final_wanted != Some(id) => {
-                self.final_wanted = Some(id);
-                self.final_peak = seiza_compose::picture::Picture {
-                    finish: scene.finish.clone(),
-                    space: crate::canvas::WORKING_SPACE,
-                    headroom: scene.headroom,
-                    ..Default::default()
-                }
-                .peak();
-                let crop = self.crop_rect();
-                let (width, height) = self.canvas.read(|shared| shared.canvas.document_size);
-                let rect = crop.unwrap_or([0.0, 0.0, width as f32, height as f32]);
-                let (patches, size) = picture_patches(rect);
-                let request = Arc::new(PictureRequest {
-                    id,
-                    scene,
-                    patches,
-                    size,
-                });
-                self.canvas
-                    .edit(|canvas| canvas.final_probe = Some(request));
-            }
-            Some(_) => {}
-            None => {
-                self.final_wanted = None;
-                self.histogram = None;
-                self.canvas.edit(|canvas| canvas.final_probe = None);
-            }
-        }
-        self.update_histogram();
-        self.resolved_chains = chains;
         self.places = places;
-        let scenes = Arc::new(scenes);
-        if super::timing() {
-            eprintln!(
-                "refresh: picture request {:.1} ms, scenes {:.1} ms, histogram {:.1} ms",
-                requested.as_secs_f64() * 1e3,
-                (built - requested).as_secs_f64() * 1e3,
-                (started.elapsed() - built).as_secs_f64() * 1e3,
-            );
-        }
         // The selected row's mask shows over the image while a person has
         // it switched on, so they see what they have painted.
         let overlay = if self.mask_shown {
@@ -1738,15 +1627,35 @@ impl Studio {
         let wipe = (self.split == Split::Wipe).then_some(self.wipe);
         let crop = self.crop_rect();
         self.canvas.edit(|canvas| {
-            if let Some(probe) = probe {
-                canvas.probe = probe;
-            }
-            canvas.scenes = scenes;
             canvas.strokes = overlay;
             canvas.strokes_replaced += 1;
             canvas.wipe = wipe;
             canvas.crop = crop;
         });
+        if super::timing() {
+            eprintln!(
+                "refresh: {:.1} ms on the UI thread",
+                started.elapsed().as_secs_f64() * 1e3
+            );
+        }
+    }
+
+    /// Takes in what the scene worker built: which samplings the scenes
+    /// ask for, and the histogram once its samples are read.
+    pub(super) fn follow_scenes(&mut self) {
+        let Some(outcome) = self.scene_worker.take_outcome() else {
+            return;
+        };
+        if outcome.picture_wanted.is_none() {
+            self.picture_samples = None;
+        }
+        self.picture_wanted = outcome.picture_wanted;
+        if outcome.final_wanted.is_none() {
+            self.histogram = None;
+        }
+        self.final_wanted = outcome.final_wanted;
+        self.final_peak = outcome.final_peak;
+        self.update_histogram();
     }
 
     /// Ends a brush stroke. A mask stroke joins the selected row's mask. A
