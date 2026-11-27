@@ -1474,6 +1474,28 @@ impl seiza_compose::render::Source for StoreSource {
 }
 
 /// The tile source the options ask for, with its bands.
+/// A picture of one black pixel: what the canvas draws while the store it
+/// is to show opens on a thread of its own.
+pub struct Blank;
+
+impl TileSource for Blank {
+    fn pyramid(&self) -> Pyramid {
+        Pyramid {
+            width: 1,
+            height: 1,
+            levels: 1,
+        }
+    }
+
+    fn bands(&self) -> usize {
+        1
+    }
+
+    fn tile(&self, _: TileKey) -> Vec<u16> {
+        vec![0; (TILE * TILE) as usize]
+    }
+}
+
 pub fn source(open: Option<&Path>) -> Result<(Arc<dyn TileSource>, Bands), String> {
     match open {
         Some(path) => {

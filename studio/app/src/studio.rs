@@ -1006,9 +1006,39 @@ impl Studio {
             .clone()
             .or_else(|| Some(options.open.as_ref()?.with_extension("json")));
         let tools = tools::Tools::new(&options);
+        // A document that cannot be read is reported and the default flow
+        // opens in its place, unsaved, so the file is left as it is. A
+        // picture with no document yet gets one.
+        let mut unreadable = None;
+        let opened = document_path.as_ref().and_then(|path| {
+            if !path.exists() {
+                return None;
+            }
+            std::fs::read_to_string(path)
+                .map_err(|error| error.to_string())
+                .and_then(|text| Document::from_json(&text).map_err(|error| error.to_string()))
+                .map_err(|error| unreadable = Some(format!("{}: {error}", path.display())))
+                .ok()
+        });
+        // A store with a readable document beside it opens on a thread of
+        // its own, after the window shows: the document's steps show at
+        // once, and the canvas draws the store once it is open. A store
+        // with no document needs its inputs' names for the default flow
+        // first, so it opens before.
+        let deferred = options
+            .open
+            .clone()
+            .zip(document_path.clone())
+            .filter(|_| opened.is_some());
         let opening = Instant::now();
-        let source = crate::store_tiles::source(options.open.as_deref());
-        if timing() {
+        let source = match &deferred {
+            Some(_) => Ok((
+                Arc::new(crate::store_tiles::Blank) as Arc<dyn psf_studio_render::TileSource>,
+                Bands::default(),
+            )),
+            None => crate::store_tiles::source(options.open.as_deref()),
+        };
+        if timing() && deferred.is_none() {
             eprintln!(
                 "store: opened in {:.1} ms before the window",
                 opening.elapsed().as_secs_f64() * 1e3
@@ -1097,20 +1127,6 @@ impl Studio {
         })
         .detach();
 
-        // A document that cannot be read is reported and the default flow
-        // opens in its place, unsaved, so the file is left as it is. A
-        // picture with no document yet gets one.
-        let mut unreadable = None;
-        let opened = document_path.as_ref().and_then(|path| {
-            if !path.exists() {
-                return None;
-            }
-            std::fs::read_to_string(path)
-                .map_err(|error| error.to_string())
-                .and_then(|text| Document::from_json(&text).map_err(|error| error.to_string()))
-                .map_err(|error| unreadable = Some(format!("{}: {error}", path.display())))
-                .ok()
-        });
         let was_opened = opened.is_some();
         let mut document = opened.unwrap_or_else(|| panes::flow_document(&band_info.names));
         adopt(&mut document);
@@ -1202,6 +1218,10 @@ impl Studio {
         // Undo goes back no further than the document as it opened.
         studio.history.reset(studio.document.to_json());
         studio.refresh_canvas();
+        if let Some((store, document_path)) = deferred {
+            let document = studio.document.clone();
+            studio.open_store(store, Some((document_path, document)), None);
+        }
         studio
     }
 

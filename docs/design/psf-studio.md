@@ -2955,9 +2955,14 @@ Gaps to fix, roughly in the order they got in the way:
 - [ ] **Setup and hand-off.** No Setup page or recipe record in the
   document, no server target or sign-in in Studio, no table of every
   input's tools, no round trip to another editor.
-- [ ] **UI thread.** The store given at start opens before the window
-  shows (about 260 ms for the Cat's Eye); export and the parity check build
-  their scene on the UI thread.
+- [x] **UI thread.** A store given at start with a readable document
+  beside it opens on a thread of its own after the window shows: the
+  window answers with the document's steps while the canvas draws one
+  black pixel, then the store (the Iris answered in 0.8 s and drew its
+  picture at 4.5 s). A store with no document still opens first, since the
+  default flow needs its inputs' names. Export and the parity check build
+  their scene on their own threads; a full-resolution TIFF of the Iris
+  took 3.7 s.
 - [x] **Tried in the app** on the Iris (`psf-studio-mcp`, with its new
   `studio_add_step`): two Tone and color steps with painted masks draw
   together; selecting each shows the histogram of its area (18.5% above

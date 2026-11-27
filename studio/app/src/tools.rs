@@ -1185,7 +1185,7 @@ impl Studio {
     /// Opens the store at `path` on a thread of its own, with `document`
     /// to show with it. The canvas keeps the picture it shows until the
     /// store is open; an opening started later replaces this one.
-    fn open_store(
+    pub(super) fn open_store(
         &mut self,
         path: PathBuf,
         document: Option<(PathBuf, crate::studio_model::Document)>,

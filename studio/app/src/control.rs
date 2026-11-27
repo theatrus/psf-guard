@@ -615,9 +615,6 @@ impl Studio {
         if self.run_is_queued() {
             busy.push("a run of the tools to start".to_string());
         }
-        if self.store_opening.is_some() {
-            busy.push("opening the store".to_string());
-        }
         for task in &self.derive_tasks {
             busy.push(task.describe().to_string());
         }

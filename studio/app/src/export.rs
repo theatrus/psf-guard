@@ -110,21 +110,12 @@ impl Studio {
         let Some(store) = self.store_path().map(Path::to_path_buf) else {
             return;
         };
-        let (mut final_scene, states) = scene(
-            &self.document,
-            &self.band_info,
-            &Place::Final.view(),
-            self.scene_version,
-            self.picture_samples
-                .as_ref()
-                .map(|(id, samples)| (*id, samples.as_slice())),
-            &mut self.resolved_chains,
-            // The view stretch is for looking only: an export leaves a
-            // channel nothing stretches linear.
-            &[],
-        );
-        final_scene.stretches = self.analysis(&states);
-        let picture = final_scene.picture(&[]);
+        // The scene is built on the export's thread, from the document as
+        // it is now.
+        let document = self.document.clone();
+        let band_info = self.band_info.clone();
+        let picture_samples = self.picture_samples.clone();
+        let scene_version = self.scene_version;
         let (width, height) = self.canvas.read(|shared| shared.canvas.document_size);
         let rect = match self.crop_rect() {
             Some([left, top, right, bottom]) => [
@@ -147,6 +138,21 @@ impl Studio {
         self.export = Some(run.clone());
         self.tell_export(&format!("Exporting {}…", file_name(&path)));
         std::thread::spawn(move || {
+            let (mut final_scene, states) = scene(
+                &document,
+                &band_info,
+                &Place::Final.view(),
+                scene_version,
+                picture_samples
+                    .as_ref()
+                    .map(|(id, samples)| (*id, samples.as_slice())),
+                &mut crate::output_stretch::ResolvedChains::default(),
+                // The view stretch is for looking only: an export leaves a
+                // channel nothing stretches linear.
+                &[],
+            );
+            final_scene.stretches = Arc::new(band_info.stretches(&states).unwrap_or_default());
+            let picture = final_scene.picture(&[]);
             let result = export(&picture, &store, &planes, region, tiff_float, &run);
             *run.done.lock().expect("export result") = Some(result);
         });
@@ -387,18 +393,12 @@ impl Studio {
         let Some(store) = self.store_path().map(Path::to_path_buf) else {
             return;
         };
-        // The scene the canvas sampled: the final picture's layers.
-        let (mut probe, states) = scene(
-            &self.document,
-            &self.band_info,
-            &Place::Final.view(),
-            self.scene_version,
-            None,
-            &mut crate::output_stretch::ResolvedChains::default(),
-            &self.view_stretch_stages(),
-        );
-        probe.stretches = self.analysis(&states);
-        let combined = probe.combined(&[]);
+        // The scene the canvas sampled, the final picture's layers, is
+        // built on the check's thread.
+        let document = self.document.clone();
+        let band_info = self.band_info.clone();
+        let view_stretch = self.view_stretch_stages();
+        let scene_version = self.scene_version;
         let (width, height) = self.canvas.read(|shared| shared.canvas.document_size);
         let rect = self
             .crop_rect()
@@ -416,6 +416,17 @@ impl Studio {
         );
         let planes = self.derived.clone();
         std::thread::spawn(move || {
+            let (mut probe, states) = scene(
+                &document,
+                &band_info,
+                &Place::Final.view(),
+                scene_version,
+                None,
+                &mut crate::output_stretch::ResolvedChains::default(),
+                &view_stretch,
+            );
+            probe.stretches = Arc::new(band_info.stretches(&states).unwrap_or_default());
+            let combined = probe.combined(&[]);
             let text = parity(&combined, &store, &planes, region, &patches, size, &gpu)
                 .unwrap_or_else(|error| format!("{{\"error\": {error:?}}}"));
             if let Err(error) = std::fs::write(&report, text) {
