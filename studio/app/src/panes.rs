@@ -666,7 +666,7 @@ fn push_step_layer(
             omitted.push(not_run(step, "the layers beneath it"));
             return Pushed::Nothing;
         }
-        let Ok(mask) = mask_for(mask_strokes(&layer.mask)) else {
+        let Ok(mask) = mask_for(layer_strokes(layer)) else {
             omitted.push(layer.name.clone());
             return Pushed::Nothing;
         };
@@ -737,9 +737,9 @@ fn push_step_layer(
 
     let masks = if heal {
         mask_for(step_strokes(step))
-            .and_then(|stroke| Ok((stroke, mask_for(mask_strokes(&layer.mask))?)))
+            .and_then(|stroke| Ok((stroke, mask_for(layer_strokes(layer))?)))
     } else {
-        mask_for(mask_strokes(&layer.mask)).map(|mask| (mask, None))
+        mask_for(layer_strokes(layer)).map(|mask| (mask, None))
     };
     let Ok((mask, clip)) = masks else {
         omitted.push(layer.name.clone());
@@ -807,6 +807,31 @@ fn push_tool_image(
 /// step is left out rather than drawn over the whole picture.
 fn draws_step_mask(mask: &Option<MaskRecord>) -> bool {
     matches!(mask, None | Some(MaskRecord::Painted(_)))
+}
+
+/// The layer a clipped layer or group is clipped to: the nearest layer
+/// beneath it, or beneath a group's members, in the same group, that is not
+/// clipped and is not an adjustment.
+fn clip_base(document: &Document, id: Uuid) -> Option<&LayerRecord> {
+    let layers = document.layers();
+    let low = *document.block_of(id)?.start();
+    let group = layers.iter().find(|layer| layer.id == id)?.group;
+    layers[..low]
+        .iter()
+        .rev()
+        .filter(|other| other.group == group)
+        .find(|other| !other.clipped && !other.source.is_adjustment())
+}
+
+/// The strokes that limit a layer: its painted mask, or the strokes painted
+/// behind its shared mask.
+fn layer_strokes(layer: &LayerRecord) -> Vec<Segment> {
+    match (&layer.mask, &layer.painted_too) {
+        (Some(MaskRecord::Shared { .. }), Some(too)) => {
+            mask_strokes(&Some(MaskRecord::Painted(too.clone())))
+        }
+        _ => mask_strokes(&layer.mask),
+    }
 }
 
 fn mask_strokes(mask: &Option<MaskRecord>) -> Vec<Segment> {
@@ -897,6 +922,7 @@ fn push_own_adjustments(
     layers: &mut Vec<Layer>,
     omitted: &mut Vec<String>,
     mask_for: &mut impl FnMut(Vec<Segment>) -> Result<Option<usize>, ()>,
+    shared: &mut Vec<(usize, Uuid, bool, String)>,
     owner: &LayerRecord,
     applied: &[Uuid],
 ) {
@@ -907,7 +933,12 @@ fn push_own_adjustments(
         let Some(kind) = adjustment_kind(operation) else {
             continue;
         };
-        if !draws_step_mask(&step.mask) {
+        // A shared mask is computed from its inputs.
+        let behind = match &step.mask {
+            Some(MaskRecord::Shared { mask, inverted }) => Some((*mask, *inverted)),
+            _ => None,
+        };
+        if !draws_step_mask(&step.mask) && behind.is_none() {
             omitted.push(format!(
                 "{operation} of {}, whose {} the canvas does not draw",
                 owner.name,
@@ -916,13 +947,23 @@ fn push_own_adjustments(
             continue;
         }
         match mask_for(mask_strokes(&step.mask)) {
-            Ok(mask) if layers.len() < MAX_LAYERS => layers.push(Layer {
-                opacity: step.opacity,
-                mask,
-                adjustment: Some((kind, amount(step))),
-                own: true,
-                ..plain_layer()
-            }),
+            Ok(mask) if layers.len() < MAX_LAYERS => {
+                layers.push(Layer {
+                    opacity: step.opacity,
+                    mask,
+                    adjustment: Some((kind, amount(step))),
+                    own: true,
+                    ..plain_layer()
+                });
+                if let Some((mask, inverted)) = behind {
+                    shared.push((
+                        layers.len() - 1,
+                        mask,
+                        inverted,
+                        format!("{operation} of {}", owner.name),
+                    ));
+                }
+            }
             _ => omitted.push(format!("{} of {}", operation, owner.name)),
         }
     }
@@ -1251,6 +1292,11 @@ pub(super) fn scene(
     // The entries whose layer may have a mask computed from inputs: the
     // entry's place in `layers`, and the layer.
     let mut masked: Vec<(usize, &LayerRecord)> = Vec::new();
+    // Entries behind a shared mask that is not their layer's own: an own
+    // adjustment's, a pass-through group's, or that of the layer they are
+    // clipped to. The entry's place, the mask, whether it is inverted, and
+    // a name to report.
+    let mut shared_wanted: Vec<(usize, Uuid, bool, String)> = Vec::new();
     // A channel view draws its channel alone; a blended view draws the stack.
     let entries: Vec<StackEntry> = if planned.stack.is_empty() {
         (0..planned.channels.len())
@@ -1377,24 +1423,37 @@ pub(super) fn scene(
                 // A group that is gone still has to end, so the layers
                 // after it are not blended into it.
                 let found = find(&group);
-                let mask = found.map_or(Ok(None), |group| mask_for(mask_strokes(&group.mask)));
+                let mask = found.map_or(Ok(None), |group| mask_for(layer_strokes(group)));
                 if mask.is_err() {
                     omitted.push(format!("the mask of {}", name(found)));
                 }
                 let mask = mask.unwrap_or(None);
                 mask_of.insert(group, mask);
+                // A clipped group shows only inside the mask of the layer
+                // beneath its members.
+                let base = found
+                    .filter(|group| group.clipped)
+                    .and_then(|group| clip_base(document, group.id));
+                let clip = base.and_then(|base| match mask_of.get(&base.id) {
+                    Some(mask) => *mask,
+                    None => mask_for(layer_strokes(base)).unwrap_or(None),
+                });
+                if let Some(base) = base
+                    && let Some(MaskRecord::Shared { mask, inverted }) = &base.mask
+                {
+                    shared_wanted.push((layers.len(), *mask, *inverted, name(found)));
+                }
+                let hidden_base = base.is_some_and(|base| !base.visible);
                 layers.push(Layer {
                     mark: Mark::GroupEnd,
-                    opacity: found.map_or(
-                        1.0,
-                        |group| {
-                            if group.visible {
-                                group.opacity
-                            } else {
-                                0.0
-                            }
-                        },
-                    ),
+                    clip,
+                    opacity: found.map_or(1.0, |group| {
+                        if group.visible && !hidden_base {
+                            group.opacity
+                        } else {
+                            0.0
+                        }
+                    }),
                     blend: found.map_or(Blend::Normal, |group| blend_of(group.blend)),
                     mask,
                     ..plain_layer()
@@ -1407,6 +1466,7 @@ pub(super) fn scene(
                         &mut layers,
                         &mut omitted,
                         &mut mask_for,
+                        &mut shared_wanted,
                         group,
                         &planned.own_steps,
                     );
@@ -1422,7 +1482,7 @@ pub(super) fn scene(
                 if !made.visible || tool_plane(bands, *step, 0, true).is_none() {
                     continue;
                 }
-                let Ok(mask) = mask_for(mask_strokes(&made.mask)) else {
+                let Ok(mask) = mask_for(layer_strokes(made)) else {
                     omitted.push(made.name.clone());
                     continue;
                 };
@@ -1547,7 +1607,7 @@ pub(super) fn scene(
             let Some(kind) = adjustment_kind(operation) else {
                 continue;
             };
-            let Ok(mask) = mask_for(mask_strokes(&layer.mask)) else {
+            let Ok(mask) = mask_for(layer_strokes(layer)) else {
                 omitted.push(layer.name.clone());
                 continue;
             };
@@ -1716,7 +1776,7 @@ pub(super) fn scene(
             }
             continue;
         };
-        let Ok(mask) = mask_for(mask_strokes(&layer.mask)) else {
+        let Ok(mask) = mask_for(layer_strokes(layer)) else {
             omitted.push(layer.name.clone());
             continue;
         };
@@ -1730,7 +1790,7 @@ pub(super) fn scene(
                 Some(mask) => *mask,
                 // The layer it is clipped to is not in this view.
                 None => {
-                    let mask = mask_for(mask_strokes(&base.mask)).unwrap_or(None);
+                    let mask = mask_for(layer_strokes(base)).unwrap_or(None);
                     mask_of.insert(base.id, mask);
                     mask
                 }
@@ -1763,6 +1823,14 @@ pub(super) fn scene(
         layer_stretches.push(stages.clone());
         let shown_at = layers.len() - 1;
         masked.push((shown_at, layer));
+        // Clipped to a layer behind a shared mask, it is behind that mask
+        // too.
+        if let Some(base) = base
+            && !gray
+            && let Some(MaskRecord::Shared { mask, inverted }) = &base.mask
+        {
+            shared_wanted.push((shown_at, *mask, *inverted, layer.name.clone()));
+        }
         for step in input_heals {
             let mask = mask_for(step_strokes(step));
             push_heal(&mut heals, &mut omitted, shown_at, true, step, mask);
@@ -1780,6 +1848,7 @@ pub(super) fn scene(
             &mut layers,
             &mut omitted,
             &mut mask_for,
+            &mut shared_wanted,
             layer,
             &after_baked,
         );
@@ -1882,6 +1951,43 @@ pub(super) fn scene(
     }
     // The shared masks the entries are behind: the entry's place in
     // `layers`, the mask, whether it is inverted, and a name to report.
+    // The layers of a group whose layers pass through blend straight onto
+    // what is beneath them, each limited by the group's opacity and masks.
+    for (at, layer) in masked.clone() {
+        for group in document.ancestors(layer.id) {
+            let Some(group) = find(&group).filter(|group| group.pass_through) else {
+                continue;
+            };
+            let entry = &mut layers[at];
+            entry.opacity *= if group.visible { group.opacity } else { 0.0 };
+            let strokes = layer_strokes(group);
+            if !strokes.is_empty() {
+                if entry.clip.is_none() {
+                    entry.clip = mask_for(strokes).unwrap_or(None);
+                } else {
+                    entry.opacity = 0.0;
+                    omitted.push(format!(
+                        "{}, clipped and in {}, whose layers pass through with a mask",
+                        layer.name, group.name
+                    ));
+                }
+            }
+            if let Some(MaskRecord::Shared { mask, inverted }) = &group.mask {
+                shared_wanted.push((at, *mask, *inverted, layer.name.clone()));
+            }
+            // Its own adjustments apply to a group that blends on its own.
+            if group.steps.iter().any(|step| step.enabled)
+                && !omitted
+                    .iter()
+                    .any(|words| words.starts_with(&format!("the adjustments of {}", group.name)))
+            {
+                omitted.push(format!(
+                    "the adjustments of {}, whose layers pass through",
+                    group.name
+                ));
+            }
+        }
+    }
     let mut wanted: Vec<(usize, Uuid, bool, String)> = masked
         .into_iter()
         .filter_map(|(at, layer)| match &layer.mask {
@@ -1890,6 +1996,7 @@ pub(super) fn scene(
             }
             _ => None,
         })
+        .chain(shared_wanted)
         .collect();
     // A view of a mask draws white behind that mask, so the mask shows.
     if let Subject::Mask(id) = &view.subject {
@@ -1998,6 +2105,12 @@ pub(super) fn scene(
             omitted.push(format!("{name}, for its mask"));
             continue;
         }
+        // An entry has one computed mask; one behind two is not drawn.
+        if layers[at].computed.is_some() {
+            layers[at].opacity = 0.0;
+            omitted.push(format!("{name}, behind two shared masks"));
+            continue;
+        }
         layers[at].computed = Some(computed.len());
         computed.push(ComputedMask {
             bands: read,
@@ -2104,11 +2217,9 @@ impl Studio {
     /// steps, and touch-ups for shared masks.
     pub(super) fn can_mask(&self) -> bool {
         match &self.selected {
-            // A layer behind a shared mask is not painted on: its mask is
-            // touched up on the mask's own row.
-            Row::Layer(id) => !self
-                .layer(*id)
-                .is_some_and(|layer| matches!(layer.mask, Some(MaskRecord::Shared { .. }))),
+            // Behind a shared mask, painting limits the layer as well; the
+            // shared mask is touched up on its own row.
+            Row::Layer(id) => self.layer(*id).is_some(),
             Row::Finish(_) | Row::Mask(_) => true,
             Row::LayerStep { step, .. } => self
                 .document
@@ -2194,7 +2305,7 @@ impl Studio {
     /// selected row's mask.
     fn selected_strokes(&self) -> Vec<Segment> {
         if let Some(layer) = self.selected_layer() {
-            return mask_strokes(&layer.mask);
+            return layer_strokes(layer);
         }
         if let Some(mask) = self.selected_mask() {
             return mask.touch_ups.iter().flat_map(segments).collect();
@@ -2268,7 +2379,7 @@ impl Studio {
         let strokes = match (&self.selected, self.selected_step_layer()) {
             (_, Some((layer, step))) => match step.kind {
                 StepKind::Heal { .. } => step_strokes(step),
-                StepKind::Operation { .. } => mask_strokes(&layer.mask),
+                StepKind::Operation { .. } => layer_strokes(layer),
             },
             (Row::Finish(id), None) => step_strokes(self.document.step(*id)?.1),
             _ => return None,
@@ -3782,6 +3893,90 @@ mod tests {
             "{:?}",
             drawn.omitted
         );
+    }
+
+    #[test]
+    fn groups_pass_through_clip_and_keep_painted_masks_behind_shared_ones() {
+        use super::{flow_document, scene, Bands};
+        use crate::canvas::Mark;
+        use crate::studio_model::{MaskRecord, PaintedMask, Place, SharedMask, Stroke, StrokeMode};
+        let inputs = ["ha".to_string(), "oiii".to_string()];
+        let mut document = flow_document(&inputs);
+        let adjustments: Vec<_> = document
+            .layers()
+            .iter()
+            .filter(|layer| layer.source.is_adjustment())
+            .map(|layer| layer.id)
+            .collect();
+        for id in adjustments {
+            document.remove_layer(id);
+        }
+        let ids: Vec<_> = document.layers().iter().map(|layer| layer.id).collect();
+        let mut bands = Bands::default();
+        bands.names = inputs.to_vec();
+        bands.tile_band = vec![0, 1];
+        bands.steps = vec![Vec::new(), Vec::new()];
+        let draw = |document: &crate::studio_model::Document| {
+            scene(
+                document,
+                &bands,
+                &Place::Final.view(),
+                0,
+                None,
+                &mut Default::default(),
+                &[],
+            )
+            .0
+        };
+        let marks = |drawn: &super::Scene| -> Vec<Mark> {
+            drawn.layers.iter().map(|layer| layer.mark).collect()
+        };
+        // The top layer in a group at half opacity.
+        let group = document.group_layer(ids[1]).unwrap();
+        document.layer_mut(group).unwrap().opacity = 0.5;
+        let grouped = draw(&document);
+        assert!(marks(&grouped).contains(&Mark::GroupBegin));
+        // Passing through, the group is not drawn; its layer takes its
+        // opacity.
+        document.layer_mut(group).unwrap().pass_through = true;
+        let passed = draw(&document);
+        assert!(!marks(&passed).contains(&Mark::GroupBegin));
+        let top = passed.layers.last().unwrap();
+        assert!((top.opacity - 0.5 * document.layers()[1].opacity).abs() < 1e-6);
+        // Clipped, the group shows within the mask of the layer beneath.
+        document.layer_mut(group).unwrap().pass_through = false;
+        let stroke = Stroke {
+            points: vec![[5.0, 5.0]],
+            radius: 3.0,
+            hardness: 0.5,
+            mode: StrokeMode::Add,
+        };
+        document.layer_mut(ids[0]).unwrap().mask = Some(MaskRecord::Painted(PaintedMask {
+            strokes: vec![stroke.clone()],
+            ..Default::default()
+        }));
+        document.layer_mut(group).unwrap().clipped = true;
+        let clipped = draw(&document);
+        let end = clipped
+            .layers
+            .iter()
+            .find(|layer| layer.mark == Mark::GroupEnd)
+            .unwrap();
+        assert!(end.clip.is_some());
+        // A painted mask stays when a shared mask is chosen, and limits the
+        // layer as well.
+        let shared = document.add_mask(SharedMask::new(vec!["ha".to_string()]));
+        assert!(document.set_layer_shared_mask(ids[0], Some((shared, false))));
+        let layer = &document.layers()[0];
+        assert!(matches!(layer.mask, Some(MaskRecord::Shared { .. })));
+        assert!(layer.painted_too.is_some());
+        let behind = draw(&document);
+        assert!(behind.layers.first().unwrap().mask.is_some());
+        assert!(document.set_layer_shared_mask(ids[0], None));
+        assert!(matches!(
+            document.layers()[0].mask,
+            Some(MaskRecord::Painted(_))
+        ));
     }
 
     #[test]

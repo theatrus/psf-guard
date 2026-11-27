@@ -785,7 +785,9 @@ impl Studio {
                             }
                         },
                     ))
-                    .when(layer.group.is_none(), |row| {
+                    .when(
+                        self.document.ancestors(id).len() < crate::studio_model::MAX_GROUP_DEPTH,
+                        |row| {
                         row.child(Self::act(
                             "Group",
                             "layer-group",
@@ -943,6 +945,13 @@ impl Studio {
     fn inspect_group(&self, layer: &LayerRecord, cx: &mut Context<Self>) -> AnyElement {
         let id = layer.id;
         let members = self.document.group_members(id).count();
+        let (pass_through, clipped) = (layer.pass_through, layer.clipped);
+        // A group goes into a new group while every layer in it stays
+        // within the depth groups go to.
+        let can_nest = {
+            let mut trial = self.document.clone();
+            trial.group_layer(id).is_ok()
+        };
         column()
             .child(Self::title(
                 layer.name.clone(),
@@ -992,12 +1001,51 @@ impl Studio {
                 move |this, name| this.add_adjustment_above(Some(id), name),
             )))
             .child(Self::heading("Group"))
+            .child(Self::act(
+                if pass_through {
+                    "Layers pass through"
+                } else {
+                    "Layers blend together first"
+                },
+                "pass-through",
+                pass_through,
+                cx,
+                move |this| {
+                    if let Some(group) = this.document.layer_mut(id) {
+                        group.pass_through = !pass_through;
+                    }
+                },
+            ))
+            .children(Self::help(
+                "Passing through, each layer blends straight onto the layers beneath the group, as if it were not grouped; the group's opacity and masks still limit each one, and its own adjustments do not apply.",
+            ))
+            .child(Self::act(
+                if clipped { "Clipped" } else { "Not clipped" },
+                "group-clipped",
+                clipped,
+                cx,
+                move |this| {
+                    if let Some(group) = this.document.layer_mut(id) {
+                        group.clipped = !clipped;
+                    }
+                },
+            ))
+            .children(Self::help(
+                "A clipped group shows only inside the mask of the layer beneath it, and not at all while that layer is hidden.",
+            ))
             .child(
                 wrap()
                     .child(Self::act("Ungroup", "ungroup", false, cx, move |this| {
                         this.document.ungroup(id);
                         this.selected = Row::Combined;
                     }))
+                    .when(can_nest, |row| {
+                        row.child(Self::act("Group", "group-group", false, cx, move |this| {
+                            if let Ok(group) = this.document.group_layer(id) {
+                                this.selected = Row::Layer(group);
+                            }
+                        }))
+                    })
                     .child(Self::act("Delete", "part-delete", false, cx, move |this| {
                         this.remove_part(id)
                     })),
@@ -1032,12 +1080,8 @@ impl Studio {
                     on,
                     cx,
                     move |this| {
-                        if let Some(layer) = this.document.layer_mut(id) {
-                            layer.mask = (!on).then_some(MaskRecord::Shared {
-                                mask: mask_id,
-                                inverted: false,
-                            });
-                        }
+                        this.document
+                            .set_layer_shared_mask(id, (!on).then_some((mask_id, false)));
                     },
                 )
             })
@@ -1058,26 +1102,22 @@ impl Studio {
                         return;
                     };
                     let mask = this.document.add_mask(SharedMask::new(vec![input]));
-                    if let Some(layer) = this.document.layer_mut(id) {
-                        layer.mask = Some(MaskRecord::Shared {
-                            mask,
-                            inverted: false,
-                        });
-                    }
+                    this.document.set_layer_shared_mask(id, Some((mask, false)));
                     this.selected = Row::Mask(mask);
                 },
             )))
             .children(Self::help(
                 "A shared mask follows the signal of one or two inputs. Several layers can be behind the same mask, or its inverse.",
             ))
-            .when(painted, |pane| {
-                pane.children(Self::help("Choosing a shared mask replaces the painted mask."))
+            .when(painted || layer.painted_too.is_some(), |pane| {
+                pane.children(Self::help(
+                    "A painted mask stays with a shared mask: the layer shows only where both let it.",
+                ))
             })
             .when_some(used, |pane, (mask, inverted)| {
                 let set = move |this: &mut Self, inverted: bool| {
-                    if let Some(layer) = this.document.layer_mut(id) {
-                        layer.mask = Some(MaskRecord::Shared { mask, inverted });
-                    }
+                    this.document
+                        .set_layer_shared_mask(id, Some((mask, inverted)));
                 };
                 pane.child(
                     Self::segmented()

@@ -49,7 +49,7 @@ mod view_tests;
 pub use budget::{read_within, MemoryBudget};
 pub use document::{
     BlendMode, CropRecord, Document, LayerRecord, LayerSource, MaskRecord, MaskShape, PaletteUse,
-    SharedMask, Stage, StageKind, StepKind, StepRecord, DOCUMENT_VERSION,
+    SharedMask, Stage, StageKind, StepKind, StepRecord, DOCUMENT_VERSION, MAX_GROUP_DEPTH,
 };
 pub use error::StudioError;
 pub use flow::{

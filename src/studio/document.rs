@@ -465,6 +465,10 @@ fn derived_id(from: Uuid, salt: u8) -> Uuid {
     Uuid::from_bytes(bytes)
 }
 
+/// How deep groups nest: a layer inside this many groups at most, as deep
+/// as Seiza's compositor draws them.
+pub const MAX_GROUP_DEPTH: usize = 4;
+
 /// One layer of the Combine stage: a source with its own color, mask and
 /// adjustments, combined with the layers beneath it.
 ///
@@ -491,10 +495,19 @@ pub struct LayerRecord {
     pub steps: Vec<StepRecord>,
     /// Where this layer shows. `None` is everywhere.
     pub mask: Option<MaskRecord>,
-    /// The group the layer is a member of. A group's members are directly
-    /// beneath it in the stack. A group is a member of no group.
+    /// A painted mask that limits a layer behind a shared mask as well:
+    /// where the shared mask follows the inputs, this is painted by hand.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub painted_too: Option<super::PaintedMask>,
+    /// The group the layer is a member of. A group's members, groups among
+    /// them, are directly beneath it in the stack.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group: Option<Uuid>,
+    /// For a group: whether its layers pass through, each blending straight
+    /// onto the layers beneath rather than together first. The group's
+    /// opacity and masks still limit each of them.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pass_through: bool,
     /// Whether the layer is clipped to the layer beneath it: it shows only
     /// inside that layer's mask, and not at all while that layer is hidden.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -532,7 +545,9 @@ impl LayerRecord {
             color: None,
             steps: Vec::new(),
             mask: None,
+            painted_too: None,
             group: None,
+            pass_through: false,
             clipped: false,
             slot: None,
             palette: None,
@@ -820,32 +835,115 @@ impl Document {
     }
 
     /// Restores the rules of groups after the stack changed: a group's
-    /// members are directly beneath it, in their order; a layer whose group
-    /// is gone is a member of none; a group is a member of none.
+    /// members, groups among them, are directly beneath it, in their order;
+    /// a layer whose group is gone, or that would hold itself, is a member
+    /// of none.
     fn keep_groups_together(&mut self) {
         let layers = &mut self.stages[StageKind::Combine as usize].layers;
-        let groups: Vec<Uuid> = layers
+        let groups: std::collections::HashSet<Uuid> = layers
             .iter()
             .filter(|layer| layer.source == LayerSource::Group)
             .map(|layer| layer.id)
             .collect();
         for layer in layers.iter_mut() {
-            let is_group = layer.source == LayerSource::Group;
-            if is_group || layer.group.is_some_and(|group| !groups.contains(&group)) {
+            if layer.group.is_some_and(|group| !groups.contains(&group)) {
                 layer.group = None;
             }
         }
-        for group in groups {
-            let (members, mut rest): (Vec<_>, Vec<_>) = std::mem::take(layers)
-                .into_iter()
-                .partition(|layer| layer.group == Some(group));
-            let at = rest
-                .iter()
-                .position(|layer| layer.id == group)
-                .expect("the group was just listed");
-            rest.splice(at..at, members);
-            *layers = rest;
+        // A group inside itself, however deep, leaves its group.
+        let parent: std::collections::HashMap<Uuid, Option<Uuid>> =
+            layers.iter().map(|layer| (layer.id, layer.group)).collect();
+        for layer in layers.iter_mut() {
+            let mut at = layer.group;
+            for _ in 0..parent.len() {
+                match at {
+                    Some(group) if group == layer.id => {
+                        layer.group = None;
+                        break;
+                    }
+                    Some(group) => at = parent.get(&group).copied().flatten(),
+                    None => break,
+                }
+            }
         }
+        // Each group's members, then the group, from the top level down,
+        // siblings in the order they were in.
+        let mut children: std::collections::HashMap<Option<Uuid>, Vec<usize>> =
+            std::collections::HashMap::new();
+        for (at, layer) in layers.iter().enumerate() {
+            children.entry(layer.group).or_default().push(at);
+        }
+        fn emit(
+            at: usize,
+            layers: &[LayerRecord],
+            children: &std::collections::HashMap<Option<Uuid>, Vec<usize>>,
+            order: &mut Vec<usize>,
+        ) {
+            if layers[at].source == LayerSource::Group {
+                for child in children.get(&Some(layers[at].id)).into_iter().flatten() {
+                    emit(*child, layers, children, order);
+                }
+            }
+            order.push(at);
+        }
+        let mut order = Vec::with_capacity(layers.len());
+        for at in children.get(&None).into_iter().flatten() {
+            emit(*at, layers, &children, &mut order);
+        }
+        let mut taken: Vec<Option<LayerRecord>> =
+            std::mem::take(layers).into_iter().map(Some).collect();
+        *layers = order
+            .into_iter()
+            .filter_map(|at| taken[at].take())
+            .collect();
+    }
+
+    /// The groups a layer is in, outermost first.
+    pub fn ancestors(&self, id: Uuid) -> Vec<Uuid> {
+        let layers = self.layers();
+        let mut chain = Vec::new();
+        let mut at = layers
+            .iter()
+            .find(|layer| layer.id == id)
+            .and_then(|layer| layer.group);
+        while let Some(group) = at {
+            if chain.contains(&group) || chain.len() > layers.len() {
+                break;
+            }
+            chain.push(group);
+            at = layers
+                .iter()
+                .find(|layer| layer.id == group)
+                .and_then(|layer| layer.group);
+        }
+        chain.reverse();
+        chain
+    }
+
+    /// How deep the deepest member of the stack sits: 0 when no layer is in
+    /// a group.
+    pub fn group_depth(&self) -> usize {
+        self.layers()
+            .iter()
+            .map(|layer| self.ancestors(layer.id).len())
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// The places a layer takes in the stack with what moves with it,
+    /// bottom first: a group with every layer inside it, however deep, and
+    /// any other layer alone. `None` when the document has no such layer.
+    pub fn block_of(&self, id: Uuid) -> Option<std::ops::RangeInclusive<usize>> {
+        let layers = self.layers();
+        let at = layers.iter().position(|layer| layer.id == id)?;
+        if layers[at].source != LayerSource::Group {
+            return Some(at..=at);
+        }
+        let low = layers[..at]
+            .iter()
+            .rposition(|layer| !self.ancestors(layer.id).contains(&id))
+            .map_or(0, |other| other + 1);
+        Some(low..=at)
     }
 
     /// The members of a group, bottom first.
@@ -855,31 +953,34 @@ impl Document {
             .filter(move |layer| layer.group == Some(group))
     }
 
-    /// Puts a layer into a new group of its own, right where the layer is,
-    /// and returns the group's id. Other layers join by being moved into it.
-    /// The group takes the layer's blend mode.
+    /// Puts a layer, or a group with its members, into a new group of its
+    /// own, right where it is, in the group it was in, and returns the new
+    /// group's id. Other layers join by being moved into it. The group takes
+    /// the layer's blend mode.
     ///
-    /// Refuses a layer that is a group, and a layer already in a group:
-    /// groups do not hold groups.
+    /// Refuses a layer that would sit deeper than [`MAX_GROUP_DEPTH`].
     pub fn group_layer(&mut self, id: Uuid) -> Result<Uuid, StudioError> {
         let refuse = |why: &str| StudioError::Document(why.to_string());
+        let before = self.stages[StageKind::Combine as usize].layers.clone();
         let layers = &mut self.stages[StageKind::Combine as usize].layers;
         let at = layers
             .iter()
             .position(|layer| layer.id == id)
             .ok_or_else(|| refuse("the layer is not in the document"))?;
-        if layers[at].source == LayerSource::Group || layers[at].group.is_some() {
-            return Err(refuse("a group does not hold another group"));
-        }
         // The group blends as the layer did, so grouping one layer does not
         // change the picture.
         let mut group = LayerRecord::new("Group", LayerSource::Group);
         group.blend = layers[at].blend;
+        group.group = layers[at].group;
         let group_id = group.id;
         layers[at].group = Some(group_id);
         // The layer leaves the part whose palette made it.
         layers[at].slot = None;
         layers.insert(at + 1, group);
+        if self.group_depth() > MAX_GROUP_DEPTH {
+            self.stages[StageKind::Combine as usize].layers = before;
+            return Err(refuse(&format!("groups go {MAX_GROUP_DEPTH} deep at most")));
+        }
         Ok(group_id)
     }
 
@@ -895,10 +996,17 @@ impl Document {
             return false;
         }
         // The members are no palette's from here on, and the masks the
-        // group's palette made are theirs alone.
+        // group's palette made are theirs alone. They join the group it was
+        // in.
+        let outer = self
+            .layers()
+            .iter()
+            .find(|layer| layer.id == group)
+            .and_then(|layer| layer.group);
         for layer in &mut self.stages[StageKind::Combine as usize].layers {
             if layer.group == Some(group) {
                 layer.slot = None;
+                layer.group = outer;
             }
         }
         for mask in &mut self.masks {
@@ -973,27 +1081,23 @@ impl Document {
     }
 
     pub fn place_layer(&mut self, id: Uuid, position: usize, group: Option<Uuid>) -> bool {
-        let layers = &mut self.stages[StageKind::Combine as usize].layers;
-        let Some(at) = layers.iter().position(|layer| layer.id == id) else {
+        let Some(block) = self.block_of(id) else {
             return false;
         };
-        let is_group = layers[at].source == LayerSource::Group;
-        // A group's members are directly beneath it.
-        let low = if is_group {
-            layers[..at]
-                .iter()
-                .rposition(|layer| layer.group != Some(id))
-                .map_or(0, |other| other + 1)
-        } else {
-            at
-        };
+        // A group joins a group only outside itself, and no deeper than
+        // groups go.
         let joins = group.filter(|group| {
-            !is_group
-                && layers
+            *group != id
+                && !self.ancestors(*group).contains(&id)
+                && self
+                    .layers()
                     .iter()
                     .any(|layer| layer.id == *group && layer.source == LayerSource::Group)
         });
-        if !is_group {
+        let before = self.stages[StageKind::Combine as usize].layers.clone();
+        let layers = &mut self.stages[StageKind::Combine as usize].layers;
+        let (low, at) = (*block.start(), *block.end());
+        {
             // A layer that leaves its part is no longer one its palette
             // made: the palette of the part it joins must not replace it.
             if layers[at].group != joins {
@@ -1013,6 +1117,10 @@ impl Document {
             layers.splice(to..to, block);
         }
         self.keep_groups_together();
+        if self.group_depth() > MAX_GROUP_DEPTH {
+            self.stages[StageKind::Combine as usize].layers = before;
+            return false;
+        }
         true
     }
 
@@ -1033,52 +1141,35 @@ impl Document {
     /// whole group there. A group moves with its members. Returns whether it
     /// moved: an end of its group or of the stack stops it.
     pub fn step_layer(&mut self, id: Uuid, up: bool) -> bool {
-        let layers = &self.stages[StageKind::Combine as usize].layers;
-        let Some(at) = layers.iter().position(|layer| layer.id == id) else {
+        let Some(own) = self.block_of(id) else {
             return false;
         };
-        // The block a layer moves as, bottom first: a group with its
-        // members beneath it, any other layer alone.
-        let block = |head: usize| -> std::ops::RangeInclusive<usize> {
-            if layers[head].source == LayerSource::Group {
-                let group = layers[head].id;
-                let low = layers[..head]
-                    .iter()
-                    .rposition(|layer| layer.group != Some(group))
-                    .map_or(0, |other| other + 1);
-                low..=head
-            } else {
-                head..=head
-            }
-        };
-        let own = block(at);
+        let layers = &self.stages[StageKind::Combine as usize].layers;
+        let at = *own.end();
         let container = layers[at].group;
+        // The block a layer moves as, bottom first: a group with every layer
+        // inside it, any other layer alone.
+        let block = |head: usize| self.block_of(layers[head].id).unwrap_or(head..=head);
         let neighbour = if up {
+            // Above, the next sibling: the layer there, or the group whose
+            // bottom member it is, however deep.
             let next = own.end() + 1;
-            let first = layers.get(next).filter(|layer| match container {
-                // A member moves only past members of its own group.
-                Some(group) => layer.group == Some(group),
-                None => true,
-            });
-            first.map(|first| match (container, first.group) {
-                // At the top level, a group's first member stands for the
-                // whole group above it.
-                (None, Some(group)) => {
-                    let head = layers
-                        .iter()
-                        .position(|layer| layer.id == group)
-                        .unwrap_or(next);
-                    block(head)
+            layers.get(next).and_then(|first| {
+                let mut chain = self.ancestors(first.id);
+                chain.push(first.id);
+                let depth = container.map_or(0, |group| self.ancestors(group).len() + 1);
+                // The member must be inside this layer's group.
+                if container.is_some_and(|group| !chain.contains(&group)) {
+                    return None;
                 }
-                _ => block(next),
+                let sibling = *chain.get(depth)?;
+                let head = layers.iter().position(|layer| layer.id == sibling)?;
+                Some(block(head))
             })
         } else {
             own.start()
                 .checked_sub(1)
-                .filter(|before| match container {
-                    Some(group) => layers[*before].group == Some(group),
-                    None => true,
-                })
+                .filter(|before| layers[*before].group == container)
                 .map(block)
         };
         let Some(neighbour) = neighbour else {
@@ -1362,6 +1453,14 @@ impl Document {
             }
             for layer in &mut stage.layers {
                 if layer.id == id {
+                    // The strokes painted behind a shared mask go first.
+                    if let Some(too) = &mut layer.painted_too {
+                        let removed = too.strokes.pop().is_some();
+                        if too.strokes.is_empty() {
+                            layer.painted_too = None;
+                        }
+                        return removed;
+                    }
                     return pop(&mut layer.mask);
                 }
                 for step in &mut layer.steps {
@@ -1392,7 +1491,11 @@ impl Document {
             }
             for layer in &stage.layers {
                 if layer.id == id {
-                    return count(&layer.mask);
+                    return count(&layer.mask)
+                        + layer
+                            .painted_too
+                            .as_ref()
+                            .map_or(0, |mask| mask.strokes.len());
                 }
                 for step in &layer.steps {
                     if step.id == id {
@@ -1422,6 +1525,10 @@ impl Document {
             }
             for layer in &mut stage.layers {
                 if layer.id == id {
+                    if let Some(too) = &mut layer.painted_too {
+                        too.blur = blur.max(0.0);
+                        return true;
+                    }
                     return set(&mut layer.mask);
                 }
                 for step in &mut layer.steps {
@@ -1505,15 +1612,60 @@ impl Document {
     /// painted one. A layer behind a shared or computed mask is refused:
     /// painting over it would discard it. A shared mask is touched up with
     /// [`Self::touch_up_mask`].
+    /// Puts a layer behind a shared mask, or its inverse, or takes it from
+    /// behind one with `None`. A painted mask stays: behind a shared mask it
+    /// limits the layer as well. Returns whether the document has the layer.
+    pub fn set_layer_shared_mask(&mut self, id: Uuid, shared: Option<(Uuid, bool)>) -> bool {
+        let Some(layer) = self.layer_mut(id) else {
+            return false;
+        };
+        let painted = match layer.mask.take() {
+            Some(MaskRecord::Painted(painted)) => Some(painted),
+            Some(MaskRecord::Shared { .. }) => layer.painted_too.take(),
+            other => {
+                layer.mask = other;
+                None
+            }
+        };
+        match shared {
+            Some((mask, inverted)) => {
+                layer.mask = Some(MaskRecord::Shared { mask, inverted });
+                layer.painted_too = painted;
+            }
+            None => {
+                if layer.mask.is_none() {
+                    layer.mask = painted.map(MaskRecord::Painted);
+                }
+                layer.painted_too = None;
+            }
+        }
+        true
+    }
+
     pub fn paint_layer_mask(&mut self, id: Uuid, stroke: Stroke) -> Result<(), StudioError> {
         let layer = self
             .layer_mut(id)
             .ok_or_else(|| StudioError::Document("the layer is not in the document".to_string()))?;
         match &mut layer.mask {
             Some(MaskRecord::Painted(mask)) => mask.strokes.push(stroke),
+            // Behind a shared mask, the strokes limit the layer as well.
+            Some(MaskRecord::Shared { .. }) => match &mut layer.painted_too {
+                Some(mask) => mask.strokes.push(stroke),
+                None if stroke.mode == StrokeMode::Subtract => {
+                    return Err(StudioError::Document(
+                        "the layer has no painted mask to erase from".to_string(),
+                    ));
+                }
+                too @ None => {
+                    *too = Some(PaintedMask {
+                        strokes: vec![stroke],
+                        blur: 0.0,
+                    });
+                }
+            },
             Some(_) => {
                 return Err(StudioError::Document(
-                    "the layer has a computed mask; remove it before painting one".to_string(),
+                    "the layer has a range mask; remove it before painting one".to_string(),
                 ));
             }
             mask @ None => {

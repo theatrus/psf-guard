@@ -320,11 +320,11 @@ pub fn plan(document: &Document, view: &View) -> ViewPlan {
         Subject::Combined => layers,
         Subject::LayersUpTo(id) => place(id).map_or(&[], |at| &layers[..=at]),
         Subject::MembersUpTo(id) => place(id).map_or(&[], |at| {
-            let group = layers[at].group;
-            let low = layers[..at]
-                .iter()
-                .rposition(|layer| layer.group != group)
-                .map_or(0, |other| other + 1);
+            // From the bottom of its group, however deep its members are.
+            let low = layers[at]
+                .group
+                .and_then(|group| document.block_of(group))
+                .map_or(0, |block| *block.start());
             &layers[low..=at]
         }),
         Subject::Layer(id) => match place(id) {
@@ -332,10 +332,7 @@ pub fn plan(document: &Document, view: &View) -> ViewPlan {
             Some(at) if layers[at].source.is_adjustment() => &layers[..=at],
             // A group alone is its members and itself.
             Some(at) if layers[at].source == LayerSource::Group => {
-                let low = layers[..at]
-                    .iter()
-                    .rposition(|layer| layer.group != Some(*id))
-                    .map_or(0, |other| other + 1);
+                let low = document.block_of(*id).map_or(at, |block| *block.start());
                 &layers[low..=at]
             }
             Some(at) => &layers[at..=at],
@@ -367,22 +364,43 @@ pub fn plan(document: &Document, view: &View) -> ViewPlan {
     if let Subject::Channel(channel) = &view.subject {
         channels.push(channel_plan(channel));
     }
-    // The group whose members are being listed.
-    let mut open: Option<Uuid> = None;
+    // The groups a view of one layer or of a group's members is inside,
+    // which it does not draw: it shows them on their own.
+    let outside: Vec<Uuid> = match &view.subject {
+        Subject::Layer(id) | Subject::MembersUpTo(id) => document.ancestors(*id),
+        _ => Vec::new(),
+    };
+    // The groups whose members are being listed, outermost first.
+    let mut open: Vec<Uuid> = Vec::new();
     for layer in drawn {
-        let belongs_to = if layer.source == LayerSource::Group {
-            Some(layer.id)
-        } else {
-            layer.group.filter(|_| within_groups)
+        // The groups this layer is drawn in, outermost first: a group is
+        // drawn in itself, its end closing it.
+        // A group whose layers pass through is not drawn as a group: they
+        // blend straight onto the layers beneath.
+        let passes = |group: &Uuid| {
+            layers
+                .iter()
+                .any(|layer| layer.id == *group && layer.pass_through)
         };
-        if open != belongs_to {
-            if let Some(group) = open.take() {
-                stack.push(StackEntry::GroupEnd { group });
-            }
-            if let Some(group) = belongs_to {
-                stack.push(StackEntry::GroupBegin { group });
-                open = Some(group);
-            }
+        let mut chain: Vec<Uuid> = if within_groups {
+            document
+                .ancestors(layer.id)
+                .into_iter()
+                .filter(|group| !outside.contains(group) && !passes(group))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        if layer.source == LayerSource::Group && !layer.pass_through {
+            chain.push(layer.id);
+        }
+        while !chain.starts_with(&open) {
+            let group = open.pop().expect("a group that is open");
+            stack.push(StackEntry::GroupEnd { group });
+        }
+        for group in chain[open.len()..].iter().copied() {
+            stack.push(StackEntry::GroupBegin { group });
+            open.push(group);
         }
         match &layer.source {
             LayerSource::Band { band } => {
@@ -396,9 +414,10 @@ pub fn plan(document: &Document, view: &View) -> ViewPlan {
             LayerSource::Adjust { .. } | LayerSource::Adjustment { .. } => {
                 stack.push(StackEntry::Adjustment { layer: layer.id })
             }
+            LayerSource::Group if layer.pass_through => {}
             LayerSource::Group => {
                 stack.push(StackEntry::GroupEnd { group: layer.id });
-                open = None;
+                open.pop();
             }
             // A layer of what a step made, such as the stars a star
             // removal took out.
@@ -408,8 +427,8 @@ pub fn plan(document: &Document, view: &View) -> ViewPlan {
             }),
         }
     }
-    // A view that stops inside a group shows the group as far as it goes.
-    if let Some(group) = open {
+    // A view that stops inside groups shows them as far as they go.
+    while let Some(group) = open.pop() {
         stack.push(StackEntry::GroupEnd { group });
     }
     let own_steps: Vec<Uuid> = drawn

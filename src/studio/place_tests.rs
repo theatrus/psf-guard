@@ -373,9 +373,14 @@ fn a_group_keeps_its_members_beneath_it_and_moves_with_them() {
     );
     // The group blends as the layer it was made around did.
     assert_eq!(document.layers()[2].blend, BlendMode::Add);
-    // A group does not hold a group.
-    assert!(document.group_layer(group).is_err());
-    assert!(document.group_layer(ids[1]).is_err());
+    // A group can go in a group, and leaves it when that group goes.
+    let outer = document.group_layer(group).unwrap();
+    assert_eq!(document.ancestors(ids[1]), [outer, group]);
+    assert!(document.ungroup(outer));
+    assert_eq!(
+        stack_of(&document),
+        ["B as blue", "G as green in group", "Group", "R as red"]
+    );
 
     // Red joins the group, on top of green.
     assert!(document.place_layer(ids[2], 2, Some(group)));
@@ -848,4 +853,43 @@ fn a_layer_steps_past_its_neighbour_and_a_group_moves_whole() {
         listed(&document),
         ["Exposure", "R as red", "Group", "G as green", "B as blue"]
     );
+}
+
+#[test]
+fn groups_nest_as_deep_as_seiza_draws_them() {
+    let mut document = document(&["red", "green", "blue"]);
+    let ids: Vec<Uuid> = document.layers().iter().map(|layer| layer.id).collect();
+    // Green in a group, in a group, and so on.
+    let mut groups = Vec::new();
+    for _ in 0..super::MAX_GROUP_DEPTH {
+        groups.push(document.group_layer(ids[1]).unwrap());
+    }
+    assert!(document.group_layer(ids[1]).is_err());
+    assert_eq!(document.ancestors(ids[1]).len(), super::MAX_GROUP_DEPTH);
+    // The outermost group moves as one block, with every group inside it.
+    let outermost = *groups.first().unwrap();
+    assert_eq!(
+        document.block_of(outermost).map(|block| block.count()),
+        Some(1 + super::MAX_GROUP_DEPTH)
+    );
+    assert!(document.place_layer(outermost, 0, None));
+    assert_eq!(document.layers().last().unwrap().id, ids[2]);
+    // The view opens each group and closes them in turn.
+    let entries: Vec<&str> = plan(&document, &Place::Combined.view())
+        .stack
+        .iter()
+        .map(|entry| match entry {
+            StackEntry::Band { .. } => "band",
+            StackEntry::GroupBegin { .. } => "begin",
+            StackEntry::GroupEnd { .. } => "end",
+            _ => "other",
+        })
+        .collect();
+    assert_eq!(
+        entries,
+        ["begin", "begin", "begin", "begin", "band", "end", "end", "end", "end", "band", "band"]
+    );
+    // A group cannot go inside itself: it stays where groups allow.
+    document.place_layer(outermost, 1, groups.last().copied());
+    assert!(document.ancestors(outermost).is_empty());
 }

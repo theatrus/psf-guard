@@ -252,17 +252,9 @@ impl Studio {
         let Some(at) = layers.iter().position(|layer| layer.id == target) else {
             return;
         };
-        // A group holds no group: one dropped anywhere goes above the
-        // target's whole part, or above the target at the top level.
-        if source(self, dragged) == Some(LayerSource::Group) {
-            let top = layers[at]
-                .group
-                .and_then(|group| layers.iter().position(|layer| layer.id == group))
-                .unwrap_or(at);
-            self.document.place_layer(dragged, top + 1, None);
-            self.selected = Row::Layer(dragged);
-            return;
-        }
+        // A group dropped on a group joins it, on top, and anywhere else
+        // goes as a layer would; the document refuses a group inside itself
+        // or deeper than groups go.
         let (position, group) = if target_source == Some(LayerSource::Group) {
             (at, Some(target))
         } else if lower {
@@ -326,10 +318,12 @@ impl Studio {
         group: Option<Uuid>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let inside = group.is_some();
+        // Indented as the group's members are: once for each group it is
+        // inside.
+        let depth = group.map_or(0, |group| self.document.ancestors(group).len() + 1);
         div()
-            .id(("slot", position * 2 + usize::from(inside)))
-            .ml(px(if inside { CHILD_INDENT } else { 0.0 }))
+            .id(("slot", position * 8 + depth))
+            .ml(px(depth as f32 * CHILD_INDENT))
             .h(px(10.0))
             .rounded_sm()
             .drag_over::<DragLayer>(|style, _, _, _| style.bg(rgb(SELECTED)))
@@ -386,7 +380,8 @@ impl Studio {
         words.extend(mask_words(&self.document, &layer.mask));
         let name = layer.name.clone();
         let label: SharedString = name.clone().into();
-        let indent = if in_group { CHILD_INDENT } else { 0.0 };
+        // A member is indented once for each group it is in.
+        let indent = self.document.ancestors(id).len() as f32 * CHILD_INDENT;
         self.tree_row(("layer", index), Row::Layer(id), indent, cx)
             .when(layer.source.shows_pixels(), |row| {
                 row.child(
@@ -512,11 +507,7 @@ impl Studio {
         };
         let label: SharedString = step.kind.name().to_string().into();
         let draggable = matches!(step.kind, StepKind::Operation { .. });
-        let indent = if layer.group.is_some() {
-            2.0 * CHILD_INDENT
-        } else {
-            CHILD_INDENT
-        };
+        let indent = (self.document.ancestors(layer.id).len() + 1) as f32 * CHILD_INDENT;
         self.tree_row(("layer-step", index), row, indent, cx)
             .child(Self::child_mark())
             .child(Self::named(
@@ -549,31 +540,31 @@ impl Studio {
             rows.push(self.layer_row(index, layer, cx));
             for (at, step) in layer.steps.iter().enumerate() {
                 rows.push(self.layer_step_row(index * 64 + at, layer, step, cx));
-                let indent = if layer.group.is_some() {
-                    3.0 * CHILD_INDENT
-                } else {
-                    2.0 * CHILD_INDENT
-                };
+                let indent = (self.document.ancestors(layer.id).len() + 2) as f32 * CHILD_INDENT;
                 rows.extend(self.stars_row(step, indent, 1000 + index * 64 + at, cx));
             }
-            let is_group = layer.source == LayerSource::Group;
-            // The group this row is in, or is.
-            let around = if is_group {
-                Some(layer.id)
-            } else {
-                layer.group
-            };
-            // Whether the layer beneath is in the same group.
-            let goes_on = around.is_some()
-                && index
-                    .checked_sub(1)
-                    .is_some_and(|below| layers[below].group == around);
-            if around.is_some() {
-                // Beneath this row, inside the group.
-                rows.push(self.drop_slot(index, around, cx));
+            // The groups this row is in, or is, outermost first.
+            let mut around = self.document.ancestors(layer.id);
+            if layer.source == LayerSource::Group {
+                around.push(layer.id);
             }
-            if !goes_on {
-                // Beneath this row, or beneath its whole group, outside it.
+            // The groups the layer beneath is in too.
+            let below: Vec<Uuid> = index
+                .checked_sub(1)
+                .map(|below| self.document.ancestors(layers[below].id))
+                .unwrap_or_default();
+            // Beneath this row, inside each group it closes, innermost
+            // first, and outside them all at the bottom of the stack or of
+            // a top-level group.
+            let mut outside = true;
+            for group in around.iter().rev() {
+                rows.push(self.drop_slot(index, Some(*group), cx));
+                if below.contains(group) {
+                    outside = false;
+                    break;
+                }
+            }
+            if outside {
                 rows.push(self.drop_slot(index, None, cx));
             }
         }
