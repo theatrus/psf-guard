@@ -1572,9 +1572,17 @@ fn changed_inputs(
             .map(|(_, members)| members.to_vec())
             .unwrap_or_default()
     };
+    // An input with no tools has no entry, an empty chain or null alike:
+    // a stars input a run added has none, as the store it came from.
+    let empty = |value: Option<&serde_json::Value>| match value {
+        None | Some(serde_json::Value::Null) => true,
+        Some(serde_json::Value::Array(steps)) => steps.is_empty(),
+        Some(_) => false,
+    };
     let mut changed: Vec<&str> = Vec::new();
     for key in now.keys().chain(prepared.keys()) {
-        if now.get(key) == prepared.get(key) {
+        let (now, prepared) = (now.get(key), prepared.get(key));
+        if now == prepared || (empty(now) && empty(prepared)) {
             continue;
         }
         match key.split_once(':') {
@@ -1660,6 +1668,12 @@ mod tests {
         let mut now = prepared.clone();
         now["oiii"] = sxt.clone();
         assert_eq!(changed_inputs(&prepared, &now, &channels), names(&["oiii"]));
+        // A stars input a run added, with no tools, is not a change.
+        let mut with_stars = prepared.clone();
+        with_stars["oiii@stars"] = serde_json::json!([]);
+        let mut channels_with_stars = channels.clone();
+        channels_with_stars.push("oiii@stars".to_string());
+        assert!(changed_inputs(&prepared, &with_stars, &channels_with_stars).is_empty());
         // A group's tools count for each input of the group, and a tool
         // taken away counts as a change.
         let mut now = prepared.clone();
