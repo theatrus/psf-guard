@@ -685,5 +685,46 @@ impl Studio {
                 self.tree_row("final", Row::Final, 0.0, cx)
                     .child(Self::named("Final picture", "every step")),
             )
+            .child(self.section("history", "History", true, cx, |this, cx| {
+                this.history_rows(cx)
+            }))
+    }
+
+    /// The document's edits, oldest first, as the History panel lists them:
+    /// the document as opened, each edit done, and the edits undone, which
+    /// are dimmed. Clicking one goes to the document after it.
+    fn history_rows(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let (done, undone) = self.history.words();
+        let current = done.len();
+        let rows = std::iter::once("Opened")
+            .chain(done)
+            .chain(undone)
+            .map(str::to_string)
+            .enumerate()
+            .map(|(position, words)| {
+                div()
+                    .id(("history", position))
+                    .px_2()
+                    .py_0p5()
+                    .rounded_sm()
+                    .text_xs()
+                    .cursor_pointer()
+                    .when(position == current, |row| row.bg(rgb(SELECTED)))
+                    .text_color(rgb(if position > current { QUIET } else { TEXT }))
+                    .child(words)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.go_to_history(position);
+                        cx.notify();
+                    }))
+            })
+            .collect::<Vec<_>>();
+        div()
+            .flex()
+            .flex_col()
+            .gap_0p5()
+            .children(rows)
+            .children(Self::help(
+                "Click an edit to see the picture after it. The edits after it stay, dimmed, until you make a new one.",
+            ))
     }
 }

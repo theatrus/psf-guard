@@ -17,6 +17,7 @@
 //! reduced levels, and reads any region of any level.
 
 mod budget;
+mod describe;
 mod document;
 mod error;
 mod flow;
@@ -31,6 +32,8 @@ mod store;
 mod stroke;
 mod view;
 
+#[cfg(test)]
+mod describe_tests;
 #[cfg(test)]
 mod flow_tests;
 #[cfg(test)]
@@ -47,6 +50,7 @@ mod tests;
 mod view_tests;
 
 pub use budget::{read_within, MemoryBudget};
+pub use describe::describe_edit;
 pub use document::{
     BlendMode, CropRecord, Document, LayerRecord, LayerSource, MaskRecord, MaskShape, PaletteUse,
     SharedMask, Stage, StageKind, StepKind, StepRecord, DOCUMENT_VERSION, MAX_GROUP_DEPTH,
