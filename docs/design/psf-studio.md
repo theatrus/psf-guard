@@ -2061,6 +2061,16 @@ second on the main thread for each slider move; counting now takes a few
 milliseconds, and the GPU's sampling about 30 ms between frames. Set
 `PSF_STUDIO_TIMING` to print where an edit's time goes.
 
+**Scenes off the UI thread.** An edit hands a copy of the document to the
+scene thread and returns at once. That thread makes each band's stretch
+analysis, a layered stretch's maps, Texture's noise measure and the output
+stretches resolved from the picture, then writes the scenes for the render
+thread to draw. A newer edit replaces one the thread has not started, and
+scenes a newer edit replaces before they are written are dropped. On the
+Cat's Eye, an analysis takes 60–100 ms on that thread; the UI thread spends
+under 0.1 ms per slider move. Export and the parity check still build their
+scene on the UI thread, once per click.
+
 **Export.** **Export** in the Final picture's inspector writes the whole
 picture, cropped, at full resolution: TIFF at 16 bits per channel or as
 32-bit floats in the working space, PNG at 16 bits in Display P3, AVIF as
