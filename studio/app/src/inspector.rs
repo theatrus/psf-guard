@@ -1629,12 +1629,70 @@ impl Studio {
             .into_any_element()
     }
 
+    /// Every input's tools in one table: what runs on each, in order, and
+    /// whether a run is due. Clicking an input selects it.
+    fn tools_table(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let due = self.inputs_to_run();
+        let rows = self
+            .document
+            .channels()
+            .into_iter()
+            .enumerate()
+            .map(|(index, channel)| {
+                let tools: Vec<String> = crate::studio_model::input_steps(&self.document, &channel)
+                    .into_iter()
+                    .filter_map(|listed| {
+                        let (stage, step) = self.document.step(listed.id)?;
+                        (stage == StageKind::Linear
+                            && step.enabled
+                            && crate::studio_model::is_tool_step(step))
+                        .then(|| step.kind.name().to_string())
+                    })
+                    .collect();
+                let words = if tools.is_empty() {
+                    "no tools".to_string()
+                } else {
+                    tools.join(" · ")
+                };
+                let flag = if due.contains(&channel) {
+                    " · to run"
+                } else {
+                    ""
+                };
+                let picked = channel.clone();
+                div()
+                    .id(("tools-table", index))
+                    .flex()
+                    .gap_2()
+                    .text_xs()
+                    .cursor_pointer()
+                    .child(div().w(px(72.0)).child(channel_label(&channel)))
+                    .child(div().flex_1().child(format!("{words}{flag}")))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.selected = Row::Input(picked.clone());
+                        this.refresh_canvas();
+                        cx.notify();
+                    }))
+            })
+            .collect::<Vec<_>>();
+        column()
+            .child(Self::heading("Tools by input"))
+            .when_some(self.document.recipe.clone(), |pane, recipe| {
+                pane.child(div().text_xs().child(format!("Made with the recipe {recipe}.")))
+            })
+            .children(rows)
+            .children(Self::help(
+                "Each input's processing tools, in the order they run. Click an input to change them.",
+            ))
+    }
+
     fn inspect_combined(&self, cx: &mut Context<Self>) -> AnyElement {
         column()
             .child(Self::title(
                 "Combined",
                 "Every layer, blended bottom to top.",
             ))
+            .child(self.tools_table(cx))
             .child(self.palette_block(None, cx))
             .child(self.section("tones", "Tones", false, cx, |this, cx| this.tones_block(cx)))
             .child(Self::act("Balance colors", "balance", false, cx, |this| {

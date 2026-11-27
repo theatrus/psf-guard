@@ -436,6 +436,7 @@ impl Document {
             self.remove_mask(id);
         }
         self.palette = None;
+        self.recipe = Some(recipe.name.to_string());
         // The Star stretch belongs to the RGB stars part.
         let adds_color_stars = recipe.parts.contains(&PartKind::ColorStars)
             || (recipe.parts.contains(&PartKind::Color)

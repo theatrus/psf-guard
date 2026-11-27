@@ -61,6 +61,11 @@ fn document_changes(before: &Document, after: &Document, changes: &mut Vec<Strin
     if before.crop != after.crop {
         changes.push("Changed the crop".to_string());
     }
+    if before.recipe != after.recipe
+        && let Some(recipe) = &after.recipe
+    {
+        changes.push(format!("Used the recipe {recipe}"));
+    }
 }
 
 /// Where a step applies, as the tree words it.

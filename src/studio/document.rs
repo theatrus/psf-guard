@@ -586,6 +586,9 @@ pub struct Document {
     /// The palette the layers were made from, if any.
     #[serde(default)]
     pub palette: Option<PaletteUse>,
+    /// The recipe the layers were made from last, by its name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recipe: Option<String>,
     /// What part of the image the picture keeps.
     #[serde(default, skip_serializing_if = "CropRecord::is_automatic")]
     pub crop: CropRecord,
@@ -660,6 +663,7 @@ impl Document {
                 .collect(),
             masks: Vec::new(),
             palette: None,
+            recipe: None,
             crop: CropRecord::Automatic,
             headroom: None,
             hdr_knee: None,
