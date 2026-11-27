@@ -191,3 +191,6 @@ toml_edit = "0.25"
 # Seiza release has it.
 [patch.crates-io]
 seiza-stretch = { git = "https://github.com/theatrus/seiza", rev = "331359253dd301b3abb6eb6b423ba3b5200fa18e" }
+# seiza-stretch from there reads its own seiza-stats; one copy of it, so the
+# RPM build can vendor every crate.
+seiza-stats = { git = "https://github.com/theatrus/seiza", rev = "331359253dd301b3abb6eb6b423ba3b5200fa18e" }
