@@ -26,16 +26,32 @@ pub mod flow_operations {
     pub const FOLLOW_CHANNELS: &str = "Inputs follow their channel cards";
     /// Deconvolution of one input channel.
     pub const DECONVOLUTION: &str = "Deconvolution";
-    /// The processing tools of one input channel: sharpening, noise
-    /// reduction and star removal, each by a provider, such as an RC-Astro
-    /// tool or Seiza's noise model. The settings key keeps its older name.
+    /// One processing tool that sharpens, by a provider such as RC-Astro's
+    /// BlurXTerminator. Its settings are one step of PSF Guard's tool
+    /// chains: `{"provider": "bxt", "parameters": {...}}`. A tool step's
+    /// band is an input, or a color group ([`super::COLOR_GROUPS`]), whose
+    /// registered inputs it runs on combined into one color image.
+    pub const SHARPENING: &str = "Sharpening";
+    /// One processing tool that reduces noise, such as RC-Astro's
+    /// NoiseXTerminator or Seiza's noise model.
+    pub const NOISE_REDUCTION: &str = "Noise reduction";
+    /// One processing tool that removes the stars, such as RC-Astro's
+    /// StarXTerminator. The stars it removes are kept as an input.
+    pub const STAR_REMOVAL: &str = "Star removal";
+    /// One processing tool whose provider this build does not know.
+    pub const PROCESSING_TOOL: &str = "Processing tool";
+    /// Every tool step's name.
+    pub const TOOLS: [&str; 4] = [SHARPENING, NOISE_REDUCTION, STAR_REMOVAL, PROCESSING_TOOL];
+    /// Documents written before each tool was a step of its own kept an
+    /// input's tools in one step of this name, as a chain
+    /// (`{"steps": [...]}`). Opening such a document splits it into one
+    /// step per tool.
     pub const RC_ASTRO_INPUT: &str = "Processing tools";
     /// Continuum subtraction and emission amounts.
     pub const EMISSION: &str = "Subtract continuum";
-    /// The processing tools of the color channels together. With no band
-    /// they are PSF Guard's color tools. With the band of a color group
-    /// ([`super::COLOR_GROUPS`]) they are Studio's, and run on the group's
-    /// registered channels combined into one color image.
+    /// The older step of a color group's tools, or with no band of PSF
+    /// Guard's color tools, as a chain. Opening a document splits it into
+    /// one tool step per tool, with the group's band.
     pub const RC_ASTRO_COLOR: &str = "Processing tools on color";
     /// Photometric color calibration against Gaia.
     pub const COLOR_CALIBRATION: &str = "Color calibration";
@@ -54,96 +70,308 @@ pub mod flow_operations {
 }
 use flow_operations as op;
 
-/// The name of the channel that holds `channel` with its background
-/// corrected in full, in a store that keeps both. The channel under its own
-/// name is then uncorrected, and any strength between is a blend of the two.
-pub fn background_corrected_channel(channel: &str) -> String {
-    format!("{channel}@background")
+/// The name of the channel that holds `channel` after one Linear step
+/// that changes its samples, in a store prepared with that step: a tool, a
+/// deconvolution, or a background extraction, which is kept corrected in
+/// full. The store's record lists each channel's planes in the order the
+/// steps ran.
+pub fn step_channel(channel: &str, step: uuid::Uuid) -> String {
+    format!("{channel}@step-{step}")
 }
 
-/// The name of the channel that holds `channel` after its processing tools
-/// ran, in a store that keeps both. The channel under its own name is then
-/// the stack as it came, and [`background_corrected_channel`] holds the
-/// tools' result with its background corrected.
-pub fn tools_channel(channel: &str) -> String {
-    format!("{channel}@tools")
-}
+/// The step each provider of a processing tool makes, by the provider's
+/// key. PSF Guard's providers (`remote_work::steps::PROVIDERS`) list the
+/// same, and a test there holds the two together. The order is the order
+/// one chain runs its tools in.
+pub const TOOL_PROVIDERS: [(&str, &str); 4] = [
+    ("bxt", op::SHARPENING),
+    ("nxt", op::NOISE_REDUCTION),
+    ("noise-model", op::NOISE_REDUCTION),
+    ("sxt", op::STAR_REMOVAL),
+];
 
-/// Whether a Linear step is a processing tool: an input's tools, its
-/// deconvolution, or a color group's tools.
-fn is_tools_step(step: &super::StepRecord) -> bool {
-    [op::RC_ASTRO_INPUT, op::DECONVOLUTION, op::RC_ASTRO_COLOR].contains(&step.kind.name())
-}
-
-/// Whether the background is corrected before the processing tools run, so
-/// every input's tools work on its stack with the background corrected:
-/// the document's first Background extraction step comes before its first
-/// tools step in the Linear stage. With no tools step, or no Background
-/// extraction step, the answer is no.
-///
-/// Seiza fits every input's background with one model, so the order is the
-/// document's, not each input's.
-pub fn background_before_tools(document: &super::Document) -> bool {
-    let steps = &document.stage(super::StageKind::Linear).steps;
-    let background = steps
+/// The name of the step that runs a provider's tool.
+pub fn tool_operation(provider: &str) -> &'static str {
+    TOOL_PROVIDERS
         .iter()
-        .position(|step| step.kind.name() == op::BACKGROUND);
-    let tools = steps.iter().position(is_tools_step);
-    matches!((background, tools), (Some(background), Some(tools)) if background < tools)
+        .find(|(key, _)| *key == provider)
+        .map_or(op::PROCESSING_TOOL, |(_, operation)| operation)
 }
 
-/// Puts the document's first Background extraction step before every tools
-/// step, or after every one, so the tools run on the corrected stacks or the
-/// background is fitted on the tools' results. Returns whether the
-/// document changed.
-pub fn set_background_before_tools(document: &mut super::Document, before: bool) -> bool {
-    if background_before_tools(document) == before {
+/// Whether a step runs one processing tool.
+pub fn is_tool_step(step: &StepRecord) -> bool {
+    op::TOOLS.contains(&step.kind.name())
+}
+
+/// The tool a tool step runs, as one step of PSF Guard's tool chains:
+/// `{"provider": ..., "parameters": {...}}`.
+pub fn tool_of(step: &StepRecord) -> Option<&Value> {
+    match &step.kind {
+        StepKind::Operation { settings, .. } if is_tool_step(step) => {
+            settings.get("provider").is_some().then_some(settings)
+        }
+        _ => None,
+    }
+}
+
+/// A step that runs `tool`, one step of PSF Guard's tool chains. A tool
+/// with no settings gets an empty set, so every tool step reads alike.
+pub fn tool_step(mut tool: Value) -> StepRecord {
+    // Chains written by older builds name the provider `tool`.
+    if tool.get("provider").is_none()
+        && let Some(provider) = tool.get("tool").cloned()
+    {
+        tool["provider"] = provider;
+    }
+    if let Some(tool) = tool.as_object_mut() {
+        tool.remove("tool");
+        tool.entry("parameters")
+            .or_insert_with(|| Value::Object(Map::new()));
+    }
+    let provider = tool["provider"].as_str().unwrap_or_default().to_string();
+    operation(tool_operation(&provider), Accepts::Linear, &tool)
+}
+
+/// Whether a Linear step changes the samples of `channel` when a store is
+/// prepared: a tool step or a deconvolution of the input or of its color
+/// group, or a Background extraction step for every input or for this
+/// one. The stars a tool took out, and the other states a store keeps of
+/// an input, are changed by none.
+pub fn changes_input(step: &StepRecord, channel: &str) -> bool {
+    if channel.contains('@') {
         return false;
     }
-    let steps = &document.stage(super::StageKind::Linear).steps;
-    let Some(background) = steps
-        .iter()
-        .find(|step| step.kind.name() == op::BACKGROUND)
-        .map(|step| step.id)
-    else {
+    let band = step.band.as_deref();
+    if step.kind.name() == op::BACKGROUND {
+        return band.is_none_or(|band| band == channel);
+    }
+    if !is_tool_step(step) && step.kind.name() != op::DECONVOLUTION {
         return false;
-    };
-    // The places are counted without the Background extraction step.
-    let others: Vec<&super::StepRecord> =
-        steps.iter().filter(|step| step.id != background).collect();
-    let index = if before {
-        others.iter().position(|step| is_tools_step(step))
-    } else {
-        others
-            .iter()
-            .rposition(|step| is_tools_step(step))
-            .map(|at| at + 1)
-    };
-    let Some(index) = index else {
-        return false;
-    };
-    document.move_step(background, index)
+    }
+    band == Some(channel)
+        || band.is_some_and(|band| color_group_of(channel).is_some_and(|(group, _)| group == band))
 }
 
-/// Where a new tools step goes in the Linear stage, so it keeps the
-/// document's order: before the Background extraction step when the tools
-/// run first, else after it and after the tools already there.
-pub fn new_tools_step_index(document: &super::Document) -> usize {
-    let steps = &document.stage(super::StageKind::Linear).steps;
+/// The Linear steps that preparing a store runs for `channel`, in order:
+/// each that is on and [`changes_input`]. Each is listed with its id,
+/// name, band and settings, so a store's record of them tells whether the
+/// document has moved on since. The strength of a Background extraction
+/// step is left out when no step after it changes the input: the canvas
+/// applies that strength itself.
+pub fn input_program(document: &Document, channel: &str) -> Vec<Value> {
+    let steps: Vec<&StepRecord> = document
+        .stage(StageKind::Linear)
+        .steps
+        .iter()
+        .filter(|step| step.enabled && changes_input(step, channel))
+        .collect();
+    steps
+        .iter()
+        .enumerate()
+        .map(|(at, step)| {
+            let mut settings = match &step.kind {
+                StepKind::Operation { settings, .. } => settings.clone(),
+                StepKind::Heal { .. } => Value::Null,
+            };
+            if step.kind.name() == op::BACKGROUND
+                && at + 1 == steps.len()
+                && let Some(settings) = settings.as_object_mut()
+            {
+                settings.remove("strength");
+            }
+            serde_json::json!({
+                "step": step.id.to_string(),
+                "operation": step.kind.name(),
+                "band": step.band,
+                "settings": settings,
+            })
+        })
+        .collect()
+}
+
+/// The color group PSF Guard's color tools run on in a document with
+/// `channels`: red, green and blue when it has two of them, else the
+/// narrowband lines.
+fn color_tools_group(channels: &[String]) -> &'static str {
+    let present = |members: &[&str; 3]| {
+        members
+            .iter()
+            .filter(|member| channels.iter().any(|channel| channel == *member))
+            .count()
+    };
+    match COLOR_GROUPS
+        .iter()
+        .find(|(_, members)| present(members) >= 2)
+    {
+        Some((group, _)) => group,
+        None => COLOR_GROUPS[0].0,
+    }
+}
+
+/// The tool steps one chain of PSF Guard's settings makes, in its order.
+fn tool_steps(chain: &Value, band: Option<&str>) -> Vec<StepRecord> {
+    chain["steps"]
+        .as_array()
+        .map(|tools| {
+            tools
+                .iter()
+                .map(|tool| {
+                    let step = tool_step(tool.clone());
+                    match band {
+                        Some(band) => step.for_band(band),
+                        None => step,
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The id of the `index`th tool step split from the step `old`: the old
+/// id for the first, and for each later one the old id with its last bytes
+/// changed by the index. Every program that opens the document gives the
+/// split steps the same ids, so a store prepared from a document finds the
+/// steps the app split from it.
+fn split_id(old: uuid::Uuid, index: usize) -> uuid::Uuid {
+    if index == 0 {
+        return old;
+    }
+    let mut bytes = *old.as_bytes();
+    bytes[14] ^= 0xa5;
+    bytes[15] ^= index as u8;
+    uuid::Uuid::from_bytes(bytes)
+}
+
+/// Splits each step that kept a chain of tools, as documents did before
+/// each tool was a step, into one step per tool, in its place and in the
+/// chain's order. The first keeps the old step's id, so a selection or a
+/// record of it still finds it, and the others get ids made from it
+/// ([`split_id`]); each keeps whether it was on. PSF Guard's
+/// color tools, which had no band, take the color group they run on.
+pub fn split_tool_chains(document: &mut Document) {
+    let channels = document.channels();
+    let legacy: Vec<(usize, StepRecord)> = document
+        .stage(StageKind::Linear)
+        .steps
+        .iter()
+        .enumerate()
+        .filter(|(_, step)| [op::RC_ASTRO_INPUT, op::RC_ASTRO_COLOR].contains(&step.kind.name()))
+        .map(|(at, step)| (at, step.clone()))
+        .collect();
+    for (at, old) in legacy.into_iter().rev() {
+        let StepKind::Operation { settings, .. } = &old.kind else {
+            continue;
+        };
+        let band = match (&old.band, old.kind.name()) {
+            (Some(band), _) => band.clone(),
+            (None, _) => color_tools_group(&channels).to_string(),
+        };
+        let mut steps = tool_steps(settings, Some(&band));
+        for (index, step) in steps.iter_mut().enumerate() {
+            step.enabled = old.enabled;
+            step.id = split_id(old.id, index);
+        }
+        document.remove_step(old.id);
+        for (offset, step) in steps.into_iter().enumerate() {
+            let _ = document.insert_step(StageKind::Linear, at + offset, step);
+        }
+    }
+}
+
+/// Moves a Linear step one place earlier or later among the steps listed
+/// for `channel`: past the step before or after it there. A store prepared
+/// after the move runs the steps in the new order, so a tool can run
+/// before or after the background extraction. Returns whether the step
+/// moved; the first step does not move earlier, nor the last later.
+pub fn move_linear_step(
+    document: &mut Document,
+    step: uuid::Uuid,
+    channel: &str,
+    later: bool,
+) -> bool {
+    let listed: Vec<uuid::Uuid> = super::input_steps(document, channel)
+        .into_iter()
+        .map(|listed| listed.id)
+        .collect();
+    let steps = &document.stage(StageKind::Linear).steps;
+    let positions: Vec<usize> = steps
+        .iter()
+        .enumerate()
+        .filter(|(_, other)| listed.contains(&other.id))
+        .map(|(at, _)| at)
+        .collect();
+    let Some(here) = positions.iter().position(|at| steps[*at].id == step) else {
+        return false;
+    };
+    let target = if later {
+        positions.get(here + 1).copied()
+    } else {
+        here.checked_sub(1).map(|before| positions[before])
+    };
+    match target {
+        Some(target) => document.move_step(step, target),
+        None => false,
+    }
+}
+
+/// The order of what tools do, as one chain runs them: sharpening, noise
+/// reduction, star removal.
+fn tool_rank(operation: &str) -> usize {
+    op::TOOLS
+        .iter()
+        .position(|other| *other == operation)
+        .unwrap_or(op::TOOLS.len())
+}
+
+/// Where a new tool step of `operation` for `band` goes in the Linear
+/// stage. Among the band's tool steps, it goes before the first that does
+/// something later in a chain's order, and else after the last. A band with
+/// none takes it after its deconvolution, and else before the first
+/// Background extraction step, so a new tool runs on the stack as it came,
+/// as PSF Guard's color previews run them. A person can move it after.
+pub fn new_tool_step_index(document: &Document, band: &str, operation: &str) -> usize {
+    let steps = &document.stage(StageKind::Linear).steps;
+    let own: Vec<usize> = steps
+        .iter()
+        .enumerate()
+        .filter(|(_, step)| is_tool_step(step) && step.band.as_deref() == Some(band))
+        .map(|(at, _)| at)
+        .collect();
+    if let Some(later) = own
+        .iter()
+        .find(|at| tool_rank(steps[**at].kind.name()) > tool_rank(operation))
+    {
+        return *later;
+    }
+    if let Some(last) = own.last() {
+        return last + 1;
+    }
+    // A group's tool follows its members' own tools.
+    let members: Vec<&str> = COLOR_GROUPS
+        .iter()
+        .find(|(group, _)| *group == band)
+        .map(|(_, members)| members.to_vec())
+        .unwrap_or_else(|| vec![band]);
+    let after_members = steps
+        .iter()
+        .rposition(|step| {
+            (is_tool_step(step) || step.kind.name() == op::DECONVOLUTION)
+                && step
+                    .band
+                    .as_deref()
+                    .is_some_and(|other| members.contains(&other))
+        })
+        .map(|at| at + 1);
     let background = steps
         .iter()
         .position(|step| step.kind.name() == op::BACKGROUND);
-    match background {
-        None => steps.len(),
-        Some(background) if !background_before_tools(document) => background,
-        Some(background) => {
-            steps
-                .iter()
-                .rposition(is_tools_step)
-                .filter(|last| *last > background)
-                .unwrap_or(background)
-                + 1
-        }
+    match (after_members, background) {
+        (Some(after), _) => after,
+        (None, Some(background)) => background,
+        (None, None) => steps
+            .iter()
+            .position(|step| [op::EMISSION, op::COLOR_CALIBRATION].contains(&step.kind.name()))
+            .unwrap_or(steps.len()),
     }
 }
 
@@ -268,10 +496,9 @@ pub fn document_from_color_setup(
         )?;
     }
     for (channel, config) in per_channel("input_rc_astro")? {
-        add(
-            StageKind::Linear,
-            operation(op::RC_ASTRO_INPUT, Accepts::Linear, config).for_band(channel),
-        )?;
+        for step in tool_steps(config, Some(channel)) {
+            add(StageKind::Linear, step)?;
+        }
     }
     if let Some(background) = settings
         .get("background_extraction")
@@ -282,14 +509,25 @@ pub fn document_from_color_setup(
             operation(op::BACKGROUND, Accepts::Linear, background),
         )?;
     }
-    for (key, name) in [
-        ("emission", op::EMISSION),
-        ("color_rc_astro", op::RC_ASTRO_COLOR),
-        ("color_calibration", op::COLOR_CALIBRATION),
-    ] {
-        if let Some(value) = settings.get(key).filter(|v| !v.is_null()) {
-            add(StageKind::Linear, operation(name, Accepts::Linear, value))?;
+    if let Some(value) = settings.get("emission").filter(|v| !v.is_null()) {
+        add(
+            StageKind::Linear,
+            operation(op::EMISSION, Accepts::Linear, value),
+        )?;
+    }
+    // PSF Guard's color tools run on the color channels together: a color
+    // group's tool steps.
+    if let Some(chain) = settings.get("color_rc_astro").filter(|v| !v.is_null()) {
+        let names: Vec<String> = channels.iter().map(|channel| channel.to_string()).collect();
+        for step in tool_steps(chain, Some(color_tools_group(&names))) {
+            add(StageKind::Linear, step)?;
         }
+    }
+    if let Some(value) = settings.get("color_calibration").filter(|v| !v.is_null()) {
+        add(
+            StageKind::Linear,
+            operation(op::COLOR_CALIBRATION, Accepts::Linear, value),
+        )?;
     }
 
     // The Stretch stage: each channel's stretches in order, then the
@@ -443,15 +681,43 @@ pub fn color_setup_from_document(document: &Document) -> Result<Value, StudioErr
                 settings.insert("input_processing".to_string(), value.clone());
             }
             op::DECONVOLUTION => into_channel_map("input_deconvolutions")?,
-            op::RC_ASTRO_INPUT => into_channel_map("input_rc_astro")?,
+            // An input's tool steps are its chain, in their order; a color
+            // group's are PSF Guard's color tools, except star removal,
+            // which PSF Guard runs on channel stacks only.
+            name if op::TOOLS.contains(&name) => {
+                let band = channel()?;
+                let group = COLOR_GROUPS.iter().any(|(group, _)| *group == band);
+                if group && name == op::STAR_REMOVAL {
+                    continue;
+                }
+                let chain = if group {
+                    settings
+                        .entry("color_rc_astro".to_string())
+                        .or_insert_with(|| serde_json::json!({ "steps": [] }))
+                } else {
+                    let map = per_channel
+                        .entry("input_rc_astro".to_string())
+                        .or_insert_with(|| Value::Object(Map::new()));
+                    match map {
+                        Value::Object(map) => map
+                            .entry(band)
+                            .or_insert_with(|| serde_json::json!({ "steps": [] })),
+                        _ => continue,
+                    }
+                };
+                // A chain of PSF Guard's runs one tool of each kind, so a
+                // second of a kind is Studio's alone.
+                if let Some(tools) = chain["steps"].as_array_mut() {
+                    let kind =
+                        |tool: &Value| tool_operation(tool["provider"].as_str().unwrap_or(""));
+                    if !tools.iter().any(|tool| kind(tool) == kind(value)) {
+                        tools.push(value.clone());
+                    }
+                }
+            }
             op::EMISSION => {
                 settings.insert("emission".to_string(), value.clone());
             }
-            // A color group's tools together are Studio's.
-            op::RC_ASTRO_COLOR if step.band.is_none() => {
-                settings.insert("color_rc_astro".to_string(), value.clone());
-            }
-            op::RC_ASTRO_COLOR => {}
             op::COLOR_CALIBRATION => {
                 settings.insert("color_calibration".to_string(), value.clone());
             }

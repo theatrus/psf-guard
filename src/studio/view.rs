@@ -104,10 +104,12 @@ pub struct ChannelPlan {
     /// The background step that applies to the channel, if the view has
     /// reached one that is on.
     pub background: Option<Uuid>,
-    /// The channel's processing tools step, or its deconvolution step, if
-    /// the view has reached one that is on. The channel is then shown as the tools left
-    /// it.
-    pub tools: Option<Uuid>,
+    /// The Linear steps that change the channel's samples when a store is
+    /// prepared ([`super::changes_input`]), in order, that the view has
+    /// reached and that are on: its tools, its deconvolution, its color
+    /// group's tools and the background extraction. The channel is shown
+    /// as the last of them left it.
+    pub linear: Vec<Uuid>,
     pub stretch: PlannedStretch,
     /// The heals of this channel alone that the view applies, in order.
     /// They change the channel's samples before its stretch.
@@ -276,20 +278,15 @@ pub fn plan(document: &Document, view: &View) -> ViewPlan {
         ChannelPlan {
             channel: channel.to_string(),
             background: step_for(&steps, op::BACKGROUND, channel).map(|step| step.id),
-            // The store holds an input after its deconvolution and its
-            // tools together, so either step reached shows that state.
-            tools: step_for(&steps, op::RC_ASTRO_INPUT, channel)
-                .or_else(|| step_for(&steps, op::DECONVOLUTION, channel))
-                .or_else(|| {
-                    // A color group's tools step has the group's band only.
-                    let (group, _) = super::flow::color_group_of(channel)?;
-                    steps.iter().map(|(_, step)| *step).rfind(|step| {
-                        step.enabled
-                            && step.kind.name() == op::RC_ASTRO_COLOR
-                            && step.band.as_deref() == Some(group)
-                    })
+            linear: steps
+                .iter()
+                .filter(|(stage, step)| {
+                    *stage == StageKind::Linear
+                        && step.enabled
+                        && super::changes_input(step, channel)
                 })
-                .map(|step| step.id),
+                .map(|(_, step)| step.id)
+                .collect(),
             stretch: if view.stretch == DisplayStretch::Document && !stretches.is_empty() {
                 PlannedStretch::Document(stretches)
             } else {

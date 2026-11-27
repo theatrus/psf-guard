@@ -402,7 +402,7 @@ fn a_layers_mask_is_painted_and_a_document_with_adjustments_round_trips() {
 }
 
 #[test]
-fn an_input_deconvolved_without_tools_is_shown_in_its_tools_state() {
+fn an_input_is_shown_after_each_linear_step_that_changes_it() {
     let settings: Value =
         serde_json::from_str(include_str!("../processing_setups/default_color.json")).unwrap();
     let mut document = document_from_color_setup("Default", &settings, &["ha", "oiii"]).unwrap();
@@ -422,7 +422,27 @@ fn an_input_deconvolved_without_tools_is_shown_in_its_tools_state() {
         stretch: DisplayStretch::Document,
         own_until: None,
     };
-    assert_eq!(plan(&document, &view).channels[0].tools, Some(id));
+    let linear = plan(&document, &view).channels[0].linear.clone();
+    assert_eq!(linear.first(), Some(&id));
+    let background = document
+        .stage(StageKind::Linear)
+        .steps
+        .iter()
+        .find(|step| step.kind.name() == super::flow_operations::BACKGROUND)
+        .map(|step| step.id);
+    assert_eq!(linear.last().copied(), background);
+    // A view up to the deconvolution has reached it alone.
+    let up_to = View {
+        up_to: UpTo::Step(id),
+        ..view.clone()
+    };
+    assert_eq!(plan(&document, &up_to).channels[0].linear, vec![id]);
+    // The stars a tool took out change with no step.
+    let stars = View {
+        subject: Subject::Channel("ha@stars".to_string()),
+        ..view
+    };
+    assert!(plan(&document, &stars).channels[0].linear.is_empty());
 }
 
 #[test]

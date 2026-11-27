@@ -13,12 +13,10 @@ use crate::image_steps::{Domain, ImageShape, Region};
 use crate::server::stack_preview::color::{
     StackBackgroundExtraction, StackColorRole, StackColorSource,
 };
-use crate::server::stack_preview::rc_astro::ProcessingChain;
+use crate::server::stack_preview::rc_astro::{ProcessingChain, ProcessingStep};
 use crate::server::workers::rc_astro::RcAstroRunner;
 use crate::server::workers::Workers;
-use crate::studio::{
-    background_corrected_channel, stars_channel, tools_channel, RegionReader, StudioError,
-};
+use crate::studio::{stars_channel, step_channel, RegionReader, StudioError};
 use crate::studio_flow::role_name;
 use anyhow::{anyhow, bail, Context, Result};
 use seiza_background::BackgroundFit;
@@ -217,42 +215,55 @@ pub struct ChannelRegistration {
     pub matched_stars: usize,
 }
 
+/// One state a store keeps of a channel: the channel after one Linear step
+/// that changed it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChannelState {
+    /// The step, by its id in the document.
+    pub step: uuid::Uuid,
+    /// The plane that holds the channel after the step ([`step_channel`]).
+    pub plane: String,
+    /// Whether the plane is a background correction in full, which the
+    /// canvas blends into the state before it by the step's strength.
+    pub correction: bool,
+}
+
 /// Channel stacks on one grid: a linear image with one channel per plane.
 ///
-/// The planes are, in order: every stack as it came; for each channel with
-/// processing tools, the tools' result ([`tools_channel`]) and the stars a
-/// star removal took out ([`stars_channel`]); and, with background
-/// correction, every channel corrected in full
-/// ([`background_corrected_channel`]). When the tools run first, the
-/// corrected plane is the tools' result corrected, where a channel has
-/// tools; when the background is corrected first, it is the stack
-/// corrected, and the tools ran on it. A strength
-/// between is a blend of the two, because Seiza's correction changes each
-/// sample in proportion to the strength and resampling keeps proportions.
-/// So a person can move the strength and see the result at once, with no
-/// refit.
+/// The planes are, in order: every stack as it came; then, for each Linear
+/// step that changed a channel, in the order the steps ran, the channel
+/// after it ([`step_channel`]), with the stars a star removal took out
+/// ([`stars_channel`]) and a line with its continuum subtracted. A
+/// background extraction's plane is the channel corrected in full, and a
+/// strength between is a blend with the state before it, because Seiza's
+/// correction changes each sample in proportion to the strength and
+/// resampling keeps proportions. So a person can move the strength and see
+/// the result at once, with no refit. A step after it took the channel at
+/// the step's strength.
 ///
 /// The channels stay as separate planes, as Seiza gave them. A region is
 /// interleaved when it is read, so the channels are never copied whole.
 pub struct RegisteredChannels {
     shape: ImageShape,
     planes: Vec<Vec<f32>>,
-    /// A name for each plane: the channel's role, and for a corrected
-    /// plane [`background_corrected_channel`] of it.
+    /// A name for each plane: the channel's role, and for a channel's
+    /// other planes, the channel's name with what the plane holds.
     pub names: Vec<String>,
     pub placements: Vec<ChannelPlacement>,
-    /// Each channel's fitted background, when the channels were corrected.
+    /// Each channel's fitted background, for each background extraction.
     pub backgrounds: Vec<(StackColorRole, BackgroundFit)>,
-    /// The processing tools that ran on each channel that had any, with
-    /// their settings as they were run.
+    /// The processing tools that ran on each channel, one per tool step,
+    /// with their settings as they were run.
     pub tools: Vec<(StackColorRole, ProcessingChain)>,
     /// What continuum subtraction did for each emission line it was asked
     /// for, in words.
     pub continuum: Vec<(StackColorRole, String)>,
-    /// Whether the background was corrected before the tools ran. Then
-    /// [`background_corrected_channel`] is the stack corrected, and
-    /// [`tools_channel`] is the tools' result on the corrected stack.
-    pub background_first: bool,
+    /// Each channel's states after the Linear steps that changed it, in
+    /// the order they ran, by the channel's name.
+    pub states: BTreeMap<String, Vec<ChannelState>>,
+    /// For each channel whose stars a tool took out, the plane of the
+    /// channel just after that tool: the image the stars add back to.
+    pub starless: BTreeMap<String, String>,
 }
 
 /// Continuum subtraction: its settings, and where each channel's stack
@@ -268,30 +279,191 @@ pub fn line_channel(channel: &str) -> String {
     format!("{channel}@line")
 }
 
-impl RegisteredChannels {
-    /// Reads each channel stack, deconvolves it and runs its processing
-    /// tools when `tools` has them for it, corrects its background when
-    /// `background` is given, and places every result on the first stack's
+/// One Linear step that changes the samples of the channels it is for, as
+/// preparing a store runs them: in the document's order.
+pub enum LinearStep {
+    /// One processing tool: on one channel, or on a color group's channels
+    /// combined into one color image.
+    Tool {
+        step: uuid::Uuid,
+        roles: Vec<StackColorRole>,
+        /// What progress calls the channels: an input's name or a group's.
+        label: String,
+        tool: ProcessingStep,
+    },
+    /// Seiza's deconvolution of one channel.
+    Deconvolution {
+        step: uuid::Uuid,
+        role: StackColorRole,
+        config: seiza_deconvolution::DeconvolutionConfig,
+    },
+    /// A background extraction of the channels given, fitted with one model.
+    Background {
+        step: uuid::Uuid,
+        roles: Vec<StackColorRole>,
+        extraction: StackBackgroundExtraction,
+    },
+}
+
+impl LinearStep {
+    fn roles(&self) -> &[StackColorRole] {
+        match self {
+            LinearStep::Tool { roles, .. } | LinearStep::Background { roles, .. } => roles,
+            LinearStep::Deconvolution { role, .. } => std::slice::from_ref(role),
+        }
+    }
+}
+
+/// The Linear steps to run on the channels, and where their results are
+/// kept.
+pub struct LinearProgram<'a> {
+    /// The workers that run the tools: this machine's own, and any
+    /// connected to it.
+    pub workers: &'a Workers,
+    /// Where each step's result is kept, so a repeat run is fast.
+    pub cache: &'a Path,
+    /// Each stack's source and revision, which the cache keys its results
+    /// by.
+    pub sources: BTreeMap<StackColorRole, (String, String)>,
+    /// The steps, in order.
+    pub steps: Vec<LinearStep>,
+    /// Hears the channel, the tool running on it, and how far the tool's
+    /// chain has got, from 0 to 1.
+    pub progress: &'a dyn Fn(&str, &str, f32),
+}
+
+/// How far one channel has got through a [`LinearProgram`], and what its
+/// samples are, for the cache.
+///
+/// Tool steps that follow one another in a chain's order on one channel
+/// are run as one chain, as PSF Guard runs a channel's chain: each tool's
+/// result is kept by the chain so far, so the results of a document saved
+/// before each tool was a step are found again.
+struct Track {
+    /// The channel's samples now, in its own frame or on the reference
     /// grid.
+    image: LinearImage,
+    on_grid: bool,
+    /// What `start` is, for the cache: the stack's revision, or the id of
+    /// the step that made it.
+    revision: String,
+    /// A deconvolution that ran on the image `revision` names and gave
+    /// `start`.
+    deconvolution: Option<String>,
+    /// The samples the chain in hand starts from.
+    start: LinearImage,
+    /// The chain in hand: the tools run on `start` so far.
+    chain: Vec<ProcessingStep>,
+    /// The id of the last step that ran since `revision`.
+    last: Option<String>,
+}
+
+impl Track {
+    fn new(image: LinearImage, revision: &str) -> Self {
+        Self {
+            start: image.clone(),
+            image,
+            on_grid: false,
+            revision: revision.to_string(),
+            deconvolution: None,
+            chain: Vec::new(),
+            last: None,
+        }
+    }
+
+    /// The chain in hand with `tool` after it, when one chain can run them
+    /// all: each tool does something later in a chain's order than the one
+    /// before it, as a chain runs its tools in that order.
+    fn chain_with(&self, tool: &ProcessingStep) -> Option<Vec<ProcessingStep>> {
+        extend_chain(&self.chain, tool)
+    }
+
+    /// Starts again from the samples as they are now: what ran since
+    /// `revision` becomes the new revision.
+    fn settle(&mut self) {
+        if let Some(last) = self.last.take() {
+            self.revision = last;
+        }
+        self.deconvolution = None;
+        self.chain.clear();
+        self.start = self.image.clone();
+    }
+
+    /// The samples are now `image`, made by the step `id` from the samples
+    /// as they were.
+    fn replace(&mut self, image: LinearImage, id: String) {
+        self.image = image;
+        self.settle();
+        self.revision = id;
+    }
+
+    /// How a color group's revision names this channel: its revision and
+    /// the last step since, as PSF Guard's group tools named it.
+    fn group_part(&self) -> String {
+        format!("{}:{}", self.revision, self.last.as_deref().unwrap_or(""))
+    }
+}
+
+/// `chain` with `tool` after it, when one chain can run them all: each
+/// tool does something later in a chain's order than the one before it,
+/// as a chain runs its tools in that order.
+fn extend_chain(chain: &[ProcessingStep], tool: &ProcessingStep) -> Option<Vec<ProcessingStep>> {
+    let rank = |step: &ProcessingStep| {
+        step.category().and_then(|category| {
+            crate::remote_work::steps::Category::ALL
+                .iter()
+                .position(|other| *other == category)
+        })
+    };
+    let fits = match chain.last() {
+        None => true,
+        Some(last) => matches!((rank(last), rank(tool)), (Some(a), Some(b)) if b > a),
+    };
+    fits.then(|| {
+        let mut chain = chain.to_vec();
+        chain.push(tool.clone());
+        chain
+    })
+}
+
+/// The chain of tools a color group runs together, while no other step
+/// changes the group's channels.
+struct GroupTrack {
+    roles: Vec<StackColorRole>,
+    source: String,
+    revision: String,
+    start: LinearImage,
+    chain: Vec<ProcessingStep>,
+}
+
+fn short_digest(text: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(text.as_bytes());
+    digest
+        .iter()
+        .take(8)
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+impl RegisteredChannels {
+    /// Reads each channel stack, runs the program's steps on the channels
+    /// in order, and places every result on the first stack's grid.
     ///
-    /// The steps and their order are the ones PSF Guard's color previews
-    /// run: the code in `color_steps`. Registration is measured on the
-    /// stacks as they came. The tools run on a stack as it came, and each
-    /// background is fitted and corrected on the tools' result. When
-    /// `tools` asks for the background first, each background is fitted
-    /// and corrected on the stack as it came, and the tools run on it at
-    /// the step's strength. Either way the background is fitted in the
-    /// channel's own frame, before resampling, so the empty border a
-    /// resample leaves is never fitted.
+    /// The steps are the ones PSF Guard's color previews run: the code in
+    /// `color_steps`. Registration is measured on the stacks as they came.
+    /// A step runs on a channel in its own frame, before resampling, so the
+    /// empty border a resample leaves is never fitted; a color group's tool
+    /// runs on its channels registered, and what follows it for those
+    /// channels runs on the grid.
     ///
-    /// Every stack is held in memory while this runs, twice when the
-    /// background is corrected. A mosaic too large for that needs these
-    /// steps by tile.
+    /// Every stack is held in memory while this runs, with each state it
+    /// passes through. A mosaic too large for that needs these steps by
+    /// tile.
     pub fn prepare(
         stacks: &[(StackColorRole, &Path)],
-        tools: Option<&ChannelTools<'_>>,
+        program: Option<&LinearProgram<'_>>,
         continuum: Option<&ChannelContinuum>,
-        background: Option<&StackBackgroundExtraction>,
         gpu: &GpuOptions,
     ) -> Result<Self> {
         if stacks.is_empty() {
@@ -303,6 +475,7 @@ impl RegisteredChannels {
             .collect::<Result<Vec<_>>>()?;
         let roles: Vec<StackColorRole> = stacks.iter().map(|(role, _)| *role).collect();
         let reference = (roles[0], frames[0].image.width, frames[0].image.height);
+        let (width, height) = (reference.1, reference.2);
 
         let others: Vec<(StackColorRole, &LinearImage)> = roles
             .iter()
@@ -353,404 +526,386 @@ impl RegisteredChannels {
         for (channel, frame) in frames.iter().enumerate() {
             planes.push(place(channel, frame.image.clone())?);
         }
+        // Adds a plane, or replaces one of the same name.
+        let set = |names: &mut Vec<String>,
+                   planes: &mut Vec<Vec<f32>>,
+                   name: String,
+                   samples: Vec<f32>| {
+            match names.iter().position(|other| *other == name) {
+                Some(at) => planes[at] = samples,
+                None => {
+                    names.push(name);
+                    planes.push(samples);
+                }
+            }
+        };
 
-        // The background first, when the tools are to run on the corrected
-        // stacks: each stack is corrected in its own frame, in full for
-        // the canvas to blend, and the tools take it at the step's
-        // strength.
-        let background_first =
-            background.is_some() && tools.is_some_and(|tools| tools.after_background);
+        let mut tracks: Vec<Track> = frames
+            .iter()
+            .zip(&roles)
+            .map(|(frame, role)| {
+                let revision = program
+                    .and_then(|program| program.sources.get(role))
+                    .map_or("", |(_, revision)| revision.as_str());
+                Track::new(frame.image.clone(), revision)
+            })
+            .collect();
+        let mut states: BTreeMap<String, Vec<ChannelState>> = BTreeMap::new();
+        let mut starless = BTreeMap::new();
         let mut backgrounds = Vec::new();
-        let mut processed: Vec<LinearImage> =
-            frames.iter().map(|frame| frame.image.clone()).collect();
-        let strength = background.map_or(1.0, |extraction| extraction.strength as f32);
-        if let (true, Some(extraction)) = (background_first, background) {
-            let full = StackBackgroundExtraction {
-                strength: 1.0,
-                ..extraction.clone()
-            };
-            let mut corrected = processed.clone();
-            let mut channels: Vec<(StackColorRole, &mut LinearImage)> =
-                roles.iter().copied().zip(corrected.iter_mut()).collect();
-            correct_channel_backgrounds(
-                &mut channels,
-                &full,
-                |_| Vec::new(),
-                |role, event| {
-                    if let BackgroundEvent::Corrected { fit, .. } = event {
-                        backgrounds.push((role, fit.clone()));
-                    }
-                    Ok(())
-                },
-            )
-            .map_err(anyhow::Error::msg)?;
-            for (channel, corrected) in corrected.into_iter().enumerate() {
-                processed[channel] = blend(&processed[channel], &corrected, strength)?;
-                names.push(background_corrected_channel(&channel_names[channel]));
-                planes.push(place(channel, corrected)?);
-            }
-        }
-
-        // The tools run on each stack in its own frame: as it came, or
-        // with its background corrected when that comes first. What
-        // follows them works on their result.
         let mut tool_runs = Vec::new();
-        if let Some(tools) = tools {
-            for (channel, (role, frame)) in roles.iter().zip(&frames).enumerate() {
-                let label = channel_names[channel].clone();
-                // The stack as the tools take it.
-                let frame = &seiza_stacking::FitsFrame {
-                    image: processed[channel].clone(),
-                    ..frame.clone()
-                };
-                // A deconvolution runs first, and the chain runs on its
-                // result. The two together are the channel's tools state.
-                let mut source = std::borrow::Cow::Borrowed(frame);
-                if let Some(deconvolution) = tools.deconvolutions.get(role) {
-                    (tools.progress)(&label, "Seiza deconvolution", 0.0);
-                    let (restored, _) = deconvolution
-                        .apply(tools.cache, frame)
-                        .map_err(|error| anyhow!("the deconvolution of {label}: {error}"))?;
-                    source = std::borrow::Cow::Owned(seiza_stacking::FitsFrame {
-                        image: restored,
-                        headers: frame.headers.clone(),
-                        ..frame.clone()
+        let mut group: Option<GroupTrack> = None;
+        let position = |role: &StackColorRole| roles.iter().position(|other| other == role);
+
+        for step in program.map_or(&[][..], |program| program.steps.as_slice()) {
+            let program = program.expect("steps come with their program");
+            let members: Vec<usize> = step.roles().iter().filter_map(position).collect();
+            if members.is_empty() {
+                continue;
+            }
+            // A step on a group's channels ends the group's chain, unless
+            // it is that group's next tool.
+            let continues_group = matches!(
+                (step, &group),
+                (LinearStep::Tool { roles: wanted, .. }, Some(track))
+                    if wanted.len() > 1 && *wanted == track.roles
+            );
+            if !continues_group
+                && group
+                    .as_ref()
+                    .is_some_and(|track| track.roles.iter().any(|role| step.roles().contains(role)))
+            {
+                group = None;
+            }
+            match step {
+                LinearStep::Tool {
+                    step: id,
+                    roles: wanted,
+                    label,
+                    tool,
+                } if wanted.len() == 1 => {
+                    let channel = members[0];
+                    let track = &mut tracks[channel];
+                    let chain = match track.chain_with(tool) {
+                        Some(chain) => chain,
+                        None => {
+                            track.settle();
+                            vec![tool.clone()]
+                        }
+                    };
+                    let source = &program.sources[&roles[channel]].0;
+                    let resolved = ToolChain::resolve(
+                        program.workers,
+                        &ProcessingChain {
+                            steps: chain.clone(),
+                        },
+                        "studio",
+                        source,
+                        &track.revision,
+                        track.deconvolution.as_deref(),
+                    )
+                    .map_err(|error| anyhow!("the tools of {label}: {error}"))?;
+                    let outcome = run_tool_chain(
+                        RcAstroRunner {
+                            workers: program.workers,
+                            person: true,
+                        },
+                        program.cache,
+                        &resolved,
+                        &track.start,
+                        &frames[channel].headers,
+                        None,
+                        |ToolEvent::Running {
+                             label: running,
+                             fraction,
+                         }| (program.progress)(label, running, fraction),
+                        &mut || Ok(()),
+                    )
+                    .map_err(|error| anyhow!("the tools of {label}: {error}"))?;
+                    track.chain = chain;
+                    track.last = resolved.ids.last().cloned();
+                    track.image = outcome.image;
+                    let name = &channel_names[channel];
+                    let plane = step_channel(name, *id);
+                    let samples = if track.on_grid {
+                        track.image.data.clone()
+                    } else {
+                        place(channel, track.image.clone())?
+                    };
+                    set(&mut names, &mut planes, plane.clone(), samples);
+                    if let Some(stars) = outcome.stars {
+                        let stars = if track.on_grid {
+                            stars.data
+                        } else {
+                            place(channel, stars)?
+                        };
+                        set(&mut names, &mut planes, stars_channel(name), stars);
+                        starless.insert(name.clone(), plane.clone());
+                    }
+                    states.entry(name.clone()).or_default().push(ChannelState {
+                        step: *id,
+                        plane,
+                        correction: false,
                     });
-                }
-                let Some(chain) = tools.chains.get(role) else {
-                    if let std::borrow::Cow::Owned(restored) = source {
-                        names.push(tools_channel(&label));
-                        planes.push(place(channel, restored.image.clone())?);
-                        processed[channel] = restored.image;
-                    }
-                    continue;
-                };
-                let frame = source.as_ref();
-                let outcome = run_tool_chain(
-                    RcAstroRunner {
-                        workers: tools.workers,
-                        person: true,
-                    },
-                    tools.cache,
-                    chain,
-                    &frame.image,
-                    &frame.headers,
-                    None,
-                    |ToolEvent::Running {
-                         label: tool,
-                         fraction,
-                     }| (tools.progress)(&label, tool, fraction),
-                    &mut || Ok(()),
-                )
-                .map_err(|error| anyhow!("the tools of {label}: {error}"))?;
-                names.push(tools_channel(&label));
-                planes.push(place(channel, outcome.image.clone())?);
-                if let Some(stars) = outcome.stars {
-                    names.push(stars_channel(&label));
-                    planes.push(place(channel, stars)?);
-                }
-                processed[channel] = outcome.image;
-                tool_runs.push((*role, chain.config.clone()));
-            }
-        }
-
-        // Each group's tools, on its registered channels together. The
-        // results replace each channel's tools state and stars, already on
-        // the reference grid.
-        let mut on_grid: Vec<Option<LinearImage>> = vec![None; roles.len()];
-        if let Some(tools) = tools {
-            let (width, height) = (reference.1, reference.2);
-            for group in &tools.groups {
-                let members: Vec<usize> = group
-                    .roles
-                    .iter()
-                    .filter_map(|role| roles.iter().position(|other| other == role))
-                    .collect();
-                if members.len() < 2 {
-                    continue;
-                }
-                // Each member in its state after its own tools, or as the
-                // tools take it: as stacked, or corrected at the step's
-                // strength when the background comes first.
-                let latest = |channel: usize| -> Result<LinearImage> {
-                    let at = |name: String| names.iter().position(|other| *other == name);
-                    let label = &channel_names[channel];
-                    let stacked = LinearImage::new(width, height, 1, planes[channel].clone())?;
-                    if let Some(at) = at(tools_channel(label)) {
-                        return Ok(LinearImage::new(width, height, 1, planes[at].clone())?);
-                    }
-                    match at(background_corrected_channel(label)).filter(|_| background_first) {
-                        Some(at) => {
-                            let corrected = LinearImage::new(width, height, 1, planes[at].clone())?;
-                            blend(&stacked, &corrected, strength)
-                        }
-                        None => Ok(stacked),
-                    }
-                };
-                let mut images = members
-                    .iter()
-                    .map(|channel| latest(*channel))
-                    .collect::<Result<Vec<_>>>()?;
-                // A color image has three channels: a group of two repeats
-                // its last.
-                while images.len() < 3 {
-                    images.push(images[images.len() - 1].clone());
-                }
-                let combined = crate::server::stack_preview::color_calibration::interleave(
-                    &images[0], &images[1], &images[2],
-                )
-                .map_err(anyhow::Error::msg)?;
-                let outcome = run_tool_chain(
-                    RcAstroRunner {
-                        workers: tools.workers,
-                        person: true,
-                    },
-                    tools.cache,
-                    &group.chain,
-                    &combined,
-                    &frames[0].headers,
-                    None,
-                    |ToolEvent::Running {
-                         label: tool,
-                         fraction,
-                     }| (tools.progress)(&group.name, tool, fraction),
-                    &mut || Ok(()),
-                )
-                .map_err(|error| anyhow!("the tools of {}: {error}", group.name))?;
-                let split = |image: &LinearImage, at: usize| -> Vec<f32> {
-                    image.data.iter().skip(at).step_by(3).copied().collect()
-                };
-                let mut set = |name: String, samples: Vec<f32>| match names
-                    .iter()
-                    .position(|other| *other == name)
-                {
-                    Some(at) => planes[at] = samples,
-                    None => {
-                        names.push(name);
-                        planes.push(samples);
-                    }
-                };
-                for (at, channel) in members.iter().enumerate() {
-                    let label = &channel_names[*channel];
-                    let starless = split(&outcome.image, at);
-                    on_grid[*channel] = Some(LinearImage::new(width, height, 1, starless.clone())?);
-                    set(tools_channel(label), starless);
-                    if let Some(stars) = &outcome.stars {
-                        set(stars_channel(label), split(stars, at));
-                    }
-                    tool_runs.push((roles[*channel], group.chain.config.clone()));
-                }
-            }
-        }
-
-        if let (false, Some(extraction)) = (background_first, background) {
-            // Corrected in full: the strength is applied when the two
-            // planes are blended.
-            let full = StackBackgroundExtraction {
-                strength: 1.0,
-                ..extraction.clone()
-            };
-            // A channel a group's tools ran on is corrected on the grid.
-            for (channel, image) in on_grid.iter().enumerate() {
-                if let Some(image) = image {
-                    processed[channel] = image.clone();
-                }
-            }
-            let mut channels: Vec<(StackColorRole, &mut LinearImage)> =
-                roles.iter().copied().zip(processed.iter_mut()).collect();
-            // Catalog protection needs a plate solve of the stack, which
-            // Studio does not read yet, so no region is protected.
-            correct_channel_backgrounds(
-                &mut channels,
-                &full,
-                |_| Vec::new(),
-                |role, event| {
-                    if let BackgroundEvent::Corrected { fit, .. } = event {
-                        backgrounds.push((role, fit.clone()));
-                    }
-                    Ok(())
-                },
-            )
-            .map_err(anyhow::Error::msg)?;
-            for (channel, corrected) in processed.into_iter().enumerate() {
-                names.push(background_corrected_channel(&channel_names[channel]));
-                if on_grid[channel].is_some() {
-                    planes.push(corrected.data);
-                } else {
-                    planes.push(place(channel, corrected)?);
-                }
-            }
-        }
-
-        // Continuum subtraction, with the steps PSF Guard's color previews
-        // run: the continuum under each line is fitted on the stacks as
-        // they came, which still have the stars the fit measures, and then
-        // subtracted from the line in its last linear state.
-        let mut continuum_results = Vec::new();
-        if let Some(continuum) = continuum.filter(|continuum| {
-            continuum.config.mode != crate::server::stack_preview::color::ContinuumMode::Off
-        }) {
-            use seiza_stacking::{
-                ContinuumFitOutcome, ContinuumSource, ContinuumSources, ContinuumTransfer,
-            };
-            let (width, height) = (reference.1, reference.2);
-            let image = |samples: Vec<f32>| LinearImage::new(width, height, 1, samples);
-            for (line, role) in roles.iter().enumerate() {
-                let Some(settings) = continuum.config.lines.get(role) else {
-                    continue;
-                };
-                let wanted = if *role == StackColorRole::Oiii {
-                    vec![StackColorRole::Green, StackColorRole::Blue]
-                } else {
-                    vec![StackColorRole::Red]
-                };
-                let Some(references) = wanted
-                    .iter()
-                    .map(|wanted| roles.iter().position(|other| other == wanted))
-                    .collect::<Option<Vec<usize>>>()
-                else {
-                    continuum_results.push((
-                        *role,
-                        "not subtracted: the broadband channel under it is missing".to_string(),
+                    tool_runs.push((
+                        roles[channel],
+                        ProcessingChain {
+                            steps: vec![tool.clone()],
+                        },
                     ));
-                    continue;
-                };
-                let inputs: Vec<usize> = std::iter::once(line).chain(references.clone()).collect();
-                let masks: Vec<Option<Vec<u8>>> = inputs
-                    .iter()
-                    .map(|input| {
-                        let map = continuum.clipping.get(&roles[*input])?;
-                        let placed = place(*input, map.clone()).ok()?;
-                        // A map of another size is not this stack's.
-                        if placed.len() != width * height {
-                            return None;
-                        }
-                        Some(
-                            placed
-                                .iter()
-                                .map(|value| u8::from(!value.is_finite() || *value > 0.0))
-                                .collect(),
-                        )
-                    })
-                    .collect();
-                let source = |input: usize, mask: &Option<Vec<u8>>| ContinuumSource {
-                    name: channel_names[input].clone(),
-                    revision: format!("studio:{}", channel_names[input]),
-                    transfer: ContinuumTransfer::Linear,
-                    saturation: continuum.config.saturation.get(&roles[input]).copied(),
-                    clipping_revision: mask
-                        .as_ref()
-                        .map(|_| format!("clipping:{}", channel_names[input])),
-                };
-                let sources = ContinuumSources {
-                    width,
-                    height,
-                    narrowband: source(line, &masks[0]),
-                    references: references
-                        .iter()
-                        .zip(&masks[1..])
-                        .map(|(input, mask)| source(*input, mask))
-                        .collect(),
-                };
-                let stacked: Vec<LinearImage> = inputs
-                    .iter()
-                    .map(|input| image(planes[*input].clone()))
-                    .collect::<Result<_, _>>()?;
-                let borrowed: Vec<&LinearImage> = stacked[1..].iter().collect();
-                let mask_slices: Vec<Option<&[u8]>> =
-                    masks.iter().map(|mask| mask.as_deref()).collect();
-                // The inputs must agree on their stars: all starless, or all
-                // with their stars, or the line keeps or loses the stars of
-                // its references.
-                let starless: Vec<bool> = inputs
-                    .iter()
-                    .map(|input| {
-                        let wanted = stars_channel(&channel_names[*input]);
-                        names.contains(&wanted)
-                    })
-                    .collect();
-                if starless.iter().any(|&one| one) && !starless.iter().all(|&one| one) {
-                    continuum_results.push((
-                        *role,
-                        "not subtracted: remove the stars of the line and of its references alike"
-                            .to_string(),
-                    ));
-                    continue;
                 }
-                // The fit measures the stars of the stacks either way. When
-                // the line is subtracted starless, no star can keep a core
-                // or halo, so Seiza's check of the stars' profiles is
-                // reported and does not refuse the fit.
-                let mut config = continuum.config.clone();
-                if starless[0] {
-                    config.photometry.target = seiza_stacking::ContinuumTarget::Starless;
-                }
-                let outcome = crate::color_steps::fit_continuum_line(
-                    &stacked[0],
-                    &borrowed,
-                    &sources,
-                    &mask_slices,
-                    &config,
-                    settings,
-                    role.label(),
-                )
-                .map_err(|error| anyhow!("the continuum of {}: {error}", role.label()))?;
-                let plan = match outcome {
-                    ContinuumFitOutcome::Fitted { plan } => plan,
-                    ContinuumFitOutcome::Skipped { detail, .. } => {
-                        continuum_results.push((*role, format!("not subtracted: {detail}")));
+                LinearStep::Tool {
+                    step: id,
+                    roles: wanted,
+                    label,
+                    tool,
+                } => {
+                    if members.len() < 2 {
                         continue;
                     }
-                };
-                // Each input in its last linear state: with its background
-                // corrected, else after its tools, else as stacked. When the
-                // background comes first, the tools' result is the last.
-                let last_state = |input: usize| -> Option<LinearImage> {
-                    let name = &channel_names[input];
-                    let mut order = [background_corrected_channel(name), tools_channel(name)];
-                    if background_first {
-                        order.reverse();
+                    // The group's chain in hand, or a new one on the group's
+                    // channels as they are now, registered.
+                    let extended = group
+                        .as_ref()
+                        .filter(|track| track.roles == *wanted)
+                        .and_then(|track| extend_chain(&track.chain, tool));
+                    let track = match (extended, group.take()) {
+                        (Some(chain), Some(mut track)) => {
+                            track.chain = chain;
+                            track
+                        }
+                        _ => {
+                            let mut images = Vec::new();
+                            for channel in &members {
+                                let track = &tracks[*channel];
+                                images.push(if track.on_grid {
+                                    track.image.clone()
+                                } else {
+                                    LinearImage::new(
+                                        width,
+                                        height,
+                                        1,
+                                        place(*channel, track.image.clone())?,
+                                    )?
+                                });
+                            }
+                            // A color image has three channels: a group of
+                            // two repeats its last.
+                            while images.len() < 3 {
+                                images.push(images[images.len() - 1].clone());
+                            }
+                            let start =
+                                crate::server::stack_preview::color_calibration::interleave(
+                                    &images[0], &images[1], &images[2],
+                                )
+                                .map_err(anyhow::Error::msg)?;
+                            let source = format!(
+                                "{label}:{}",
+                                members
+                                    .iter()
+                                    .map(|channel| program.sources[&roles[*channel]].0.as_str())
+                                    .map(|source| source.trim_start_matches("mono:"))
+                                    .collect::<Vec<_>>()
+                                    .join("+")
+                            );
+                            let revision = members
+                                .iter()
+                                .map(|channel| tracks[*channel].group_part())
+                                .collect::<Vec<_>>()
+                                .join("+");
+                            GroupTrack {
+                                roles: wanted.clone(),
+                                source,
+                                revision,
+                                start,
+                                chain: vec![tool.clone()],
+                            }
+                        }
+                    };
+                    let resolved = ToolChain::resolve(
+                        program.workers,
+                        &ProcessingChain {
+                            steps: track.chain.clone(),
+                        },
+                        "studio",
+                        &track.source,
+                        &track.revision,
+                        None,
+                    )
+                    .map_err(|error| anyhow!("the tools of {label}: {error}"))?;
+                    let outcome = run_tool_chain(
+                        RcAstroRunner {
+                            workers: program.workers,
+                            person: true,
+                        },
+                        program.cache,
+                        &resolved,
+                        &track.start,
+                        &frames[members[0]].headers,
+                        None,
+                        |ToolEvent::Running {
+                             label: running,
+                             fraction,
+                         }| (program.progress)(label, running, fraction),
+                        &mut || Ok(()),
+                    )
+                    .map_err(|error| anyhow!("the tools of {label}: {error}"))?;
+                    let split = |image: &LinearImage, at: usize| -> Vec<f32> {
+                        image.data.iter().skip(at).step_by(3).copied().collect()
+                    };
+                    let id_now = resolved.ids.last().cloned().unwrap_or_default();
+                    for (at, channel) in members.iter().enumerate() {
+                        let name = &channel_names[*channel];
+                        let samples = split(&outcome.image, at);
+                        let plane = step_channel(name, *id);
+                        set(&mut names, &mut planes, plane.clone(), samples.clone());
+                        if let Some(stars) = &outcome.stars {
+                            set(
+                                &mut names,
+                                &mut planes,
+                                stars_channel(name),
+                                split(stars, at),
+                            );
+                            starless.insert(name.clone(), plane.clone());
+                        }
+                        let member = &mut tracks[*channel];
+                        member
+                            .replace(LinearImage::new(width, height, 1, samples)?, id_now.clone());
+                        member.on_grid = true;
+                        states.entry(name.clone()).or_default().push(ChannelState {
+                            step: *id,
+                            plane,
+                            correction: false,
+                        });
+                        tool_runs.push((
+                            roles[*channel],
+                            ProcessingChain {
+                                steps: vec![tool.clone()],
+                            },
+                        ));
                     }
-                    order
-                        .iter()
-                        .find_map(|wanted| names.iter().position(|other| other == wanted))
-                        .and_then(|at| image(planes[at].clone()).ok())
-                };
-                let latest: Vec<LinearImage> = inputs
-                    .iter()
-                    .zip(&stacked)
-                    .map(|(input, stacked)| last_state(*input).unwrap_or_else(|| stacked.clone()))
-                    .collect();
-                let (from, state) = if starless[0] {
-                    (&latest, "starless")
-                } else {
-                    (&latest, "with its stars")
-                };
-                let from_references: Vec<&LinearImage> = from[1..].iter().collect();
-                let residual =
-                    seiza_stacking::subtract_continuum(&from[0], &from_references, &sources, &plan)
-                        .map_err(|error| anyhow!("the continuum of {}: {error}", role.label()))?;
-                let residual = residual.data;
-                names.push(line_channel(&channel_names[line]));
-                planes.push(residual);
-                continuum_results.push((
-                    *role,
-                    format!(
-                        "subtracted {state}, weights {}",
-                        plan.coefficients
+                    group = Some(track);
+                }
+                LinearStep::Deconvolution {
+                    step: id,
+                    role,
+                    config,
+                } => {
+                    let channel = members[0];
+                    let label = channel_names[channel].clone();
+                    let track = &mut tracks[channel];
+                    if !track.chain.is_empty() || track.deconvolution.is_some() {
+                        track.settle();
+                    }
+                    let source = &program.sources[role].0;
+                    let deconvolution = crate::color_steps::ChannelDeconvolution::resolve(
+                        *config,
+                        "studio",
+                        source,
+                        &track.revision,
+                    )
+                    .map_err(|error| anyhow!("the deconvolution of {label}: {error}"))?;
+                    (program.progress)(&label, "Seiza deconvolution", 0.0);
+                    let frame = seiza_stacking::FitsFrame {
+                        image: track.image.clone(),
+                        ..frames[channel].clone()
+                    };
+                    let (restored, _) = deconvolution
+                        .apply(program.cache, &frame)
+                        .map_err(|error| anyhow!("the deconvolution of {label}: {error}"))?;
+                    track.image = restored.clone();
+                    track.start = restored;
+                    track.chain.clear();
+                    track.deconvolution = Some(deconvolution.id.clone());
+                    track.last = Some(deconvolution.id);
+                    let plane = step_channel(&label, *id);
+                    let samples = if track.on_grid {
+                        track.image.data.clone()
+                    } else {
+                        place(channel, track.image.clone())?
+                    };
+                    set(&mut names, &mut planes, plane.clone(), samples);
+                    states.entry(label).or_default().push(ChannelState {
+                        step: *id,
+                        plane,
+                        correction: false,
+                    });
+                }
+                LinearStep::Background {
+                    step: id,
+                    extraction,
+                    ..
+                } => {
+                    // Corrected in full: the strength is applied when the
+                    // states are blended.
+                    let full = StackBackgroundExtraction {
+                        strength: 1.0,
+                        ..extraction.clone()
+                    };
+                    let strength = extraction.strength as f32;
+                    // What the correction depends on: its settings and
+                    // every channel it fits, as they are now.
+                    let key = short_digest(&format!(
+                        "{}|{}",
+                        serde_json::to_string(extraction)?,
+                        members
                             .iter()
-                            .map(|weight| format!("{weight:.3}"))
+                            .map(|channel| tracks[*channel].group_part())
                             .collect::<Vec<_>>()
-                            .join(", ")
-                    ),
-                ));
+                            .join("+")
+                    ));
+                    let mut corrected: Vec<LinearImage> = members
+                        .iter()
+                        .map(|channel| tracks[*channel].image.clone())
+                        .collect();
+                    let member_roles: Vec<StackColorRole> =
+                        members.iter().map(|channel| roles[*channel]).collect();
+                    let mut channels: Vec<(StackColorRole, &mut LinearImage)> = member_roles
+                        .iter()
+                        .copied()
+                        .zip(corrected.iter_mut())
+                        .collect();
+                    // Catalog protection needs a plate solve of the stack,
+                    // which Studio does not read yet, so no region is
+                    // protected.
+                    correct_channel_backgrounds(
+                        &mut channels,
+                        &full,
+                        |_| Vec::new(),
+                        |role, event| {
+                            if let BackgroundEvent::Corrected { fit, .. } = event {
+                                backgrounds.push((role, fit.clone()));
+                            }
+                            Ok(())
+                        },
+                    )
+                    .map_err(anyhow::Error::msg)?;
+                    for (channel, corrected) in members.iter().zip(corrected) {
+                        let name = channel_names[*channel].clone();
+                        let track = &mut tracks[*channel];
+                        let plane = step_channel(&name, *id);
+                        let samples = if track.on_grid {
+                            corrected.data.clone()
+                        } else {
+                            place(*channel, corrected.clone())?
+                        };
+                        set(&mut names, &mut planes, plane.clone(), samples);
+                        let blended = blend(&track.image, &corrected, strength)?;
+                        track.replace(blended, format!("background:{key}"));
+                        states.entry(name).or_default().push(ChannelState {
+                            step: *id,
+                            plane,
+                            correction: true,
+                        });
+                    }
+                }
             }
         }
 
-        Ok(Self {
+        let mut prepared = Self {
             shape: ImageShape {
-                width: reference.1,
-                height: reference.2,
+                width,
+                height,
                 channels: planes.len(),
             },
             planes,
@@ -758,9 +913,203 @@ impl RegisteredChannels {
             placements,
             backgrounds,
             tools: tool_runs,
-            continuum: continuum_results,
-            background_first,
-        })
+            continuum: Vec::new(),
+            states,
+            starless,
+        };
+        if let Some(continuum) = continuum {
+            prepared.subtract_continuum(continuum, &roles, &channel_names, &|channel, image| {
+                place(channel, image)
+            })?;
+        }
+        prepared.shape.channels = prepared.planes.len();
+        Ok(prepared)
+    }
+
+    /// Continuum subtraction, with the steps PSF Guard's color previews
+    /// run: the continuum under each line is fitted on the stacks as they
+    /// came, which still have the stars the fit measures, and then
+    /// subtracted from the line in its last linear state.
+    fn subtract_continuum(
+        &mut self,
+        continuum: &ChannelContinuum,
+        roles: &[StackColorRole],
+        channel_names: &[String],
+        place: &dyn Fn(usize, LinearImage) -> Result<Vec<f32>>,
+    ) -> Result<()> {
+        use seiza_stacking::{
+            ContinuumFitOutcome, ContinuumSource, ContinuumSources, ContinuumTransfer,
+        };
+        if continuum.config.mode == crate::server::stack_preview::color::ContinuumMode::Off {
+            return Ok(());
+        }
+        let (width, height) = (self.shape.width, self.shape.height);
+        let image = |samples: Vec<f32>| LinearImage::new(width, height, 1, samples);
+        for (line, role) in roles.iter().enumerate() {
+            let Some(settings) = continuum.config.lines.get(role) else {
+                continue;
+            };
+            let wanted = if *role == StackColorRole::Oiii {
+                vec![StackColorRole::Green, StackColorRole::Blue]
+            } else {
+                vec![StackColorRole::Red]
+            };
+            let Some(references) = wanted
+                .iter()
+                .map(|wanted| roles.iter().position(|other| other == wanted))
+                .collect::<Option<Vec<usize>>>()
+            else {
+                self.continuum.push((
+                    *role,
+                    "not subtracted: the broadband channel under it is missing".to_string(),
+                ));
+                continue;
+            };
+            let inputs: Vec<usize> = std::iter::once(line).chain(references.clone()).collect();
+            let masks: Vec<Option<Vec<u8>>> = inputs
+                .iter()
+                .map(|input| {
+                    let map = continuum.clipping.get(&roles[*input])?;
+                    let placed = place(*input, map.clone()).ok()?;
+                    // A map of another size is not this stack's.
+                    if placed.len() != width * height {
+                        return None;
+                    }
+                    Some(
+                        placed
+                            .iter()
+                            .map(|value| u8::from(!value.is_finite() || *value > 0.0))
+                            .collect(),
+                    )
+                })
+                .collect();
+            let source = |input: usize, mask: &Option<Vec<u8>>| ContinuumSource {
+                name: channel_names[input].clone(),
+                revision: format!("studio:{}", channel_names[input]),
+                transfer: ContinuumTransfer::Linear,
+                saturation: continuum.config.saturation.get(&roles[input]).copied(),
+                clipping_revision: mask
+                    .as_ref()
+                    .map(|_| format!("clipping:{}", channel_names[input])),
+            };
+            let sources = ContinuumSources {
+                width,
+                height,
+                narrowband: source(line, &masks[0]),
+                references: references
+                    .iter()
+                    .zip(&masks[1..])
+                    .map(|(input, mask)| source(*input, mask))
+                    .collect(),
+            };
+            let stacked: Vec<LinearImage> = inputs
+                .iter()
+                .map(|input| image(self.planes[*input].clone()))
+                .collect::<Result<_, _>>()?;
+            let borrowed: Vec<&LinearImage> = stacked[1..].iter().collect();
+            let mask_slices: Vec<Option<&[u8]>> =
+                masks.iter().map(|mask| mask.as_deref()).collect();
+            // The inputs must agree on their stars: all starless, or all
+            // with their stars, or the line keeps or loses the stars of its
+            // references.
+            let starless: Vec<bool> = inputs
+                .iter()
+                .map(|input| self.names.contains(&stars_channel(&channel_names[*input])))
+                .collect();
+            if starless.iter().any(|&one| one) && !starless.iter().all(|&one| one) {
+                self.continuum.push((
+                    *role,
+                    "not subtracted: remove the stars of the line and of its references alike"
+                        .to_string(),
+                ));
+                continue;
+            }
+            // The fit measures the stars of the stacks either way. When the
+            // line is subtracted starless, no star can keep a core or halo,
+            // so Seiza's check of the stars' profiles is reported and does
+            // not refuse the fit.
+            let mut config = continuum.config.clone();
+            if starless[0] {
+                config.photometry.target = seiza_stacking::ContinuumTarget::Starless;
+            }
+            let outcome = crate::color_steps::fit_continuum_line(
+                &stacked[0],
+                &borrowed,
+                &sources,
+                &mask_slices,
+                &config,
+                settings,
+                role.label(),
+            )
+            .map_err(|error| anyhow!("the continuum of {}: {error}", role.label()))?;
+            let plan = match outcome {
+                ContinuumFitOutcome::Fitted { plan } => plan,
+                ContinuumFitOutcome::Skipped { detail, .. } => {
+                    self.continuum
+                        .push((*role, format!("not subtracted: {detail}")));
+                    continue;
+                }
+            };
+            // Each input in its last linear state.
+            let latest: Vec<LinearImage> = inputs
+                .iter()
+                .zip(&stacked)
+                .map(|(input, stacked)| {
+                    self.last_state(&channel_names[*input])
+                        .unwrap_or_else(|| stacked.clone())
+                })
+                .collect();
+            let state = if starless[0] {
+                "starless"
+            } else {
+                "with its stars"
+            };
+            let from_references: Vec<&LinearImage> = latest[1..].iter().collect();
+            let residual =
+                seiza_stacking::subtract_continuum(&latest[0], &from_references, &sources, &plan)
+                    .map_err(|error| anyhow!("the continuum of {}: {error}", role.label()))?;
+            self.names.push(line_channel(&channel_names[line]));
+            self.planes.push(residual.data);
+            self.continuum.push((
+                *role,
+                format!(
+                    "subtracted {state}, weights {}",
+                    plan.coefficients
+                        .iter()
+                        .map(|weight| format!("{weight:.3}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    /// One channel in its last linear state, on the reference grid: after
+    /// the last Linear step that changed it, with a background correction
+    /// there blended in by `strength`; as stacked when no step changed it.
+    /// `None` for a channel the store does not hold.
+    pub fn last_state_at(&self, channel: &str, strength: f32) -> Option<LinearImage> {
+        let states = self.states.get(channel);
+        let Some(last) = states.and_then(|states| states.last()) else {
+            return self.plane(channel);
+        };
+        let after = self.plane(&last.plane)?;
+        if !last.correction || strength >= 1.0 {
+            return Some(after);
+        }
+        let states = states.expect("a last state has its list");
+        let before = match states.len().checked_sub(2) {
+            Some(at) => self.plane(&states[at].plane)?,
+            None => self.plane(channel)?,
+        };
+        blend(&before, &after, strength).ok()
+    }
+
+    /// One channel in its last linear state, with a last background
+    /// correction in full.
+    pub fn last_state(&self, channel: &str) -> Option<LinearImage> {
+        self.last_state_at(channel, 1.0)
     }
 }
 
@@ -838,13 +1187,14 @@ impl RegisteredChannels {
 
 impl RegisteredChannels {
     /// Gives the sky of `channels` the level it has in `anchor`, in every
-    /// state that still has a sky: as stacked, after the tools, and with
-    /// the background corrected. A channel's stars have no sky and are
-    /// left alone.
+    /// state that still has a sky: as stacked, and after each Linear step.
+    /// A channel's stars have no sky and are left alone.
     ///
     /// Color calibration's gains scale each channel's sky with it, so
     /// without this the sky takes the color of the largest gain. The sky's
-    /// level is the median of a sample of the plane.
+    /// level is the median of a sample of the plane. A state is levelled
+    /// with the anchor after the same step; an anchor that the step did not
+    /// change lends its level as stacked.
     pub fn level_sky(&mut self, anchor: StackColorRole, channels: &[StackColorRole]) {
         let median = |plane: &[f32]| -> Option<f32> {
             let step = (plane.len() / 500_000).max(1);
@@ -864,25 +1214,34 @@ impl RegisteredChannels {
         let Ok(anchor) = role_name(anchor) else {
             return;
         };
-        for state in ["", "@tools", "@background"] {
-            let plane_of = |name: &str| {
-                let wanted = match state {
-                    "" => name.to_string(),
-                    "@tools" => tools_channel(name),
-                    _ => background_corrected_channel(name),
+        let plane_of = |this: &Self, name: &str| this.names.iter().position(|other| other == name);
+        let anchor_after = |this: &Self, step: Option<uuid::Uuid>| -> String {
+            step.and_then(|step| {
+                this.states
+                    .get(&anchor)?
+                    .iter()
+                    .find(|state| state.step == step)
+                    .map(|state| state.plane.clone())
+            })
+            .unwrap_or_else(|| anchor.clone())
+        };
+        for role in channels {
+            let Ok(name) = role_name(*role) else { continue };
+            let mut wanted: Vec<(String, Option<uuid::Uuid>)> = vec![(name.clone(), None)];
+            wanted.extend(
+                self.states
+                    .get(&name)
+                    .into_iter()
+                    .flatten()
+                    .map(|state| (state.plane.clone(), Some(state.step))),
+            );
+            for (plane_name, step) in wanted {
+                let Some(level) = plane_of(self, &anchor_after(self, step))
+                    .and_then(|plane| median(&self.planes[plane]))
+                else {
+                    continue;
                 };
-                self.names.iter().position(|other| *other == wanted)
-            };
-            // An anchor without this state, such as green with no tools,
-            // lends its level as stacked.
-            let anchor_plane =
-                plane_of(&anchor).or_else(|| self.names.iter().position(|other| *other == anchor));
-            let Some(level) = anchor_plane.and_then(|plane| median(&self.planes[plane])) else {
-                continue;
-            };
-            for role in channels {
-                let Ok(name) = role_name(*role) else { continue };
-                let Some(plane) = plane_of(&name) else {
+                let Some(plane) = plane_of(self, &plane_name) else {
                     continue;
                 };
                 let Some(own) = median(&self.planes[plane]) else {
@@ -894,32 +1253,6 @@ impl RegisteredChannels {
             }
         }
     }
-}
-
-/// The processing tools to run on channels, and where their results are
-/// kept.
-pub struct ChannelTools<'a> {
-    /// The workers that run the tools: this machine's own, and any
-    /// connected to it.
-    pub workers: &'a Workers,
-    /// Where each step's result is kept, so a repeat run is fast.
-    pub cache: &'a Path,
-    /// The chain for each channel that has one.
-    pub chains: BTreeMap<StackColorRole, ToolChain>,
-    /// The deconvolution of each channel that has one. It runs before the
-    /// channel's chain.
-    pub deconvolutions: BTreeMap<StackColorRole, crate::color_steps::ChannelDeconvolution>,
-    /// Chains that run on a group of channels together, after each
-    /// channel's own: on the group's registered channels combined into one
-    /// color image, as PSF Guard's color tools run.
-    pub groups: Vec<GroupTools>,
-    /// Hears the channel, the tool running on it, and how far the channel's
-    /// chain has got, from 0 to 1.
-    pub progress: &'a dyn Fn(&str, &str, f32),
-    /// Whether the tools run on the stacks with their background corrected,
-    /// at the step's strength, rather than the background being fitted on
-    /// the tools' results.
-    pub after_background: bool,
 }
 
 /// `stacked` blended toward `corrected` by `strength`: Seiza's background
@@ -940,15 +1273,6 @@ fn blend(stacked: &LinearImage, corrected: &LinearImage, strength: f32) -> Resul
         stacked.channels,
         data,
     )?)
-}
-
-/// A chain that runs on a group of channels together.
-pub struct GroupTools {
-    /// The group's name, for progress.
-    pub name: String,
-    /// The group's channels, in the order the color image holds them.
-    pub roles: Vec<StackColorRole>,
-    pub chain: ToolChain,
 }
 
 fn open_mono(path: &Path) -> Result<seiza_stacking::FitsFrame> {
@@ -1015,8 +1339,49 @@ mod tests {
             backgrounds: Vec::new(),
             tools: Vec::new(),
             continuum: Vec::new(),
-            background_first: false,
+            states: BTreeMap::new(),
+            starless: BTreeMap::new(),
         }
+    }
+
+    fn tool(provider: &str) -> ProcessingStep {
+        ProcessingStep {
+            provider: provider.to_string(),
+            parameters: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn tools_in_a_chains_order_run_as_one_chain() {
+        let grow = |chain: &[ProcessingStep], next: &str| -> Option<Vec<String>> {
+            extend_chain(chain, &tool(next))
+                .map(|chain| chain.into_iter().map(|step| step.provider).collect())
+        };
+        let chain = vec![tool("bxt"), tool("nxt")];
+        assert_eq!(grow(&[], "nxt").unwrap(), ["nxt"]);
+        assert_eq!(grow(&chain, "sxt").unwrap(), ["bxt", "nxt", "sxt"]);
+        // A chain runs its tools in its own order, and one tool of a kind,
+        // so noise reduction then sharpening, or a second noise reduction,
+        // starts a chain of its own.
+        assert!(grow(&[tool("nxt")], "bxt").is_none());
+        assert!(grow(&[tool("nxt")], "noise-model").is_none());
+        assert!(grow(&[tool("unknown")], "sxt").is_none());
+
+        // What a chain started after a deconvolution, or after another
+        // chain, is kept by.
+        let image = LinearImage::new(1, 1, 1, vec![0.5]).unwrap();
+        let mut track = Track::new(image.clone(), "stack-1");
+        track.deconvolution = Some("deconvolved".to_string());
+        track.last = Some("deconvolved".to_string());
+        assert_eq!(track.group_part(), "stack-1:deconvolved");
+        track.chain = vec![tool("nxt")];
+        track.last = Some("after-nxt".to_string());
+        track.settle();
+        assert_eq!(track.revision, "after-nxt");
+        assert!(track.deconvolution.is_none() && track.chain.is_empty());
+        assert_eq!(track.group_part(), "after-nxt:");
+        track.replace(image, "background:1".to_string());
+        assert_eq!(track.revision, "background:1");
     }
 
     #[test]

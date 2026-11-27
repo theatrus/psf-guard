@@ -4,8 +4,7 @@
 use crate::derived::{BandRead, DerivedKey, DerivedKind, DerivedPlane};
 use crate::image_steps::{Domain, ImageShape, Region};
 use crate::studio_model::{
-    background_corrected_channel, tools_channel, MemoryBudget, RegionReader, SampleFormat,
-    StoreLevel, StoreOptions, StudioError, TileStore,
+    MemoryBudget, RegionReader, SampleFormat, StoreLevel, StoreOptions, StudioError, TileStore,
 };
 use psf_studio_render::synth::{generate_tile, TileKey, BANDS, DOC_HEIGHT, DOC_WIDTH, TILE};
 use psf_studio_render::{Pyramid, TileSource};
@@ -16,7 +15,7 @@ use seiza_stretch::{
     LayeredMaps, ResolvedCurve, ResolvedLayered, ResolvedSampleDomain, SampleDomain,
     SampleNormalization, StretchAnalysis, StretchConfig, StretchModel, StretchParams,
 };
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -31,6 +30,85 @@ pub struct StoreTiles {
     names: Vec<String>,
     /// The channels that are already stretched for display, by name.
     display: Vec<String>,
+    /// Each channel's states, by the channel's name, as the store's record
+    /// lists them: the plane after each Linear step that changed it.
+    states: BTreeMap<String, Vec<(StateKey, String, bool)>>,
+}
+
+/// Which step a stored state of a band is the result of.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StateKey {
+    /// The step with this id.
+    Step(uuid::Uuid),
+    /// A store prepared before each step had a plane of its own: the band
+    /// after all its tools.
+    Tools,
+    /// Such a store's band with its background corrected in full.
+    Background,
+}
+
+/// One stored state of a band: the step it is the result of, the tile
+/// channel that holds it, and whether it is a background correction in
+/// full, which is blended into the state before it by the step's strength.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BandStep {
+    pub key: StateKey,
+    pub channel: usize,
+    pub correction: bool,
+}
+
+/// The states a store's record lists, by channel name. A record from
+/// before each step had a plane of its own lists none; its planes
+/// `<name>@tools` and `<name>@background` are then the band's states, in
+/// the order the record says they ran.
+fn record_states(
+    record: &serde_json::Value,
+    names: &[String],
+) -> BTreeMap<String, Vec<(StateKey, String, bool)>> {
+    if let Some(states) = record["states"].as_object() {
+        return states
+            .iter()
+            .map(|(channel, states)| {
+                let listed = states
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|state| {
+                        let step = uuid::Uuid::parse_str(state["step"].as_str()?).ok()?;
+                        Some((
+                            StateKey::Step(step),
+                            state["plane"].as_str()?.to_string(),
+                            state["correction"].as_bool().unwrap_or(false),
+                        ))
+                    })
+                    .collect();
+                (channel.clone(), listed)
+            })
+            .collect();
+    }
+    let background_first = record["background_first"].as_bool().unwrap_or(false);
+    let mut states = BTreeMap::new();
+    for name in names.iter().filter(|name| !name.contains('@')) {
+        let has = |plane: &str| names.iter().any(|other| other == plane);
+        let tools = format!("{name}@tools");
+        let corrected = format!("{name}@background");
+        let mut listed = Vec::new();
+        if has(&tools) {
+            listed.push((StateKey::Tools, tools, false));
+        }
+        if has(&corrected) {
+            let state = (StateKey::Background, corrected, true);
+            if background_first {
+                listed.insert(0, state);
+            } else {
+                listed.push(state);
+            }
+        }
+        if !listed.is_empty() {
+            states.insert(name.clone(), listed);
+        }
+    }
+    states
 }
 
 /// What a band's stretch is resolved from: Seiza's analysis of a sample of
@@ -412,25 +490,21 @@ impl BandStretch {
     }
 }
 
-/// A band's states as the store holds them, in the order its samples and
-/// quarter-resolution copies list them.
-const STACKED: usize = 0;
-const TOOLS: usize = 1;
-const CORRECTED: usize = 2;
-
 /// What one band is drawn from at a place in the document's steps.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct BandState {
-    /// Whether the band's processing tools have been applied.
-    pub tools: bool,
-    /// How much of the background correction is applied, from 0 to 1.
+    /// The stored state drawn: 0 for the band as stacked, else one more
+    /// than its place in the band's states.
+    pub state: usize,
+    /// How much of a background correction in that state is applied, from
+    /// 0 to 1.
     pub background: f32,
 }
 
 /// The bands of a document, as the canvas needs them: where each is in a
 /// tile, samples to analyse for its stretch, and the tile channels that
-/// hold it after its processing tools and with its background corrected in
-/// full, when the store has them.
+/// hold it after each Linear step that changed it, when the store has
+/// them.
 #[derive(Clone, Default)]
 pub struct Bands {
     /// The store the bands are in, for the planes worked out from it.
@@ -443,18 +517,14 @@ pub struct Bands {
     pub names: Vec<String>,
     /// Per band: the tile channel that holds it as stacked.
     pub tile_band: Vec<usize>,
-    /// Per band: the tile channel that holds it after its tools, if any.
-    pub tools: Vec<Option<usize>>,
-    /// Per band: the tile channel that holds it corrected, if any. The
-    /// corrected band is the tools' result corrected, where the band has
-    /// tools.
-    pub corrected: Vec<Option<usize>>,
-    /// Per band: samples of the band as stacked, after its tools, and
-    /// corrected.
-    samples: Vec<[Option<Vec<f32>>; 3]>,
-    /// Per band: the whole band as stacked, after its tools, and corrected,
-    /// at a quarter of the resolution, for layered stretches' maps.
-    quarter: Vec<[Option<Arc<Vec<f32>>>; 3]>,
+    /// Per band: its stored states after the Linear steps that changed it,
+    /// in the order they ran.
+    pub steps: Vec<Vec<BandStep>>,
+    /// Per band: samples of the band as stacked, then in each state.
+    samples: Vec<Vec<Option<Vec<f32>>>>,
+    /// Per band: the whole band as stacked, then in each state, at a
+    /// quarter of the resolution, for layered stretches' maps.
+    quarter: Vec<Vec<Option<Arc<Vec<f32>>>>>,
     /// The width and height of the quarter-resolution copies.
     quarter_size: (usize, usize),
     /// Per band: the value a canvas sample of 1 stands for.
@@ -467,16 +537,23 @@ pub struct Bands {
     /// The bands the store holds already stretched for display, such as
     /// stars after the star stretch. They are drawn as they are.
     display: Vec<usize>,
-    /// Whether the store corrected the background before the tools ran:
-    /// then the corrected channel is the stack corrected, and the tools'
-    /// result already holds the correction.
-    background_first: bool,
     /// The largest rectangle every input covers, as x, y, width and height,
     /// which the store records when it is prepared.
     pub automatic_crop: Option<[u32; 4]>,
     /// What color calibration did when the store was prepared, in words.
     /// Empty when it was not asked for.
     pub calibration: String,
+}
+
+/// Whether a stored state is the result of `step`: by its id, or in a
+/// store from before each step had a plane of its own, by what the step
+/// does.
+fn matches(key: StateKey, step: uuid::Uuid, background: bool) -> bool {
+    match key {
+        StateKey::Step(id) => id == step,
+        StateKey::Tools => !background,
+        StateKey::Background => background,
+    }
 }
 
 /// Names for the bands of a store that records none: by how many it has.
@@ -520,7 +597,6 @@ impl Bands {
         else {
             return;
         };
-        self.background_first = record["background_first"].as_bool().unwrap_or(false);
         self.automatic_crop = record["crop"].as_array().and_then(|values| {
             let value = |at: usize| Some(values.get(at)?.as_u64()? as u32);
             Some([value(0)?, value(1)?, value(2)?, value(3)?])
@@ -584,11 +660,13 @@ impl Bands {
         let plane = |channel: Option<usize>| channel.and_then(|at| channels.get(at).cloned());
         bands.samples = (0..bands.len())
             .map(|band| {
-                [
-                    plane(Some(bands.tile_band[band])),
-                    plane(bands.tools[band]),
-                    plane(bands.corrected[band]),
-                ]
+                std::iter::once(plane(Some(bands.tile_band[band])))
+                    .chain(
+                        bands.steps[band]
+                            .iter()
+                            .map(|step| plane(Some(step.channel))),
+                    )
+                    .collect()
             })
             .collect();
         bands
@@ -647,27 +725,76 @@ impl Bands {
         self.names.iter().position(|name| name == channel)
     }
 
-    /// Whether any band has a corrected twin to blend with.
-    pub fn has_correction(&self) -> bool {
-        self.corrected.iter().any(Option::is_some)
+    /// Whether the store holds a band after a step: by its id, or for a
+    /// store prepared before each step had a plane of its own, a tool step
+    /// or a background extraction of that band.
+    pub fn has_step(&self, band: usize, step: uuid::Uuid, background: bool) -> bool {
+        self.steps.get(band).is_some_and(|steps| {
+            steps
+                .iter()
+                .any(|stored| matches(stored.key, step, background))
+        })
     }
 
-    /// Whether the store holds a band after its processing tools.
-    pub fn has_tools(&self, band: usize) -> bool {
-        self.tools.get(band).is_some_and(Option::is_some)
+    /// Whether any band of the store holds its state after a step.
+    pub fn has_step_anywhere(&self, step: uuid::Uuid, background: bool) -> bool {
+        (0..self.len()).any(|band| self.has_step(band, step, background))
     }
 
-    /// The tile channel a band is drawn from in `state`, and the channel
-    /// to blend into it for the background correction, if the store's
-    /// corrected channel is that state's: the store corrects the tools'
-    /// result where a band has tools, so a view before the tools has no
-    /// corrected channel to blend.
+    /// What a band is drawn from after the Linear steps a view reached,
+    /// in order, each with its strength when it is a background
+    /// extraction: the stored state after the last of them, and the steps
+    /// the store holds no state of in this order, which a run would add.
+    ///
+    /// The steps are matched with the store's states in turn. A state
+    /// holds every step before it as the store ran them, so after the
+    /// first step that differs, such as a step moved or added since, no
+    /// later state stands for the document, and the band is drawn after
+    /// the last that matched. In a store from before each step had a plane,
+    /// the one tools state stands for every tool step in a row.
+    pub fn state_after(
+        &self,
+        band: usize,
+        reached: &[(uuid::Uuid, Option<f32>)],
+    ) -> (BandState, Vec<uuid::Uuid>) {
+        let steps = self.steps.get(band).map_or(&[][..], Vec::as_slice);
+        let mut state = BandState::default();
+        let mut missing = Vec::new();
+        for (step, strength) in reached {
+            let background = strength.is_some();
+            if !missing.is_empty() {
+                missing.push(*step);
+                continue;
+            }
+            let previous = state.state.checked_sub(1).map(|at| steps[at].key);
+            if previous == Some(StateKey::Tools) && !background {
+                continue;
+            }
+            match steps.get(state.state) {
+                Some(stored) if matches(stored.key, *step, background) => {
+                    state = BandState {
+                        state: state.state + 1,
+                        background: if stored.correction {
+                            strength.unwrap_or(1.0)
+                        } else {
+                            0.0
+                        },
+                    };
+                }
+                _ => missing.push(*step),
+            }
+        }
+        (state, missing)
+    }
+
+    /// The tile channel a band is drawn from in `state`, and the channel to
+    /// blend into it by the state's background strength, if the state is a
+    /// background correction.
     pub fn planes(&self, band: usize, state: BandState) -> (usize, Option<usize>) {
         let (base, blended) = self.states_drawn(band, state);
-        let channel = |state: usize| match state {
-            TOOLS => self.tools[band],
-            CORRECTED => self.corrected[band],
-            _ => Some(self.tile_band[band]),
+        let channel = |index: usize| match index.checked_sub(1) {
+            None => Some(self.tile_band[band]),
+            Some(at) => self.steps.get(band)?.get(at).map(|step| step.channel),
         };
         (
             channel(base).unwrap_or(self.tile_band[band]),
@@ -675,36 +802,17 @@ impl Bands {
         )
     }
 
-    /// Whether the band's tools' result in `state` already holds its
-    /// background correction: the store corrected it before the tools ran.
-    pub fn correction_in_tools(&self, band: usize, state: BandState) -> bool {
-        self.background_first && state.tools && self.has_tools(band)
-    }
-
-    /// Which of a band's stored states a view in `state` draws, as
-    /// [`STACKED`], [`TOOLS`] or [`CORRECTED`], and the state blended into
-    /// it by the background's strength, if the store has one to blend.
-    ///
-    /// When the tools ran first, the corrected state is the tools' result
-    /// corrected, so it blends only into a view that has the tools as the
-    /// store does. When the background was corrected first, it is the
-    /// stack corrected: it blends into a view before the tools, and the
-    /// tools' result already holds the correction.
+    /// Which of a band's stored states a view in `state` draws, as an index
+    /// of its samples (0 as stacked), and the state blended into it by the
+    /// background's strength: a correction is blended into the state
+    /// before it.
     fn states_drawn(&self, band: usize, state: BandState) -> (usize, Option<usize>) {
-        let has_tools = self.tools.get(band).is_some_and(Option::is_some);
-        let has_corrected = self.corrected.get(band).is_some_and(Option::is_some);
-        let tools = state.tools && has_tools;
-        if self.background_first {
-            return if tools {
-                (TOOLS, None)
-            } else {
-                (STACKED, has_corrected.then_some(CORRECTED))
-            };
+        let steps = self.steps.get(band).map_or(&[][..], Vec::as_slice);
+        match state.state.checked_sub(1).and_then(|at| steps.get(at)) {
+            None => (0, None),
+            Some(step) if step.correction => (state.state - 1, Some(state.state)),
+            Some(_) => (state.state, None),
         }
-        (
-            if tools { TOOLS } else { STACKED },
-            (has_corrected && state.tools == has_tools).then_some(CORRECTED),
-        )
     }
 
     /// The whole band at a quarter of the resolution in the state given
@@ -713,8 +821,8 @@ impl Bands {
         let copies = self.quarter.get(band)?;
         let state = states.get(band).copied().unwrap_or_default();
         let (base, blended) = self.states_drawn(band, state);
-        let base = copies[base].as_ref().or(copies[STACKED].as_ref())?;
-        Some(match blended.and_then(|at| copies[at].as_ref()) {
+        let base = copies.get(base)?.as_ref().or(copies.first()?.as_ref())?;
+        Some(match blended.and_then(|at| copies.get(at)?.as_ref()) {
             Some(after) if state.background > 0.0 => base
                 .iter()
                 .zip(after.iter())
@@ -738,11 +846,12 @@ impl Bands {
             .map(|(band, copies)| {
                 let state = states.get(band).copied().unwrap_or_default();
                 let (base, blended) = self.states_drawn(band, state);
-                let base = copies[base]
-                    .as_deref()
-                    .or(copies[STACKED].as_deref())
+                let base = copies
+                    .get(base)
+                    .and_then(|copy| copy.as_deref())
+                    .or(copies.first().and_then(|copy| copy.as_deref()))
                     .unwrap_or(&[]);
-                match blended.and_then(|at| copies[at].as_ref()) {
+                match blended.and_then(|at| copies.get(at)?.as_ref()) {
                     Some(after) if state.background > 0.0 => base
                         .iter()
                         .zip(after)
@@ -854,6 +963,7 @@ impl StoreTiles {
             levels,
             scales: vec![1.0; shape.channels],
             display: Vec::new(),
+            states: BTreeMap::new(),
         })
     }
 
@@ -1013,15 +1123,27 @@ impl StoreTiles {
         let mut bands = Bands::default();
         for channel in (0..self.bands).filter(|channel| is_band(*channel)) {
             let name = self.names.get(channel).cloned();
-            let tools = name.as_deref().and_then(|name| named(tools_channel(name)));
-            let corrected = name
-                .as_deref()
-                .and_then(|name| named(background_corrected_channel(name)));
-            // The band's channels share one scale, so the canvas can blend
-            // their samples.
-            let scale = [Some(channel), tools, corrected]
+            let steps: Vec<BandStep> = name
+                .as_ref()
+                .and_then(|name| self.states.get(name))
                 .into_iter()
                 .flatten()
+                .filter_map(|(key, plane, correction)| {
+                    Some(BandStep {
+                        key: *key,
+                        channel: named(plane.clone())?,
+                        correction: *correction,
+                    })
+                })
+                .collect();
+            let planes: Vec<usize> = std::iter::once(channel)
+                .chain(steps.iter().map(|step| step.channel))
+                .collect();
+            // The band's channels share one scale, so the canvas can blend
+            // their samples.
+            let scale = planes
+                .iter()
+                .copied()
                 .map(largest_of)
                 .fold(f32::MIN_POSITIVE, f32::max);
             // The stars a tool took out of an input take the input's scale,
@@ -1041,24 +1163,25 @@ impl StoreTiles {
             } else {
                 scale
             };
-            for plane in [Some(channel), tools, corrected].into_iter().flatten() {
-                self.scales[plane] = scale;
+            for plane in &planes {
+                self.scales[*plane] = scale;
             }
             bands.tile_band.push(channel);
             bands.names.push(name.unwrap_or_default());
-            bands.tools.push(tools);
-            bands.corrected.push(corrected);
+            bands.steps.push(steps);
             bands.scales.push(scale);
-            bands.samples.push([
-                Some(channels[channel].clone()),
-                tools.map(|plane| channels[plane].clone()),
-                corrected.map(|plane| channels[plane].clone()),
-            ]);
-            bands.quarter.push([
-                quarter.get(channel).cloned(),
-                tools.and_then(|plane| quarter.get(plane).cloned()),
-                corrected.and_then(|plane| quarter.get(plane).cloned()),
-            ]);
+            bands.samples.push(
+                planes
+                    .iter()
+                    .map(|plane| Some(channels[*plane].clone()))
+                    .collect(),
+            );
+            bands.quarter.push(
+                planes
+                    .iter()
+                    .map(|plane| quarter.get(*plane).cloned())
+                    .collect(),
+            );
         }
         // A channel that is no band and no band's other state, such as the
         // stars a tool took out, keeps a scale of its own.
@@ -1221,11 +1344,10 @@ fn analyse_synthetic() -> Bands {
     Bands {
         names: names_for(BANDS),
         tile_band: (0..BANDS).collect(),
-        tools: vec![None; BANDS],
-        corrected: vec![None; BANDS],
+        steps: vec![Vec::new(); BANDS],
         samples: bands
             .into_iter()
-            .map(|samples| [Some(samples), None, None])
+            .map(|samples| vec![Some(samples)])
             .collect(),
         // The synthetic tiles go to the canvas as they are.
         scales: vec![1.0; BANDS],
@@ -1238,20 +1360,21 @@ fn analyse_synthetic() -> Bands {
 /// its channels are divided by.
 pub fn open_store(path: &Path) -> Result<(StoreTiles, Bands), String> {
     let mut store = StoreTiles::open(path).map_err(|error| error.to_string())?;
-    // The planes already stretched for display keep a scale of 1.
-    store.display = std::fs::read_to_string(path.with_extension("prepared.json"))
+    let record = std::fs::read_to_string(path.with_extension("prepared.json"))
         .ok()
         .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-        .and_then(|record| {
-            Some(
-                record["display"]
-                    .as_array()?
-                    .iter()
-                    .filter_map(|plane| Some(plane.as_str()?.to_string()))
-                    .collect(),
-            )
+        .unwrap_or_default();
+    // The planes already stretched for display keep a scale of 1.
+    store.display = record["display"]
+        .as_array()
+        .map(|planes| {
+            planes
+                .iter()
+                .filter_map(|plane| Some(plane.as_str()?.to_string()))
+                .collect()
         })
         .unwrap_or_default();
+    store.states = record_states(&record, &store.names);
     let mut bands = store.analyse()?;
     bands.read_calibration(path);
     Ok((store, bands))
@@ -1371,37 +1494,111 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_band_draws_its_planes_in_the_order_the_store_was_prepared_in() {
-        // One band: stacked in channel 0, its tools' result in 1, and its
-        // corrected state in 2.
-        let mut bands = Bands {
+    fn a_band_is_drawn_after_the_last_step_the_store_holds() {
+        let [sharpen, background, noise, missing] = [(); 4].map(|_| uuid::Uuid::new_v4());
+        // One band: stacked in channel 0, sharpened in 1, its background
+        // corrected in full in 2, then its noise reduced in 3.
+        let step = |key, channel, correction| BandStep {
+            key: StateKey::Step(key),
+            channel,
+            correction,
+        };
+        let bands = Bands {
             tile_band: vec![0],
-            tools: vec![Some(1)],
-            corrected: vec![Some(2)],
+            steps: vec![vec![
+                step(sharpen, 1, false),
+                step(background, 2, true),
+                step(noise, 3, false),
+            ]],
             ..Bands::default()
         };
-        let before_tools = BandState {
-            tools: false,
-            background: 0.5,
+        let draw = |reached: &[(uuid::Uuid, Option<f32>)]| {
+            let (state, missing) = bands.state_after(0, reached);
+            (bands.planes(0, state), state.background, missing)
         };
-        let after_tools = BandState {
-            tools: true,
-            background: 0.5,
+        assert_eq!(draw(&[]), ((0, None), 0.0, vec![]));
+        assert_eq!(draw(&[(sharpen, None)]), ((1, None), 0.0, vec![]));
+        // A correction blends into the state before it, by its strength.
+        assert_eq!(
+            draw(&[(sharpen, None), (background, Some(0.5))]),
+            ((1, Some(2)), 0.5, vec![])
+        );
+        // A step after it took it at its strength.
+        assert_eq!(
+            draw(&[(sharpen, None), (background, Some(0.5)), (noise, None)]),
+            ((3, None), 0.0, vec![])
+        );
+        // A step the store has not run is listed, and the band is drawn
+        // after the last it has.
+        assert_eq!(
+            draw(&[(sharpen, None), (missing, None)]),
+            ((1, None), 0.0, vec![missing])
+        );
+        // A step moved since the store was prepared: the states after it
+        // hold the old order, so none stands for the new one.
+        assert_eq!(
+            draw(&[(background, Some(1.0)), (noise, None), (sharpen, None)]),
+            ((0, None), 0.0, vec![background, noise, sharpen])
+        );
+        assert_eq!(
+            draw(&[(sharpen, None), (noise, None), (background, Some(1.0))]),
+            ((1, None), 0.0, vec![noise, background])
+        );
+        assert!(bands.has_step(0, noise, false) && !bands.has_step(0, missing, false));
+    }
+
+    #[test]
+    fn a_store_from_before_each_step_had_a_plane_keeps_its_tools_and_background() {
+        let names: Vec<String> = ["ha", "oiii", "ha@tools", "ha@background", "oiii@background"]
+            .iter()
+            .map(|name| name.to_string())
+            .collect();
+        let tools_first = record_states(&serde_json::json!({}), &names);
+        assert_eq!(
+            tools_first["ha"],
+            [
+                (StateKey::Tools, "ha@tools".to_string(), false),
+                (StateKey::Background, "ha@background".to_string(), true),
+            ]
+        );
+        assert_eq!(tools_first["oiii"].len(), 1);
+        let background_first =
+            record_states(&serde_json::json!({ "background_first": true }), &names);
+        assert_eq!(background_first["ha"][0].0, StateKey::Background);
+        // The tools' state stands for every tool step in a row, and the
+        // correction for the background step after them.
+        let bands = Bands {
+            tile_band: vec![0],
+            steps: vec![tools_first["ha"]
+                .iter()
+                .enumerate()
+                .map(|(at, (key, _, correction))| BandStep {
+                    key: *key,
+                    channel: at + 2,
+                    correction: *correction,
+                })
+                .collect()],
+            ..Bands::default()
         };
-        // Tools first: the corrected plane is the tools' result corrected,
-        // so it blends only into the view after the tools.
-        assert_eq!(bands.planes(0, before_tools), (0, None));
-        assert_eq!(bands.planes(0, after_tools), (1, Some(2)));
-        assert!(!bands.correction_in_tools(0, after_tools));
-        // Background first: the corrected plane is the stack corrected, and
-        // the tools' result already holds the correction.
-        bands.background_first = true;
-        assert_eq!(bands.planes(0, before_tools), (0, Some(2)));
-        assert_eq!(bands.planes(0, after_tools), (1, None));
-        assert!(bands.correction_in_tools(0, after_tools));
-        // A band with no tools blends its correction either way.
-        bands.tools = vec![None];
-        assert_eq!(bands.planes(0, after_tools), (0, Some(2)));
+        let [one, two, background] = [(); 3].map(|_| uuid::Uuid::new_v4());
+        let (state, missing) =
+            bands.state_after(0, &[(one, None), (two, None), (background, Some(0.5))]);
+        assert_eq!((state.state, state.background, missing), (2, 0.5, vec![]));
+        // Any tool step finds the tools' state; a background step, the
+        // correction.
+        let any = uuid::Uuid::new_v4();
+        assert!(matches(StateKey::Tools, any, false) && !matches(StateKey::Tools, any, true));
+        assert!(matches(StateKey::Background, any, true));
+        // A record that lists states is read as it is.
+        let step = uuid::Uuid::new_v4();
+        let listed = record_states(
+            &serde_json::json!({ "states": { "ha": [
+                { "step": step.to_string(), "plane": format!("ha@step-{step}"), "correction": false }
+            ] } }),
+            &names,
+        );
+        assert_eq!(listed["ha"][0].0, StateKey::Step(step));
+        assert!(!listed.contains_key("oiii"));
     }
 
     #[test]

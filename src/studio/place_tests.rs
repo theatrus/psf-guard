@@ -722,16 +722,8 @@ fn the_stars_of_an_input_are_stretched_as_the_input_is() {
 fn a_color_groups_tools_belong_to_its_inputs_and_stay_out_of_psf_guards_setup() {
     let mut document = document(&["red", "green", "blue", "ha", "oiii"]);
     let before = color_setup_from_document(&document).unwrap();
-    let chain = serde_json::json!({ "steps": [{ "provider": "sxt", "parameters": {} }] });
     let group_step = |band: &str| {
-        let mut step = StepRecord::new(StepKind::Operation {
-            operation: op::RC_ASTRO_COLOR.to_string(),
-            accepts: crate::image_steps::Accepts::Linear,
-            settings: chain.clone(),
-        })
-        .for_band(band);
-        step.enabled = true;
-        step
+        super::tool_step(serde_json::json!({ "provider": "sxt", "parameters": {} })).for_band(band)
     };
     let rgb = group_step("rgb");
     let lines = group_step("lines");

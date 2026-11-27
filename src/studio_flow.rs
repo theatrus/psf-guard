@@ -100,12 +100,16 @@ mod tests {
         let mut processing = default_processing();
         processing.emission = Some(Default::default());
         processing.narrowband = Some(Default::default());
-        // A chain with no steps is enough to carry the setting through.
-        let chain = || serde_json::from_value(json!({ "steps": [] })).unwrap();
-        processing.color_rc_astro = Some(chain());
+        // One tool in a chain is enough to carry the setting through: each
+        // tool is a step of its own, and a chain with none has no step.
+        let chain = |provider: &str| {
+            serde_json::from_value(json!({ "steps": [{ "provider": provider, "parameters": {} }] }))
+                .unwrap()
+        };
+        processing.color_rc_astro = Some(chain("nxt"));
         processing
             .input_rc_astro
-            .insert(StackColorRole::Ha, chain());
+            .insert(StackColorRole::Ha, chain("bxt"));
         processing.input_deconvolutions.insert(
             StackColorRole::Oiii,
             seiza_deconvolution::DeconvolutionConfig::conservative(3.0),

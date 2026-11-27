@@ -187,45 +187,27 @@ impl Tools {
 impl Studio {
     // ---- the document's tools -------------------------------------------
 
-    /// The step that holds an input's tools.
-    fn tools_step(&self, channel: &str) -> Option<&StepRecord> {
+    /// The tool steps of an input or of a color group, in the document's
+    /// order.
+    fn tool_steps(&self, band: &str) -> Vec<&StepRecord> {
         self.document
             .stage(StageKind::Linear)
             .steps
             .iter()
-            .find(|step| {
-                step.kind.name() == flow_operations::RC_ASTRO_INPUT
-                    && step.band.as_deref() == Some(channel)
+            .filter(|step| {
+                crate::studio_model::is_tool_step(step) && step.band.as_deref() == Some(band)
             })
+            .collect()
     }
 
-    /// An input's tools in order: each provider with its settings, as PSF
-    /// Guard keeps them.
-    fn chain(&self, channel: &str) -> Vec<serde_json::Value> {
-        match self.tools_step(channel).map(|step| &step.kind) {
-            Some(StepKind::Operation { settings, .. }) => {
-                settings["steps"].as_array().cloned().unwrap_or_default()
-            }
-            _ => Vec::new(),
-        }
-    }
-
-    /// Whether an input has processing tools the store is prepared with:
-    /// its own, its deconvolution, or its color group's.
-    fn has_tools(&self, channel: &str) -> bool {
-        let deconvolution = self
-            .document
-            .stage(StageKind::Linear)
-            .steps
-            .iter()
-            .any(|step| {
-                step.enabled
-                    && step.kind.name() == flow_operations::DECONVOLUTION
-                    && step.band.as_deref() == Some(channel)
-            });
-        let group = crate::studio_model::color_group_of(channel)
-            .is_some_and(|(group, _)| !self.group_chain(group).is_empty());
-        !self.chain(channel).is_empty() || deconvolution || group
+    /// The tools of an input or of a color group in order: each provider
+    /// with its settings, one per tool step.
+    fn chain(&self, band: &str) -> Vec<serde_json::Value> {
+        self.tool_steps(band)
+            .into_iter()
+            .filter_map(crate::studio_model::tool_of)
+            .cloned()
+            .collect()
     }
 
     fn provider_of(step: &serde_json::Value) -> &str {
@@ -235,66 +217,20 @@ impl Studio {
             .unwrap_or_default()
     }
 
-    /// Every input's tools, to tell whether the store was prepared for
-    /// them.
+    /// Every input's Linear steps that preparing a store runs, and the
+    /// continuum subtraction, to tell whether the store was prepared for
+    /// them. A record of this form says `"format": 2`.
     fn all_chains(&self) -> serde_json::Value {
         let mut chains = self
             .document
             .channels()
             .into_iter()
             .map(|channel| {
-                let chain = self.chain(&channel);
-                (channel, serde_json::Value::Array(chain))
+                let program = crate::studio_model::input_program(&self.document, &channel);
+                (channel, serde_json::Value::Array(program))
             })
             .collect::<serde_json::Map<_, _>>();
-        // An input's deconvolution is prepared with the store as well.
-        for step in &self.document.stage(StageKind::Linear).steps {
-            if let (
-                true,
-                Some(band),
-                StepKind::Operation {
-                    operation,
-                    settings,
-                    ..
-                },
-            ) = (step.enabled, &step.band, &step.kind)
-                && operation == flow_operations::DECONVOLUTION
-            {
-                chains.insert(format!("{band}:deconvolution"), settings.clone());
-            }
-        }
-        // Tools that run on a color group are prepared with the store too.
-        for (band, _) in crate::studio_model::COLOR_GROUPS {
-            let chain = self.group_chain(band);
-            if !chain.is_empty() {
-                chains.insert(format!("{band}:together"), chain.into());
-            }
-        }
-        // Each input's background extraction is prepared with the store as
-        // well, but for its strength, which the canvas applies. When the
-        // background is corrected before the tools, the tools ran on it at
-        // its strength, so an input with tools records the strength and
-        // the order too.
-        let before_tools = crate::studio_model::background_before_tools(&self.document);
-        for channel in self.document.channels() {
-            let background = crate::studio_model::input_steps(&self.document, &channel)
-                .into_iter()
-                .filter_map(|listed| self.document.step(listed.id).map(|(_, step)| step))
-                .rfind(|step| step.enabled && step.kind.name() == flow_operations::BACKGROUND);
-            if let Some(StepKind::Operation { settings, .. }) = background.map(|step| &step.kind) {
-                let mut settings = settings.clone();
-                let tools_follow = before_tools && self.has_tools(&channel);
-                if let Some(settings) = settings.as_object_mut() {
-                    if tools_follow {
-                        settings.insert("before_tools".to_string(), true.into());
-                    } else {
-                        settings.remove("strength");
-                    }
-                }
-                chains.insert(format!("{channel}:background"), settings);
-            }
-        }
-        // Continuum subtraction is prepared with the store as well.
+        chains.insert("format".to_string(), 2.into());
         chains.insert(
             "continuum".to_string(),
             self.continuum_step()
@@ -350,19 +286,26 @@ impl Studio {
     pub(super) fn tools_are_prepared(&mut self, ran: Option<serde_json::Value>) {
         let store = self.tools.store.clone();
         let now = self.all_chains();
+        // A record from before each tool was a step lists chains, not
+        // steps, and is not read; the store's own record of the steps it
+        // was prepared with is, with continuum subtraction as it is now.
+        let recorded = |record: serde_json::Value| (record["format"] == 2).then_some(record);
         let prepared = ran
             .or_else(|| {
-                let mut kept = store.as_deref().and_then(prepared_record::read)?;
-                // A record written before background settings were recorded
-                // takes them as they are now, so a later change shows.
-                if let (Some(kept), Some(now)) = (kept.as_object_mut(), now.as_object()) {
-                    for (key, value) in now {
-                        if key.ends_with(":background") && !kept.contains_key(key) {
-                            kept.insert(key.clone(), value.clone());
-                        }
-                    }
-                }
-                Some(kept)
+                store
+                    .as_deref()
+                    .and_then(prepared_record::read)
+                    .and_then(recorded)
+            })
+            .or_else(|| {
+                let record =
+                    std::fs::read_to_string(store.as_deref()?.with_extension("prepared.json"))
+                        .ok()?;
+                let record: serde_json::Value = serde_json::from_str(&record).ok()?;
+                let mut program = record["program"].as_object()?.clone();
+                program.insert("format".to_string(), 2.into());
+                program.insert("continuum".to_string(), now["continuum"].clone());
+                Some(serde_json::Value::Object(program))
             })
             .unwrap_or(now);
         if let Some(store) = &store {
@@ -384,49 +327,49 @@ impl Studio {
         }
     }
 
-    /// Writes an input's tools into the document. An input with no tool
-    /// has no tools step.
-    fn set_chain(&mut self, channel: &str, mut chain: Vec<serde_json::Value>) {
-        // A chain runs its tools in the order of what they do.
-        let place = |step: &serde_json::Value| {
-            let provider = Self::provider_of(step);
-            let category = self
-                .tools
-                .tools
-                .iter()
-                .find(|tool| tool.key == provider)
-                .map_or("", |tool| tool.category.as_str());
-            CATEGORIES
-                .iter()
-                .position(|(name, _)| *name == category)
-                .unwrap_or(CATEGORIES.len())
-        };
-        chain.sort_by_key(place);
-        let existing = self.tools_step(channel).map(|step| step.id);
-        if chain.is_empty() {
-            if let Some(id) = existing {
-                self.document.remove_step(id);
-                if self.selected_step() == Some(id) {
-                    self.selected = Row::Input(channel.to_string());
+    /// Writes the tools of an input or of a color group into its tool
+    /// steps, one kind of tool at a time: a kind the chain lacks loses its
+    /// steps, a kind it has updates the first step of that kind, and a new
+    /// kind gets a step where [`crate::studio_model::new_tool_step_index`]
+    /// puts it. Steps keep their places, so an order a person chose holds.
+    fn set_chain(&mut self, band: &str, chain: Vec<serde_json::Value>) {
+        let kind =
+            |tool: &serde_json::Value| crate::studio_model::tool_operation(Self::provider_of(tool));
+        for operation in flow_operations::TOOLS {
+            let wanted = chain.iter().find(|tool| kind(tool) == operation);
+            let existing: Vec<uuid::Uuid> = self
+                .tool_steps(band)
+                .into_iter()
+                .filter(|step| step.kind.name() == operation)
+                .map(|step| step.id)
+                .collect();
+            match (wanted, existing.first()) {
+                (None, _) => {
+                    for id in existing {
+                        self.document.remove_step(id);
+                        if self.selected_step() == Some(id)
+                            && let Row::InputStep { channel, .. } = &self.selected
+                        {
+                            self.selected = Row::Input(channel.clone());
+                        }
+                    }
                 }
-            }
-            return;
-        }
-        let settings = serde_json::json!({ "steps": chain });
-        match existing {
-            Some(id) => {
-                self.document.set_step_settings(id, settings);
-            }
-            None => {
-                // In the document's order: before the background is fitted,
-                // or after it when the tools run on the corrected stacks.
-                let before = crate::studio_model::new_tools_step_index(&self.document);
-                let mut step =
-                    operation(flow_operations::RC_ASTRO_INPUT, Accepts::Linear).for_band(channel);
-                if let StepKind::Operation { settings: own, .. } = &mut step.kind {
-                    *own = settings;
+                (Some(tool), Some(id)) => {
+                    let changed = self
+                        .document
+                        .step(*id)
+                        .and_then(|(_, step)| crate::studio_model::tool_of(step))
+                        != Some(tool);
+                    if changed {
+                        self.document.set_step_settings(*id, tool.clone());
+                    }
                 }
-                let _ = self.document.insert_step(StageKind::Linear, before, step);
+                (Some(tool), None) => {
+                    let at =
+                        crate::studio_model::new_tool_step_index(&self.document, band, operation);
+                    let step = crate::studio_model::tool_step(tool.clone()).for_band(band);
+                    let _ = self.document.insert_step(StageKind::Linear, at, step);
+                }
             }
         }
     }
@@ -556,10 +499,10 @@ impl Studio {
         (present.len() >= 2).then_some((band, present))
     }
 
-    /// The inputs a color group's tools step applies to, as a person reads
+    /// The inputs a color group's tool step applies to, as a person reads
     /// them: "Ha, OIII, SII together". `None` for any other step.
     pub(super) fn group_applies_to(&self, step: &StepRecord) -> Option<String> {
-        if step.kind.name() != flow_operations::RC_ASTRO_COLOR {
+        if !crate::studio_model::is_tool_step(step) {
             return None;
         }
         let band = step.band.as_deref()?;
@@ -576,55 +519,14 @@ impl Studio {
         Some(format!("{} together", present.join(", ")))
     }
 
-    /// The step that holds a color group's tools.
-    fn group_step(&self, band: &str) -> Option<&StepRecord> {
-        self.document
-            .stage(StageKind::Linear)
-            .steps
-            .iter()
-            .find(|step| {
-                step.kind.name() == flow_operations::RC_ASTRO_COLOR
-                    && step.band.as_deref() == Some(band)
-            })
-    }
-
     /// A color group's tools in order.
     fn group_chain(&self, band: &str) -> Vec<serde_json::Value> {
-        match self.group_step(band).map(|step| &step.kind) {
-            Some(StepKind::Operation { settings, .. }) => {
-                settings["steps"].as_array().cloned().unwrap_or_default()
-            }
-            _ => Vec::new(),
-        }
+        self.chain(band)
     }
 
-    /// Writes a color group's tools into the document. A group with no
-    /// tool has no step.
+    /// Writes a color group's tools into its tool steps.
     fn set_group_chain(&mut self, band: &str, chain: Vec<serde_json::Value>) {
-        let existing = self.group_step(band).map(|step| step.id);
-        if chain.is_empty() {
-            if let Some(id) = existing {
-                self.document.remove_step(id);
-            }
-            return;
-        }
-        let settings = serde_json::json!({ "steps": chain });
-        match existing {
-            Some(id) => {
-                self.document.set_step_settings(id, settings);
-            }
-            None => {
-                // A group's tools run after its inputs' own, on the side of
-                // the background the document's order puts the tools.
-                let before = crate::studio_model::new_tools_step_index(&self.document);
-                let mut step =
-                    operation(flow_operations::RC_ASTRO_COLOR, Accepts::Linear).for_band(band);
-                if let StepKind::Operation { settings: own, .. } = &mut step.kind {
-                    *own = settings;
-                }
-                let _ = self.document.insert_step(StageKind::Linear, before, step);
-            }
-        }
+        self.set_chain(band, chain);
     }
 
     /// The band of the group an input's stars are removed with, when they
@@ -1291,6 +1193,7 @@ impl Studio {
         // The picture on screen keeps its last edits.
         self.save_document();
         self.document = document;
+        self.history.reset(self.document.to_json());
         self.document_is_saved();
         self.tools.store = Some(task.path);
         self.tools.document = Some(document_path);
@@ -1600,11 +1503,9 @@ impl StoreOpening {
     }
 }
 
-/// Which of `channels` have tools in `now` other than those in `prepared`,
-/// both as [`Studio::all_chains`] lists them: by input, an input's
-/// deconvolution (`ha:deconvolution`), a color group's tools
-/// (`rgb:together`, for each of its inputs) and continuum subtraction (for
-/// each line).
+/// Which of `channels` have Linear steps in `now` other than those in
+/// `prepared`, both as [`Studio::all_chains`] lists them: by input, and
+/// continuum subtraction, which counts for each line.
 fn changed_inputs(
     prepared: &serde_json::Value,
     now: &serde_json::Value,
@@ -1613,37 +1514,24 @@ fn changed_inputs(
     let (Some(prepared), Some(now)) = (prepared.as_object(), now.as_object()) else {
         return Vec::new();
     };
-    let group = |name: &str| {
-        crate::studio_model::COLOR_GROUPS
-            .iter()
-            .find(|(group, _)| *group == name)
-            .map(|(_, members)| members.to_vec())
-            .unwrap_or_default()
-    };
-    // An input with no tools has no entry, an empty chain or null alike:
-    // a stars input a run added has none, as the store it came from.
+    // An input with no steps has no entry, an empty list or null alike: a
+    // stars input a run added has none, as the store it came from.
     let empty = |value: Option<&serde_json::Value>| match value {
         None | Some(serde_json::Value::Null) => true,
         Some(serde_json::Value::Array(steps)) => steps.is_empty(),
         Some(_) => false,
     };
-    // A record written before background settings were recorded has none:
-    // they are taken as they are, not as changed.
-    let recorded_background = prepared.keys().any(|key| key.ends_with(":background"));
+    let lines = ["sii", "ha", "oiii"];
     let mut changed: Vec<&str> = Vec::new();
     for key in now.keys().chain(prepared.keys()) {
-        if key.ends_with(":background") && !recorded_background {
-            continue;
-        }
         let (now, prepared) = (now.get(key), prepared.get(key));
-        if now == prepared || (empty(now) && empty(prepared)) {
+        if key == "format" || now == prepared || (empty(now) && empty(prepared)) {
             continue;
         }
-        match key.split_once(':') {
-            Some((band, "together")) => changed.extend(group(band)),
-            Some((input, _)) => changed.push(input),
-            None if key == "continuum" => changed.extend(group("lines")),
-            None => changed.push(key),
+        if key == "continuum" {
+            changed.extend(lines);
+        } else {
+            changed.push(key);
         }
     }
     channels
@@ -1711,53 +1599,60 @@ mod tests {
     }
 
     #[test]
-    fn changed_tools_name_the_inputs_a_run_would_update() {
-        let channels = names(&["ha", "oiii", "sii", "red", "green", "blue"]);
-        let sxt = serde_json::json!([{"provider": "sxt", "parameters": {}}]);
+    fn changed_steps_name_the_inputs_a_run_would_update() {
+        let channels = names(&["ha", "oiii", "sii", "red"]);
+        let sxt =
+            serde_json::json!([{"operation": "Star removal", "settings": {"provider": "sxt"}}]);
         let prepared = serde_json::json!({
-            "ha": [], "oiii": [], "sii": [], "red": [], "green": [], "blue": [],
-            "continuum": null,
+            "format": 2, "ha": [], "oiii": [], "sii": [], "red": [], "continuum": null,
         });
         assert!(changed_inputs(&prepared, &prepared, &channels).is_empty());
         let mut now = prepared.clone();
         now["oiii"] = sxt.clone();
         assert_eq!(changed_inputs(&prepared, &now, &channels), names(&["oiii"]));
-        // A stars input a run added, with no tools, is not a change.
+        // A step taken away counts as a change too.
+        assert_eq!(changed_inputs(&now, &prepared, &channels), names(&["oiii"]));
+        // A stars input a run added, with no steps, is not a change.
         let mut with_stars = prepared.clone();
         with_stars["oiii@stars"] = serde_json::json!([]);
         let mut channels_with_stars = channels.clone();
         channels_with_stars.push("oiii@stars".to_string());
         assert!(changed_inputs(&prepared, &with_stars, &channels_with_stars).is_empty());
-        // Background settings a record never had are not a change; once
-        // recorded, a change of them is.
-        let mut background = prepared.clone();
-        background["ha:background"] = serde_json::json!({ "config": {} });
-        assert!(changed_inputs(&prepared, &background, &channels).is_empty());
-        let mut moved = background.clone();
-        moved["ha:background"] = serde_json::json!({ "config": { "protected_regions": [1] } });
-        assert_eq!(
-            changed_inputs(&background, &moved, &channels),
-            names(&["ha"])
-        );
-        // A group's tools count for each input of the group, and a tool
-        // taken away counts as a change.
-        let mut now = prepared.clone();
-        now["rgb:together"] = sxt.clone();
-        assert_eq!(
-            changed_inputs(&prepared, &now, &channels),
-            names(&["red", "green", "blue"])
-        );
-        assert_eq!(
-            changed_inputs(&now, &prepared, &channels),
-            names(&["red", "green", "blue"])
-        );
+        // Continuum subtraction counts for each line.
         let mut now = prepared.clone();
         now["continuum"] = serde_json::json!({});
-        now["ha:deconvolution"] = serde_json::json!({"psf": 2.5});
         assert_eq!(
             changed_inputs(&prepared, &now, &channels),
             names(&["ha", "oiii", "sii"])
         );
+    }
+
+    #[test]
+    fn a_tool_chosen_for_an_input_is_a_step_of_its_own() {
+        let inputs = names(&["ha", "oiii"]);
+        let mut document = super::super::panes::flow_document(&inputs);
+        let background = document
+            .stage(StageKind::Linear)
+            .steps
+            .iter()
+            .position(|step| step.kind.name() == flow_operations::BACKGROUND)
+            .unwrap();
+        let tool =
+            crate::studio_model::tool_step(serde_json::json!({ "provider": "nxt" })).for_band("ha");
+        let at = crate::studio_model::new_tool_step_index(
+            &document,
+            "ha",
+            flow_operations::NOISE_REDUCTION,
+        );
+        assert_eq!(at, background);
+        document.insert_step(StageKind::Linear, at, tool).unwrap();
+        // The input's program lists the tool before the background.
+        let program = crate::studio_model::input_program(&document, "ha");
+        let operations: Vec<&str> = program
+            .iter()
+            .map(|step| step["operation"].as_str().unwrap())
+            .collect();
+        assert_eq!(operations, ["Noise reduction", "Background extraction"]);
     }
 
     #[test]

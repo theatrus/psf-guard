@@ -390,29 +390,16 @@ fn adjustment_kind(operation: &str) -> Option<Adjustment> {
 /// Whether the canvas draws a step, or only keeps it in the document.
 pub(super) fn is_drawn(stage: StageKind, step: &StepRecord, bands: &Bands) -> bool {
     match (&step.kind, stage) {
-        // Drawn when the store holds each band corrected as well.
         (StepKind::Operation { operation, .. }, StageKind::Linear) => {
-            let band = step.band.as_deref().and_then(|band| bands.band_of(band));
-            (operation == flow_operations::BACKGROUND && bands.has_correction())
-                // The store's red, green and blue hold the calibration.
-                || (operation == flow_operations::COLOR_CALIBRATION && bands.is_calibrated())
-                // An input's tools are drawn when the store holds their
-                // result.
-                || ((operation == flow_operations::RC_ASTRO_INPUT
+            let background = operation == flow_operations::BACKGROUND;
+            // The store's red, green and blue hold the calibration.
+            (operation == flow_operations::COLOR_CALIBRATION && bands.is_calibrated())
+                // A step that changes the inputs is drawn when the store
+                // holds an input after it.
+                || ((background
+                    || crate::studio_model::is_tool_step(step)
                     || operation == flow_operations::DECONVOLUTION)
-                    && band.is_some_and(|band| bands.has_tools(band)))
-                // A color group's tools are drawn when the store holds
-                // their result for the group's inputs.
-                || (operation == flow_operations::RC_ASTRO_COLOR
-                    && crate::studio_model::COLOR_GROUPS
-                        .iter()
-                        .find(|(group, _)| step.band.as_deref() == Some(*group))
-                        .is_some_and(|(_, inputs)| {
-                            inputs
-                                .iter()
-                                .filter_map(|input| bands.band_of(input))
-                                .any(|band| bands.has_tools(band))
-                        }))
+                    && bands.has_step_anywhere(step.id, background))
         }
         // Every stretch of an input is drawn, the layered ones included.
         (StepKind::Operation { .. }, StageKind::Stretch) if stretch_model(step).is_some() => true,
@@ -586,9 +573,8 @@ pub(super) fn stretch_model(step: &StepRecord) -> Option<StretchModel> {
 /// that holds it in that state, the channel to blend in for the background
 /// correction with how much of it, and its stretches in order.
 ///
-/// What the canvas cannot draw is recorded as left out: a background
-/// correction for a view before the input's tools, where the store
-/// corrected the tools' result, and a stretch the canvas does not know.
+/// What the canvas cannot draw is recorded as left out: a Linear step the
+/// store was prepared without, and a stretch the canvas does not know.
 fn band_source(
     document: &Document,
     bands: &Bands,
@@ -604,22 +590,28 @@ fn band_source(
     bool,
 ) {
     let label = channel_label(&plan.channel);
-    let strength = plan
-        .background
-        .and_then(|id| document.step(id))
-        .map_or(0.0, |(_, step)| amount(step));
-    let mut state = BandState {
-        tools: plan.tools.is_some(),
-        background: strength,
-    };
+    // The steps the view reached that change the input, each with its
+    // strength when it is a background extraction.
+    let reached: Vec<(Uuid, Option<f32>)> = plan
+        .linear
+        .iter()
+        .filter_map(|id| {
+            let (_, step) = document.step(*id)?;
+            let background = step.kind.name() == flow_operations::BACKGROUND;
+            Some((*id, background.then(|| amount(step))))
+        })
+        .collect();
+    let (mut state, missing) = bands.state_after(band, &reached);
+    for id in missing {
+        if let Some((_, step)) = document.step(id) {
+            omitted.push(format!(
+                "the {} of {label}, which the store was not prepared with in this order",
+                step.kind.name().to_lowercase()
+            ));
+        }
+    }
     let (plane, corrected) = bands.planes(band, state);
     if corrected.is_none() {
-        if strength > 0.0
-            && bands.corrected[band].is_some()
-            && !bands.correction_in_tools(band, state)
-        {
-            omitted.push(format!("the background of {label} without its tools"));
-        }
         state.background = 0.0;
     }
     // A band the store holds stretched for display has no stretch to draw.
@@ -1709,6 +1701,7 @@ impl Studio {
     /// per pane.
     pub(super) fn refresh_canvas(&mut self) {
         let started = std::time::Instant::now();
+        self.note_edit();
         self.scene_version += 1;
         let selected = self.selected.place(self.alone);
         let mut places = panes(self.split, &selected, &self.document);
@@ -2241,6 +2234,33 @@ impl Studio {
     // ---- the bar over the canvas ----------------------------------------
 
     /// The document's name and how the canvas is divided.
+    /// Undo or Redo in the top bar, disabled while there is nothing to
+    /// undo or redo.
+    fn history_button(
+        label: &'static str,
+        id: &'static str,
+        enabled: bool,
+        cx: &mut Context<Self>,
+        action: fn(&mut Self),
+    ) -> impl IntoElement {
+        div()
+            .id(id)
+            .px_2()
+            .py_1()
+            .rounded_sm()
+            .bg(rgb(CONTROL))
+            .child(label)
+            .when(!enabled, |button| button.text_color(rgb(QUIET)))
+            .when(enabled, |button| {
+                button
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        action(this);
+                        cx.notify();
+                    }))
+            })
+    }
+
     fn top_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let splits = Split::ALL
             .into_iter()
@@ -2297,6 +2317,20 @@ impl Studio {
                             }))
                     }),
             )
+            .child(Self::history_button(
+                "Undo",
+                "undo",
+                self.history_can(false),
+                cx,
+                Self::undo,
+            ))
+            .child(Self::history_button(
+                "Redo",
+                "redo",
+                self.history_can(true),
+                cx,
+                Self::redo,
+            ))
             .child(div().pl_3().child(Self::note("View")))
             .child(Self::segmented().children(splits))
             .child(div().pl_2().child(Self::act(
@@ -2516,6 +2550,14 @@ impl Render for Studio {
             .text_sm()
             .on_mouse_move(cx.listener(Self::mouse_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
+            .on_action(cx.listener(|this, _: &super::Undo, _, cx| {
+                this.undo();
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &super::Redo, _, cx| {
+                this.redo();
+                cx.notify();
+            }))
             .child(self.top_bar(cx))
             .child(self.context_strip())
             .child(

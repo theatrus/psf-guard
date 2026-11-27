@@ -255,21 +255,73 @@ impl Studio {
                 }
                 None => Err("`path` is needed".to_string()),
             },
-            // Whether the background is corrected before the tools run.
-            "set_tools_order" => match params["background_first"].as_bool() {
-                Some(before) => {
-                    let changed = crate::studio_model::set_background_before_tools(
+            "undo" | "redo" => {
+                if method == "undo" {
+                    self.undo();
+                } else {
+                    self.redo();
+                }
+                Ok(json!({
+                    "can_undo": self.history_can(false),
+                    "can_redo": self.history_can(true),
+                }))
+            }
+            // A Linear step moved past its neighbour in one input's list.
+            "move_step" => match (
+                params["step"]
+                    .as_str()
+                    .and_then(|id| id.parse::<uuid::Uuid>().ok()),
+                params["channel"].as_str(),
+            ) {
+                (Some(step), Some(channel)) => {
+                    let later = params["later"].as_bool().unwrap_or(true);
+                    let moved = crate::studio_model::move_linear_step(
                         &mut self.document,
-                        before,
+                        step,
+                        channel,
+                        later,
                     );
                     self.refresh_canvas();
-                    Ok(json!({
-                        "background_first":
-                            crate::studio_model::background_before_tools(&self.document),
-                        "changed": changed,
-                    }))
+                    Ok(json!({ "moved": moved }))
                 }
-                None => Err("`background_first` is needed".to_string()),
+                _ => Err("`step` (an id) and `channel` are needed".to_string()),
+            },
+            // A processing tool added as a step of an input or of a color
+            // group, where a new tool goes.
+            "add_tool" => match (params["band"].as_str(), params["provider"].as_str()) {
+                (Some(band), Some(provider)) => {
+                    let tool = json!({
+                        "provider": provider,
+                        "parameters": params.get("parameters").cloned().unwrap_or_else(|| json!({})),
+                    });
+                    let operation = crate::studio_model::tool_operation(provider);
+                    let at =
+                        crate::studio_model::new_tool_step_index(&self.document, band, operation);
+                    let step = crate::studio_model::tool_step(tool).for_band(band);
+                    let id = step.id;
+                    match self.document.insert_step(StageKind::Linear, at, step) {
+                        Ok(()) => {
+                            self.refresh_canvas();
+                            Ok(json!({ "step": id.to_string(), "index": at }))
+                        }
+                        Err(error) => Err(error.to_string()),
+                    }
+                }
+                _ => Err("`band` and `provider` are needed".to_string()),
+            },
+            "remove_step" => match params["step"]
+                .as_str()
+                .and_then(|id| id.parse::<uuid::Uuid>().ok())
+            {
+                Some(step) => {
+                    let removed = self.document.remove_step(step).is_some();
+                    if self.selected_step() == Some(step) {
+                        self.selected = Row::Combined;
+                    }
+                    self.refresh_canvas();
+                    Ok(json!({ "removed": removed }))
+                }
+                None => Err("`step` (an id) is needed".to_string()),
             },
             "set_headroom" => {
                 // A number of stops makes the picture HDR; null makes it SDR.
@@ -451,7 +503,8 @@ impl Studio {
             "selected": self.selected,
             "split": self.split,
             "headroom": document.headroom,
-            "background_first": crate::studio_model::background_before_tools(document),
+            "can_undo": self.history_can(false),
+            "can_redo": self.history_can(true),
             "panes": panes,
             "inputs": inputs,
             "layers": layers,

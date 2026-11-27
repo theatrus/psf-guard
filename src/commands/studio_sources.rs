@@ -3,13 +3,12 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use crate::color_steps::ToolChain;
 use crate::processing_setups::DEFAULT_COLOR_SETTINGS;
 use crate::server::stack_preview::color::{StackColorRole, StackColorSource};
 use crate::server::workers::Workers;
 use crate::studio::{Document, RegionReader, StoreOptions, TileStore};
 use crate::studio_flow::{document_from_processing, processing_from_document};
-use crate::studio_sources::{ChannelTools, RegisteredChannels, Server};
+use crate::studio_sources::{LinearProgram, LinearStep, RegisteredChannels, Server};
 
 pub struct StudioSourcesOptions {
     pub server: String,
@@ -432,132 +431,14 @@ fn prepare_store(
         }
     };
     let processing = processing_from_document(&document)?;
-    let background = processing.background_extraction;
-    // When the document corrects the background before the tools, the
-    // tools run on the corrected stacks, so their results are kept under
-    // the background's settings too.
-    let after_background =
-        background.is_some() && crate::studio::background_before_tools(&document);
-    let corrected_by = match (&background, after_background) {
-        (Some(extraction), true) => {
-            use sha2::{Digest, Sha256};
-            let digest = Sha256::digest(serde_json::to_string(extraction)?);
-            let digest: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
-            format!(":background:{}", &digest[..16])
-        }
-        _ => String::new(),
-    };
 
-    // Each channel's processing tools, resolved against the tools this
-    // machine has. A tool's result is kept beside the downloaded stacks.
+    // The Linear steps that change the channels, in the document's order,
+    // resolved against the tools this machine has. A tool's result is kept
+    // beside the downloaded stacks.
     let workers = Workers::default();
-    let mut chains = BTreeMap::new();
-    let mut deconvolutions = BTreeMap::new();
-    for stack in stacks {
-        let source = format!("mono:{}:{}", stack.job_id, stack.group_index);
-        let revision = format!("{}{corrected_by}", stack.artifact_revision);
-        let deconvolution = processing
-            .input_deconvolutions
-            .get(&stack.role)
-            .map(|config| {
-                crate::color_steps::ChannelDeconvolution::resolve(
-                    *config, "studio", &source, &revision,
-                )
-            })
-            .transpose()
-            .map_err(|error| anyhow!("the deconvolution of {}: {error}", stack.filter_name))?;
-        if let Some(config) = processing
-            .input_rc_astro
-            .get(&stack.role)
-            .filter(|config| !config.steps.is_empty())
-        {
-            let chain = ToolChain::resolve(
-                &workers,
-                config,
-                "studio",
-                &source,
-                &revision,
-                deconvolution
-                    .as_ref()
-                    .map(|deconvolution| deconvolution.id.as_str()),
-            )
-            .map_err(|error| anyhow!("the tools of {}: {error}", stack.filter_name))?;
-            chains.insert(stack.role, chain);
-        }
-        if let Some(deconvolution) = deconvolution {
-            deconvolutions.insert(stack.role, deconvolution);
-        }
-    }
-    // The tools of a color group together: red, green and blue, or the
-    // narrowband lines.
-    let mut groups = Vec::new();
-    for (group, members) in crate::studio::COLOR_GROUPS {
-        let config: Option<crate::server::stack_preview::rc_astro::ProcessingChain> = document
-            .stage(crate::studio::StageKind::Linear)
-            .steps
-            .iter()
-            .filter(|step| step.enabled && step.band.as_deref() == Some(group))
-            .find_map(|step| match &step.kind {
-                crate::studio::StepKind::Operation {
-                    operation,
-                    settings,
-                    ..
-                } if operation == crate::studio::flow_operations::RC_ASTRO_COLOR => {
-                    serde_json::from_value(settings.clone()).ok()
-                }
-                _ => None,
-            });
-        let Some(config) = config.filter(|config| !config.steps.is_empty()) else {
-            continue;
-        };
-        let in_group: Vec<&StackColorSource> = members
-            .iter()
-            .filter_map(|member| {
-                stacks.iter().find(|stack| {
-                    crate::studio_flow::role_name(stack.role).ok().as_deref() == Some(member)
-                })
-            })
-            .collect();
-        if in_group.len() < 2 {
-            continue;
-        }
-        // The group's result follows each member's stack and the tools
-        // that ran on it first.
-        let source = format!(
-            "{group}:{}",
-            in_group
-                .iter()
-                .map(|stack| format!("{}:{}", stack.job_id, stack.group_index))
-                .collect::<Vec<_>>()
-                .join("+")
-        );
-        let revision = in_group
-            .iter()
-            .map(|stack| {
-                let before = chains
-                    .get(&stack.role)
-                    .and_then(|chain: &ToolChain| chain.ids.last().cloned())
-                    .or_else(|| {
-                        deconvolutions
-                            .get(&stack.role)
-                            .map(|d: &crate::color_steps::ChannelDeconvolution| d.id.clone())
-                    })
-                    .unwrap_or_default();
-                format!("{}:{before}", stack.artifact_revision)
-            })
-            .collect::<Vec<_>>()
-            .join("+");
-        let revision = format!("{revision}{corrected_by}");
-        let chain = ToolChain::resolve(&workers, &config, "studio", &source, &revision, None)
-            .map_err(|error| anyhow!("the tools of {group}: {error}"))?;
-        groups.push(crate::studio_sources::GroupTools {
-            name: group.to_string(),
-            roles: in_group.iter().map(|stack| stack.role).collect(),
-            chain,
-        });
-    }
-    // One line per tool and per hundredth of its channel's chain, which
-    // PSF Studio shows as a progress bar.
+    let steps = linear_steps(&document, stacks)?;
+    // One line per tool and per hundredth of its chain, which PSF Studio
+    // shows as a progress bar.
     let reported = std::cell::RefCell::new((String::new(), u32::MAX));
     let report = |channel: &str, tool: &str, fraction: f32| {
         let percent = (fraction.clamp(0.0, 1.0) * 100.0) as u32;
@@ -568,14 +449,23 @@ fn prepare_store(
             *last = (line, percent);
         }
     };
-    let tools = ChannelTools {
+    let program = LinearProgram {
         workers: &workers,
         cache: folder,
-        chains,
-        deconvolutions,
-        groups,
+        sources: stacks
+            .iter()
+            .map(|stack| {
+                (
+                    stack.role,
+                    (
+                        format!("mono:{}:{}", stack.job_id, stack.group_index),
+                        stack.artifact_revision.clone(),
+                    ),
+                )
+            })
+            .collect(),
+        steps,
         progress: &report,
-        after_background,
     };
 
     let started = Instant::now();
@@ -603,10 +493,8 @@ fn prepare_store(
             });
     let mut prepared = RegisteredChannels::prepare(
         &inputs,
-        (!tools.chains.is_empty() || !tools.deconvolutions.is_empty() || !tools.groups.is_empty())
-            .then_some(&tools),
+        Some(&program),
         continuum.as_ref(),
-        background.as_ref(),
         &seiza_stacking::GpuOptions::cpu(),
     )?;
     let calibration = calibrate_colors(&mut prepared, stacks, folder, &document);
@@ -683,7 +571,6 @@ fn prepare_store(
     let backgrounds = folder.join("backgrounds.json");
     write_atomically(&backgrounds, serde_json::to_string(&prepared.backgrounds)?)?;
     println!("Prepared in {:.1} s", started.elapsed().as_secs_f64());
-    let background_first = prepared.background_first;
     let registered = prepared;
 
     // The key changes when any channel's stack is rebuilt.
@@ -697,29 +584,24 @@ fn prepare_store(
         })
         .collect::<Vec<_>>()
         .join("|");
-    // It also changes with the tools that ran and their settings.
-    let tool_key = tools
-        .deconvolutions
-        .values()
-        .map(|deconvolution| deconvolution.id.as_str())
-        .chain(
-            tools
-                .chains
-                .values()
-                .filter_map(|chain| chain.ids.last().map(String::as_str)),
-        )
-        .chain(
-            tools
-                .groups
-                .iter()
-                .filter_map(|group| group.chain.ids.last().map(String::as_str)),
-        )
-        .collect::<Vec<_>>()
-        .join("|");
-    let key = if tool_key.is_empty() {
-        key
-    } else {
-        format!("{key}|tools:{tool_key}")
+    // It also changes with the Linear steps that ran and their settings.
+    let programs: serde_json::Map<String, serde_json::Value> = document
+        .channels()
+        .into_iter()
+        .map(|channel| {
+            let program = crate::studio::input_program(&document, &channel);
+            (channel, serde_json::Value::Array(program))
+        })
+        .collect();
+    let key = {
+        use sha2::{Digest, Sha256};
+        let digest = Sha256::digest(serde_json::to_string(&programs)?);
+        let digest: String = digest
+            .iter()
+            .take(16)
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        format!("{key}|steps:{digest}")
     };
     // And with continuum subtraction: its settings, and which stacks had a
     // clipping map.
@@ -766,7 +648,27 @@ fn prepare_store(
         "display": display,
         "star_stretch": star_stretch,
         "crop": crop,
-        "background_first": background_first,
+        // Each channel's states, in the order the steps ran, and the steps
+        // the store was prepared with, so a canvas can draw any step and
+        // tell when the document has moved on.
+        "states": registered
+            .states
+            .iter()
+            .map(|(channel, states)| {
+                let states: Vec<serde_json::Value> = states
+                    .iter()
+                    .map(|state| {
+                        serde_json::json!({
+                            "step": state.step.to_string(),
+                            "plane": state.plane,
+                            "correction": state.correction,
+                        })
+                    })
+                    .collect();
+                (channel.clone(), serde_json::Value::Array(states))
+            })
+            .collect::<serde_json::Map<_, _>>(),
+        "program": programs,
     });
     write_atomically(&record, serde_json::to_string(&prepared_record)?)?;
     if let Some(path) = document_out {
@@ -774,6 +676,84 @@ fn prepare_store(
         println!("Wrote the document to {}", path.display());
     }
     Ok(())
+}
+
+/// The document's Linear steps that change the stacks' samples, in its
+/// order, as preparing a store runs them: each tool step, deconvolution and
+/// background extraction that is on. A color group's tool runs on the
+/// group's stacks, when the document has two of them or more.
+fn linear_steps(document: &Document, stacks: &[StackColorSource]) -> Result<Vec<LinearStep>> {
+    use crate::studio::{flow_operations as op, StageKind, StepKind};
+    let role_of = |band: &str| {
+        stacks
+            .iter()
+            .find(|stack| crate::studio_flow::role_name(stack.role).ok().as_deref() == Some(band))
+            .map(|stack| stack.role)
+    };
+    let mut steps = Vec::new();
+    for step in &document.stage(StageKind::Linear).steps {
+        let StepKind::Operation { settings, .. } = &step.kind else {
+            continue;
+        };
+        if !step.enabled {
+            continue;
+        }
+        let name = step.kind.name();
+        let what = || match &step.band {
+            Some(band) => format!("{name} ({band})"),
+            None => name.to_string(),
+        };
+        if name == op::BACKGROUND {
+            let roles: Vec<StackColorRole> = match &step.band {
+                None => stacks.iter().map(|stack| stack.role).collect(),
+                Some(band) => role_of(band).into_iter().collect(),
+            };
+            let extraction = serde_json::from_value(settings.clone())
+                .with_context(|| format!("the settings of {}", what()))?;
+            steps.push(LinearStep::Background {
+                step: step.id,
+                roles,
+                extraction,
+            });
+        } else if name == op::DECONVOLUTION {
+            let Some(role) = step.band.as_deref().and_then(role_of) else {
+                continue;
+            };
+            let config = serde_json::from_value(settings.clone())
+                .with_context(|| format!("the settings of {}", what()))?;
+            steps.push(LinearStep::Deconvolution {
+                step: step.id,
+                role,
+                config,
+            });
+        } else if crate::studio::is_tool_step(step) {
+            let Some(band) = step.band.as_deref() else {
+                continue;
+            };
+            let roles: Vec<StackColorRole> = match crate::studio::COLOR_GROUPS
+                .iter()
+                .find(|(group, _)| *group == band)
+            {
+                Some((_, members)) => members
+                    .iter()
+                    .filter_map(|member| role_of(member))
+                    .collect(),
+                None => role_of(band).into_iter().collect(),
+            };
+            if roles.is_empty() {
+                continue;
+            }
+            let tool = serde_json::from_value(settings.clone())
+                .with_context(|| format!("the settings of {}", what()))?;
+            steps.push(LinearStep::Tool {
+                step: step.id,
+                roles,
+                label: band.to_string(),
+                tool,
+            });
+        }
+    }
+    Ok(steps)
 }
 
 /// Prints the processing tools this computer can run, with each tool's
@@ -928,7 +908,7 @@ fn stretch_stars(
     prepared: &mut RegisteredChannels,
     document: &Document,
 ) -> (Vec<String>, Option<f64>) {
-    use crate::studio::{flow_operations, stars_channel, tools_channel, StageKind, StepKind};
+    use crate::studio::{flow_operations, stars_channel, StageKind, StepKind};
 
     let Some(step) = document
         .stage(StageKind::Stretch)
@@ -964,9 +944,13 @@ fn stretch_stars(
         println!("  The stars were not stretched: turn Unscreen Stars off for red, green and blue");
         return (Vec::new(), None);
     }
-    let [Some(red_less), Some(green_less), Some(blue_less)] =
-        names.map(|name| prepared.plane(&tools_channel(name)))
-    else {
+    // Each channel just after the tool that took its stars out.
+    let [Some(red_less), Some(green_less), Some(blue_less)] = names.map(|name| {
+        prepared
+            .starless
+            .get(name)
+            .and_then(|plane| prepared.plane(plane))
+    }) else {
         return (Vec::new(), None);
     };
     // The image with its stars is the starless image plus the stars the
@@ -1014,9 +998,9 @@ fn stretch_stars(
 /// the whole image, and adds the result as the channel's stretched plane.
 /// Returns the planes added or replaced, which are stretched for display.
 ///
-/// The channel is stretched in its last linear state: with its background
-/// corrected when the store has that, else after its tools, else as
-/// stacked. Calibrated red, green and blue with the same stretches are
+/// The channel is stretched in its last linear state: after the last
+/// Linear step that changed it, a background correction there in full, or
+/// as stacked. Calibrated red, green and blue with the same stretches are
 /// stretched together as one color image, so their balance is kept.
 ///
 /// The stars of such a channel follow it: the channel with its stars put
@@ -1035,19 +1019,12 @@ fn stretch_whole_images(
     already_display: &[String],
 ) -> Vec<String> {
     use crate::server::stack_preview::color_calibration::interleave;
-    use crate::studio::{
-        background_corrected_channel, stars_channel, stretched_channel, tools_channel,
-    };
+    use crate::studio::{stars_channel, stretched_channel};
     use crate::studio_sources::line_channel;
     use seiza_stacking::LinearImage;
     use seiza_stretch::StretchModel;
 
-    let linear = |prepared: &RegisteredChannels, name: &str| {
-        prepared
-            .plane(&background_corrected_channel(name))
-            .or_else(|| prepared.plane(&tools_channel(name)))
-            .or_else(|| prepared.plane(name))
-    };
+    let linear = |prepared: &RegisteredChannels, name: &str| prepared.last_state(name);
     // One image of one channel, or three interleaved, and back.
     let combine = |images: &[LinearImage]| -> Result<LinearImage, String> {
         match images {
@@ -1380,6 +1357,27 @@ fn automatic_crop(prepared: &RegisteredChannels) -> Option<[usize; 4]> {
 #[cfg(test)]
 mod tests {
     use crate::server::stack_preview::color::{classify_filter, StackColorRole};
+
+    #[test]
+    fn every_provider_has_the_tool_step_studio_gives_it() {
+        use crate::remote_work::steps::{Category, PROVIDERS};
+        use crate::studio::flow_operations as op;
+        assert_eq!(crate::studio::TOOL_PROVIDERS.len(), PROVIDERS.len());
+        for provider in PROVIDERS {
+            let wanted = match provider.category {
+                Category::Sharpen => op::SHARPENING,
+                Category::Denoise => op::NOISE_REDUCTION,
+                Category::StarRemoval => op::STAR_REMOVAL,
+            };
+            assert_eq!(provider.category.label(), wanted);
+            assert_eq!(
+                crate::studio::tool_operation(provider.key),
+                wanted,
+                "{}",
+                provider.key
+            );
+        }
+    }
 
     #[test]
     fn a_file_name_gives_its_channel_from_its_last_filter_part() {

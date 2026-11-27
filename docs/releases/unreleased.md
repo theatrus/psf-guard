@@ -70,3 +70,10 @@
   Final picture saves the whole picture at full resolution as a 16-bit TIFF
   or PNG, or a 32-bit FITS or XISF, rendered on the CPU from the stacks'
   32-bit samples so it keeps more precision than the screen.
+- In PSF Studio each processing tool, such as BlurXTerminator, is a step of
+  its own. You can turn one off, remove it, or move it before or after
+  Background extraction with **Move earlier** and **Move later**, for one
+  input or for every input. Documents saved before open with their tools
+  split into these steps, and Studio reuses the tool results it already
+  has. **Undo** and **Redo**, in the toolbar and the Edit menu (⌘Z and
+  ⇧⌘Z), go back through the document's edits.

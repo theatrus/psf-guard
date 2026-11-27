@@ -3,10 +3,12 @@ use crate::canvas::{ComputedMask, Layer, SceneParts};
 use crate::store_tiles::{BandState, BandStretch, Bands};
 use crate::studio_model::{CropRecord, Document, Place, Row, Split, Stroke, StrokeMode};
 use gpui::{
-    prelude::*, px, rgb, size, App, Bounds, Context, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, NativeView, Pixels, Point, ScrollDelta, ScrollEvent, Window, WindowBounds,
-    WindowOptions,
+    actions, prelude::*, px, rgb, size, App, Bounds, Context, KeyBinding, Menu, MenuItem,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, NativeView, Pixels, Point,
+    ScrollDelta, ScrollEvent, Window, WindowBounds, WindowOptions,
 };
+
+actions!(studio, [Undo, Redo, Quit]);
 use objc2::{
     class, msg_send,
     rc::{Allocated, Retained},
@@ -946,6 +948,8 @@ pub struct Studio {
     levels: u8,
     /// The processing tools: which this computer has, and the run in hand.
     tools: tools::Tools,
+    /// The document before each edit, for Undo and Redo.
+    history: history::History,
 }
 
 impl Studio {
@@ -1174,6 +1178,7 @@ impl Studio {
                 parity_report,
                 levels,
                 tools,
+                history: history::History::default(),
             };
         // The patches read as the store opened stand in until every band
         // is sampled over the whole image.
@@ -1190,6 +1195,8 @@ impl Studio {
         }
         studio.take_in_new_inputs();
         studio.tools_are_prepared(None);
+        // Undo goes back no further than the document as it opened.
+        studio.history.reset(studio.document.to_json());
         studio.refresh_canvas();
         studio
     }
@@ -1594,6 +1601,28 @@ pub fn run(options: Options) {
     // reaches it while it runs.
     application.on_open_urls(open::keep_links);
     application.run(move |cx: &mut App| {
+        // Undo and Redo, from the keyboard and the Edit menu.
+        cx.bind_keys([
+            KeyBinding::new("cmd-z", Undo, None),
+            KeyBinding::new("cmd-shift-z", Redo, None),
+            KeyBinding::new("cmd-q", Quit, None),
+        ]);
+        cx.on_action(|_: &Quit, cx| cx.quit());
+        cx.set_menus(vec![
+            Menu {
+                name: "PSF Studio".into(),
+                items: vec![MenuItem::action("Quit PSF Studio", Quit)],
+                disabled: false,
+            },
+            Menu {
+                name: "Edit".into(),
+                items: vec![
+                    MenuItem::action("Undo", Undo),
+                    MenuItem::action("Redo", Redo),
+                ],
+                disabled: false,
+            },
+        ]);
         // The canvas is 1920 x 1080 points: a 4K surface on a 2x display.
         let bounds = Bounds::centered(
             None,
@@ -1623,6 +1652,8 @@ fn adopt(document: &mut Document) {
 mod control;
 #[path = "export.rs"]
 mod export;
+#[path = "history.rs"]
+mod history;
 #[path = "inspector.rs"]
 mod inspector;
 #[path = "open.rs"]

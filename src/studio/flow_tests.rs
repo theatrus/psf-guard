@@ -126,12 +126,15 @@ fn every_kind_of_setting_survives_the_round_trip() {
     );
     object.insert(
         "input_rc_astro".into(),
-        json!({ "oiii": { "blur": { "sharpen_stars": 0.25 } }, "ha": { "noise": { "denoise": 0.9 } } }),
+        json!({
+            "oiii": { "steps": [{ "provider": "bxt", "parameters": { "sharpen_stars": 0.25 } }] },
+            "ha": { "steps": [{ "provider": "nxt", "parameters": { "denoise": 0.9 } }] },
+        }),
     );
     object.insert("emission".into(), json!({ "ha_amount": 0.6 }));
     object.insert(
         "color_rc_astro".into(),
-        json!({ "noise": { "denoise": 0.5 } }),
+        json!({ "steps": [{ "provider": "nxt", "parameters": { "denoise": 0.5 } }] }),
     );
     object.insert(
         "narrowband".into(),
@@ -155,11 +158,12 @@ fn every_kind_of_setting_survives_the_round_trip() {
         [
             op::FOLLOW_CHANNELS.to_string(),
             "Deconvolution (ha)".to_string(),
-            "Processing tools (ha)".to_string(),
-            "Processing tools (oiii)".to_string(),
+            "Noise reduction (ha)".to_string(),
+            "Sharpening (oiii)".to_string(),
             op::BACKGROUND.to_string(),
             op::EMISSION.to_string(),
-            op::RC_ASTRO_COLOR.to_string(),
+            // PSF Guard's color tools run on the narrowband lines together.
+            "Noise reduction (lines)".to_string(),
             op::COLOR_CALIBRATION.to_string(),
         ]
     );
@@ -297,86 +301,193 @@ fn studio_starts_from_the_layered_stretch_and_keeps_a_chosen_one() {
     assert!(color_setup_from_document(&document).is_ok());
 }
 
+fn plain_step(name: &str, band: Option<&str>, settings: Value) -> StepRecord {
+    let step = StepRecord::new(StepKind::Operation {
+        operation: name.to_string(),
+        accepts: crate::image_steps::Accepts::Linear,
+        settings,
+    });
+    match band {
+        Some(band) => step.for_band(band),
+        None => step,
+    }
+}
+
+fn linear_names(document: &Document) -> Vec<String> {
+    names(document, StageKind::Linear)
+}
+
 #[test]
-fn the_background_moves_before_or_after_every_tools_step() {
-    use crate::image_steps::Accepts;
-    let operation = |name: &str, accepts: Accepts, settings: &Value| {
-        StepRecord::new(StepKind::Operation {
-            operation: name.to_string(),
-            accepts,
-            settings: settings.clone(),
-        })
-    };
+fn a_chain_of_tools_opens_as_one_step_per_tool() {
+    let mut document = document_from_color_setup("Old", &default_settings(), &SHO).unwrap();
+    let chain = json!({ "steps": [
+        { "provider": "bxt", "parameters": { "sharpen_stars": 0.3 } },
+        { "provider": "nxt" },
+        { "tool": "sxt" },
+    ] });
+    let mut ha = plain_step(op::RC_ASTRO_INPUT, Some("ha"), chain);
+    ha.enabled = false;
+    let ha_id = ha.id;
+    // PSF Guard's color tools, with no band, as older documents kept them.
+    let color = plain_step(
+        op::RC_ASTRO_COLOR,
+        None,
+        json!({ "steps": [{ "provider": "nxt", "parameters": {} }] }),
+    );
+    document.insert_step(StageKind::Linear, 1, ha).unwrap();
+    document
+        .insert_step(StageKind::Linear, usize::MAX, color)
+        .unwrap();
+
+    let opened = Document::from_json(&document.to_json()).unwrap();
+    assert_eq!(
+        linear_names(&opened),
+        [
+            op::FOLLOW_CHANNELS.to_string(),
+            "Sharpening (ha)".to_string(),
+            "Noise reduction (ha)".to_string(),
+            "Star removal (ha)".to_string(),
+            op::BACKGROUND.to_string(),
+            op::COLOR_CALIBRATION.to_string(),
+            "Noise reduction (lines)".to_string(),
+        ]
+    );
+    let steps = &opened.stage(StageKind::Linear).steps;
+    // The first tool keeps the old step's id, and every tool whether it
+    // was on.
+    assert_eq!(steps[1].id, ha_id);
+    assert!(steps[1..4].iter().all(|step| !step.enabled));
+    assert_eq!(
+        tool_of(&steps[1]).unwrap()["parameters"]["sharpen_stars"],
+        0.3
+    );
+    // A chain's older `tool` key reads as the provider, and a tool with no
+    // settings gets an empty set.
+    assert_eq!(tool_of(&steps[3]).unwrap()["provider"], "sxt");
+    assert_eq!(tool_of(&steps[2]).unwrap()["parameters"], json!({}));
+    // Opened again, nothing changes; and the old document opened twice
+    // gives its steps the same ids, as the app and a store's preparation
+    // each open it.
+    assert_eq!(Document::from_json(&opened.to_json()).unwrap(), opened);
+    assert_eq!(Document::from_json(&document.to_json()).unwrap(), opened);
+    let ids: std::collections::BTreeSet<_> = steps.iter().map(|step| step.id).collect();
+    assert_eq!(ids.len(), steps.len());
+}
+
+#[test]
+fn a_new_tool_goes_in_a_chains_order_before_the_background() {
     let mut document = Document::new("Order");
-    let linear = |document: &Document| -> Vec<String> {
-        document
-            .stage(StageKind::Linear)
-            .steps
-            .iter()
-            .map(|step| match &step.band {
-                Some(band) => format!("{} {band}", step.kind.name()),
-                None => step.kind.name().to_string(),
-            })
-            .collect()
-    };
-    for (name, band) in [
-        (op::RC_ASTRO_INPUT, Some("ha")),
-        (op::RC_ASTRO_INPUT, Some("oiii")),
-        (op::RC_ASTRO_COLOR, Some("lines")),
-        (op::BACKGROUND, None),
-        (op::COLOR_CALIBRATION, None),
+    for step in [
+        plain_step(op::DECONVOLUTION, Some("ha"), json!({})),
+        plain_step(op::BACKGROUND, None, json!({})),
+        plain_step(op::COLOR_CALIBRATION, None, json!({})),
     ] {
-        let mut step = operation(name, Accepts::Linear, &json!({}));
-        if let Some(band) = band {
-            step = step.for_band(band);
-        }
         document
             .insert_step(StageKind::Linear, usize::MAX, step)
             .unwrap();
     }
-    // As made, the tools run on the stacks and the background is fitted on
-    // their results.
-    assert!(!background_before_tools(&document));
-    assert_eq!(new_tools_step_index(&document), 3);
-
-    assert!(set_background_before_tools(&mut document, true));
-    assert!(background_before_tools(&document));
+    // An input with no tool takes its first after its deconvolution; one
+    // with neither, before the background.
+    assert_eq!(new_tool_step_index(&document, "ha", op::NOISE_REDUCTION), 1);
+    assert_eq!(new_tool_step_index(&document, "oiii", op::SHARPENING), 1);
+    let noise = tool_step(json!({ "provider": "nxt" })).for_band("ha");
+    document.insert_step(StageKind::Linear, 1, noise).unwrap();
+    // Sharpening goes before noise reduction, star removal after it.
+    assert_eq!(new_tool_step_index(&document, "ha", op::SHARPENING), 1);
+    assert_eq!(new_tool_step_index(&document, "ha", op::STAR_REMOVAL), 2);
+    // A group's tool follows its members' own.
+    assert_eq!(new_tool_step_index(&document, "lines", op::STAR_REMOVAL), 2);
+    // A tool moved after the background stays there, and a new tool of a
+    // later kind follows it.
+    let noise = document.stage(StageKind::Linear).steps[1].id;
+    assert!(document.move_step(noise, 2));
     assert_eq!(
-        linear(&document),
+        linear_names(&document),
         [
+            "Deconvolution (ha)",
             "Background extraction",
-            "Processing tools ha",
-            "Processing tools oiii",
-            "Processing tools on color lines",
+            "Noise reduction (ha)",
             "Color calibration",
         ]
     );
-    // A new tools step goes after the ones already there, so the order
-    // keeps.
-    assert_eq!(new_tools_step_index(&document), 4);
-    assert!(!set_background_before_tools(&mut document, true));
+    assert_eq!(new_tool_step_index(&document, "ha", op::STAR_REMOVAL), 3);
+}
 
-    assert!(set_background_before_tools(&mut document, false));
+#[test]
+fn a_step_moves_past_its_neighbour_in_one_inputs_list() {
+    let mut document = Document::new("Move");
+    let background = plain_step(op::BACKGROUND, None, json!({}));
+    let other = tool_step(json!({ "provider": "nxt" })).for_band("oiii");
+    let sharpen = tool_step(json!({ "provider": "bxt" })).for_band("ha");
+    let calibration = plain_step(op::COLOR_CALIBRATION, None, json!({}));
+    let id = sharpen.id;
+    for step in [background, other, sharpen, calibration] {
+        document
+            .insert_step(StageKind::Linear, usize::MAX, step)
+            .unwrap();
+    }
+    // Earlier past the background, which comes before it in Ha's list;
+    // OIII's tool is not in that list and keeps its place.
+    assert!(move_linear_step(&mut document, id, "ha", false));
     assert_eq!(
-        linear(&document),
+        linear_names(&document),
         [
-            "Processing tools ha",
-            "Processing tools oiii",
-            "Processing tools on color lines",
+            "Sharpening (ha)",
             "Background extraction",
+            "Noise reduction (oiii)",
             "Color calibration",
         ]
     );
+    assert!(!move_linear_step(&mut document, id, "ha", false));
+    // Later past the background again, to just after it.
+    assert!(move_linear_step(&mut document, id, "ha", true));
+    assert_eq!(linear_names(&document)[1], "Sharpening (ha)");
+    assert_eq!(linear_names(&document)[0], "Background extraction");
+}
 
-    // With no tools step there is no order to choose.
-    let mut plain = Document::new("Plain");
-    plain
-        .insert_step(
-            StageKind::Linear,
-            0,
-            operation(op::BACKGROUND, Accepts::Linear, &json!({})),
-        )
-        .unwrap();
-    assert!(!background_before_tools(&plain));
-    assert!(!set_background_before_tools(&mut plain, true));
+#[test]
+fn an_inputs_program_lists_what_changes_it_in_order() {
+    let mut document = Document::new("Program");
+    let background = plain_step(
+        op::BACKGROUND,
+        None,
+        json!({ "config": {}, "strength": 0.5 }),
+    );
+    let sharpen = tool_step(json!({ "provider": "bxt" })).for_band("ha");
+    let stars = tool_step(json!({ "provider": "sxt" })).for_band("lines");
+    let red = tool_step(json!({ "provider": "nxt" })).for_band("red");
+    for step in [sharpen, background, stars, red] {
+        document
+            .insert_step(StageKind::Linear, usize::MAX, step)
+            .unwrap();
+    }
+    let operations = |channel: &str| -> Vec<String> {
+        input_program(&document, channel)
+            .iter()
+            .map(|step| step["operation"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(
+        operations("ha"),
+        ["Sharpening", "Background extraction", "Star removal"]
+    );
+    assert_eq!(
+        operations("oiii"),
+        ["Background extraction", "Star removal"]
+    );
+    assert_eq!(
+        operations("red"),
+        ["Background extraction", "Noise reduction"]
+    );
+    assert!(operations("ha@stars").is_empty());
+    // A step after the background took it at its strength, so the strength
+    // is part of the program; with nothing after it, the canvas applies it.
+    assert_eq!(
+        input_program(&document, "ha")[1]["settings"]["strength"],
+        0.5
+    );
+    assert_eq!(operations("luminance"), ["Background extraction"]);
+    assert!(input_program(&document, "luminance")[0]["settings"]
+        .get("strength")
+        .is_none());
 }

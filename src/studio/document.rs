@@ -1439,7 +1439,7 @@ impl Document {
     /// Reads a document from JSON. Refuses a document from a newer build,
     /// and one whose stages are missing or out of order.
     pub fn from_json(text: &str) -> Result<Self, StudioError> {
-        let document: Document =
+        let mut document: Document =
             serde_json::from_str(text).map_err(|error| StudioError::Document(error.to_string()))?;
         if document.version > DOCUMENT_VERSION {
             return Err(StudioError::Document(format!(
@@ -1453,6 +1453,8 @@ impl Document {
                 "its stages are missing or out of order".to_string(),
             ));
         }
+        // A document from before each tool was a step of its own.
+        super::flow::split_tool_chains(&mut document);
         Ok(document)
     }
 }

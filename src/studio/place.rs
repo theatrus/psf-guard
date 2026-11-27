@@ -89,7 +89,10 @@ pub fn input_steps(document: &Document, channel: &str) -> Vec<InputStep> {
             let steps = &document.stage(stage).steps;
             steps.iter().filter_map(move |step| match &step.band {
                 // A color group's tools belong to the group's inputs.
-                Some(band) if step.kind.name() == super::flow_operations::RC_ASTRO_COLOR => {
+                Some(band)
+                    if super::flow::is_tool_step(step)
+                        && super::COLOR_GROUPS.iter().any(|(group, _)| group == band) =>
+                {
                     let (group, _) = super::flow::color_group_of(channel)?;
                     (group == band).then_some(InputStep {
                         id: step.id,

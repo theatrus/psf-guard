@@ -1198,9 +1198,9 @@ Guard's color previews already use (`StackColorProcessing`).
 | `background_extraction` | Linear | Background extraction |
 | `input_processing` | Linear | Inputs follow their channel cards |
 | `input_deconvolutions` | Linear | Deconvolution, one per channel |
-| `input_rc_astro` | Linear | Processing tools, one per channel |
+| `input_rc_astro` | Linear | One tool step per tool of each channel's chain: Sharpening, Noise reduction, Star removal |
 | `emission` | Linear | Subtract continuum |
-| `color_rc_astro` | Linear | Processing tools on color |
+| `color_rc_astro` | Linear | One tool step per tool, with the band of the color group it runs on (`rgb`, or `lines` without red, green and blue) |
 | `color_calibration` | Linear | Color calibration |
 | `input_stretches` | Stretch | Stretch, one per channel per stretch, in order |
 | `narrowband` | Stretch | Narrowband balance and stars |
@@ -1313,8 +1313,9 @@ A person moves the strength of Background extraction and the canvas
 follows at once, with no refit:
 
 - Preparation keeps two planes per channel on the reference grid: the
-  channel uncorrected, and corrected in full. The tile store names them,
-  such as `red` and `red@background`.
+  channel before the step, and corrected in full. The tile store names the
+  corrected plane after the step, such as `red@step-<id>` (see “Each tool
+  is a step”).
 - Seiza's correction changes each sample in proportion to the strength,
   in Subtract and in Divide, and resampling keeps proportions. So the
   channel at any strength is a blend of its two planes. A test compares
@@ -2176,8 +2177,10 @@ compositor, keyed on `seiza_compose::OUTPUT_VERSION`.
 The tools are the ones PSF Guard's color processing runs: sharpening,
 noise reduction and star removal, each by a provider. The providers today
 are RC-Astro's BlurXTerminator, NoiseXTerminator and StarXTerminator, and
-Seiza's built-in noise model. A document keeps them as PSF Guard does: one
-chain per input, in the step “Processing tools” of that input.
+Seiza's built-in noise model. Each tool is a step of its own in the Linear
+stage (see “Each tool is a step”); this section first described one chain
+per input in one “Processing tools” step, which documents opened now are
+split from.
 
 A tool takes seconds to minutes on a whole stack, so it is not live.
 Studio runs the tools when a document's store is prepared, and keeps each
@@ -2189,12 +2192,12 @@ result.
   function; their behavior is unchanged. A provider is chosen by its key,
   so a Seiza model and an RC-Astro tool go the same way.
 - **Preparing a store.** `psf-guard studio-sources --apply <document>`
-  runs each input's chain on its stack as it came, then fits the
-  background on the tools' result, as the color pipeline does.
-- **What the store keeps.** Per input: the stack as it came; the tools'
-  result (`<input>@tools`); the stars a star removal kept
-  (`<input>@stars`); and the result with its background corrected
-  (`<input>@background`).
+  runs the Linear steps that change the inputs in the document's order.
+  PSF Guard's own color setups put the tools before the background, as
+  the color pipeline runs them.
+- **What the store keeps.** Per input: the stack as it came; the input
+  after each step that changed it (`<input>@step-<id>`); and the stars a
+  star removal kept (`<input>@stars`).
 - **Cache.** Each step's result is kept beside the downloaded stacks, so
   a chain that grew by one tool runs only that tool.
 
@@ -2208,13 +2211,9 @@ on the same three stacks through the same step in 87 seconds
 (noise-v1-d33 on the GPU through Core ML). Nothing in Studio is particular
 to a provider: the chain names `noise-model` where it named `nxt`.
 
-In Studio an input's tools are one step of the input, listed before the
-background step, which is the order the pipeline runs them. With a store
-prepared for the document, the canvas shows the input as stacked before
-that step and the tools' result after it, so Before and after and Wipe
-compare the two. The store's corrected channel is the tools' result
-corrected, so a view that leaves the tools out shows the input without
-background correction, and the pane's label says so.
+With a store prepared for the document, the canvas shows an input after
+each of its steps: selecting a tool step shows the input after that tool,
+so Before and after and Wipe compare the input before and after it.
 
 ### Choosing and running tools from Studio
 
@@ -2237,8 +2236,8 @@ In the app, started with `--psf-guard <path>`:
   computer has. A tool this computer cannot run is listed with the reason.
 - Each chosen tool's settings follow, as sliders and switches from the
   tool's own list.
-- The choice is kept in the document as PSF Guard keeps it
-  (`input_rc_astro`), in the input's Processing tools step.
+- Each choice is a tool step of the input, which PSF Guard's settings
+  read back as the input's chain (`input_rc_astro`).
 - **Run the tools** saves the document, runs `studio-prepare`, shows the
   tool and its progress as it goes, and has the canvas draw the new store
   when it ends, without a restart. A note says when the tools have changed
@@ -2247,45 +2246,55 @@ In the app, started with `--psf-guard <path>`:
 A tool that ran with the same settings before is not run again: each
 step's result is kept beside the stacks.
 
-#### Tools before or after the background (2026-11-27)
+#### Each tool is a step (2026-11-27)
 
-The tools can run on the stacks as they came, with the background fitted
-on their results, or on the stacks with the background corrected first.
-The second is the usual order in PixInsight, gradient removal before
-BlurXTerminator. The document's step order decides: the Background
-extraction step before every tools step (an input's Processing tools, its
-Deconvolution, or a color group's tools) puts the background first. The
-Background extraction step and each tools step have an **Order** choice,
-**Tools, then background** or **Background, then tools**, which moves the
-Background extraction step before or after all of them; a tools step added
-later goes on the side the order puts it. The order is the document's,
-not each input's, because Seiza fits every input's background with one
-model.
+Every processing tool is a step of its own in the Linear stage, as every
+other operation is: Sharpening, Noise reduction and Star removal, each
+with a provider and its settings, and the band of an input or of a color
+group. A step can be turned off, moved and removed like any other, and an
+input can have a tool before the background extraction and another after
+it. Until this change an input's tools were one “Processing tools” step
+holding a chain, and preparation ran a fixed order (every tool, then
+every background), because the store was built from PSF Guard's color
+setup, which has that shape. That fixed order is gone.
 
-- When the background comes first, `studio-prepare` fits and corrects each
-  stack in its own frame, and the tools run on it at the step's strength.
-  The store keeps the stack corrected in full as `<input>@background`, and
-  the tools' result as `<input>@tools`. Its record says
-  `"background_first": true`.
-- The canvas draws an input before its tools as the stack blended toward
-  its correction by the strength, and after its tools as the tools'
-  result, which holds the correction. When the tools run first, as
-  before, the corrected plane is the tools' result corrected.
-- With the background first, the tools depend on the background's settings
-  and strength, so a change to either, or to the order, flags the inputs
-  with tools as tools not run. The tool cache keys their results on the
-  background's settings too.
-- PSF Guard's color setup has no order, so a setup exported from such a
-  document runs the tools first.
-
-Tried on a copy of the Iris store (LRGB with BlurXTerminator,
-NoiseXTerminator and StarXTerminator) through `psf-studio-mcp`: choosing
-**Background, then tools** moved the step and flagged luminance, red,
-green and blue; **Run tools** took 156 seconds and cleared the flag; the
-luminance input showed the corrected stack with its stars at its
-Background extraction step, and the tools' starless result at its
-Processing tools step. That sky has little gradient, so the final picture
-changed little: its median in a sky square rose from about 0.095 to 0.107.
+- **Opening older documents.** A “Processing tools” or “Processing tools
+  on color” step is split into one tool step per tool, in its place and in
+  the chain's order. The first keeps the old step's id. PSF Guard's color
+  tools, which had no band, take the color group they run on.
+- **Order.** **Move earlier** and **Move later** on a tool, a
+  deconvolution or a background extraction move it past the step before or
+  after it in the input's list. A step shared by every input, such as
+  Background extraction, moves for every input. A new tool goes after the
+  input's tools of an earlier kind, and else before Background extraction.
+- **Preparing.** `studio-prepare` reads the document's Linear steps and
+  runs each one that is on and changes an input
+  (`studio::changes_input`), in order: a tool on its input in the input's
+  own frame, a color group's tool on the group's inputs registered and
+  combined, a deconvolution, and each Background extraction, fitted with
+  one model across the inputs it is for. A step after a background
+  extraction takes its input at the step's strength.
+- **What the store keeps.** For each input, its plane after each step
+  (`<input>@step-<id>`, a background extraction corrected in full), and
+  its record lists them in order (`"states"`) with the steps it ran
+  (`"program"`, `studio::input_program`).
+- **Canvas.** An input is drawn after the last step the view reached that
+  the store holds. A background extraction there is blended into the
+  state before it by its strength, at once. A step the store was prepared
+  without is listed as left out, and the toolbar lists the inputs Run
+  tools would update. A store prepared before this change keeps its
+  `@tools` and `@background` planes, which stand for every tool step and
+  for the background extraction.
+- **Cache.** Tool steps that follow one another in a chain's order on one
+  input (sharpening, then noise reduction, then star removal) run as one
+  chain, so each tool's result is kept by the chain so far, as PSF Guard
+  keeps a chain's. A tool after another kind of step is kept by that
+  step's result. So a store prepared again from an older document finds
+  every tool's result it ran before.
+- **PSF Guard's settings.** An input's tool steps read back as its chain
+  and a color group's as the color tools, one of each kind, in the
+  document's order; PSF Guard runs them before the background. A color
+  group's star removal stays Studio's.
 
 ### Stars
 
@@ -2338,15 +2347,15 @@ person chooses. In the Tools block of an input with a star removal tool,
 choice moves the tool and its settings between each input's Processing
 tools step and one step for the group.
 
-- The group's step is “Processing tools on color” with the group's band,
-  `rgb` or `lines`. That step with no band is still PSF Guard's color
-  tools (`color_rc_astro`).
-- When the store is prepared, each input's own tools run first. Then the
-  group's registered inputs are combined into one color image, the
-  group's chain runs on it, and the result is split back into each
-  input's `@tools` and `@stars`. A group of two inputs repeats the last
-  one to make three channels. The background is fitted after that, on the
-  reference grid.
+- The group's step is a Star removal step with the group's band, `rgb` or
+  `lines`.
+- When the store is prepared, the group's step runs where it is in the
+  document: the group's registered inputs, as the steps before it left
+  them, are combined into one color image, the tool runs on it, and the
+  result is split back into each input's plane after the step and its
+  `@stars`. A group of two inputs repeats the last one to make three
+  channels. The steps after it on those inputs run on the reference
+  grid.
 - PSF Guard refuses star removal among its color tools (“Star removal runs
   on channel stacks, not on the color channels together”), so the group
   steps stay out of the exported color setup. A setup exported from such a
@@ -2373,9 +2382,10 @@ On the Sh2-157 stacks on this Mac:
 
 ### Not built yet
 
-- Tools on the combined color image (`color_rc_astro`) and the narrowband
-  star steps. Both run after the channels are resampled and normalized
-  together, which Studio's preparation does not do yet.
+- The narrowband star steps, which run after the channels are resampled
+  and normalized together, which Studio's preparation does not do yet.
+  PSF Guard's color tools (`color_rc_astro`) now run as color group tool
+  steps.
 - A run cannot be stopped from the app, and a second cannot be queued.
 - The app saves the document only when the tools are run.
 
@@ -2912,10 +2922,15 @@ Gaps to fix, roughly in the order they got in the way:
 - [x] **Inputs whose stars a layer shows.** An input was listed as not used
   when only its stars were in the picture; it now shows where its stars go,
   such as “→ RGB stars (stars)”.
-- [x] **Tools after the background.** The Order choice runs the tools on the
-  stacks with their background corrected (see “Tools before or after the
-  background”). The order is the whole document's.
-- [ ] **Undo history.** Only Undo stroke exists.
+- [x] **Tools after the background.** Each tool is a step of its own, in
+  any order with the background extraction, per input (see “Each tool is
+  a step”).
+- [x] **Undo history.** **Undo** and **Redo** in the toolbar and the Edit
+  menu (⌘Z, ⇧⌘Z, and `studio_undo` and `studio_redo` through
+  `psf-studio-mcp`) go back through up to 200 edits of the document. Edits
+  less than 0.7 seconds apart, such as one slider drag, are one edit.
+  Opening another picture starts the history again. A run of the tools is
+  not undone: undoing its edits flags the inputs to run again.
 - [ ] **Tool runs.** A run cannot be queued behind another; tools on the
   combined color image (`color_rc_astro`) and the narrowband star steps
   are not run.

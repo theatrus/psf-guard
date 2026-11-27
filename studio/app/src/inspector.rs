@@ -11,16 +11,12 @@ use super::panes::{
 use super::{SliderId, Studio, Tool, PANEL_WIDTH};
 use crate::image_steps::Accepts;
 use crate::studio_model::{
-    balance_colors, channel_label, flow_operations, hue_of, input_steps, layer_name,
-    level_for_zoom, own_step_for_channel, BlendMode, CropRecord, JunctionStatus, LayerRecord,
-    LayerSource, MaskRecord, MaskShape, Row, SharedMask, StageKind, StepKind, StepRecord,
+    balance_colors, channel_label, flow_operations, hue_of, layer_name, level_for_zoom,
+    own_step_for_channel, BlendMode, CropRecord, JunctionStatus, LayerRecord, LayerSource,
+    MaskRecord, MaskShape, Row, SharedMask, StageKind, StepKind, StepRecord,
 };
 use gpui::{div, prelude::*, px, rgb, AnyElement, Context};
 use uuid::Uuid;
-
-/// The steps a reduced view leaves out, because their result depends on
-/// pixel scale. The engine reports these per step; the demo names them.
-const FULL_RESOLUTION_ONLY: [&str; 1] = ["Noise reduction"];
 
 /// The steps offered on the combined picture.
 const FINISH_STEPS: [(&str, Accepts); 5] = [
@@ -573,12 +569,10 @@ impl Studio {
         column()
             .child(Self::title(step.kind.name().to_string(), applies_to))
             .child(self.step_controls(stage, step, cx))
-            .when(
-                step.kind.name() == flow_operations::RC_ASTRO_INPUT
-                    || (step.kind.name() == flow_operations::RC_ASTRO_COLOR && step.band.is_some()),
-                |pane| pane.child(self.tools_block(&channel, cx)),
-            )
-            .children(self.tools_order_block(step.kind.name(), cx))
+            .when(crate::studio_model::is_tool_step(step), |pane| {
+                pane.child(self.tools_block(&channel, cx))
+            })
+            .children(self.linear_order_block(step, &channel, cx))
             .when(step.kind.name() == flow_operations::BACKGROUND, |pane| {
                 pane.child(self.protect_block(id, cx))
             })
@@ -808,42 +802,34 @@ impl Studio {
             .children(Self::help(only_help))
     }
 
-    /// Whether the processing tools run before the background is
-    /// corrected or after it, for the Background extraction step and the
-    /// tools steps of a document that has both.
-    fn tools_order_block(&self, operation: &str, cx: &mut Context<Self>) -> Option<gpui::Div> {
-        let order_steps = [
-            flow_operations::BACKGROUND,
-            flow_operations::RC_ASTRO_INPUT,
-            flow_operations::RC_ASTRO_COLOR,
-            flow_operations::DECONVOLUTION,
-        ];
-        if !order_steps.contains(&operation) {
+    /// Buttons that move a step that changes an input's samples, such as
+    /// a tool or the background extraction, past the step before or after
+    /// it in the input's list. The store runs them in that order.
+    fn linear_order_block(
+        &self,
+        step: &StepRecord,
+        channel: &str,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::Div> {
+        if !crate::studio_model::changes_input(step, channel) {
             return None;
         }
-        let steps = &self.document.stage(StageKind::Linear).steps;
-        let has = |name: &str| steps.iter().any(|step| step.kind.name() == name);
-        let has_tools = order_steps[1..].iter().any(|name| has(name));
-        if !has(flow_operations::BACKGROUND) || !has_tools {
-            return None;
-        }
-        let first = crate::studio_model::background_before_tools(&self.document);
-        let mut choice = |label: &'static str, key: &'static str, before: bool| {
-            Self::act(label, key, first == before, cx, move |this| {
-                crate::studio_model::set_background_before_tools(&mut this.document, before);
+        let id = step.id;
+        let mut mover = |label: &'static str, key: &'static str, later: bool| {
+            let channel = channel.to_string();
+            Self::act(label, key, false, cx, move |this| {
+                crate::studio_model::move_linear_step(&mut this.document, id, &channel, later);
             })
         };
-        let (tools_first, background_first) = (
-            choice("Tools, then background", "order-tools-first", false),
-            choice("Background, then tools", "order-background-first", true),
+        let (earlier, later) = (
+            mover("Move earlier", "linear-earlier", false),
+            mover("Move later", "linear-later", true),
         );
         Some(
             column()
-                .child(Self::heading("Order"))
-                .child(tools_first)
-                .child(background_first)
+                .child(Self::field("Order", wrap().child(earlier).child(later)))
                 .children(Self::help(
-                    "Tools, then background: the tools run on each stack as it came, and the background is fitted on their results. Background, then tools: the background is corrected first, at the step's strength, and the tools, such as BlurXTerminator, run on the corrected stacks. The order applies to every input, because the backgrounds are fitted with one model. A change takes effect when the tools run again; the toolbar names the inputs.",
+                    "Moves the step past the one before or after it in this input's list. Preparing the store runs the tools, deconvolution and background extraction in that order: a tool after Background extraction runs on the stack with its background corrected. A step shared by every input, such as Background extraction, moves for every input. A new order takes effect when the tools run again; the toolbar lists the inputs.",
                 )),
         )
     }
@@ -1756,32 +1742,17 @@ impl Studio {
 
     // ---- blocks under the row's controls --------------------------------
 
-    /// Which of an input's steps the view leaves out at this zoom.
-    fn zoom_notes(&self, channel: &str) -> gpui::Div {
+    /// The zoom and the pyramid level the view reads. Every step's result
+    /// is drawn at any zoom: the tools ran on the whole stack when the store
+    /// was prepared.
+    fn zoom_notes(&self, _channel: &str) -> gpui::Div {
         let zoom = self.canvas.read(|shared| shared.canvas.view.zoom);
         let level = level_for_zoom(zoom, self.levels);
-        let omitted: Vec<&str> = input_steps(&self.document, channel)
-            .iter()
-            .filter_map(|row| self.document.step(row.id))
-            .map(|(_, step)| step.kind.name())
-            .filter(|name| level > 0 && FULL_RESOLUTION_ONLY.contains(name))
-            .collect();
-        let note = if omitted.is_empty() {
-            "The view leaves out no step for its zoom.".to_string()
-        } else {
-            format!(
-                "At this zoom the view leaves out: {}. Zoom to 100% or use a crop preview to see them.",
-                omitted.join(", ")
-            )
-        };
-        column()
-            .child(Self::heading("Zoom"))
-            .child(
-                div()
-                    .text_xs()
-                    .child(format!("Zoom {:.0}%, pyramid level {level}", zoom * 100.0)),
-            )
-            .child(div().text_xs().child(note))
+        column().child(Self::heading("Zoom")).child(
+            div()
+                .text_xs()
+                .child(format!("Zoom {:.0}%, pyramid level {level}", zoom * 100.0)),
+        )
     }
 
     fn junction_block(&self) -> gpui::Div {

@@ -126,9 +126,39 @@ fn tools() -> Value {
             }), &["layer", "patch"]),
         },
         {
-            "name": "studio_set_tools_order",
-            "description": "Sets whether the background is corrected before the processing tools run (true: the tools, such as BlurXTerminator, run on the corrected stacks) or after them (false), as the Order choice on the Background extraction step does. It applies to every input, and takes effect when the tools run again (studio_run_tools).",
-            "inputSchema": object(json!({ "instance": instance, "background_first": { "type": "boolean" } }), &["background_first"]),
+            "name": "studio_undo",
+            "description": "Undoes the last edit of the document, as Undo (Cmd+Z) does. Edits in quick succession, such as one slider drag, are one edit. Returns whether more can be undone and redone.",
+            "inputSchema": object(json!({ "instance": instance }), &[]),
+        },
+        {
+            "name": "studio_redo",
+            "description": "Makes the last edit undone again, as Redo (Shift+Cmd+Z) does.",
+            "inputSchema": object(json!({ "instance": instance }), &[]),
+        },
+        {
+            "name": "studio_add_tool",
+            "description": "Adds a processing tool as a step of its own: `band` is an input, such as \"luminance\", or a color group, \"rgb\" or \"lines\"; `provider` is a tool key from studio-tools, such as \"bxt\", \"nxt\", \"noise-model\" or \"sxt\"; `parameters` its settings. It goes after the band's tools of an earlier kind, else before Background extraction. Returns the step's id. It takes effect when the tools run again (studio_run_tools).",
+            "inputSchema": object(json!({
+                "instance": instance,
+                "band": { "type": "string" },
+                "provider": { "type": "string" },
+                "parameters": { "type": "object" }
+            }), &["band", "provider"]),
+        },
+        {
+            "name": "studio_move_step",
+            "description": "Moves a Linear step that changes an input, such as a tool or Background extraction, past the step before it (`later`: false) or after it (`later`: true) in `channel`'s list, as Move earlier and Move later do. Preparing the store runs the steps in that order, so a tool moved after Background extraction runs on the corrected stack. It takes effect when the tools run again.",
+            "inputSchema": object(json!({
+                "instance": instance,
+                "step": { "type": "string" },
+                "channel": { "type": "string" },
+                "later": { "type": "boolean" }
+            }), &["step", "channel"]),
+        },
+        {
+            "name": "studio_remove_step",
+            "description": "Removes a step from the document by its id.",
+            "inputSchema": object(json!({ "instance": instance, "step": { "type": "string" } }), &["step"]),
         },
         {
             "name": "studio_set_headroom",
@@ -256,10 +286,30 @@ impl Server {
             "studio_set_layer" => {
                 forward(self.instance(arguments)?, "set_layer", arguments.clone())
             }
-            "studio_set_tools_order" => forward(
+            "studio_undo" => forward(self.instance(arguments)?, "undo", json!({})),
+            "studio_redo" => forward(self.instance(arguments)?, "redo", json!({})),
+            "studio_add_tool" => forward(
                 self.instance(arguments)?,
-                "set_tools_order",
-                json!({ "background_first": arguments["background_first"] }),
+                "add_tool",
+                json!({
+                    "band": arguments["band"],
+                    "provider": arguments["provider"],
+                    "parameters": arguments.get("parameters").cloned().unwrap_or(Value::Null),
+                }),
+            ),
+            "studio_move_step" => forward(
+                self.instance(arguments)?,
+                "move_step",
+                json!({
+                    "step": arguments["step"],
+                    "channel": arguments["channel"],
+                    "later": arguments["later"],
+                }),
+            ),
+            "studio_remove_step" => forward(
+                self.instance(arguments)?,
+                "remove_step",
+                json!({ "step": arguments["step"] }),
             ),
             "studio_set_headroom" => forward(
                 self.instance(arguments)?,
