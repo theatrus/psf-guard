@@ -2544,6 +2544,23 @@ are. A change of the amount is applied by preparing the store again
 (“Run tools”). PSF Guard's star reduction and its saving of the amount in
 the `narrowband` settings are not carried over yet.
 
+**Tools not run yet.** Studio compares each input's tools, deconvolution,
+color group tools and continuum subtraction with the ones the store was
+prepared with. When they differ, the toolbar shows “Tools changed for Ha,
+OIII, SII” and a **Run tools** button, and each affected input's row says
+“tools not run”. A color group's tools count for each of its inputs, and
+continuum subtraction for each line. The tools a store was prepared with
+are kept beside it, in `<store>.tools.json`, with the store's size and
+modification time, so the flag is still there after Studio restarts. A
+record of another version of the store, such as one prepared outside
+Studio, is not read; the document's tools are then taken as prepared.
+
+A star removal in Studio always keeps the stars it removes, linear, with
+Unscreen Stars off: `psf-guard` sets those settings itself
+(`rc_astro::keep_linear_stars`), and Studio does not show them. A store's
+new stars become inputs; they get a layer of their own only when the
+picture has no stars layer yet, so the stars are not added twice.
+
 **The layered stretch** is Studio's default in place of the automatic
 midtones stretch: a new document's stretches are changed by
 `Document::use_layered_stretch`, and PSF Guard's own default setup is not.

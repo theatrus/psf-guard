@@ -113,6 +113,7 @@ impl Studio {
     /// The rows of the inputs, or of the stars the tools took out of them.
     fn input_rows(&self, stars: bool, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let mut rows = Vec::new();
+        let to_run = self.inputs_to_run();
         for (index, channel) in self.document.channels().into_iter().enumerate() {
             if channel.contains('@') != stars {
                 continue;
@@ -144,13 +145,17 @@ impl Studio {
             rows.push(
                 self.tree_row(("input", index), Row::Input(channel.clone()), 0.0, cx)
                     .child(fold)
-                    .child(Self::named(
-                        label.clone(),
-                        match self.goes_to(&channel) {
+                    .child(Self::named(label.clone(), {
+                        let mut words = match self.goes_to(&channel) {
                             Some(goes) => format!("{} {goes}", counted(steps.len(), "step")),
                             None => format!("{} · not used", counted(steps.len(), "step")),
-                        },
-                    ))
+                        };
+                        // Its tools changed since the store was prepared.
+                        if to_run.contains(&channel) {
+                            words.push_str(" · tools not run");
+                        }
+                        words
+                    }))
                     .into_any_element(),
             );
             if folded {

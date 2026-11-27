@@ -1107,7 +1107,7 @@ impl Studio {
             ));
         }
         studio.take_in_new_inputs();
-        studio.tools_are_prepared();
+        studio.tools_are_prepared(None);
         studio.refresh_canvas();
         studio
     }

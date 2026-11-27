@@ -300,10 +300,33 @@ impl Studio {
         }
     }
 
-    /// Records that the store the canvas draws was prepared for the
-    /// document as it is.
-    pub(super) fn tools_are_prepared(&mut self) {
-        self.tools.prepared = Some(self.all_chains());
+    /// Records which tools the store the canvas draws was prepared with:
+    /// `ran`, the tools a run that just prepared it was given; else the
+    /// record kept beside the store, when it is of the store as it is now;
+    /// else the document's tools as they are. The record is written beside
+    /// the store, so a later session knows which changes the store lacks.
+    pub(super) fn tools_are_prepared(&mut self, ran: Option<serde_json::Value>) {
+        let store = self.tools.store.clone();
+        let prepared = ran
+            .or_else(|| store.as_deref().and_then(prepared_record::read))
+            .unwrap_or_else(|| self.all_chains());
+        if let Some(store) = &store {
+            prepared_record::write(store, &prepared);
+        }
+        self.tools.prepared = Some(prepared);
+    }
+
+    /// The inputs whose tools changed since the store was prepared, which
+    /// Run tools would bring up to date, in the document's order. A color
+    /// group's tools count for each of its inputs, and continuum
+    /// subtraction for each line.
+    pub(super) fn inputs_to_run(&self) -> Vec<String> {
+        match &self.tools.prepared {
+            Some(prepared) => {
+                changed_inputs(prepared, &self.all_chains(), &self.document.channels())
+            }
+            None => Vec::new(),
+        }
     }
 
     /// Writes an input's tools into the document. An input with no tool
@@ -680,8 +703,15 @@ impl Studio {
             else {
                 continue;
             };
+            // A star removal always keeps its stars, linear, for the stars
+            // layers; `psf-guard` sets those two settings itself.
+            let removes_stars = self.is_of(&provider, STARS);
             for setting in &schema.parameters {
-                if setting.flag.is_none() || matches!(setting.kind, SettingKind::Other) {
+                if setting.flag.is_none()
+                    || matches!(setting.kind, SettingKind::Other)
+                    || (removes_stars
+                        && matches!(setting.name.as_str(), "stars" | "difference" | "unscreen"))
+                {
                     continue;
                 }
                 let value = step["parameters"]
@@ -736,7 +766,7 @@ impl Studio {
 
     /// Whether the tools can be run from here, and why not when they
     /// cannot.
-    fn cannot_run(&self) -> Option<&'static str> {
+    pub(super) fn cannot_run(&self) -> Option<&'static str> {
         if self.tools.binary.is_none() {
             Some("The psf-guard program was not found.")
         } else if self.tools.store.is_none() || self.tools.document.is_none() {
@@ -748,7 +778,7 @@ impl Studio {
 
     /// Saves the document and has `psf-guard` prepare the store again for
     /// it. The canvas takes the new store when the run ends.
-    fn run_tools(&mut self) {
+    pub(super) fn run_tools(&mut self) {
         let (Some(binary), Some(store), Some(document)) = (
             self.tools.binary.clone(),
             self.tools.store.clone(),
@@ -1114,12 +1144,9 @@ impl Studio {
                     None => {
                         self.tools.status =
                             "The tools ran. The canvas shows their result.".to_string();
-                        self.reload_store();
                         // The store holds the tools the run was given, not
                         // any changed while it ran.
-                        if chains.is_some() {
-                            self.tools.prepared = chains;
-                        }
+                        self.reload_store(chains);
                     }
                 }
             }
@@ -1149,17 +1176,18 @@ impl Studio {
                 crate::studio_model::Document::from_json(&text).map_err(|error| error.to_string())
             });
         match opened {
-            Ok(opened) => self.open_store(store, Some((document, opened))),
+            Ok(opened) => self.open_store(store, Some((document, opened)), None),
             Err(error) => {
                 self.tools.status = format!("Not opened: the document could not be read ({error})");
             }
         }
     }
 
-    /// Draws the store again from its file, after a run prepared it.
-    fn reload_store(&mut self) {
+    /// Draws the store again from its file, after a run prepared it with
+    /// the tools `ran`.
+    fn reload_store(&mut self, ran: Option<serde_json::Value>) {
         if let Some(path) = self.tools.store.clone() {
-            self.open_store(path, None);
+            self.open_store(path, None, ran);
         }
     }
 
@@ -1170,8 +1198,9 @@ impl Studio {
         &mut self,
         path: PathBuf,
         document: Option<(PathBuf, crate::studio_model::Document)>,
+        ran: Option<serde_json::Value>,
     ) {
-        self.store_opening = Some(StoreOpening::start(path, document));
+        self.store_opening = Some(StoreOpening::start(path, document, ran));
     }
 
     /// Shows the store the opening task opened, once it is open.
@@ -1200,7 +1229,7 @@ impl Studio {
             }
         };
         let Some((document_path, document)) = task.document else {
-            self.show_source(source, bands);
+            self.show_source(source, bands, task.ran);
             return;
         };
         // The picture on screen keeps its last edits.
@@ -1217,15 +1246,17 @@ impl Studio {
         self.drag = None;
         self.alone = false;
         self.mask_shown = false;
-        self.show_source(source, bands);
+        self.show_source(source, bands, None);
         self.canvas.edit(|canvas| canvas.fit());
     }
 
     /// Draws a store's tiles from now on.
+    /// `ran` is the tools a run that just prepared the store was given.
     fn show_source(
         &mut self,
         source: Arc<dyn psf_studio_render::TileSource>,
         bands: crate::store_tiles::Bands,
+        ran: Option<serde_json::Value>,
     ) {
         let pyramid = source.pyramid();
         self.band_info = Arc::new(bands);
@@ -1249,7 +1280,7 @@ impl Studio {
             shared.new_source = Some(source);
         }
         self.take_in_new_inputs();
-        self.tools_are_prepared();
+        self.tools_are_prepared(ran);
         self.refresh_canvas();
     }
 
@@ -1357,6 +1388,11 @@ impl Studio {
                         "On this input alone, after its own tools, or on the group's registered inputs combined into one color image, as PSF Guard's color tools run.",
                     ));
             }
+            if *category == STARS && !none_chosen {
+                block = block.children(Self::help(
+                    "The stars it removes are kept, linear, as an input of their own, such as Ha stars, for a stars layer to add back.",
+                ));
+            }
         }
         // The chosen tools' settings.
         for (index, (provider, setting, value)) in
@@ -1433,7 +1469,9 @@ impl Studio {
                     "Runs every input's tools and prepares the store again. A tool that ran with these settings before is not run again.",
                 ));
             if changed && !running {
-                block = block.child(div().text_xs().child("Changed. Run to update."));
+                block = block.child(div().text_xs().child(
+                    "The store was prepared with other tools. Run tools to update the picture.",
+                ));
             }
         }
         if !self.tools.status.is_empty() {
@@ -1475,12 +1513,18 @@ pub(super) struct StoreOpening {
     path: PathBuf,
     /// The document to show with the store, and where it is saved.
     document: Option<(PathBuf, crate::studio_model::Document)>,
+    /// The tools the run that prepared the store was given.
+    ran: Option<serde_json::Value>,
     done: Arc<Mutex<Option<Opened>>>,
     started: std::time::Instant,
 }
 
 impl StoreOpening {
-    fn start(path: PathBuf, document: Option<(PathBuf, crate::studio_model::Document)>) -> Self {
+    fn start(
+        path: PathBuf,
+        document: Option<(PathBuf, crate::studio_model::Document)>,
+        ran: Option<serde_json::Value>,
+    ) -> Self {
         let done = Arc::new(Mutex::new(None));
         let (result, at) = (done.clone(), path.clone());
         std::thread::Builder::new()
@@ -1493,10 +1537,50 @@ impl StoreOpening {
         Self {
             path,
             document,
+            ran,
             done,
             started: std::time::Instant::now(),
         }
     }
+}
+
+/// Which of `channels` have tools in `now` other than those in `prepared`,
+/// both as [`Studio::all_chains`] lists them: by input, an input's
+/// deconvolution (`ha:deconvolution`), a color group's tools
+/// (`rgb:together`, for each of its inputs) and continuum subtraction (for
+/// each line).
+fn changed_inputs(
+    prepared: &serde_json::Value,
+    now: &serde_json::Value,
+    channels: &[String],
+) -> Vec<String> {
+    let (Some(prepared), Some(now)) = (prepared.as_object(), now.as_object()) else {
+        return Vec::new();
+    };
+    let group = |name: &str| {
+        crate::studio_model::COLOR_GROUPS
+            .iter()
+            .find(|(group, _)| *group == name)
+            .map(|(_, members)| members.to_vec())
+            .unwrap_or_default()
+    };
+    let mut changed: Vec<&str> = Vec::new();
+    for key in now.keys().chain(prepared.keys()) {
+        if now.get(key) == prepared.get(key) {
+            continue;
+        }
+        match key.split_once(':') {
+            Some((band, "together")) => changed.extend(group(band)),
+            Some((input, _)) => changed.push(input),
+            None if key == "continuum" => changed.extend(group("lines")),
+            None => changed.push(key),
+        }
+    }
+    channels
+        .iter()
+        .filter(|channel| changed.contains(&channel.as_str()))
+        .cloned()
+        .collect()
 }
 
 /// Gives `document` an input for each of `names` it lacks, such as the
@@ -1557,6 +1641,39 @@ mod tests {
     }
 
     #[test]
+    fn changed_tools_name_the_inputs_a_run_would_update() {
+        let channels = names(&["ha", "oiii", "sii", "red", "green", "blue"]);
+        let sxt = serde_json::json!([{"provider": "sxt", "parameters": {}}]);
+        let prepared = serde_json::json!({
+            "ha": [], "oiii": [], "sii": [], "red": [], "green": [], "blue": [],
+            "continuum": null,
+        });
+        assert!(changed_inputs(&prepared, &prepared, &channels).is_empty());
+        let mut now = prepared.clone();
+        now["oiii"] = sxt.clone();
+        assert_eq!(changed_inputs(&prepared, &now, &channels), names(&["oiii"]));
+        // A group's tools count for each input of the group, and a tool
+        // taken away counts as a change.
+        let mut now = prepared.clone();
+        now["rgb:together"] = sxt.clone();
+        assert_eq!(
+            changed_inputs(&prepared, &now, &channels),
+            names(&["red", "green", "blue"])
+        );
+        assert_eq!(
+            changed_inputs(&now, &prepared, &channels),
+            names(&["red", "green", "blue"])
+        );
+        let mut now = prepared.clone();
+        now["continuum"] = serde_json::json!({});
+        now["ha:deconvolution"] = serde_json::json!({"psf": 2.5});
+        assert_eq!(
+            changed_inputs(&prepared, &now, &channels),
+            names(&["ha", "oiii", "sii"])
+        );
+    }
+
+    #[test]
     fn new_stars_get_a_layer_only_when_the_picture_shows_none() {
         let inputs = names(&["ha", "oiii", "red", "green", "blue"]);
         let mut plain = super::super::panes::flow_document(&inputs);
@@ -1590,6 +1707,79 @@ mod tests {
         assert_eq!(layer_bands(&with_stars), before);
         for name in &stars {
             assert!(with_stars.channels().contains(name), "{name} is an input");
+        }
+    }
+}
+
+/// The tools a store was prepared with, kept in a file beside it
+/// (`picture.tools.json` beside `picture.pgtiles`) with the store's size
+/// and modification time. A record of another version of the store, such
+/// as one prepared outside Studio, is not read.
+mod prepared_record {
+    use std::path::{Path, PathBuf};
+
+    fn path(store: &Path) -> PathBuf {
+        store.with_extension("tools.json")
+    }
+
+    /// The store's size and modification time, in nanoseconds.
+    fn version(store: &Path) -> Option<(u64, u128)> {
+        let metadata = std::fs::metadata(store).ok()?;
+        let modified = metadata
+            .modified()
+            .ok()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?
+            .as_nanos();
+        Some((metadata.len(), modified))
+    }
+
+    pub(super) fn read(store: &Path) -> Option<serde_json::Value> {
+        let text = std::fs::read_to_string(path(store)).ok()?;
+        let record: serde_json::Value = serde_json::from_str(&text).ok()?;
+        let (size, modified) = version(store)?;
+        let matches = record["size"].as_u64() == Some(size)
+            && record["modified"].as_str() == Some(modified.to_string().as_str());
+        matches.then(|| record["tools"].clone())
+    }
+
+    /// Writes the record next to the store, through a temporary file, so a
+    /// record is whole or absent. A record that cannot be written is left
+    /// out: the next session takes the document's tools as prepared.
+    pub(super) fn write(store: &Path, tools: &serde_json::Value) {
+        let Some((size, modified)) = version(store) else {
+            return;
+        };
+        let record = serde_json::json!({
+            "size": size,
+            "modified": modified.to_string(),
+            "tools": tools,
+        });
+        let target = path(store);
+        let temporary = target.with_extension(format!("{}.tmp", std::process::id()));
+        if std::fs::write(&temporary, record.to_string()).is_ok()
+            && std::fs::rename(&temporary, &target).is_err()
+        {
+            let _ = std::fs::remove_file(&temporary);
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn a_record_is_read_only_for_the_store_it_was_written_for() {
+            let folder = tempfile::tempdir().unwrap();
+            let store = folder.path().join("picture.pgtiles");
+            std::fs::write(&store, b"tiles").unwrap();
+            let tools = serde_json::json!({"ha": [{"provider": "sxt", "parameters": {}}]});
+            write(&store, &tools);
+            assert!(folder.path().join("picture.tools.json").is_file());
+            assert_eq!(read(&store), Some(tools));
+            // The store prepared again, by Studio or another program.
+            std::fs::write(&store, b"other tiles").unwrap();
+            assert_eq!(read(&store), None);
         }
     }
 }

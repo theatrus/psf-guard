@@ -2203,6 +2203,31 @@ impl Studio {
                     this.stop_run()
                 }))
             })
+            // Tools changed since the store was prepared: the picture shows
+            // the store's tools until they run.
+            .when_some(
+                (!self.is_running() && self.cannot_run().is_none())
+                    .then(|| self.inputs_to_run())
+                    .filter(|inputs| !inputs.is_empty()),
+                |bar, inputs| {
+                    let names: Vec<String> =
+                        inputs.iter().map(|input| channel_label(input)).collect();
+                    bar.child(
+                        div()
+                            .pr_2()
+                            .text_xs()
+                            .whitespace_nowrap()
+                            .child(format!("Tools changed for {}", names.join(", "))),
+                    )
+                    .child(Self::act(
+                        "Run tools",
+                        "run-tools-bar",
+                        true,
+                        cx,
+                        |this| this.run_tools(),
+                    ))
+                },
+            )
             .child(Self::act("?", "help", Self::help_shown(), cx, |_| {
                 Self::toggle_help()
             }))
