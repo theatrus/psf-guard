@@ -92,4 +92,4 @@
   a layer above it, “Stars it took out”, screened over the picture, which
   you can hide, fade or move. Documents with Finish steps open with those
   steps as layers on top, in the same order, so the picture is unchanged.
-  A heal beneath other layers is not drawn yet.
+  A heal inside a group is not drawn yet.

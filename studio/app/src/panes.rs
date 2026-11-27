@@ -602,7 +602,6 @@ struct StackParts<'a> {
     layer_stretches: &'a mut Vec<Vec<StretchModel>>,
     heals: &'a mut Vec<LayerHeal>,
     steps: &'a mut Vec<FinishKind>,
-    step_names: &'a mut Vec<String>,
     stacked: &'a mut Vec<FinishStep>,
 }
 
@@ -652,7 +651,6 @@ fn push_step_layer(
             parts.layer_stretches.clear();
             parts.heals.clear();
             parts.steps.clear();
-            parts.step_names.clear();
             parts.stacked.clear();
             push_tool_image(
                 parts.layers,
@@ -706,15 +704,27 @@ fn push_step_layer(
     let Some(kind) = finish_kind(step, stretches, context, &before, omitted) else {
         return Pushed::Nothing;
     };
-    // A heal is limited to its stroke, and then to the layer's mask.
+    // A heal is limited to its stroke. Seiza draws one beneath other
+    // layers only outside a group and with no other mask.
     let heal = matches!(step.kind, StepKind::Heal { .. });
-    let masks = if heal {
+    if heal && (layer.group.is_some() || layer.mask.is_some()) {
+        omitted.push(format!(
+            "{}, a heal {}, which the canvas does not draw yet",
+            layer.name,
+            if layer.group.is_some() {
+                "inside a group"
+            } else {
+                "with a mask of its layer"
+            }
+        ));
+        return Pushed::Nothing;
+    }
+    let mask = if heal {
         mask_for(step_strokes(step))
-            .and_then(|stroke| Ok((stroke, mask_for(mask_strokes(&layer.mask))?)))
     } else {
-        mask_for(mask_strokes(&layer.mask)).map(|mask| (mask, None))
+        mask_for(mask_strokes(&layer.mask))
     };
-    let Ok((mask, clip)) = masks else {
+    let Ok(mask) = mask else {
         omitted.push(layer.name.clone());
         return Pushed::Nothing;
     };
@@ -731,11 +741,9 @@ fn push_step_layer(
         mark: Mark::Step(parts.steps.len()),
         opacity: layer.opacity,
         mask,
-        clip,
         ..plain_layer()
     });
     parts.steps.push(kind);
-    parts.step_names.push(layer.name.clone());
     Pushed::Layer
 }
 
@@ -1287,9 +1295,8 @@ pub(super) fn scene(
         .map(|step| step.id)
         .zip(chains.resolve(&configs, picture_samples))
         .collect();
-    // What each layer marked as a step does, and its name for messages.
+    // What each layer marked as a step does.
     let mut steps: Vec<FinishKind> = Vec::new();
-    let mut step_names: Vec<String> = Vec::new();
     // The steps in the stack so far, for Texture, which measures the
     // picture's noise as the steps before it leave it.
     let mut stacked: Vec<FinishStep> = Vec::new();
@@ -1430,7 +1437,6 @@ pub(super) fn scene(
                             layer_stretches: &mut layer_stretches,
                             heals: &mut heals,
                             steps: &mut steps,
-                            step_names: &mut step_names,
                             stacked: &mut stacked,
                         };
                         let pushed = push_step_layer(
@@ -1732,7 +1738,6 @@ pub(super) fn scene(
         heals.clear();
         masked.clear();
         steps.clear();
-        step_names.clear();
         push_tool_image(
             &mut layers,
             &mut layer_bands,
@@ -1942,18 +1947,6 @@ pub(super) fn scene(
     on_top.reverse();
     on_top.append(&mut finish);
     let finish = on_top;
-    // A heal beneath other layers is not drawn yet.
-    for layer in &mut layers {
-        if let Mark::Step(index) = layer.mark
-            && matches!(steps[index], FinishKind::Heal { .. })
-        {
-            layer.opacity = 0.0;
-            omitted.push(format!(
-                "{}, a heal beneath other layers, which the canvas draws only on top",
-                step_names[index]
-            ));
-        }
-    }
     let scene = Scene {
         computed,
         layers,
@@ -3417,8 +3410,8 @@ mod tests {
             .collect();
         assert!(matches!(marked[..], [FinishKind::Tone(_)]));
 
-        // A heal on top is a Finish step; beneath another layer it is
-        // listed as not drawn, never drawn somewhere else.
+        // A heal on top is a Finish step; beneath another layer it is a step
+        // layer, which Seiza draws in stages.
         let heal = StepRecord::new(StepKind::Heal {
             stroke: Stroke {
                 points: vec![[10.0, 10.0]],
@@ -3442,10 +3435,29 @@ mod tests {
         document.place_layer(heal_layer, at, None);
         let under = draw(&document);
         assert!(under.finish.is_empty());
-        assert!(under
+        assert!(
+            !under.omitted.iter().any(|words| words.contains("heal")),
+            "{:?}",
+            under.omitted
+        );
+        assert!(under.layers.iter().any(|layer| matches!(
+            layer.mark,
+            Mark::Step(index) if matches!(under.steps[index], FinishKind::Heal { .. })
+        )));
+        // In a group, or with a mask of its layer, it is listed as not
+        // drawn, never drawn without it.
+        document.layer_mut(heal_layer).unwrap().mask =
+            document.layers()[0]
+                .mask
+                .clone()
+                .or(Some(crate::studio_model::MaskRecord::Painted(
+                    Default::default(),
+                )));
+        let masked = draw(&document);
+        assert!(masked
             .omitted
             .iter()
-            .any(|words| words.contains("a heal beneath other layers")));
+            .any(|words| words.contains("with a mask of its layer")));
         // The hidden layer's step is drawn nowhere.
         document.layer_mut(tone_layer).unwrap().visible = false;
         let hidden = draw(&document);

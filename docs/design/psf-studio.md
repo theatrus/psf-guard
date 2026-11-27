@@ -2375,10 +2375,19 @@ beneath it and can be dragged anywhere in the stack:
   applies it over the area it reads; steps on top of the stack draw
   exactly as Finish steps. The canvas gives Seiza the steps on top of the
   stack as Finish steps, and the others as step layers. The GPU applies a
-  step layer one pixel at a time inside the layer pass. A heal beneath
-  other layers is listed as not drawn, and Tone's local contrast beneath
-  other layers is drawn one pixel at a time on the GPU; both need a
-  staged pass that renders the layers beneath to a texture first.
+  step layer that maps each pixel alone inside the layer pass. A heal or
+  Tone's local contrast beneath other layers ends a stage: the GPU draws
+  the layers beneath it to a texture, the step reads it around each pixel,
+  and the layers above start from what the step made. Inside a group, a
+  heal is listed as not drawn and local contrast is drawn one pixel at a
+  time; a heal with a mask of its layer is listed as not drawn.
+- **Checked** on a copy of the Iris with a heal beneath the stars layer:
+  Studio's parity check (Seiza's CPU render against the canvas's patches)
+  gave the same figures with the heal shown and hidden (mean 6.2e-5,
+  99.9th percentile 8.5e-4). A heal whose source is outside a 128-pixel
+  patch reads pixels the patch does not draw, so the check differs there
+  (99.9th percentile 3.2e-2); a full view of the canvas draws the
+  source, as it does for a heal on top.
 - **Output stretches.** The stretches are resolved in the order the
   picture is made, from samples of the combined picture without the
   stretches that read them. A stretch beneath other layers is resolved
@@ -3061,8 +3070,8 @@ Gaps to fix, roughly in the order they got in the way:
   thin gap between two rows.
 - [x] **One way to adjust.** Done 2026-11-27: steps on the picture are
   adjustment layers (“Steps on the picture are adjustment layers”), drawn
-  by Seiza's compositor. Left: a heal and Tone's local contrast beneath
-  other layers need a staged GPU pass.
+  by Seiza's compositor, which draws a heal and Tone's local contrast
+  beneath other layers in stages. Left: those steps inside a group.
 - [ ] **History panel.** Asked for on 2026-11-27: a panel like
   Lightroom's History that lists the document's edits in order, so a
   person sees what changed in the stack and can step back to any of them.
