@@ -5751,7 +5751,7 @@ dependencies = [
 [[package]]
 name = "seiza-stats"
 version = "0.1.2"
-source = "git+https://github.com/theatrus/seiza?rev=4f523e03f3e5d7a779a0b5cecfaaefdefe4714b5#4f523e03f3e5d7a779a0b5cecfaaefdefe4714b5"
+source = "git+https://github.com/theatrus/seiza?rev=a84f899c610f78ac9dd7233cffcdf642b6c17e55#a84f899c610f78ac9dd7233cffcdf642b6c17e55"
 dependencies = [
  "bytemuck",
 ]
@@ -5759,7 +5759,7 @@ dependencies = [
 [[package]]
 name = "seiza-stretch"
 version = "0.4.0"
-source = "git+https://github.com/theatrus/seiza?rev=4f523e03f3e5d7a779a0b5cecfaaefdefe4714b5#4f523e03f3e5d7a779a0b5cecfaaefdefe4714b5"
+source = "git+https://github.com/theatrus/seiza?rev=a84f899c610f78ac9dd7233cffcdf642b6c17e55#a84f899c610f78ac9dd7233cffcdf642b6c17e55"
 dependencies = [
  "rayon",
  "seiza-stats",

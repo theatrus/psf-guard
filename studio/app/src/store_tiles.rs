@@ -228,6 +228,9 @@ impl BandStretch {
         // The band's samples as the stages so far left them. They are only
         // needed from the second stage on.
         let mut seen: Option<Vec<f32>> = None;
+        // The brightest value the stages so far give: above 1 once an HDR
+        // stretch reaches into the headroom, which later stretches keep.
+        let mut peak = 1.0_f32;
         for (at, stage) in stages.iter().enumerate() {
             let model = match stage {
                 StretchModel::AutoMtf(params) if nudge != 0.0 => {
@@ -305,9 +308,19 @@ impl BandStretch {
                     channel
                 });
                 let stage = LayeredStage::new(layered, maps).with_guides(luminance, fine.flatten());
-                let peak = stage.peak();
+                peak = stage.peak();
                 transfer.extend([
                     TransferStage::Layered(stage),
+                    TransferStage::Clamp {
+                        low: 0.0,
+                        high: peak,
+                    },
+                ]);
+            } else if peak > 1.0 {
+                // After an HDR stretch, a stretch shapes the range up to SDR
+                // white and keeps what is above it.
+                transfer.extend([
+                    TransferStage::BelowWhite(curve),
                     TransferStage::Clamp {
                         low: 0.0,
                         high: peak,
@@ -1279,6 +1292,39 @@ mod tests {
             stage,
             TransferStage::Clamp { high, .. } if (*high - 1.0).abs() < 1e-4
         )));
+        // A second stretch after the HDR one keeps the headroom: it shapes
+        // the range up to SDR white, and the transfer reaches the peak.
+        let midtones: StretchModel = serde_json::from_value(serde_json::json!({
+            "type": "mtf", "shadows": 0.0, "midtone": 0.4, "highlights": 1.0
+        }))
+        .unwrap();
+        let chained = band.transfer(
+            &[model.clone(), midtones.clone()],
+            0.0,
+            2.0,
+            &|_| None,
+            &mut Vec::new(),
+        );
+        assert!(matches!(
+            chained.stages[chained.stages.len() - 2],
+            TransferStage::BelowWhite(_)
+        ));
+        assert!(matches!(
+            chained.stages.last(),
+            Some(TransferStage::Clamp { high, .. }) if *high > 1.5
+        ));
+        // After an SDR stretch, a second one clips at white as before.
+        let plain = band.transfer(
+            &[midtones.clone(), midtones],
+            0.0,
+            0.0,
+            &|_| None,
+            &mut Vec::new(),
+        );
+        assert!(matches!(
+            plain.stages.last(),
+            Some(TransferStage::Clamp { high, .. }) if *high == 1.0
+        ));
     }
 
     #[test]
