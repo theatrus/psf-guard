@@ -839,14 +839,9 @@ impl Studio {
         );
         Some(
             column()
-                .child(Self::field(
-                    "Order",
-                    div()
-                        .flex()
-                        .gap_1()
-                        .child(tools_first)
-                        .child(background_first),
-                ))
+                .child(Self::heading("Order"))
+                .child(tools_first)
+                .child(background_first)
                 .children(Self::help(
                     "Tools, then background: the tools run on each stack as it came, and the background is fitted on their results. Background, then tools: the background is corrected first, at the step's strength, and the tools, such as BlurXTerminator, run on the corrected stacks. The order applies to every input, because the backgrounds are fitted with one model. A change takes effect when the tools run again; the toolbar names the inputs.",
                 )),
