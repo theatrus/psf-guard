@@ -2732,6 +2732,21 @@ Order: the layout first, since every later piece adds controls. Then 1 to
 narrowband into RGB). Then 4, for RGB stars, and the layered stretch. Then
 5.
 
+## Protected background regions (2026-11-27)
+
+A Background extraction step keeps regions out of the sky it measures, so a
+nebula's faint halo is not taken for sky and subtracted. With the step
+selected, the canvas outlines its regions and its inspector lists them,
+each with **Remove**. **Protect**, among the tools while the step is
+selected, draws an ellipse: press at its centre and drag out to set its
+width and height. Regions are stored as Seiza takes them,
+`config.protected_regions`, in fractions of the image; the fit keeps them
+and adds the catalog's when catalog protection is on. The background is
+worked out when the store is prepared, so each input's background settings,
+but for the strength the canvas applies, join the tools the toolbar compares
+with the prepared record. A record written before then takes them as they
+are when Studio opens the store.
+
 ## Driving Studio from an assistant (2026-11-26)
 
 An assistant working on Studio needs to see what Studio shows, not what a

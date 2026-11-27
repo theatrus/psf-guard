@@ -79,6 +79,8 @@ enum Tool {
     Heal,
     /// Draws the rectangle the picture keeps.
     Crop,
+    /// Draws a region the selected background extraction keeps out.
+    Protect,
 }
 
 /// A slider in a pane.
@@ -832,6 +834,8 @@ pub struct Studio {
     brush_size: f32,
     /// Where a crop being drawn started, in document pixels.
     crop_from: Option<[f64; 2]>,
+    /// Where a protected region being drawn is centred.
+    protect_from: Option<[f64; 2]>,
     /// Whether the canvas shows the final picture while a mask is selected,
     /// in place of the mask itself.
     mask_shows_picture: bool,
@@ -1107,6 +1111,7 @@ impl Studio {
                 brush_removes: false,
                 brush_size: 24.0,
                 crop_from: None,
+                protect_from: None,
                 mask_shows_picture: false,
                 wipe: 0.5,
                 split: Split::WithPicture,
@@ -1225,6 +1230,12 @@ impl Studio {
             self.crop_from = Some(self.to_document(event.position));
             return;
         }
+        if self.tool == Tool::Protect {
+            if self.selected_background_step().is_some() {
+                self.protect_from = Some(self.to_document(event.position));
+            }
+            return;
+        }
         if self.tool != Tool::Pan {
             let at = self.to_document(event.position);
             self.stroke = Some(Stroke {
@@ -1256,6 +1267,28 @@ impl Studio {
                 let from = self.to_document(last);
                 let to = self.to_document(event.position);
                 let (tool, radius) = (self.tool, self.brush_radius());
+                // The region being drawn shows as its outline, with the
+                // step's others.
+                if let (Tool::Protect, Some(center)) = (tool, self.protect_from) {
+                    let zoom = self.canvas.read(|shared| shared.canvas.view.zoom);
+                    let line = (1.5 * self.scale_factor as f64 / zoom) as f32;
+                    let (width, height) = self.canvas.read(|shared| shared.canvas.document_size);
+                    let (width, height) = (width.max(2) as f32, height.max(2) as f32);
+                    let drawn = serde_json::json!({
+                        "kind": "ellipse",
+                        "center": [center[0] / f64::from(width - 1.0), center[1] / f64::from(height - 1.0)],
+                        "radii": [(to[0] - center[0]).abs() / f64::from(width), (to[1] - center[1]).abs() / f64::from(height)],
+                    });
+                    let mut outlines = self.protected_outlines(line);
+                    outlines.extend(protect::outline_of(&drawn, width, height, line));
+                    self.canvas.edit(|canvas| {
+                        canvas.strokes_replaced += 1;
+                        canvas.strokes = outlines;
+                    });
+                    self.drag = Some(Drag::Canvas(event.position));
+                    cx.notify();
+                    return;
+                }
                 // The crop being drawn shows as its outline.
                 if let (Tool::Crop, Some(start)) = (tool, self.crop_from) {
                     let zoom = self.canvas.read(|shared| shared.canvas.view.zoom);
@@ -1285,7 +1318,7 @@ impl Studio {
                     }
                     // The canvas shows a stroke as mask coverage while it is
                     // drawn, for the brush and for healing alike.
-                    Tool::Crop => {}
+                    Tool::Crop | Tool::Protect => {}
                     Tool::Brush | Tool::Heal => canvas.strokes.push(Segment {
                         from: [from[0] as f32, from[1] as f32],
                         to: [to[0] as f32, to[1] as f32],
@@ -1305,6 +1338,13 @@ impl Studio {
 
     fn mouse_up(&mut self, event: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.drag = None;
+        if let Some(center) = self.protect_from.take() {
+            let edge = self.to_document(event.position);
+            self.add_protected_ellipse(center, edge);
+            self.refresh_canvas();
+            cx.notify();
+            return;
+        }
         if let Some(start) = self.crop_from.take() {
             let end = self.to_document(event.position);
             let size = self.canvas.read(|shared| shared.canvas.document_size);
@@ -1568,6 +1608,8 @@ mod open;
 mod panes;
 #[path = "parts.rs"]
 mod parts;
+#[path = "protect.rs"]
+mod protect;
 #[path = "scene_worker.rs"]
 mod scene_worker;
 #[path = "tools.rs"]

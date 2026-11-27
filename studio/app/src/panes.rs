@@ -1633,11 +1633,17 @@ impl Studio {
         self.places = places;
         // The selected row's mask shows over the image while a person has
         // it switched on, so they see what they have painted.
-        let overlay = if self.mask_shown {
+        let mut overlay = if self.mask_shown {
             self.selected_strokes()
         } else {
             Vec::new()
         };
+        // A selected background extraction's protected regions show as
+        // outlines.
+        if self.selected_background_step().is_some() {
+            let zoom = self.canvas.read(|shared| shared.canvas.view.zoom);
+            overlay.extend(self.protected_outlines((1.5 * self.scale_factor as f64 / zoom) as f32));
+        }
         let wipe = (self.split == Split::Wipe).then_some(self.wipe);
         let crop = self.crop_rect();
         self.canvas.edit(|canvas| {
@@ -1677,7 +1683,7 @@ impl Studio {
     /// input, of the selected layer, or of the combined picture.
     pub(super) fn commit_stroke(&mut self, stroke: Stroke) {
         match self.tool {
-            Tool::Pan | Tool::Crop => {}
+            Tool::Pan | Tool::Crop | Tool::Protect => {}
             Tool::Brush => {
                 // The brush adds to a mask, or erases from it, as the
                 // person chose.
@@ -2082,6 +2088,9 @@ impl Studio {
             (Tool::Heal, _) => Some("Heal adds a step here.".to_string()),
             (Tool::Crop, _) => {
                 Some("Crop sets the rectangle the picture is cropped to.".to_string())
+            }
+            (Tool::Protect, _) => {
+                Some("Protect draws a region the background extraction keeps out.".to_string())
             }
         };
         let marked = on_a_mask || self.tool == Tool::Brush;

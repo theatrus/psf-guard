@@ -498,6 +498,9 @@ impl Studio {
                     || (step.kind.name() == flow_operations::RC_ASTRO_COLOR && step.band.is_some()),
                 |pane| pane.child(self.tools_block(&channel, cx)),
             )
+            .when(step.kind.name() == flow_operations::BACKGROUND, |pane| {
+                pane.child(self.protect_block(id, cx))
+            })
             .children(own)
             .child(Self::act(
                 if shared {
@@ -1637,6 +1640,9 @@ impl Studio {
             Tool::Crop => {
                 "Drag a rectangle over the picture. Studio crops the picture to it.".to_string()
             }
+            Tool::Protect => {
+                "Press at a region's centre and drag out to set its width and height. The background extraction keeps it out of the sky it measures.".to_string()
+            }
         };
         let brushing = matches!(self.tool, Tool::Brush | Tool::Heal);
         let painting = self.tool == Tool::Brush && can_mask;
@@ -1652,7 +1658,10 @@ impl Studio {
                         row.child(tool(Tool::Brush, "Brush", cx))
                     })
                     .child(tool(Tool::Heal, "Heal", cx))
-                    .child(tool(Tool::Crop, "Crop", cx)),
+                    .child(tool(Tool::Crop, "Crop", cx))
+                    .when(self.selected_background_step().is_some(), |row| {
+                        row.child(tool(Tool::Protect, "Protect", cx))
+                    }),
             )
             .children(Self::help(help))
             .when(brushing, |pane| {

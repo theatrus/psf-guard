@@ -252,6 +252,21 @@ impl Studio {
                 chains.insert(format!("{band}:together"), chain.into());
             }
         }
+        // Each input's background extraction is prepared with the store as
+        // well, but for its strength, which the canvas applies.
+        for channel in self.document.channels() {
+            let background = crate::studio_model::input_steps(&self.document, &channel)
+                .into_iter()
+                .filter_map(|listed| self.document.step(listed.id).map(|(_, step)| step))
+                .rfind(|step| step.enabled && step.kind.name() == flow_operations::BACKGROUND);
+            if let Some(StepKind::Operation { settings, .. }) = background.map(|step| &step.kind) {
+                let mut settings = settings.clone();
+                if let Some(settings) = settings.as_object_mut() {
+                    settings.remove("strength");
+                }
+                chains.insert(format!("{channel}:background"), settings);
+            }
+        }
         // Continuum subtraction is prepared with the store as well.
         chains.insert(
             "continuum".to_string(),
@@ -307,9 +322,22 @@ impl Studio {
     /// the store, so a later session knows which changes the store lacks.
     pub(super) fn tools_are_prepared(&mut self, ran: Option<serde_json::Value>) {
         let store = self.tools.store.clone();
+        let now = self.all_chains();
         let prepared = ran
-            .or_else(|| store.as_deref().and_then(prepared_record::read))
-            .unwrap_or_else(|| self.all_chains());
+            .or_else(|| {
+                let mut kept = store.as_deref().and_then(prepared_record::read)?;
+                // A record written before background settings were recorded
+                // takes them as they are now, so a later change shows.
+                if let (Some(kept), Some(now)) = (kept.as_object_mut(), now.as_object()) {
+                    for (key, value) in now {
+                        if key.ends_with(":background") && !kept.contains_key(key) {
+                            kept.insert(key.clone(), value.clone());
+                        }
+                    }
+                }
+                Some(kept)
+            })
+            .unwrap_or(now);
         if let Some(store) = &store {
             prepared_record::write(store, &prepared);
         }
@@ -1579,8 +1607,14 @@ fn changed_inputs(
         Some(serde_json::Value::Array(steps)) => steps.is_empty(),
         Some(_) => false,
     };
+    // A record written before background settings were recorded has none:
+    // they are taken as they are, not as changed.
+    let recorded_background = prepared.keys().any(|key| key.ends_with(":background"));
     let mut changed: Vec<&str> = Vec::new();
     for key in now.keys().chain(prepared.keys()) {
+        if key.ends_with(":background") && !recorded_background {
+            continue;
+        }
         let (now, prepared) = (now.get(key), prepared.get(key));
         if now == prepared || (empty(now) && empty(prepared)) {
             continue;
@@ -1674,6 +1708,17 @@ mod tests {
         let mut channels_with_stars = channels.clone();
         channels_with_stars.push("oiii@stars".to_string());
         assert!(changed_inputs(&prepared, &with_stars, &channels_with_stars).is_empty());
+        // Background settings a record never had are not a change; once
+        // recorded, a change of them is.
+        let mut background = prepared.clone();
+        background["ha:background"] = serde_json::json!({ "config": {} });
+        assert!(changed_inputs(&prepared, &background, &channels).is_empty());
+        let mut moved = background.clone();
+        moved["ha:background"] = serde_json::json!({ "config": { "protected_regions": [1] } });
+        assert_eq!(
+            changed_inputs(&background, &moved, &channels),
+            names(&["ha"])
+        );
         // A group's tools count for each input of the group, and a tool
         // taken away counts as a change.
         let mut now = prepared.clone();
