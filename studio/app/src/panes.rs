@@ -1219,6 +1219,7 @@ pub(super) fn scene(
         omitted,
         stretches: Arc::default(),
         version,
+        headroom: document.headroom.unwrap_or(0.0),
     };
     (scene, states)
 }
@@ -1484,22 +1485,11 @@ impl Studio {
     }
 
     /// Turns the selected Tone and color step's HDR on or off.
-    pub(super) fn set_tone_hdr(&mut self, on: bool) {
-        let Some(id) = self.selected_step() else {
-            return;
-        };
-        let Some((_, step)) = self.document.step(id) else {
-            return;
-        };
-        let StepKind::Operation { settings, .. } = &step.kind else {
-            return;
-        };
-        let mut settings = settings.clone();
-        if !settings.is_object() {
-            settings = tone_step::new_settings();
-        }
-        settings["hdr"] = on.into();
-        self.document.set_step_settings(id, settings);
+    /// Makes the whole picture HDR, at the headroom it had or two stops, or
+    /// SDR.
+    pub(super) fn set_hdr(&mut self, on: bool) {
+        self.last_headroom = self.document.headroom.unwrap_or(self.last_headroom);
+        self.document.headroom = on.then_some(self.last_headroom);
     }
 
     /// How much the selected Finish step's mask covers each of the
@@ -1655,11 +1645,12 @@ impl Studio {
                 // histogram, and keeps a slider's drag smooth.
                 None => pixels.iter().step_by(4).flatten().copied().collect(),
             };
-            let finished = crate::canvas::finished_samples(&scene.finish, &chosen);
+            let finished = crate::canvas::finished_samples(&scene.finish, scene.headroom, &chosen);
             // An HDR picture is clipped at its peak, as the canvas shows it.
             let peak = seiza_compose::picture::Picture {
                 finish: scene.finish.clone(),
                 space: crate::canvas::WORKING_SPACE,
+                headroom: scene.headroom,
                 ..Default::default()
             }
             .peak();
@@ -1762,6 +1753,10 @@ impl Studio {
     pub(super) fn slider_moved(&mut self, slider: SliderId, position: f32) {
         match slider {
             SliderId::ToolParam(index) => self.tool_slider_moved(index, position),
+            SliderId::Headroom => {
+                let (_, _, low, high) = tone_step::HEADROOM;
+                self.document.headroom = Some(low + (high - low) * position);
+            }
             SliderId::FinishParam(index) => {
                 let Some(id) = self.selected_step() else {
                     return;

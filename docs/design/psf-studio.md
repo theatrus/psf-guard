@@ -1998,16 +1998,22 @@ Seiza's compositor design record. On the canvas the windows are measured in
 screen pixels, so zoomed out they cover the same part of the picture at the
 canvas's resolution.
 
-**HDR.** Tone and color has an HDR switch and a Headroom, 0 to 4 stops
-(2 to start). With HDR on, Seiza lifts the brightest areas above SDR
-white toward the headroom instead of clipping them; Exposure and Whites
-put areas there. Above SDR white a value continues on the extended sRGB
-curve that macOS's extended color spaces use, so two stops of headroom
-peaks at the value whose light is four times SDR white's, about 1.82.
-Seiza's `Picture::peak` gives the picture's peak: a later Curves or
-Stretch step over the whole picture brings it back to 1. The canvas, the
-histogram and every export clip values at the peak, so an SDR picture
-never shows above white, whatever its blends or Saturation give. On an EDR
+**HDR.** HDR belongs to the whole picture: the Final picture's
+inspector has an HDR switch and a Headroom, 0 to 4 stops (2 to start),
+which the document keeps. With HDR on, every stage may be brighter than
+SDR white up to the headroom: the stretches, the combined picture and every
+Finish step, and every view of the picture shows it so (Seiza's
+`Picture::headroom`). The HDR layered stretch puts the brightest structure
+there, Tone and color keeps it there, and Exposure and Whites put more
+there. A document from when HDR was a switch of the Tone and color step
+opens with that step's headroom as the picture's.
+
+Above SDR white a value continues on the extended sRGB curve that macOS's
+extended color spaces use, so two stops of headroom peaks at the value
+whose light is four times SDR white's, about 1.82. Seiza's `Picture::peak`
+gives the picture's peak. The canvas, the histogram and every export clip
+values at the peak, so an SDR picture never shows above white, whatever
+its blends or Saturation give. On an EDR
 surface (`--output p3-extended`, as on a Pro Display XDR) the canvas shows
 values above 1 brighter than white.
 Export to a name ending `.avif` writes an HDR AVIF: the picture in linear

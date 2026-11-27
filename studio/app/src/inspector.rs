@@ -370,28 +370,8 @@ impl Studio {
                 cx,
             ));
         }
-        // HDR: the brightest areas rise above SDR white, up to the headroom.
-        block = block.child(Self::heading("HDR")).child(Self::field(
-            "HDR",
-            Self::act(
-                if tone.hdr { "On" } else { "Off" },
-                "tone-hdr",
-                tone.hdr,
-                cx,
-                move |this| this.set_tone_hdr(!tone.hdr),
-            ),
-        ));
-        if tone.hdr {
-            let (_, label, low, high) = crate::tone_step::HEADROOM;
-            block = block.child(self.labelled_slider(
-                format!("{label} {:.1} stops", tone.headroom),
-                SliderId::FinishParam(seiza_compose::tone::CONTROLS.len()),
-                (tone.headroom - low) / (high - low),
-                cx,
-            ));
-        }
         block.children(Self::help(
-            "Exposure, Contrast, Highlights, Shadows, Whites and Blacks change the brightness and keep each pixel's color. Whites up and Blacks down clip more of the picture to white and to black. Highlights and Shadows move the tones of each area and keep the detail in it, so a star stays as bright above a lifted sky. Texture raises or lowers fine detail, Clarity the contrast of larger structures in the midtones, and Dehaze takes away a gray veil such as sky glow while keeping colored nebulae. With HDR on, the brightest areas rise above SDR white, up to the headroom (each stop doubles the light), instead of clipping; raise Exposure or Whites to put them there. An HDR display shows them brighter than white; export them as AVIF.",
+            "Exposure, Contrast, Highlights, Shadows, Whites and Blacks change the brightness and keep each pixel's color. Whites up and Blacks down clip more of the picture to white and to black. Highlights and Shadows move the tones of each area and keep the detail in it, so a star stays as bright above a lifted sky. Texture raises or lowers fine detail, Clarity the contrast of larger structures in the midtones, and Dehaze takes away a gray veil such as sky glow while keeping colored nebulae. When the picture is HDR (set under Final picture), the brightest areas keep their place above SDR white instead of clipping; raise Exposure or Whites to put more there.",
         ))
     }
 
@@ -1357,6 +1337,34 @@ impl Studio {
             }))
     }
 
+    /// HDR: whether the whole picture may be brighter than SDR white, and how
+    /// far.
+    fn hdr_block(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let headroom = self.document.headroom;
+        let mut block = column().child(Self::field(
+            "HDR",
+            Self::act(
+                if headroom.is_some() { "On" } else { "Off" },
+                "picture-hdr",
+                headroom.is_some(),
+                cx,
+                move |this| this.set_hdr(headroom.is_none()),
+            ),
+        ));
+        if let Some(headroom) = headroom {
+            let (_, label, low, high) = crate::tone_step::HEADROOM;
+            block = block.child(self.labelled_slider(
+                format!("{label} {headroom:.1} stops"),
+                SliderId::Headroom,
+                (headroom - low) / (high - low),
+                cx,
+            ));
+        }
+        block.children(Self::help(
+            "With HDR on, the whole picture may be brighter than SDR white, up to the headroom (each stop doubles the light): the stretches, the combined picture and every Finish step. An HDR stretch, such as Layered, HDR, puts the brightest structure there, and Tone and color keeps it. Every view of the picture shows it brighter than white on an HDR display. Export it as AVIF or as a 32-bit float TIFF to keep it.",
+        ))
+    }
+
     /// Export: the final picture at full resolution, to a file.
     fn export_block(&self, cx: &mut Context<Self>) -> gpui::Div {
         let running = self.export.clone();
@@ -1400,6 +1408,7 @@ impl Studio {
         column()
             .child(Self::title("Final picture", "Every step of the document."))
             .child(self.histogram_block())
+            .child(self.hdr_block(cx))
             .child(self.export_block(cx))
             .child(self.crop_block(cx))
             .child(self.finish_menu(cx))

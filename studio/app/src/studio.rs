@@ -98,6 +98,8 @@ enum SliderId {
     /// One control of the selected Tone and color step, by its place in
     /// [`seiza_compose::tone::CONTROLS`].
     FinishParam(usize),
+    /// The picture's HDR headroom.
+    Headroom,
     /// The selected shared mask's reach.
     Reach,
     /// How far the selected shared mask is smoothed.
@@ -115,7 +117,8 @@ enum SliderId {
 }
 
 impl SliderId {
-    const ALL: [SliderId; 9] = [
+    const ALL: [SliderId; 10] = [
+        SliderId::Headroom,
         SliderId::Opacity,
         SliderId::Hue,
         SliderId::Saturation,
@@ -344,6 +347,8 @@ pub struct Scene {
     stretches: Arc<Vec<BandStretch>>,
     /// Different for every scene, so the renderer uploads masks once.
     version: u64,
+    /// The picture's headroom above SDR white, in stops: 0 for SDR.
+    headroom: f32,
 }
 
 impl Scene {
@@ -371,16 +376,19 @@ impl Scene {
     /// The scene as the Seiza picture the canvas draws, with each band's
     /// stretch moved by `nudges`.
     pub(super) fn picture(&self, nudges: &[f64]) -> Picture {
-        crate::canvas::picture(
-            &SceneParts {
-                layers: &self.layers,
-                computed: &self.computed,
-                masks: &self.masks,
-                heals: &self.heals,
-                finish: &self.finish,
-            },
-            &self.transfers(nudges),
-        )
+        Picture {
+            headroom: self.headroom,
+            ..crate::canvas::picture(
+                &SceneParts {
+                    layers: &self.layers,
+                    computed: &self.computed,
+                    masks: &self.masks,
+                    heals: &self.heals,
+                    finish: &self.finish,
+                },
+                &self.transfers(nudges),
+            )
+        }
     }
 
     /// The combined picture, before the Finish steps: what the canvas
@@ -720,6 +728,8 @@ pub struct Studio {
     export_line: String,
     /// Whether a TIFF export holds 32-bit floats, in place of 16 bits.
     tiff_float: bool,
+    /// The headroom HDR comes back with when it is turned on again.
+    last_headroom: f32,
     /// Where to write the parity report, until it is written.
     parity_report: Option<PathBuf>,
     /// The levels in the document's pyramid.
@@ -853,7 +863,8 @@ impl Studio {
                 .ok()
         });
         let was_opened = opened.is_some();
-        let document = opened.unwrap_or_else(|| panes::flow_document(&band_info.names));
+        let mut document = opened.unwrap_or_else(|| panes::flow_document(&band_info.names));
+        crate::tone_step::adopt_headroom(&mut document);
         let mut studio =
             Self {
                 native_view,
@@ -866,7 +877,7 @@ impl Studio {
                         [SliderId::ToneHue(layer), SliderId::ToneSaturation(layer)]
                     }))
                     .chain((0..8).map(SliderId::StretchParam))
-                    .chain((0..=seiza_compose::tone::CONTROLS.len()).map(SliderId::FinishParam))
+                    .chain((0..seiza_compose::tone::CONTROLS.len()).map(SliderId::FinishParam))
                     .chain((0..tools::MAX_TOOL_SETTINGS).map(SliderId::ToolParam))
                     .map(|id| (id, Rc::default()))
                     .collect(),
@@ -901,6 +912,7 @@ impl Studio {
                 export: None,
                 export_line: String::new(),
                 tiff_float: false,
+                last_headroom: crate::tone_step::DEFAULT_HEADROOM,
                 parity_report,
                 levels,
                 tools,

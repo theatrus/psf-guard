@@ -222,14 +222,18 @@ pub fn picture(parts: &SceneParts, stretches: &[Transfer]) -> Picture {
         heals: parts.heals.to_vec(),
         finish: parts.finish.to_vec(),
         space: WORKING_SPACE,
+        // SDR; a scene gives the document's headroom.
+        headroom: 0.0,
     }
 }
 
 /// The picture's samples `rgb`, red, green and blue interleaved, after the
 /// Finish steps that change each pixel alone: what the histogram shows.
 /// Masks and heals, which need the pixels around, are left out. Seiza's CPU
-/// render applies the steps, as it does for an export.
-pub fn finished_samples(finish: &[FinishStep], rgb: &[f32]) -> Vec<f32> {
+/// render applies the steps, as it does for an export, with the picture's
+/// `headroom` in stops, so an HDR picture's samples keep what is above SDR
+/// white.
+pub fn finished_samples(finish: &[FinishStep], headroom: f32, rgb: &[f32]) -> Vec<f32> {
     let pixels = rgb.len() / 3;
     if pixels == 0 {
         return Vec::new();
@@ -255,6 +259,7 @@ pub fn finished_samples(finish: &[FinishStep], rgb: &[f32]) -> Vec<f32> {
         layers,
         finish: steps,
         space: WORKING_SPACE,
+        headroom,
         ..Picture::default()
     };
     let source = InterleavedSource { rgb, pixels };
@@ -291,7 +296,9 @@ pub fn picture_noise(before: &[FinishStep], samples: &[f32], patches: usize) -> 
         .flatten()
         .copied()
         .collect();
-    let finished = finished_samples(before, &chosen);
+    // The sky's noise is far below SDR white, so the headroom does not
+    // change it.
+    let finished = finished_samples(before, 0.0, &chosen);
     let mut measured: Vec<f32> = finished
         .chunks_exact(size * size * 3)
         .map(|patch| seiza_compose::tone::luminance_noise(patch, size, size, WORKING_SPACE))
@@ -411,7 +418,7 @@ mod tests {
     #[test]
     fn the_histogram_samples_follow_the_finish_steps() {
         let rgb = [0.1, 0.2, 0.3, 0.5, 0.5, 0.5];
-        assert_eq!(finished_samples(&[], &rgb), rgb);
+        assert_eq!(finished_samples(&[], 0.0, &rgb), rgb);
         let brighter = [FinishStep {
             kind: FinishKind::Tone(Tone {
                 exposure: 1.0,
@@ -421,7 +428,7 @@ mod tests {
             // A mask is left out: the histogram is of the picture's tones.
             mask: Some(0),
         }];
-        let finished = finished_samples(&brighter, &rgb);
+        let finished = finished_samples(&brighter, 0.0, &rgb);
         assert!(finished[0] > rgb[0] * 1.5, "{finished:?}");
         assert!(finished[3] > 0.9, "{finished:?}");
     }

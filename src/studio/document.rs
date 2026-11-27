@@ -523,6 +523,11 @@ pub struct Document {
     /// What part of the image the picture keeps.
     #[serde(default, skip_serializing_if = "CropRecord::is_automatic")]
     pub crop: CropRecord,
+    /// How far above SDR white the picture reaches, in stops, when it is
+    /// HDR: every stage of it, from the stretches on, may be brighter than
+    /// white up to there. `None` is an SDR picture.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub headroom: Option<f32>,
 }
 
 /// What part of the image a picture keeps.
@@ -583,6 +588,7 @@ impl Document {
             masks: Vec::new(),
             palette: None,
             crop: CropRecord::Automatic,
+            headroom: None,
         }
     }
 

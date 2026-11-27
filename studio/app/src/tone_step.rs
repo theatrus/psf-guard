@@ -4,28 +4,26 @@
 
 use seiza_compose::tone::{Tone, CONTROLS, MAX_HEADROOM};
 
-/// The HDR headroom's control: how far above SDR white an HDR picture
-/// reaches, in stops. A slider after [`CONTROLS`].
+/// The picture's HDR headroom control: how far above SDR white an HDR
+/// picture reaches, in stops. The document holds it for the whole picture;
+/// every Tone and color step takes it from there.
 pub const HEADROOM: (&str, &str, f32, f32) = ("headroom", "Headroom", 0.0, MAX_HEADROOM);
 
-/// The headroom a step has before a person sets one: two stops, four times
-/// SDR white.
-const DEFAULT_HEADROOM: f32 = 2.0;
+/// The headroom a picture has when HDR is first turned on: two stops, four
+/// times SDR white's light.
+pub const DEFAULT_HEADROOM: f32 = 2.0;
 
-/// Control `index` of a Tone and color step: one of [`CONTROLS`], then the
-/// HDR headroom.
+/// Control `index` of a Tone and color step: one of [`CONTROLS`].
 pub fn control(index: usize) -> Option<(&'static str, &'static str, f32, f32)> {
-    CONTROLS
-        .get(index)
-        .copied()
-        .or((index == CONTROLS.len()).then_some(HEADROOM))
+    CONTROLS.get(index).copied()
 }
 
 /// The name of the step in a document.
 pub const OPERATION: &str = "Tone and color";
 
 /// The step's settings, with 0 for a control they leave out or do not give
-/// as a number, and each control held to its range.
+/// as a number, and each control held to its range. Whether the picture is
+/// HDR is the document's, not the step's.
 pub fn from_settings(settings: &serde_json::Value) -> Tone {
     let numbers: serde_json::Map<String, serde_json::Value> = CONTROLS
         .iter()
@@ -34,28 +32,54 @@ pub fn from_settings(settings: &serde_json::Value) -> Tone {
             Some((key.to_string(), serde_json::Value::from(value)))
         })
         .collect();
-    let mut tone =
-        serde_json::from_value::<Tone>(serde_json::Value::Object(numbers)).unwrap_or_default();
-    tone.hdr = settings
-        .get("hdr")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false);
-    tone.headroom = settings
-        .get(HEADROOM.0)
-        .and_then(serde_json::Value::as_f64)
-        .map_or(DEFAULT_HEADROOM, |value| value as f32);
-    tone.held()
+    serde_json::from_value::<Tone>(serde_json::Value::Object(numbers))
+        .unwrap_or_default()
+        .held()
 }
 
 /// The settings a new step starts with: every control at 0.
 pub fn new_settings() -> serde_json::Value {
-    let mut settings: serde_json::Map<String, serde_json::Value> = CONTROLS
+    let settings: serde_json::Map<String, serde_json::Value> = CONTROLS
         .iter()
         .map(|(key, ..)| (key.to_string(), serde_json::Value::from(0.0)))
         .collect();
-    settings.insert("hdr".into(), false.into());
-    settings.insert(HEADROOM.0.into(), DEFAULT_HEADROOM.into());
     serde_json::Value::Object(settings)
+}
+
+/// Moves HDR from a Tone and color step to the document. A document made
+/// when HDR was a switch of the step becomes an HDR picture with that
+/// step's headroom, and its steps lose the switch.
+pub fn adopt_headroom(document: &mut crate::studio_model::Document) {
+    use crate::studio_model::{StageKind, StepKind};
+    let steps: Vec<(uuid::Uuid, serde_json::Value)> = document
+        .stage(StageKind::Finish)
+        .steps
+        .iter()
+        .filter_map(|step| match &step.kind {
+            StepKind::Operation {
+                operation,
+                settings,
+                ..
+            } if operation == OPERATION && settings.get("hdr").is_some() => {
+                Some((step.id, settings.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    for (id, mut settings) in steps {
+        let on = settings["hdr"].as_bool().unwrap_or(false);
+        let headroom = settings[HEADROOM.0]
+            .as_f64()
+            .map_or(DEFAULT_HEADROOM, |value| value as f32);
+        if on && document.headroom.is_none() {
+            document.headroom = Some(headroom.clamp(0.0, MAX_HEADROOM));
+        }
+        if let Some(settings) = settings.as_object_mut() {
+            settings.remove("hdr");
+            settings.remove(HEADROOM.0);
+        }
+        document.set_step_settings(id, settings);
+    }
 }
 
 #[cfg(test)]
@@ -66,24 +90,42 @@ mod tests {
     #[test]
     fn a_new_step_leaves_the_picture_as_it_is() {
         let tone = from_settings(&new_settings());
-        assert_eq!(
-            tone,
-            Tone {
-                headroom: 2.0,
-                ..Tone::default()
-            }
-        );
+        assert_eq!(tone, Tone::default());
         assert_eq!(tone.peak(), 1.0);
+        assert_eq!(control(CONTROLS.len()), None);
     }
 
     #[test]
-    fn hdr_and_its_headroom_are_read() {
-        let tone = from_settings(&json!({ "hdr": true, "headroom": 3.0 }));
-        assert!(tone.hdr);
-        assert_eq!(tone.headroom, 3.0);
-        assert_eq!(from_settings(&json!({ "hdr": true })).headroom, 2.0);
-        assert_eq!(control(CONTROLS.len()), Some(HEADROOM));
-        assert_eq!(control(CONTROLS.len() + 1), None);
+    fn a_step_s_hdr_switch_becomes_the_picture_s_headroom() {
+        use crate::image_steps::Accepts;
+        use crate::studio_model::{Document, StageKind, StepKind, StepRecord};
+        let mut document = Document::new("hdr");
+        let step = StepRecord::new(StepKind::Operation {
+            operation: OPERATION.to_string(),
+            accepts: Accepts::Display,
+            settings: json!({ "exposure": 1.0, "hdr": true, "headroom": 3.0 }),
+        });
+        let id = step.id;
+        document.insert_step(StageKind::Finish, 0, step).unwrap();
+        adopt_headroom(&mut document);
+        assert_eq!(document.headroom, Some(3.0));
+        let Some((_, step)) = document.step(id) else {
+            panic!("the step is gone");
+        };
+        let StepKind::Operation { settings, .. } = &step.kind else {
+            panic!("not an operation");
+        };
+        assert_eq!(settings, &json!({ "exposure": 1.0 }));
+        // A step whose switch was off leaves the picture SDR.
+        let mut sdr = Document::new("sdr");
+        let step = StepRecord::new(StepKind::Operation {
+            operation: OPERATION.to_string(),
+            accepts: Accepts::Display,
+            settings: json!({ "hdr": false, "headroom": 2.0 }),
+        });
+        sdr.insert_step(StageKind::Finish, 0, step).unwrap();
+        adopt_headroom(&mut sdr);
+        assert_eq!(sdr.headroom, None);
     }
 
     #[test]
