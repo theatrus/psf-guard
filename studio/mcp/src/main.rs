@@ -145,6 +145,11 @@ fn tools() -> Value {
             "inputSchema": object(json!({ "instance": instance, "on": { "type": "boolean" } }), &[]),
         },
         {
+            "name": "studio_move_layer",
+            "description": "Moves a layer one place up (`up` true, the default) or down the stack, as Move up and Move down do: a group's layer within its group, a top-level layer or group past the next one, a group with its layers.",
+            "inputSchema": object(json!({ "instance": instance, "layer": { "type": "string" }, "up": { "type": "boolean" } }), &["layer"]),
+        },
+        {
             "name": "studio_use_recipe",
             "description": "Makes the picture from a recipe, as the Recipe menu does, such as \"LRGB\" or \"Narrowband with RGB stars\". A recipe that shows stars apart has them separated, which runs the tools.",
             "inputSchema": object(json!({ "instance": instance, "name": { "type": "string" } }), &["name"]),
@@ -257,6 +262,9 @@ impl Server {
                 "show_clipping",
                 json!({ "on": arguments["on"].as_bool().unwrap_or(true) }),
             ),
+            "studio_move_layer" => {
+                forward(self.instance(arguments)?, "move_layer", arguments.clone())
+            }
             "studio_use_recipe" => forward(
                 self.instance(arguments)?,
                 "use_recipe",

@@ -680,7 +680,27 @@ impl Studio {
                         },
                     )),
             )
+            .child(self.order_block(id, cx))
             .into_any_element()
+    }
+
+    /// Buttons that move a layer, or a group with its members, one place
+    /// up or down the stack, as the list shows it.
+    fn order_block(&self, id: Uuid, cx: &mut Context<Self>) -> gpui::Div {
+        column()
+            .child(Self::field(
+                "Order",
+                wrap()
+                    .child(Self::act("Move up", "layer-up", false, cx, move |this| {
+                        this.document.step_layer(id, true);
+                    }))
+                    .child(Self::act("Move down", "layer-down", false, cx, move |this| {
+                        this.document.step_layer(id, false);
+                    })),
+            ))
+            .children(Self::help(
+                "A layer in a group moves among the group's layers; a group moves with its layers past the next layer or group. Dragging a row does the same, onto a layer or into the gap between two.",
+            ))
     }
 
     /// The blend modes, with the layer's own marked.
@@ -770,6 +790,7 @@ impl Studio {
             .children(Self::help(
                 "Ungrouping keeps the layers where they are and removes the group's own mask and adjustments.",
             ))
+            .child(self.order_block(id, cx))
             .into_any_element()
     }
 
@@ -1180,6 +1201,7 @@ impl Studio {
                 this.document.remove_layer(id);
                 this.selected = Row::Combined;
             }))
+            .child(self.order_block(id, cx))
             .into_any_element()
     }
 

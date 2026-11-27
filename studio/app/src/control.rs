@@ -213,6 +213,15 @@ impl Studio {
                     json!({ "split": split })
                 }),
             "set_step" => self.control_set_step(params),
+            "move_layer" => match uuid_param(params, "layer") {
+                Ok(id) => {
+                    let up = params["up"].as_bool().unwrap_or(true);
+                    let moved = self.document.step_layer(id, up);
+                    self.refresh_canvas();
+                    Ok(json!({ "moved": moved }))
+                }
+                Err(error) => Err(error),
+            },
             "show_clipping" => {
                 let on = params["on"].as_bool().unwrap_or(true);
                 self.canvas.edit(|canvas| canvas.show_clipping = on);

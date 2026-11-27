@@ -783,3 +783,47 @@ fn a_document_saved_bottom_up_reads_top_down_when_opened() {
         ["OIII as blue", "Ha as green", "SII as red"]
     );
 }
+
+#[test]
+fn a_layer_steps_past_its_neighbour_and_a_group_moves_whole() {
+    // Bottom first: R as red, then a group of G and B, then an adjustment.
+    let mut document = document(&["red", "green", "blue"]);
+    let ids: Vec<Uuid> = document.layers().iter().map(|layer| layer.id).collect();
+    // Stored bottom first as B, G, R; R is on top.
+    let (blue, green, red) = (ids[0], ids[1], ids[2]);
+    let group = document.group_layer(green).unwrap();
+    document.place_layer(blue, 2, Some(group));
+    let exposure = adjustment("Exposure");
+    document.insert_layer(usize::MAX, exposure.clone()).unwrap();
+    assert_eq!(
+        listed(&document),
+        ["Exposure", "R as red", "Group", "B as blue", "G as green"]
+    );
+
+    // A member moves within its group, and stops at its ends.
+    assert!(document.step_layer(green, true));
+    assert_eq!(listed(&document)[3..], ["G as green", "B as blue"]);
+    assert!(!document.step_layer(green, true));
+
+    // A top-level layer steps past a whole group.
+    assert!(document.step_layer(red, false));
+    assert_eq!(
+        listed(&document),
+        ["Exposure", "Group", "G as green", "B as blue", "R as red"]
+    );
+    assert!(!document.step_layer(red, false));
+
+    // A group moves with its members, past the next top-level entry.
+    assert!(document.step_layer(group, true));
+    assert_eq!(
+        listed(&document),
+        ["Group", "G as green", "B as blue", "Exposure", "R as red"]
+    );
+    assert!(!document.step_layer(group, true));
+    assert!(document.step_layer(group, false));
+    assert!(document.step_layer(group, false));
+    assert_eq!(
+        listed(&document),
+        ["Exposure", "R as red", "Group", "G as green", "B as blue"]
+    );
+}

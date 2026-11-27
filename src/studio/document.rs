@@ -953,6 +953,79 @@ impl Document {
         Ok(())
     }
 
+    /// Moves a layer one place toward the top (`up`) or the bottom, past
+    /// its neighbour: a group's member past the next member of its group,
+    /// and a layer or a group at the top level past the next layer or
+    /// whole group there. A group moves with its members. Returns whether it
+    /// moved: an end of its group or of the stack stops it.
+    pub fn step_layer(&mut self, id: Uuid, up: bool) -> bool {
+        let layers = &self.stages[StageKind::Combine as usize].layers;
+        let Some(at) = layers.iter().position(|layer| layer.id == id) else {
+            return false;
+        };
+        // The block a layer moves as, bottom first: a group with its
+        // members beneath it, any other layer alone.
+        let block = |head: usize| -> std::ops::RangeInclusive<usize> {
+            if layers[head].source == LayerSource::Group {
+                let group = layers[head].id;
+                let low = layers[..head]
+                    .iter()
+                    .rposition(|layer| layer.group != Some(group))
+                    .map_or(0, |other| other + 1);
+                low..=head
+            } else {
+                head..=head
+            }
+        };
+        let own = block(at);
+        let container = layers[at].group;
+        let neighbour = if up {
+            let next = own.end() + 1;
+            let first = layers.get(next).filter(|layer| match container {
+                // A member moves only past members of its own group.
+                Some(group) => layer.group == Some(group),
+                None => true,
+            });
+            first.map(|first| match (container, first.group) {
+                // At the top level, a group's first member stands for the
+                // whole group above it.
+                (None, Some(group)) => {
+                    let head = layers
+                        .iter()
+                        .position(|layer| layer.id == group)
+                        .unwrap_or(next);
+                    block(head)
+                }
+                _ => block(next),
+            })
+        } else {
+            own.start()
+                .checked_sub(1)
+                .filter(|before| match container {
+                    Some(group) => layers[*before].group == Some(group),
+                    None => true,
+                })
+                .map(block)
+        };
+        let Some(neighbour) = neighbour else {
+            return false;
+        };
+        let (low, high) = if up {
+            (*own.start(), *neighbour.end())
+        } else {
+            (*neighbour.start(), *own.end())
+        };
+        let moved = if up {
+            own.end() - own.start() + 1
+        } else {
+            neighbour.end() - neighbour.start() + 1
+        };
+        let layers = &mut self.stages[StageKind::Combine as usize].layers;
+        layers[low..=high].rotate_left(moved);
+        self.keep_groups_together();
+        true
+    }
+
     /// Moves one layer to `index`, counted from the bottom. Use
     /// [`Self::place_layer`] to move a layer into or out of a group, or to
     /// move a group with its members.

@@ -242,6 +242,17 @@ impl Studio {
         let Some(at) = layers.iter().position(|layer| layer.id == target) else {
             return;
         };
+        // A group holds no group: one dropped anywhere goes above the
+        // target's whole part, or above the target at the top level.
+        if source(self, dragged) == Some(LayerSource::Group) {
+            let top = layers[at]
+                .group
+                .and_then(|group| layers.iter().position(|layer| layer.id == group))
+                .unwrap_or(at);
+            self.document.place_layer(dragged, top + 1, None);
+            self.selected = Row::Layer(dragged);
+            return;
+        }
         let (position, group) = if target_source == Some(LayerSource::Group) {
             (at, Some(target))
         } else {
@@ -307,7 +318,7 @@ impl Studio {
         div()
             .id(("slot", position * 2 + usize::from(inside)))
             .ml(px(if inside { CHILD_INDENT } else { 0.0 }))
-            .h(px(6.0))
+            .h(px(10.0))
             .rounded_sm()
             .drag_over::<DragLayer>(|style, _, _, _| style.bg(rgb(SELECTED)))
             .drag_over::<DragStep>(|style, _, _, _| style.bg(rgb(SELECTED)))
