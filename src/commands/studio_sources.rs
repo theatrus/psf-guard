@@ -512,7 +512,10 @@ fn prepare_store(
     // unless a person crops it otherwise. Registration leaves empty edges
     // where the inputs do not overlap.
     let crop = automatic_crop(&prepared);
-    let (mut display, star_stretch) = stretch_stars(&mut prepared, &document);
+    // The stars stay linear: PSF Studio stretches them on the canvas, so
+    // the star stretch's amount redraws without preparing again.
+    let mut display: Vec<String> = Vec::new();
+    let star_stretch: Option<f64> = None;
     if let Calibration::Done {
         neutral_sky: true, ..
     } = calibration
@@ -531,9 +534,6 @@ fn prepare_store(
     ) {
         println!("  {name}: stretched for display");
         display.push(name);
-    }
-    if let Some(amount) = star_stretch {
-        println!("  Stars of red, green and blue stretched as one layer, amount {amount:.2}");
     }
     for (role, chain) in &prepared.tools {
         let ran: Vec<&str> = chain
@@ -1048,102 +1048,6 @@ fn calibrate_colors(
         (Outcome::Calibrated(_), None) => Calibration::Skipped {
             why: "no gains were measured".into(),
         },
-    }
-}
-
-/// Runs the document's Star stretch step: replaces the stars of red, green
-/// and blue with one linked display layer. Returns the planes that are
-/// stretched for display from then on, and the amount used.
-///
-/// The step needs each of the three channels as stacked and after a star
-/// removal. Without those, or without the step, nothing changes.
-fn stretch_stars(
-    prepared: &mut RegisteredChannels,
-    document: &Document,
-) -> (Vec<String>, Option<f64>) {
-    use crate::studio::{flow_operations, stars_channel, StageKind, StepKind};
-
-    let Some(step) = document
-        .stage(StageKind::Stretch)
-        .steps
-        .iter()
-        .find(|step| step.enabled && step.kind.name() == flow_operations::STAR_STRETCH)
-    else {
-        return (Vec::new(), None);
-    };
-    let amount = match &step.kind {
-        StepKind::Operation { settings, .. } => settings["amount"].as_f64().unwrap_or(5.0),
-        _ => 5.0,
-    }
-    .clamp(0.0, 8.0);
-    let names = ["red", "green", "blue"];
-    if names
-        .iter()
-        .any(|name| !prepared.names.contains(&stars_channel(name)))
-    {
-        return (Vec::new(), None);
-    }
-    // A star removal that unscreens its stars gives stars that do not add
-    // back to the image, so there is no image with stars to stretch from.
-    let unscreened = prepared.tools.iter().any(|(_, chain)| {
-        chain.steps.iter().any(|step| {
-            step.parameters
-                .get("unscreen")
-                .and_then(|value| serde_json::to_value(value).ok())
-                == Some(serde_json::Value::Bool(true))
-        })
-    });
-    if unscreened {
-        println!("  The stars were not stretched: turn Unscreen Stars off for red, green and blue");
-        return (Vec::new(), None);
-    }
-    // Each channel just after the tool that took its stars out.
-    let [Some(red_less), Some(green_less), Some(blue_less)] = names.map(|name| {
-        prepared
-            .starless
-            .get(name)
-            .and_then(|plane| prepared.plane(plane))
-    }) else {
-        return (Vec::new(), None);
-    };
-    // The image with its stars is the starless image plus the stars the
-    // tool took out: the image as it entered star removal, after any
-    // sharpening or noise reduction before it. The stack as it came would
-    // put those tools' changes into the stars.
-    let with_stars = |starless: &seiza_stacking::LinearImage, name: &str| {
-        let mut image = starless.clone();
-        let stars = prepared.plane(&stars_channel(name))?;
-        for (sample, star) in image.data.iter_mut().zip(&stars.data) {
-            *sample += *star;
-        }
-        Some(image)
-    };
-    let (Some(red), Some(green), Some(blue)) = (
-        with_stars(&red_less, "red"),
-        with_stars(&green_less, "green"),
-        with_stars(&blue_less, "blue"),
-    ) else {
-        return (Vec::new(), None);
-    };
-    match crate::color_steps::stretch_star_layer(
-        [&red, &green, &blue],
-        [&red_less, &green_less, &blue_less],
-        amount,
-    ) {
-        Ok(layer) => {
-            let mut display = Vec::new();
-            for (name, samples) in names.into_iter().zip(layer) {
-                let plane = stars_channel(name);
-                if prepared.replace_plane(&plane, samples) {
-                    display.push(plane);
-                }
-            }
-            (display, Some(amount))
-        }
-        Err(error) => {
-            println!("  The stars were not stretched: {error}");
-            (Vec::new(), None)
-        }
     }
 }
 

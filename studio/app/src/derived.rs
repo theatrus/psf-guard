@@ -32,6 +32,18 @@ pub enum DerivedKind {
     /// bands at each pixel, as Seiza's RGB star reduction does, so the
     /// bands' colors keep. A layer blends toward it by its reduction.
     ReducedStars(usize),
+    /// The stars of red, green or blue (`pick`), stretched as Seiza's RGB
+    /// star stretch does at `amount_milli` thousandths: each star sample
+    /// over the range of the three channels with their stars, then a
+    /// midtones curve. `bands` are red, green and blue as their star
+    /// removal left them, then their stars. With `reduced`, the stretched
+    /// stars are also made smaller in full, which a layer blends toward by
+    /// its reduction.
+    StretchedStars {
+        pick: usize,
+        amount_milli: u32,
+        reduced: bool,
+    },
     /// One channel of what a processing tool step in the Combine or Finish
     /// stage made, read from the file it wrote: its result, or the stars a
     /// star removal took out.
@@ -189,6 +201,7 @@ impl DeriveTask {
             DerivedKind::Luminance => "Measuring the luminance of red, green and blue",
             DerivedKind::Fine => "Measuring star cores",
             DerivedKind::ReducedStars(_) => "Reducing stars",
+            DerivedKind::StretchedStars { .. } => "Stretching stars",
             DerivedKind::Tool { .. } => "Reading a tool's result",
         }
     }
@@ -213,6 +226,21 @@ fn work_out(
     let shape = level.shape();
     let (width, height) = (shape.width, shape.height);
     let channels = store.bands();
+    if let DerivedKind::StretchedStars {
+        pick,
+        amount_milli,
+        reduced,
+    } = key.kind
+    {
+        return stretched_stars(
+            store,
+            key,
+            reads,
+            (pick, amount_milli, reduced),
+            progress,
+            stop,
+        );
+    }
     let (black, white) = key.range;
     let span = (white - black).max(f32::MIN_POSITIVE);
     let unit = |value: f32| (value - black) / span;
@@ -223,6 +251,7 @@ fn work_out(
         DerivedKind::ReducedStars(pick) if pick < reads.len() => Some(pick),
         DerivedKind::ReducedStars(_) => return Err("no such band to reduce".to_string()),
         DerivedKind::Tool { .. } => return Err("a tool's result is read from its file".to_string()),
+        DerivedKind::StretchedStars { .. } => unreachable!("worked out above"),
         _ => None,
     };
     let mut brightest = if reduced.is_some() {
@@ -328,6 +357,122 @@ impl DerivedPlane {
 /// One band's stars, `stars`, made smaller: each sample scaled by how much
 /// Seiza's one-pixel cross erosion lowers `brightest`, the brightest of the
 /// bands reduced together, at that pixel.
+/// The stretched stars `key` names, from the store at full resolution: two
+/// passes, the first for the range of red, green and blue with their stars,
+/// the second for the stars stretched over it, as Seiza's RGB star stretch.
+fn stretched_stars(
+    store: &StoreTiles,
+    key: &DerivedKey,
+    reads: &[BandRead],
+    (pick, amount_milli, reduced): (usize, u32, bool),
+    progress: &AtomicU32,
+    stop: &AtomicBool,
+) -> Result<DerivedPlane, String> {
+    let [red, green, blue, red_stars, green_stars, blue_stars] = reads else {
+        return Err("stretched stars read red, green and blue and their stars".to_string());
+    };
+    let (starless, stars) = ([red, green, blue], [red_stars, green_stars, blue_stars]);
+    if pick > 2 {
+        return Err("no such channel of stars".to_string());
+    }
+    let level = store
+        .full_level()
+        .ok_or_else(|| "the store has no levels".to_string())?;
+    let shape = level.shape();
+    let (width, height) = (shape.width, shape.height);
+    let channels = store.bands();
+    let strip = 256.min(height.max(1));
+    // Each pass reads the store in strips and hands each pixel's three
+    // channels with their stars, and their stars, to `each`.
+    let pass = |each: &mut dyn FnMut(usize, [f32; 3], [f32; 3]), part: u32| -> Result<(), String> {
+        let mut y = 0;
+        while y < height {
+            if stop.load(Ordering::Relaxed) {
+                return Err("it was stopped".to_string());
+            }
+            let rows = strip.min(height - y);
+            let samples = level
+                .read(Region::new(0, y, width, rows))
+                .map_err(|error| error.to_string())?;
+            let value = |read: &BandRead, pixel: usize| -> f32 {
+                let at = pixel * channels;
+                let mut value = samples[at + read.plane];
+                if let Some((corrected, amount)) = read.corrected {
+                    value += (samples[at + corrected] - value) * amount;
+                }
+                value
+            };
+            for pixel in 0..width * rows {
+                let star = stars.map(|read| value(read, pixel));
+                let with =
+                    std::array::from_fn(|channel| value(starless[channel], pixel) + star[channel]);
+                each(y * width + pixel, with, star);
+            }
+            y += rows;
+            progress.store(part * 400 + (400 * y / height) as u32, Ordering::Relaxed);
+        }
+        Ok(())
+    };
+    // The range of the three channels with their stars.
+    let (mut floor, mut peak) = (f32::INFINITY, f32::NEG_INFINITY);
+    pass(
+        &mut |_, with, _| {
+            if with.iter().all(|value| value.is_finite()) {
+                for value in with {
+                    floor = floor.min(value);
+                    peak = peak.max(value);
+                }
+            }
+        },
+        0,
+    )?;
+    if !peak.is_finite() {
+        return Err("red, green and blue have no samples".to_string());
+    }
+    // As Seiza's RGB star stretch: a range of at least 1.
+    let scale = (f64::from(peak) - f64::from(floor.min(0.0))).max(1.0);
+    let gain = 3.0_f64.powf(f64::from(amount_milli) / 1000.0);
+    let stretch = |star: f32| {
+        let x = (f64::from(star) / scale).clamp(0.0, 1.0);
+        (gain * x / (1.0 + (gain - 1.0) * x)) as f32
+    };
+    let mut values = vec![f32::NAN; width * height];
+    let mut brightest = if reduced {
+        vec![f32::NAN; width * height]
+    } else {
+        Vec::new()
+    };
+    pass(
+        &mut |at, with, star| {
+            if with.iter().any(|value| !value.is_finite()) {
+                return;
+            }
+            let stretched = star.map(stretch);
+            values[at] = stretched[pick];
+            if reduced {
+                brightest[at] = stretched.into_iter().fold(0.0, f32::max);
+            }
+        },
+        1,
+    )?;
+    if reduced {
+        reduce_stars(&mut values, &brightest, width, height);
+    }
+    progress.store(900, Ordering::Relaxed);
+    let mut levels = vec![(width, height, values)];
+    while levels.len() < store.pyramid().levels as usize {
+        let (w, h, last) = levels.last().expect("a level");
+        levels.push(halve(last, *w, *h));
+    }
+    progress.store(1000, Ordering::Relaxed);
+    Ok(DerivedPlane {
+        key: key.clone(),
+        levels,
+        // Stretched stars run from 0 to 1.
+        scale: 1.0,
+    })
+}
+
 fn reduce_stars(stars: &mut [f32], brightest: &[f32], width: usize, height: usize) {
     let eroded = seiza_compose::cross_erosion(brightest, width, height);
     for ((value, before), after) in stars.iter_mut().zip(brightest).zip(&eroded) {

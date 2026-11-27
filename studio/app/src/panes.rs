@@ -809,6 +809,92 @@ fn draws_step_mask(mask: &Option<MaskRecord>) -> bool {
     matches!(mask, None | Some(MaskRecord::Painted(_)))
 }
 
+/// The planes of the stars of red, green or blue stretched by the document's
+/// star stretch, and of them reduced in full with `reduction`, when the
+/// stars layer `channel` shows has them: worked out from the whole image,
+/// so a plane not done yet is asked for in `wanted` and the stars are drawn
+/// as their input is stretched until then. `None` for any other channel,
+/// with the star stretch off, or for a store that stretched its stars.
+fn stretched_stars_planes(
+    document: &Document,
+    bands: &Bands,
+    channel: &str,
+    reduction: Option<f32>,
+    wanted: &mut Vec<DerivedKey>,
+) -> Option<(usize, Option<(usize, f32)>)> {
+    let colors = ["red", "green", "blue"];
+    let pick = colors
+        .iter()
+        .position(|color| crate::studio_model::stars_channel(color) == channel)?;
+    let step = document
+        .stage(StageKind::Stretch)
+        .steps
+        .iter()
+        .find(|step| step.enabled && step.kind.name() == flow_operations::STAR_STRETCH)?;
+    let strength = amount(step).clamp(0.0, 8.0);
+    let starless: Vec<usize> = colors
+        .iter()
+        .map(|color| bands.band_of(color))
+        .collect::<Option<_>>()?;
+    let stars: Vec<usize> = colors
+        .iter()
+        .map(|color| bands.band_of(&crate::studio_model::stars_channel(color)))
+        .collect::<Option<_>>()?;
+    if stars.iter().any(|band| bands.is_display(*band)) {
+        return None;
+    }
+    // Each channel as its star removal left it: the Linear steps up to and
+    // including that one.
+    let states: Vec<BandState> = colors
+        .iter()
+        .zip(&starless)
+        .map(|(color, band)| {
+            let mut reached = Vec::new();
+            for listed in crate::studio_model::input_steps(document, color) {
+                let Some((stage, step)) = document.step(listed.id) else {
+                    continue;
+                };
+                if stage != StageKind::Linear || !step.enabled {
+                    continue;
+                }
+                let background = step.kind.name() == flow_operations::BACKGROUND;
+                reached.push((listed.id, background.then(|| amount(step))));
+                if step.kind.name() == flow_operations::STAR_REMOVAL {
+                    break;
+                }
+            }
+            bands.state_after(*band, &reached).0
+        })
+        .chain(stars.iter().map(|_| BandState::default()))
+        .collect();
+    let key = |reduced: bool| DerivedKey {
+        kind: DerivedKind::StretchedStars {
+            pick,
+            amount_milli: (strength * 1000.0).round() as u32,
+            reduced,
+        },
+        bands: starless.iter().chain(&stars).copied().collect(),
+        states: states.clone(),
+        range: (0.0, 1.0),
+    };
+    let mut find = |key: DerivedKey| {
+        let found = bands
+            .derived_planes()
+            .into_iter()
+            .find(|(known, _)| *known == key)
+            .map(|(_, plane)| plane);
+        if found.is_none() {
+            wanted.push(key);
+        }
+        found
+    };
+    let plane = find(key(false))?;
+    let reduced = reduction
+        .filter(|amount| *amount > 0.0)
+        .and_then(|amount| Some((find(key(true))?, amount)));
+    Some((plane, reduced))
+}
+
 /// The layer a clipped layer or group is clipped to: the nearest layer
 /// beneath it, or beneath a group's members, in the same group, that is not
 /// clipped and is not an adjustment.
@@ -1626,13 +1712,27 @@ pub(super) fn scene(
         let (state, plane, blended, own_stages, display) =
             band_source(document, bands, band, channel, view_stretch, &mut omitted);
         states[band] = state;
+        // The stars of red, green and blue under the star stretch are drawn
+        // from the planes of them stretched, worked out from the whole
+        // image at the amount set, and blended toward them reduced.
+        let stretched = layer.filter(|_| !display).and_then(|layer| {
+            stretched_stars_planes(
+                document,
+                bands,
+                &channel.channel,
+                star_reduction(document, layer).map(|(amount, _)| amount),
+                &mut wanted_planes,
+            )
+        });
         // Stars a layer reduces are read blended toward the plane of them
         // reduced, which is worked out from the whole image.
         // A background correction blended in by nothing leaves the slot free.
         let blended = blended.filter(|(_, amount)| *amount > 0.0);
         let blended = match (
             blended,
-            layer.and_then(|layer| star_reduction(document, layer)),
+            layer
+                .filter(|_| stretched.is_none())
+                .and_then(|layer| star_reduction(document, layer)),
         ) {
             (blended, None) => blended,
             (Some(blended), Some(_)) => {
@@ -1711,6 +1811,11 @@ pub(super) fn scene(
         // A plane the store stretched has a table row of its own, which
         // leaves its samples as they are.
         let stretched_as = if display { DISPLAY_ROW } else { stretched_as };
+        // Stretched stars are display samples already.
+        let (plane, blended, stretched_as, stages) = match stretched {
+            Some((stars, reduced)) => (stars, reduced, DISPLAY_ROW, Vec::new()),
+            None => (plane, blended, stretched_as, stages),
+        };
         // A layer's own tool step whose result the canvas has: the layer is
         // drawn from that result, which holds its stretch and every own step
         // before the tool.
