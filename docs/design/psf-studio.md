@@ -2480,6 +2480,16 @@ Also tried on a store of Ha, OIII, SII, R, G and B with star removal on
 all six: the recipe “Narrowband with RGB stars” gives a starless SHO
 nebula with the stars of R, G and B screened over it.
 
+A recipe or part that shows stars apart (RGB stars, Stars) needs them
+separated, so choosing one sees to it: every input the picture shows gets
+the first star removal tool this computer has, a color group's inputs
+together so the stars keep their colors, and `psf-guard` prepares the
+store again, with its progress in the status line. Before, the recipe only
+made the layers; the nebula kept its stars and the stars layers read
+channels the store did not have. A document whose stars layers show no
+stars says so under the Recipe menu. Without a star removal tool the
+status line says what is missing.
+
 **Gaia calibration of R, G and B** runs in the store preparation
 (`calibrate_colors` in `src/commands/studio_sources.rs`, on the shared step
 `color_steps::measure_color_gains`):

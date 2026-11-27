@@ -388,6 +388,84 @@ impl Studio {
         }
     }
 
+    // ---- separating the stars a picture shows ----------------------------
+
+    /// The inputs the picture's layers show, with a stars layer read as
+    /// the input its stars came from.
+    fn shown_inputs(&self) -> Vec<String> {
+        let mut inputs: Vec<String> = Vec::new();
+        for layer in self.document.layers() {
+            if let LayerSource::Band { band } = &layer.source {
+                let input = band.strip_suffix("@stars").unwrap_or(band).to_string();
+                if !inputs.contains(&input) {
+                    inputs.push(input);
+                }
+            }
+        }
+        inputs
+    }
+
+    /// Whether a layer shows stars that the store does not hold: their
+    /// input's stars have not been separated.
+    pub(super) fn stars_missing(&self) -> bool {
+        self.document
+            .layers()
+            .iter()
+            .any(|layer| match &layer.source {
+                LayerSource::Band { band } => {
+                    band.ends_with("@stars") && self.band_info.band_of(band).is_none()
+                }
+                _ => false,
+            })
+    }
+
+    /// Whether an input's stars are removed by its tools, its own or its
+    /// color group's.
+    fn removes_stars(&self, channel: &str) -> bool {
+        self.chain(channel)
+            .iter()
+            .any(|step| self.is_of(Self::provider_of(step), STARS))
+            || self.stars_together(channel).is_some()
+    }
+
+    /// When the picture shows stars apart from its other layers, as the
+    /// RGB stars and Stars parts do, removes the stars of every input it
+    /// shows, with the first star removal tool this computer has, and has
+    /// `psf-guard` prepare the store again: the other layers then show the
+    /// inputs without their stars, and the stars layers show the stars.
+    /// The inputs of a color group, such as red, green and blue, lose their
+    /// stars together, so the stars keep their colors.
+    pub(super) fn separate_stars(&mut self) {
+        let shows_stars = self.document.layers().iter().any(
+            |layer| matches!(&layer.source, LayerSource::Band { band } if band.ends_with("@stars")),
+        );
+        if !shows_stars {
+            return;
+        }
+        let Some(provider) = self
+            .tools
+            .tools
+            .iter()
+            .find(|tool| tool.category == STARS)
+            .map(|tool| tool.key.clone())
+        else {
+            self.tools.status = "Not separated: the stars layers need a star removal tool, such as RC-Astro StarXTerminator, and this computer has none.".to_string();
+            return;
+        };
+        for input in self.shown_inputs() {
+            if self.removes_stars(&input) {
+                continue;
+            }
+            self.set_tool(&input, STARS, Some(&provider));
+            if self.group_of(&input).is_some() {
+                self.set_stars_together(&input, true);
+            }
+        }
+        if self.stars_missing() && self.cannot_run().is_none() {
+            self.run_tools();
+        }
+    }
+
     // ---- star removal on a color group ----------------------------------
 
     /// The color group an input belongs to, when the document has at least

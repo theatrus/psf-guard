@@ -293,6 +293,8 @@ impl Studio {
                     let inputs = this.inputs();
                     this.document.use_recipe(recipe, &inputs);
                     this.selected = Row::Combined;
+                    // A recipe that shows stars apart has them separated.
+                    this.separate_stars();
                 })
             })
             .collect();
@@ -306,6 +308,7 @@ impl Studio {
                     if let Some(part) = this.document.add_part(kind, &inputs) {
                         this.selected = Row::Layer(part);
                     }
+                    this.separate_stars();
                 })
             })
             .collect();
@@ -315,6 +318,11 @@ impl Studio {
             .gap_1()
             .child(self.menu("recipe", "Recipe", recipes, cx))
             .child(self.menu("add-part", "Add part", kinds, cx))
+            .when(self.stars_missing() && !self.is_running(), |bar| {
+                bar.child(Self::note(
+                    "The stars layers show no stars yet: their inputs' stars have not been removed. Choose the recipe again to remove them with a star removal tool and prepare the store, or give each input a star removal tool and run the tools.",
+                ))
+            })
     }
 
     /// Removes a part with its layers.
