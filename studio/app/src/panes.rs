@@ -1631,7 +1631,16 @@ impl Studio {
                 None => pixels.iter().step_by(4).flatten().copied().collect(),
             };
             let finished = crate::canvas::finished_samples(&scene.finish, &chosen);
-            let mut histogram = crate::histogram::Histogram::of(&finished, 1);
+            // An HDR picture is clipped at its Tone step's peak.
+            let peak = scene
+                .finish
+                .iter()
+                .filter_map(|step| match &step.kind {
+                    seiza_compose::picture::FinishKind::Tone(tone) => Some(tone.peak()),
+                    _ => None,
+                })
+                .fold(1.0_f32, f32::max);
+            let mut histogram = crate::histogram::Histogram::of(&finished, 1, peak);
             histogram.masked = covers.is_some();
             Some(Arc::new(histogram))
         });

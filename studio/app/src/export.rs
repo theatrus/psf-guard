@@ -232,8 +232,8 @@ fn extension(path: &Path) -> Option<String> {
 
 /// Writes interleaved RGB in the working space, where 1 is SDR white, as
 /// an HDR AVIF: converted to linear Rec. 2020 through the working space's
-/// ICC profile (sRGB when Studio was given none), values above 1 decoded on
-/// the extended sRGB curve, as an HDR display shows them.
+/// ICC profile (sRGB when Studio was given none). Above 1 a value is linear
+/// light already, a multiple of SDR white's, as Tone's HDR headroom is.
 fn save_hdr(
     path: &Path,
     width: usize,
@@ -256,8 +256,8 @@ fn save_hdr(
 }
 
 /// `rgb` in the working space as linear light in the curves' target: each
-/// channel decoded (by the curve within 0 to 1, by the extended sRGB curve
-/// above it), then through the matrix. Uncovered pixels are black.
+/// channel decoded by the curve within 0 to 1 and taken as linear light
+/// above it, then through the matrix. Uncovered pixels are black.
 fn to_linear(rgb: &[f32], curves: &psf_studio_render::display::DisplayCurves) -> Vec<f32> {
     let last = (curves.width.max(2) - 1) as f32;
     let decode = |value: f32, channel: usize| -> f32 {
@@ -265,7 +265,7 @@ fn to_linear(rgb: &[f32], curves: &psf_studio_render::display::DisplayCurves) ->
             return 0.0;
         }
         if value > 1.0 {
-            return ((value + 0.055) / 1.055).powf(2.4);
+            return value;
         }
         let place = value * last;
         let low = place.floor() as usize;
@@ -456,8 +456,10 @@ mod tests {
             assert!((channel - 1.0).abs() < 0.01, "{linear:?}");
         }
         assert!((linear[3] - 0.214).abs() < 0.01, "{linear:?}");
-        let above = ((2.0_f32 + 0.055) / 1.055).powf(2.4);
-        assert!((linear[6] - above).abs() < 0.05 * above, "{linear:?}");
+        // Above SDR white a value is linear light: twice SDR white's.
+        for channel in &linear[6..9] {
+            assert!((channel - 2.0).abs() < 0.03, "{linear:?}");
+        }
         // Pure sRGB red is inside Rec. 2020: mostly red, some green.
         let red = to_linear(&[1.0, 0.0, 0.0], &curves);
         assert!(red[0] > 0.6 && red[1] > 0.03 && red[2] < 0.05, "{red:?}");

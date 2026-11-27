@@ -391,7 +391,7 @@ impl Studio {
             ));
         }
         block.children(Self::help(
-            "Exposure, Contrast, Highlights, Shadows, Whites and Blacks change the brightness and keep each pixel's color. Whites up and Blacks down clip more of the picture to white and to black. Highlights and Shadows move the tones of each area and keep the detail in it, so a star stays as bright above a lifted sky. Texture raises or lowers fine detail, Clarity the contrast of larger structures in the midtones, and Dehaze takes away a gray veil such as sky glow while keeping colored nebulae. With HDR on, the brightest areas rise above SDR white, up to the headroom, instead of clipping; raise Exposure or Whites to put them there. An HDR display shows them brighter than white; export them as AVIF.",
+            "Exposure, Contrast, Highlights, Shadows, Whites and Blacks change the brightness and keep each pixel's color. Whites up and Blacks down clip more of the picture to white and to black. Highlights and Shadows move the tones of each area and keep the detail in it, so a star stays as bright above a lifted sky. Texture raises or lowers fine detail, Clarity the contrast of larger structures in the midtones, and Dehaze takes away a gray veil such as sky glow while keeping colored nebulae. With HDR on, the brightest areas rise above SDR white, up to the headroom (each stop doubles the light), instead of clipping; raise Exposure or Whites to put them there. An HDR display shows them brighter than white; export them as AVIF.",
         ))
     }
 
@@ -1305,6 +1305,7 @@ impl Studio {
                 .child(Self::note("Reading the picture…"));
         };
         let (black, white) = (histogram.black * 100.0, histogram.white * 100.0);
+        let above = histogram.above * 100.0;
         let empty = histogram.masked && histogram.pixels == 0;
         let title = if histogram.masked {
             "Histogram of the masked area"
@@ -1347,9 +1348,13 @@ impl Studio {
                 ))
             })
             .child(div().bg(gpui::rgb(0x111316)).child(chart))
-            .child(Self::note(format!(
-                "Clipped: {black:.2}% to black, {white:.2}% to white"
-            )))
+            .child(Self::note(if above > 0.0 {
+                format!(
+                    "Clipped: {black:.2}% to black, {white:.2}% to white. Above SDR white: {above:.2}%"
+                )
+            } else {
+                format!("Clipped: {black:.2}% to black, {white:.2}% to white")
+            }))
     }
 
     /// Export: the final picture at full resolution, to a file.
