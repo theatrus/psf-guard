@@ -954,6 +954,13 @@ pub struct Studio {
     tools: tools::Tools,
     /// The document before each edit, for Undo and Redo.
     history: history::History,
+    /// While a layer is dragged: the layer row under the pointer, and
+    /// whether the pointer is over its lower half, where a drop places the
+    /// dragged layer below it.
+    drop_lower: Option<(uuid::Uuid, bool)>,
+    /// The window's own focus, so Undo, Redo and other keys reach it when
+    /// no control has the keyboard.
+    focus: gpui::FocusHandle,
 }
 
 impl Studio {
@@ -1199,6 +1206,8 @@ impl Studio {
                 levels,
                 tools,
                 history: history::History::default(),
+                drop_lower: None,
+                focus: cx.focus_handle(),
             };
         // The patches read as the store opened stand in until every band
         // is sampled over the whole image.
@@ -1217,6 +1226,7 @@ impl Studio {
         studio.tools_are_prepared(None);
         // Undo goes back no further than the document as it opened.
         studio.history.reset(studio.document.to_json());
+        window.focus(&studio.focus, cx);
         studio.refresh_canvas();
         if let Some((store, document_path)) = deferred {
             let document = studio.document.clone();

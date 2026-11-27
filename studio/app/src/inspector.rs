@@ -790,7 +790,7 @@ impl Studio {
                     })),
             ))
             .children(Self::help(
-                "A layer in a group moves among the group's layers; a group moves with its layers past the next layer or group. Dragging a row does the same, onto a layer or into the gap between two.",
+                "A layer in a group moves among the group's layers; a group moves with its layers past the next layer or group. A row dragged onto a layer goes above it, or below it when dropped on the layer's lower half; dragged onto a group, it joins the group on top.",
             ))
     }
 

@@ -2948,8 +2948,10 @@ Gaps to fix, roughly in the order they got in the way:
   be clipped or healed; a shared mask cannot go on a layer's own
   adjustment; a layer cannot have a painted and a shared mask, or clip to
   its shared mask. Layers and parts move with Move up and Move down, and a
-  part dragged moves whole; dragging a layer within a part still needs
-  work.
+  part dragged moves whole. A layer dragged within its part goes above the
+  row it is dropped on, or below it when dropped on the row's lower half
+  (tried in the window on the Iris's RGB stars), so it no longer needs the
+  thin gap between two rows.
 - [ ] **One way to adjust.** Finish steps and adjustment layers are two;
   exposure, curves and saturation are Studio's shader code, not Seiza's.
 - [ ] **Setup and hand-off.** No Setup page or recipe record in the

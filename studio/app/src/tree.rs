@@ -15,7 +15,7 @@ use crate::studio_model::{
     channel_label, input_steps, palettes_for, LayerRecord, LayerSource, Row, StageKind, StepKind,
     StepRecord,
 };
-use gpui::{div, prelude::*, px, rgb, AnyElement, Context, SharedString, Window};
+use gpui::{div, prelude::*, px, rgb, AnyElement, Context, DragMoveEvent, SharedString, Window};
 use uuid::Uuid;
 
 /// A layer being dragged in the tree.
@@ -219,9 +219,14 @@ impl Studio {
     /// - An adjustment dropped on a layer or a group becomes that layer's
     ///   or that group's own.
     /// - Any other layer dropped on a group joins the group, on top.
-    /// - Any other layer dropped on a layer moves to just above it, in the
-    ///   same group as it.
+    /// - Any other layer dropped on a layer moves to just above it, or just
+    ///   below it when dropped on the row's lower half, in the same group as
+    ///   it: so a layer moves anywhere within its part.
     fn drop_layer_on(&mut self, dragged: Uuid, target: Uuid) {
+        let lower = self
+            .drop_lower
+            .take()
+            .is_some_and(|(over, lower)| over == target && lower);
         if dragged == target {
             return;
         }
@@ -255,6 +260,8 @@ impl Studio {
         }
         let (position, group) = if target_source == Some(LayerSource::Group) {
             (at, Some(target))
+        } else if lower {
+            (at, layers[at].group)
         } else {
             (at + 1, layers[at].group)
         };
@@ -412,6 +419,15 @@ impl Studio {
             })
             .drag_over::<DragLayer>(|style, _, _, _| style.bg(rgb(SELECTED)))
             .drag_over::<DragStep>(|style, _, _, _| style.bg(rgb(SELECTED)))
+            // Which half of the row the pointer is over, for the drop.
+            .on_drag_move(
+                cx.listener(move |this, event: &DragMoveEvent<DragLayer>, _, _| {
+                    let position = event.event.position;
+                    if event.bounds.contains(&position) {
+                        this.drop_lower = Some((id, position.y > event.bounds.center().y));
+                    }
+                }),
+            )
             .on_drop(cx.listener(move |this, dragged: &DragLayer, _, cx| {
                 this.drop_layer_on(dragged.0, id);
                 this.refresh_canvas();

@@ -2667,6 +2667,7 @@ impl Render for Studio {
             .text_sm()
             .on_mouse_move(cx.listener(Self::mouse_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
+            .track_focus(&self.focus)
             .on_action(cx.listener(|this, _: &super::Undo, _, cx| {
                 this.undo();
                 cx.notify();
