@@ -111,6 +111,10 @@ fn display_scale() -> f32 {
 /// of sixteen.
 const QUARTER_MARGIN: f32 = 1.25;
 
+/// About how many samples of each channel a band's stretch is resolved
+/// from, evenly over the whole image.
+const WHOLE_SAMPLES: usize = 600_000;
+
 /// The samples Seiza analyses per band, at most.
 const ANALYSIS_SAMPLES: usize = 300_000;
 
@@ -477,6 +481,24 @@ impl Bands {
         self.tile_band.len()
     }
 
+    /// The bands with each band's stretch analysed from `channels`, an even
+    /// sample of every tile channel over the whole image, in place of the
+    /// patches read when the store was opened.
+    pub fn with_whole_samples(&self, channels: &[Vec<f32>]) -> Bands {
+        let mut bands = self.clone();
+        let plane = |channel: Option<usize>| channel.and_then(|at| channels.get(at).cloned());
+        bands.samples = (0..bands.len())
+            .map(|band| {
+                [
+                    plane(Some(bands.tile_band[band])),
+                    plane(bands.tools[band]),
+                    plane(bands.corrected[band]),
+                ]
+            })
+            .collect();
+        bands
+    }
+
     /// The bands with `planes` worked out from the store drawn after the
     /// store's channels, from `self` without any.
     pub fn with_derived(&self, planes: &[Arc<DerivedPlane>]) -> Bands {
@@ -692,6 +714,57 @@ impl StoreTiles {
             scales: vec![1.0; shape.channels],
             display: Vec::new(),
         })
+    }
+
+    /// An even sample of every channel over the whole image at full
+    /// resolution: every so many pixels in reading order, about
+    /// `WHOLE_SAMPLES` of each channel. What a band's stretch is resolved
+    /// from once it is read, in place of the patches. With `covered`, the
+    /// region every input covers as x, y, width and height, the empty edges
+    /// registration leaves are not sampled.
+    pub fn whole_samples(
+        &self,
+        covered: Option<[u32; 4]>,
+        stop: &std::sync::atomic::AtomicBool,
+    ) -> Result<Vec<Vec<f32>>, String> {
+        let level = self.full_level().ok_or("the store has no levels")?;
+        let shape = level.shape();
+        let [left, top, wide, high] = covered
+            .map(|[x, y, width, height]| [x as usize, y as usize, width as usize, height as usize])
+            .unwrap_or([0, 0, shape.width, shape.height]);
+        let right = (left + wide).min(shape.width);
+        let bottom = (top + high).min(shape.height);
+        let inside = |pixel: usize, y: usize| {
+            let (x, y) = (pixel % shape.width, y + pixel / shape.width);
+            x >= left && x < right && y >= top && y < bottom
+        };
+        let pixels = (right.saturating_sub(left) * bottom.saturating_sub(top)).max(1);
+        // Odd, so the sample does not fall on one column of a pattern.
+        let stride = (pixels / WHOLE_SAMPLES).max(1) | 1;
+        let mut channels = vec![Vec::with_capacity(pixels / stride + 1); self.bands];
+        let strip = 256.min(shape.height.max(1));
+        let mut y = 0;
+        while y < shape.height {
+            if stop.load(std::sync::atomic::Ordering::Relaxed) {
+                return Err("it was stopped".to_string());
+            }
+            let rows = strip.min(shape.height - y);
+            let samples = level
+                .read(Region::new(0, y, shape.width, rows))
+                .map_err(|error| error.to_string())?;
+            let first = y * shape.width;
+            let start = (stride - first % stride) % stride;
+            for pixel in (start..shape.width * rows).step_by(stride) {
+                if !inside(pixel, y) {
+                    continue;
+                }
+                for (channel, plane) in channels.iter_mut().enumerate() {
+                    plane.push(samples[pixel * self.bands + channel]);
+                }
+            }
+            y += rows;
+        }
+        Ok(channels)
     }
 
     /// The store's full-resolution level.
@@ -1248,6 +1321,19 @@ mod tests {
             &mut Vec::new(),
         );
         assert_eq!(fine(&ready.stages), Some(Some(7)));
+    }
+
+    #[test]
+    fn whole_image_samples_replace_the_patches() {
+        let bands = analyse_synthetic();
+        let channels: Vec<Vec<f32>> = (0..bands.plane_scales.len())
+            .map(|channel| vec![channel as f32; 10])
+            .collect();
+        let sampled = bands.with_whole_samples(&channels);
+        for band in 0..sampled.len() {
+            let stacked = sampled.samples[band][0].as_ref().unwrap();
+            assert_eq!(stacked, &channels[sampled.tile_band[band]]);
+        }
     }
 
     #[test]

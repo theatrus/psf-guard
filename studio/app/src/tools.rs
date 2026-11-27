@@ -764,10 +764,43 @@ impl Studio {
         }
     }
 
+    /// Starts sampling every band over the whole image, for the stretches,
+    /// in place of the patches read when the store was opened.
+    pub(super) fn start_whole_samples(&mut self) {
+        if let Some(task) = self.whole_samples.take() {
+            task.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        let covered = self.base_bands.automatic_crop;
+        self.whole_samples = self
+            .base_bands
+            .store
+            .clone()
+            .map(|store| super::WholeSampling::start(store, covered));
+    }
+
     /// Takes in the planes worked out from the whole image that are done,
     /// and starts tasks for the ones the canvas's stretches wait for: two
     /// at a time, as each reads the whole store.
     pub(super) fn follow_derived(&mut self) {
+        // The stretches resolved again from the whole image's samples.
+        let sampled = self
+            .whole_samples
+            .as_ref()
+            .and_then(|task| task.done.lock().expect("whole-image samples").take());
+        if let Some(result) = sampled {
+            self.whole_samples = None;
+            match result {
+                Ok(channels) => {
+                    self.base_bands = Arc::new(self.base_bands.with_whole_samples(&channels));
+                    self.band_info = Arc::new(self.base_bands.with_derived(&self.derived));
+                    self.analysed.clear();
+                    self.refresh_canvas();
+                }
+                Err(error) => {
+                    self.tools.status = format!("Not sampled over the whole image: {error}");
+                }
+            }
+        }
         let mut finished = false;
         let mut running = Vec::new();
         for task in std::mem::take(&mut self.derive_tasks) {
@@ -848,6 +881,13 @@ impl Studio {
     /// `ha: RC-Astro StarXTerminator (40%)`.
     pub(super) fn run_progress(&self) -> Option<(String, Option<f32>, std::time::Duration)> {
         let Some(run) = self.tools.run.as_ref() else {
+            if let Some(task) = &self.whole_samples {
+                return Some((
+                    "Sampling each band over the whole image".to_string(),
+                    None,
+                    task.started.elapsed(),
+                ));
+            }
             // A plane being worked out from the whole image.
             let task = self.derive_tasks.first()?;
             let what = match self.derive_tasks.len() {
@@ -1086,6 +1126,7 @@ impl Studio {
         self.derive_tasks.clear();
         self.derived.clear();
         self.analysed.clear();
+        self.start_whole_samples();
         self.source_generation += 1;
         self.levels = pyramid.levels;
         {

@@ -430,6 +430,36 @@ impl Scene {
     }
 }
 
+/// Every tile channel's samples over the whole image, or why not.
+type WholeSamples = Result<Vec<Vec<f32>>, String>;
+
+/// A task sampling every band over the whole image.
+pub(super) struct WholeSampling {
+    done: Arc<Mutex<Option<WholeSamples>>>,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    started: Instant,
+}
+
+impl WholeSampling {
+    fn start(store: Arc<crate::store_tiles::StoreTiles>, covered: Option<[u32; 4]>) -> Self {
+        let done = Arc::new(Mutex::new(None));
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (result, halt) = (done.clone(), stop.clone());
+        std::thread::Builder::new()
+            .name("whole-image samples".into())
+            .spawn(move || {
+                let samples = store.whole_samples(covered, &halt);
+                *result.lock().expect("whole-image samples") = Some(samples);
+            })
+            .expect("spawning a task");
+        Self {
+            done,
+            stop,
+            started: Instant::now(),
+        }
+    }
+}
+
 /// What the render thread reports back for the panel.
 #[derive(Default)]
 struct Readout {
@@ -742,6 +772,9 @@ pub struct Studio {
     /// more.
     derived: Vec<Arc<crate::derived::DerivedPlane>>,
     derive_tasks: Vec<crate::derived::DeriveTask>,
+    /// The task that samples every band over the whole image, for the
+    /// stretches, while it runs.
+    whole_samples: Option<WholeSampling>,
     /// Stretch analyses already made, by each band's background strength.
     analysed: Vec<(Vec<BandState>, Arc<Vec<BandStretch>>)>,
     /// The latest samples of the combined picture, with the id of the
@@ -950,6 +983,7 @@ impl Studio {
                 analysed: Vec::new(),
                 derived: Vec::new(),
                 derive_tasks: Vec::new(),
+                whole_samples: None,
                 picture_samples: None,
                 picture_wanted: None,
                 source_generation: 0,
@@ -965,6 +999,9 @@ impl Studio {
                 levels,
                 tools,
             };
+        // The patches read as the store opened stand in until every band
+        // is sampled over the whole image.
+        studio.start_whole_samples();
         // The store was prepared for the document it is opened with, and
         // may hold inputs the document has not listed yet.
         if was_opened {

@@ -2438,6 +2438,13 @@ it; when it is, the canvas draws from a source that adds it to the
 store's channels, its tiles load again, and exports read it too. On the
 Cat's Eye store a band's fine blur takes under half a second.
 
+A band's stretch is resolved from samples of the band. When Studio opens a
+store it reads patches spread across the image, which are fast but can
+miss a small bright object, and then samples every band evenly over the
+whole region every input covers as a task (0.2 s on the Cat's Eye store).
+When that is done the stretches are resolved again from it and the canvas
+redraws.
+
 ### What is built
 
 In `src/studio/recipe.rs` and `src/studio/palette.rs`, with tests in
