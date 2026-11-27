@@ -360,6 +360,9 @@ pub struct Scene {
     headroom: f32,
     /// The planes worked out from the store, and their tile channels.
     planes: Arc<Vec<(crate::derived::DerivedKey, usize)>>,
+    /// The pane's place the scene was built for, so its label says what
+    /// the pane draws while a newer scene is built.
+    place: Option<crate::studio_model::Place>,
 }
 
 impl Scene {

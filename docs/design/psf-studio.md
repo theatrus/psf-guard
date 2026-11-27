@@ -2074,7 +2074,10 @@ thread to draw. A newer edit replaces one the thread has not started, and
 scenes a newer edit replaces before they are written are dropped. On the
 Cat's Eye, an analysis takes 60–100 ms on that thread; the UI thread spends
 under 0.1 ms per slider move. Export and the parity check still build their
-scene on the UI thread, once per click.
+scene on the UI thread, once per click. Each scene records the place it was
+built for, and a pane's label names that place, so the label matches the
+picture while a newer scene is built; a line under it names the place on
+its way (“Drawing OIII · after Processing tools on color…”).
 
 A store a tool run prepared opens on a thread of its own as well, with
 **Opening the store** in the status line. The canvas shows the picture it

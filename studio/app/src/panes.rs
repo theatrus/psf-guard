@@ -706,6 +706,17 @@ fn push_heal(
     }
 }
 
+/// What a pane's label names: the place the pane draws, which is the place
+/// its scene was built for, and the place a newer scene is being built for,
+/// if the pane is on its way there. A pane with no scene yet names the place
+/// wanted.
+pub(super) fn pane_caption(wanted: &Place, drawn: Option<Place>) -> (Place, Option<Place>) {
+    match drawn {
+        Some(drawn) if drawn != *wanted => (drawn, Some(wanted.clone())),
+        _ => (wanted.clone(), None),
+    }
+}
+
 /// Whether the document reads samples of its picture: an output stretch
 /// resolved from the picture's statistics, or Texture, which measures the
 /// picture's noise.
@@ -1279,6 +1290,7 @@ pub(super) fn scene(
         version,
         headroom: document.headroom.unwrap_or(0.0),
         planes: Arc::new(bands.derived_planes()),
+        place: None,
     };
     (scene, states)
 }
@@ -2238,25 +2250,29 @@ impl Studio {
     /// while the selection moves.
     fn pane_labels(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let scale = self.scale_factor.max(1.0);
-        let (rects, omitted): (Vec<[u32; 4]>, Vec<Vec<String>>) = self.canvas.read(|shared| {
+        type Drawn = ([u32; 4], Vec<String>, Option<Place>);
+        let drawn: Vec<Drawn> = self.canvas.read(|shared| {
             let canvas = &shared.canvas;
             (0..canvas.scenes.len())
                 .map(|index| {
+                    let scene = &canvas.scenes[index];
                     (
                         canvas.pane_rects(index).1,
-                        canvas.scenes[index].omitted.clone(),
+                        scene.omitted.clone(),
+                        scene.place.clone(),
                     )
                 })
-                .unzip()
+                .collect()
         });
         self.places
             .iter()
-            .zip(rects)
-            .zip(omitted)
+            .zip(drawn)
             .enumerate()
-            .map(|(index, ((place, rect), omitted))| {
+            .map(|(index, (wanted, (rect, omitted, drawn)))| {
                 let pinned = self.pins.get(index).is_some_and(Option::is_some);
-                let place = place.clone();
+                let place = wanted.clone();
+                let (shown, coming) = pane_caption(wanted, drawn);
+                let coming = coming.map(|next| format!("Drawing {}…", next.label(&self.document)));
                 let left_out = (!omitted.is_empty())
                     .then(|| format!("Not drawn here: {}.", omitted.join(", ")));
                 div()
@@ -2279,7 +2295,7 @@ impl Studio {
                             .flex()
                             .items_center()
                             .gap_2()
-                            .child(place.label(&self.document))
+                            .child(shown.label(&self.document))
                             .child(Self::act(
                                 if pinned { "Pinned" } else { "Pin" },
                                 ("pin", index),
@@ -2296,6 +2312,7 @@ impl Studio {
                                 },
                             )),
                     )
+                    .children(coming.map(Self::note))
                     .children(left_out.map(Self::note))
                     .into_any_element()
             })
@@ -2388,5 +2405,33 @@ impl Render for Studio {
                     )
                     .child(self.inspector(cx)),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_pane_label_names_what_the_pane_draws() {
+        use super::pane_caption;
+        use crate::studio_model::Place;
+        let stacked = Place::Input {
+            channel: "oiii".into(),
+            after: None,
+        };
+        let tools = Place::Input {
+            channel: "oiii".into(),
+            after: Some(uuid::Uuid::new_v4()),
+        };
+        // The scene for the tools step is still being built: the label
+        // names the stacked view on screen, and the tools step as next.
+        assert_eq!(
+            pane_caption(&tools, Some(stacked.clone())),
+            (stacked.clone(), Some(tools.clone()))
+        );
+        assert_eq!(
+            pane_caption(&tools, Some(tools.clone())),
+            (tools.clone(), None)
+        );
+        assert_eq!(pane_caption(&tools, None), (tools, None));
     }
 }

@@ -180,6 +180,7 @@ fn build(
             // The stretch is applied to the corrected samples, so each
             // band's analysis follows its background strength.
             scene.stretches = caches.analysis(&job.band_info, &states);
+            scene.place = Some(place.clone());
             scene
         })
         .collect();
