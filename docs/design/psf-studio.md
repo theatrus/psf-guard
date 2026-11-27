@@ -274,8 +274,9 @@ in `ps`.
 
 **Goal.** A person adds a server in Studio once and signs in once. After
 that, Studio lists the server's databases, projects, targets and stacks,
-and opens one. **Open in PSF-Studio** works on every server and uses the
-same connection.
+opens one, and saves the document and its output back to the project (see
+“Saving Studio documents to PSF Guard”). **Open in PSF-Studio** works on
+every server and uses the same connection.
 
 ##### What a person does
 
@@ -323,17 +324,24 @@ that person's role.
   connects in memory, as it keeps pairing codes.
 - The **Connect PSF Studio** page at `/studio/connect?code=…`, in the React
   app. It needs a signed-in session. It shows the computer name, the code
-  and what Studio may do, and has **Allow** and **Deny**. **Allow** posts the
-  code to `POST /api/auth/studio/approve` over the session.
+  and what Studio may do: “Read projects, targets and stacks. Save Studio
+  documents and their output to projects.” It has **Allow** and **Deny**.
+  **Allow** posts the code to `POST /api/auth/studio/approve` over the
+  session.
 - `POST /api/auth/studio/token`, which Studio polls with the connect id. It
   answers pending, denied or expired, or returns the token once with the
   approving person's username and role. The connect id stops working after
   that answer.
-- The token is an ordinary `psfg_` API token owned by the approving person,
-  labeled “PSF Studio on <computer>” and marked as Studio's so **API tokens**
-  can show it as a Studio connection. It is read-only until Studio can save
-  documents back (see “Follow-up: PSF Guard records Studio documents”);
-  then the page asks for edit access.
+- The token is a `psfg_` API token owned by the approving person, labeled
+  “PSF Studio on <computer>”, with a new **Studio** scope. **API tokens**
+  shows it as a Studio connection. The scope allows every read the person's
+  role allows, and the Studio document writes when the person is an editor.
+  Nothing else: a Studio token cannot grade frames, change plans, sync,
+  import or manage databases, so a token lost with a laptop cannot either.
+  The server checks the scope per route, as it checks `read_only` now.
+- A person with a read-only account can still connect. Studio then opens
+  targets and saves documents on this computer only, and says so in the
+  document's title bar.
 - `psf-guard studio` reads the token from `PSF_GUARD_TOKEN` before
   `--token`, as `psf-guard sync` reads `PSF_GUARD_SYNC_TOKEN`.
 
@@ -375,8 +383,9 @@ that person's role.
 - **The server answers 401**: the token was revoked or has expired. Studio
   shows the server as signed out, keeps open documents open, and offers
   **Connect again**.
-- **The server answers 403**: Studio explains which action needs edit
-  access.
+- **The server answers 403**: the person's account is read-only, or the
+  role changed since connecting. Studio keeps the document on this computer
+  and explains that saving to the server needs an editor's account.
 - **The server cannot be reached**: the server list keeps the last listing
   and offers **Try again**.
 - **The code expires** before approval: Studio offers a new code.
@@ -398,47 +407,172 @@ that person's role.
 
 ##### Order of work
 
-1. PSF Guard: the connect endpoints, the approval page, and Studio
-   connections in **API tokens**. Tests cover approval, denial, expiry,
-   single use, rate limits and revocation.
+1. PSF Guard: the Studio token scope, the connect endpoints, the approval
+   page, and Studio connections in **API tokens**. Tests cover approval,
+   denial, expiry, single use, rate limits, revocation, and a Studio token
+   refused on routes outside its scope.
 2. `psf-guard studio` reads `PSF_GUARD_TOKEN`.
 3. Studio: the connect window, the keychain, the server list and the
    signed-out state.
 4. Studio: the Open from server window and opening a target.
-5. Tickets in the link, and the button on servers with sign-in.
-6. With “Follow-up: PSF Guard records Studio documents”: saving back, which
-   asks for edit access.
+5. Saving to the server, in the order “Saving Studio documents to PSF
+   Guard” gives.
+6. Tickets in the link, and the button on servers with sign-in.
 
 ##### Open questions
 
-- Should a Studio connection stay read-only until saving back exists?
-  Proposed: yes.
 - How long should a Studio token last: a fixed 90 days, or renewed while it
   is used?
 - Should Studio start a stack build for a target that has none, or only open
   PSF Guard's stack page? Proposed: only open the page at first.
-- Does the desktop app's bundled Studio need a connection? Proposed: no; the
-  desktop app passes cache files on disk, as it does now.
+- Does the desktop app's bundled Studio need a connection? Proposed: no.
+  The desktop app passes cache files on disk, as it does now, and the
+  bundled Studio saves documents through the desktop app's own store, the
+  one a server uses.
 
-#### Follow-up: PSF Guard records Studio documents (asked for 2026-11-25)
+#### Saving Studio documents to PSF Guard (proposed 2026-11-27)
 
-The owner asked for this as its own piece of work: PSF Guard records the
-documents Studio makes for a project, and a person opens Studio from PSF
-Guard with one click. What that needs, on top of the steps listed in
-“Launching Studio from PSF Guard”:
+This replaces the follow-up asked for on 2026-11-25, “PSF Guard records
+Studio documents”, and covers what it listed.
 
-- **A record per document in PSF Guard,** below the database slug like
-  other derived data: the document, the color card it started from
-  (project, target, kind, palette, crop and star settings), and the build
-  it last ran. `studio-run` takes the card as options today because the
-  document has no place for it.
-- **A list of a project's Studio documents** on the project's stack page,
-  each with **Open in PSF-Studio**.
-- **Save from Studio** writes the document back to that record. A document
-  whose steps are all PSF Guard's can also be saved as a Color processing
-  setup, since it reads back as one.
-- **One click on the desktop app** starts the bundled Studio with the
-  record. In a browser the link and the link file do the same.
+**Goal.** A person's work in Studio belongs to the project. Another computer
+that opens the project's document shows the same picture, and the project
+page shows what Studio made. PSF Guard keeps the person's edits and the
+output. It does not keep what Studio can compute again.
+
+##### What PSF Guard keeps, and what it does not
+
+| Kept on the server | Not kept: Studio computes it again |
+|---|---|
+| The document: stages, steps and settings, layers, groups, palettes, crop, headroom and recipe | The tile store (`.pgtiles`) and its pyramid |
+| Painted masks, heals and shared masks, which the document already holds as strokes | Downloaded channel stacks and clipped maps |
+| The file an external editor saved at the Finish junction (`.edit.tif`) | Tool results: star removal, Seiza models, deconvolution |
+| Exports a person saves to the project, each with the document revision it came from | Derived planes, stretched stars and the GPU's textures |
+| A preview image for lists | Prepared-store records and partial files |
+| What the document was made from: the target, its channel stacks and their source fingerprints | Analysis and histogram samples |
+
+The external editor's file is kept because nothing else holds that work:
+Studio cannot make it again. Tool results are not kept even though some take
+minutes, because the document holds every setting they need. Another
+computer runs them again when it opens the document, as Studio does now when
+it opens a document beside a new store.
+
+##### What a person does
+
+- **Opening a target** from the Open from server window, or with **Open in
+  PSF-Studio**, lists the target's documents first: name, who last saved it,
+  when, and its preview. **New document** starts one from the default flow,
+  as now. Opening the most recent document is the default.
+- **Studio saves to the server as it saves to disk now**: a few seconds
+  after edits stop, and when the document closes. The title bar shows
+  “Saved to <server>”, “Saving…”, or “Saved on this computer only” with the
+  reason.
+- **Export** has **Save to the project** beside **Save to this computer**.
+  The project page lists saved exports with the document revision they came
+  from.
+- **Open in external editor** works as now. When the editor saves, Studio
+  reads the file and also uploads it, so the document opens with the edit on
+  another computer.
+- **File › Save to PSF Guard…** puts a document opened from files on a
+  project and target the person chooses.
+
+On PSF Guard's side, the project's stack page lists the project's Studio
+documents, each with its preview, **Open in PSF-Studio**, and its saved
+exports. **Delete** removes a document, its revisions and the files only it
+uses, after a confirmation that lists them. A document whose steps are all
+PSF Guard's can also be saved as a Color processing setup, because it reads
+back as one.
+
+##### How the server stores a document
+
+- **Where.** A folder per document below the database slug:
+  `studio/<db slug>/<document id>/`. The folder sits next to PSF Guard's
+  other owned data, not in a cache directory, so cache cleanup never removes
+  it. Nothing is written to the Target Scheduler database.
+- **The record**: the document id, its name, the project and target, the
+  channel stacks it was made from with their source fingerprints, the
+  current revision, who saved each revision and when, and the color card it
+  started from (kind, palette, crop and star settings). `studio-run` takes
+  the card as options today because the document has no place for it.
+- **Revisions.** Each save writes the document JSON as a new revision. The
+  server keeps the last 50 revisions and every revision an export or an
+  edited file refers to. A person can open an earlier revision from the
+  document list.
+- **Files** are stored once by content hash (SHA-256): the edited file,
+  exports and previews. A revision names the files it uses. Uploading a file
+  the server already has costs one request.
+- **Writes** go to a temporary file and are renamed into place, as other
+  generated files are.
+
+##### Endpoints
+
+All below `/api/db/{db}/studio-documents`, which the Studio token scope
+allows:
+
+- `GET ?project=&target=`: the documents of a project or target.
+- `POST`: a new document, with its first revision.
+- `GET /{id}` and `GET /{id}/revisions/{revision}`: the record and a
+  revision's JSON.
+- `PUT /{id}` with the revision the save started from. When another save
+  arrived first, the server answers 409 with the newer revision.
+- `HEAD` and `PUT /files/{sha256}`: check for a file, and upload it. The
+  server checks the hash and limits the size.
+- `GET /files/{sha256}`: download a file.
+- `POST /{id}/exports`: record an uploaded export against a revision.
+- `DELETE /{id}`: delete a document, only with a session or an editor's
+  Studio token.
+
+##### Two computers, one document
+
+- **A save that started from an older revision** gets 409. Studio keeps the
+  person's edits and offers **Save as a copy** or **Open the newer version**,
+  which discards this computer's unsaved changes after a confirmation.
+- The document list shows when a document was saved from another computer in
+  the last few minutes, so two people see that they are both editing it.
+  The server does not lock documents.
+
+##### Offline and failures
+
+- When the server cannot be reached, Studio keeps saving on this computer
+  and uploads the newest revision when the server answers again. It uploads
+  only the newest, not every save in between.
+- A file upload that fails is tried again. The revision that names it is
+  saved only after the file is on the server, so a revision never refers to
+  a missing file.
+
+##### When the stacks change
+
+The server may build a target's stacks again with more frames. When Studio
+opens a document whose stacks' fingerprints differ from the record's:
+
+- **The stacks are the same size and registration**: Studio opens the
+  document with the new stacks and says that they changed.
+- **The size or registration differs**: masks, heals and the crop are in
+  document pixels and would be misplaced. Studio explains that, and offers
+  **Open with the new stacks** or **Cancel**. Studio cannot offer the old
+  stacks, because the server does not promise to keep a stack after it is
+  built again.
+
+##### Order of work
+
+1. The document store, its record and revisions, with tests for atomic
+   writes, revision conflicts, retention and deletion.
+2. Files by hash, with tests for a wrong hash, the size limit and a file
+   kept while a revision uses it.
+3. Studio: save to the server and open from it, the title bar's save state,
+   and offline uploads.
+4. The edited file and exports, and the project page's document list.
+5. Stack fingerprints and the changed-stacks message.
+6. Save as a Color processing setup.
+
+##### Open questions
+
+- Are 50 revisions per document right, and should the server also limit the
+  space one document's files use?
+- Should **Save to the project** be the default for exports on a document
+  that came from a server?
+- Should the preview be rendered at every save, or only at close and export?
+  Proposed: at close and export, from the canvas, so a save stays small.
 
 ### Remote use
 
