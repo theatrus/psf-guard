@@ -97,7 +97,6 @@
   **Star removal** and heal to fix the starless picture: the heal becomes
   a layer right above it, beneath the stars. Select the **Stars it took
   out** layer and heal to remove or fix a star there alone.
-
 - In PSF Studio a heal is matched to the brightness around it, and the area
   it copies from shows over the canvas. A group can be healed, and a Heal
   layer can have a mask of its own.
