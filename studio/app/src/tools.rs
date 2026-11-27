@@ -1325,7 +1325,9 @@ impl Studio {
         let pyramid = source.pyramid();
         self.band_info = Arc::new(bands);
         self.base_bands = self.band_info.clone();
-        // Planes of the store before are of no use now.
+        // Planes of the store before are of no use now, the tools' results
+        // among them: they are read again for this store.
+        self.late = super::late_tools::Late::default();
         for task in &self.derive_tasks {
             task.stop.store(true, std::sync::atomic::Ordering::Relaxed);
         }

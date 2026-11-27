@@ -125,19 +125,24 @@ impl Studio {
                 })
             })
             .collect();
-        Self::field("Finish", self.menu("add-finish", "Add step", picks, cx)).child(Self::field(
-            "",
-            self.tool_menu("add-finish-tool", "Add tool", cx, |this, step| {
-                let id = step.id;
-                if this
-                    .document
-                    .insert_step(StageKind::Finish, usize::MAX, step)
-                    .is_ok()
-                {
-                    this.selected = Row::Finish(id);
-                }
-            }),
-        ))
+        column()
+            .child(Self::field(
+                "Finish",
+                self.menu("add-finish", "Add step", picks, cx),
+            ))
+            .child(Self::field(
+                "",
+                self.tool_menu("add-finish-tool", "Add tool", cx, |this, step| {
+                    let id = step.id;
+                    if this
+                        .document
+                        .insert_step(StageKind::Finish, usize::MAX, step)
+                        .is_ok()
+                    {
+                        this.selected = Row::Finish(id);
+                    }
+                }),
+            ))
     }
 
     /// What every step's controls share: on or off, its amount, whether the

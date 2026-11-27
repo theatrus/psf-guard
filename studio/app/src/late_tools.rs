@@ -92,6 +92,8 @@ fn store_version(store: &Path) -> String {
 fn upstream(document: &Document, step: &StepRecord, layer: Option<Uuid>) -> Value {
     let mut value: Value = serde_json::from_str(&document.to_json()).unwrap_or(Value::Null);
     value["name"] = Value::Null;
+    // Whether a star removal's stars are shown changes no tool's image.
+    strip_stars_shown(&mut value);
     let stage = |kind: StageKind| kind as usize;
     if let Some(stages) = value["stages"].as_array_mut() {
         if let Some(export) = stages.get_mut(stage(StageKind::Export)) {
@@ -131,6 +133,22 @@ fn upstream(document: &Document, step: &StepRecord, layer: Option<Uuid>) -> Valu
     value
 }
 
+/// `value` with every step's `stars_shown` setting left out.
+fn strip_stars_shown(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            if map.contains_key("provider") {
+                map.remove(STARS_SHOWN_KEY);
+            }
+            for child in map.values_mut() {
+                strip_stars_shown(child);
+            }
+        }
+        Value::Array(list) => list.iter_mut().for_each(strip_stars_shown),
+        _ => {}
+    }
+}
+
 /// The document's tool steps after the Linear stage, in the order they
 /// run: each layer's own, bottom layer first, then the Finish steps.
 pub(super) fn late_steps(document: &Document, store: &Path) -> Vec<LateStep> {
@@ -138,10 +156,16 @@ pub(super) fn late_steps(document: &Document, store: &Path) -> Vec<LateStep> {
     let version = store_version(store);
     let make = |step: &StepRecord, layer: Option<Uuid>, words: String| -> Option<LateStep> {
         let tool = tool_of(step)?.clone();
+        // Whether its stars are shown changes what is drawn, not what the
+        // tool makes.
+        let mut made_by = tool.clone();
+        if let Some(settings) = made_by.as_object_mut() {
+            settings.remove(STARS_SHOWN_KEY);
+        }
         let text = format!(
             "{version}|{}|{}",
             upstream(document, step, layer),
-            serde_json::to_string(&tool).unwrap_or_default()
+            serde_json::to_string(&made_by).unwrap_or_default()
         );
         let identity = Sha256::digest(text.as_bytes())
             .iter()
@@ -239,6 +263,20 @@ impl Late {
 }
 
 impl Studio {
+    /// Whether a tool's result is being read, or one the document has is
+    /// waiting to be.
+    pub(super) fn late_reading(&self) -> bool {
+        if self.late.reading.is_some() {
+            return true;
+        }
+        let Some(store) = self.store_path() else {
+            return false;
+        };
+        late_steps(&self.document, store).iter().any(|step| {
+            step.enabled && !self.late.has(step.id) && result_path(store, &step.identity).is_file()
+        })
+    }
+
     /// The late tool steps whose result is missing or out of date, which
     /// Run tools would run.
     pub(super) fn late_to_run(&self) -> Vec<LateStep> {
@@ -381,7 +419,9 @@ impl Studio {
                     command.arg("--shifted");
                 }
                 let ran = super::tools::run_program(run, command);
-                let _ = std::fs::remove_file(&input);
+                if std::env::var_os("PSF_STUDIO_KEEP_TOOL_INPUTS").is_none() {
+                    let _ = std::fs::remove_file(&input);
+                }
                 ran.map_err(|error| format!("{}: {error}", step.words))?;
                 // The steps after it read its result.
                 planes.retain(|plane| {
@@ -573,7 +613,14 @@ mod tests {
             noise_id,
             serde_json::json!({ "provider": "nxt", "parameters": { "denoise": 0.5 } }),
         );
-        assert_ne!(identity(&document, noise_id), second);
+        let third = identity(&document, noise_id);
+        assert_ne!(third, second);
+        // Showing or leaving out its stars runs nothing again.
+        document.set_step_settings(
+            noise_id,
+            serde_json::json!({ "provider": "nxt", "parameters": { "denoise": 0.5 }, "stars_shown": false }),
+        );
+        assert_eq!(identity(&document, noise_id), third);
 
         // A layer's tool follows that layer, not the others.
         let layers: Vec<Uuid> = document.layers().iter().map(|layer| layer.id).collect();

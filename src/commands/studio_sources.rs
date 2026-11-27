@@ -792,8 +792,25 @@ pub fn studio_tool(options: StudioToolOptions) -> Result<()> {
         .map(|byte| format!("{byte:02x}"))
         .collect();
     drop(bytes);
-    let frame = crate::image_io::open_linear_frame(&options.input)
+    let mut frame = crate::image_io::open_linear_frame(&options.input)
         .with_context(|| format!("reading {}", options.input.display()))?;
+    // The tools clip at 1. An image of an HDR picture reaches above it, so
+    // it goes to them scaled into 0 to 1 by its brightest sample, and comes
+    // back at its own scale.
+    let brightest = frame
+        .image
+        .data
+        .iter()
+        .copied()
+        .filter(|value| value.is_finite())
+        .fold(0.0_f32, f32::max);
+    let scale = brightest.max(1.0);
+    if scale > 1.0 {
+        for sample in &mut frame.image.data {
+            *sample /= scale;
+        }
+    }
+    let digest = format!("{digest}:unit");
     let tool: ProcessingStep =
         serde_json::from_str(&options.tool).context("the tool is not a step of a tool chain")?;
     let workers = Workers::default();
@@ -855,6 +872,13 @@ pub fn studio_tool(options: StudioToolOptions) -> Result<()> {
             (first, _) => first,
         };
     }
+    if scale > 1.0 {
+        for image in std::iter::once(&mut outcome.image).chain(outcome.stars.as_mut()) {
+            for sample in &mut image.data {
+                *sample *= scale;
+            }
+        }
+    }
     let write = |path: &Path, image: &seiza_stacking::LinearImage| -> Result<()> {
         let data = match image.channels {
             1 => seiza_fits::F32ImageData::Mono(&image.data),
@@ -867,10 +891,12 @@ pub fn studio_tool(options: StudioToolOptions) -> Result<()> {
         std::fs::rename(&partial, path)?;
         Ok(())
     };
-    write(&options.output, &outcome.image)?;
+    // The stars first: the result's file is how a reader knows the run is
+    // complete, stars and all.
     if let (Some(path), Some(stars)) = (&options.stars, &outcome.stars) {
         write(path, stars)?;
     }
+    write(&options.output, &outcome.image)?;
     println!(
         "Ran the tool in {:.1} s{}",
         started.elapsed().as_secs_f64(),

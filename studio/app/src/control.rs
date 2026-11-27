@@ -625,6 +625,9 @@ impl Studio {
         if let Some((what, _, _)) = self.run_progress() {
             busy.push(what);
         }
+        if self.late_reading() {
+            busy.push("reading a tool's result".to_string());
+        }
         if self.run_is_queued() {
             busy.push("a run of the tools to start".to_string());
         }

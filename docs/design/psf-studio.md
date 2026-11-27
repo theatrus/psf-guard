@@ -2329,8 +2329,21 @@ Such a step runs on what Studio draws there:
   right after the step: the tree shows them as “Stars it took out” under
   the step, with a switch that leaves them out, so the steps after it work
   on a starless picture.
+- **HDR.** The tools clip at 1, so an image of an HDR picture goes to them
+  scaled into 0 to 1 by its brightest sample and comes back at its own
+  scale; NoiseXTerminator on one channel of the Iris reaching 1.2 came back
+  at 1.0 before this.
 - **Memory.** Each result is held whole, with its pyramid: about 0.3 GB a
   channel for the Iris.
+- **Tried** on a copy of the Iris through `psf-studio-mcp`: Noise reduction
+  and Star removal on the picture ran in 48 s; the sky's 99th percentile
+  went from 0.46 to 0.43 with the stars added back and 0.15 without them,
+  and the switch runs nothing again. Noise reduction on the luminance
+  layer then flagged it and the two Finish steps after it, and the three
+  ran in 70 s. Found on the way: a result read before its stars file was
+  written showed no stars (`studio-tool` now writes the stars first), and
+  results read before a deferred store opened were dropped and not read
+  again.
 
 Still open: adding the stars back at the end of the Finish stage rather
 than right after the step, which needs layers after the Finish steps in
