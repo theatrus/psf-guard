@@ -1996,6 +1996,27 @@ Seiza's compositor design record. On the canvas the windows are measured in
 screen pixels, so zoomed out they cover the same part of the picture at the
 canvas's resolution.
 
+**HDR.** Tone and color has an HDR switch and a Headroom, 0 to 4 stops
+(2 to start). With HDR on, Seiza lifts the brightest areas above SDR
+white toward the headroom instead of clipping them; Exposure and Whites
+put areas there. Above SDR white a value is linear light, a multiple of
+SDR white's, so two stops of headroom is four times its light. On an EDR
+surface (`--output p3-extended`, as on a Pro Display XDR) the canvas shows
+those values brighter than white. Export to a name ending `.avif` writes an
+HDR AVIF: the picture in linear Rec. 2020 through the working space's ICC
+profile, PQ, 10 bits, with its content light levels. The histogram of an
+HDR picture counts clipping at the headroom's peak and gives the share
+above SDR white apart. Tried on the Cat's Eye (NGC 6543) from the C925:
+with Exposure +1.5 and a 2-stop headroom, the export's brightest light is
+610 cd/m², under the 812 cd/m² the headroom allows.
+
+**Texture and noise.** Studio measures the picture's noise from its
+samples, as the Finish steps before Tone leave them, and gives it to Tone,
+so Texture leaves noise alone and raises detail above it. On the Sh2-157
+stack, Texture +0.4 raises the sky's noise by 7%. A Finish step with a
+mask shows the histogram of its area. With a working space's profile, a
+TIFF or PNG export embeds it.
+
 **Histogram.** The inspector of the Final picture, of a Tone step and of an
 output stretch shows the histogram of the final picture: red, green, blue
 and luminance, with the share of pixels clipped to black and to white.
