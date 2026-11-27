@@ -186,6 +186,8 @@ pub struct CanvasState {
     pub capture: Option<String>,
     /// A capture the control socket asked for, by its number.
     pub control_capture: Option<u64>,
+    /// Whether pixels at the peak are marked with stripes.
+    pub show_clipping: bool,
     /// Set to measure the GPU's cost of the next frame with no display.
     pub measure_gpu: bool,
     pub gpu_frame_ms: Option<f32>,
@@ -251,6 +253,7 @@ impl CanvasState {
             fitted: false,
             capture: None,
             control_capture: None,
+            show_clipping: false,
             measure_gpu: false,
             gpu_frame_ms: None,
             probe: None,
@@ -575,6 +578,7 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
             canvas.final_probe = shared.canvas.final_probe.clone();
             canvas.wipe = shared.canvas.wipe;
             canvas.crop = shared.canvas.crop;
+            canvas.show_clipping = shared.canvas.show_clipping;
             canvas.control_capture = shared.canvas.control_capture.take();
             if !shared.canvas.fitted && canvas.surface_size.0 > 1 {
                 canvas.fit();
@@ -649,6 +653,7 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
             overlay: &canvas.strokes,
             overlay_strength: 1.0,
             crop: canvas.crop,
+            show_clipping: canvas.show_clipping,
         };
         let capture = canvas.capture.take();
         let control_capture = canvas.control_capture.take();

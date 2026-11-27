@@ -2181,6 +2181,16 @@ impl Studio {
                 cx,
                 |this| this.view_stretch_open = !this.view_stretch_open,
             )))
+            .child(div().pl_2().child(Self::act(
+                "Clipping",
+                "show-clipping",
+                self.canvas.read(|shared| shared.canvas.show_clipping),
+                cx,
+                |this| {
+                    this.canvas
+                        .edit(|canvas| canvas.show_clipping = !canvas.show_clipping)
+                },
+            )))
             .child(
                 div()
                     .flex_1()

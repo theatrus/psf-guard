@@ -72,6 +72,9 @@ pub struct Frame<'a> {
     /// bottom in document pixels. Nothing outside it is drawn. `None` keeps
     /// the whole document.
     pub crop: Option<[f32; 4]>,
+    /// Whether pixels at their pane's peak are marked with stripes, so
+    /// clipped areas show however small they are.
+    pub show_clipping: bool,
 }
 
 /// The pixels between two panes.
@@ -158,7 +161,7 @@ struct PresentUniform {
     /// Linear working-space RGB to linear target RGB, as a std140
     /// `mat3x3f`.
     to_display: DisplayMapping,
-    /// x: unused.
+    /// x: 1 when pixels at their pane's peak are marked.
     /// y: 1 when the surface takes values above SDR white (EDR).
     /// z: how many of `panes` are in use. w: the peak outside them.
     display: [f32; 4],
@@ -830,6 +833,7 @@ impl Renderer {
             uniform.panes[index] = within_surface(pane.scissor, surface).map(|value| value as f32);
             uniform.peaks[index / 4][index % 4] = pane.peak.max(1.0);
         }
+        uniform.display[0] = if frame.show_clipping { 1.0 } else { 0.0 };
         uniform.display[2] = kept as f32;
         uniform.display[3] = brightest;
         self.queue

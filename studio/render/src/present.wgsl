@@ -5,6 +5,7 @@
 struct Present {
     // The working space to the surface's primaries.
     to_display: DisplayMapping,
+    // x: 1 when pixels at their pane's peak are marked.
     // y: 1 when the surface takes values above SDR white (EDR).
     // z: how many of `panes` are in use. w: the peak outside them.
     display: vec4f,
@@ -28,7 +29,14 @@ fn present_vertex(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f
 fn present_fragment(@builtin(position) position: vec4f) -> @location(0) vec4f {
     // Nothing goes past the pane's peak: SDR white unless HDR Tone lifts it.
     let peak = peak_at(position.xy);
-    let color = min(textureLoad(finished, vec2i(position.xy), 0).rgb, vec3f(peak));
+    let picture = textureLoad(finished, vec2i(position.xy), 0).rgb;
+    // A pixel with a channel at the peak is clipped there: marked with
+    // magenta and black stripes when that is asked for.
+    if present.display.x > 0.5 && max(picture.r, max(picture.g, picture.b)) >= peak * 0.995 {
+        let stripe = (u32(position.x + position.y) / 6u) % 2u;
+        return select(vec4f(0.0, 0.0, 0.0, 1.0), vec4f(1.0, 0.0, 1.0, 1.0), stripe == 0u);
+    }
+    let color = min(picture, vec3f(peak));
     var shown = to_display(color, present.to_display);
     // Only an EDR surface shows values above SDR white; the extended sRGB
     // curve the picture is on is the one it reads.

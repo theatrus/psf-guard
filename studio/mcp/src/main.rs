@@ -140,6 +140,11 @@ fn tools() -> Value {
             }), &["path"]),
         },
         {
+            "name": "studio_show_clipping",
+            "description": "Marks pixels at their pane's peak with magenta and black stripes, as the Clipping toggle does, so clipped areas such as an HDR core show in a capture; `on` false turns it off.",
+            "inputSchema": object(json!({ "instance": instance, "on": { "type": "boolean" } }), &[]),
+        },
+        {
             "name": "studio_use_recipe",
             "description": "Makes the picture from a recipe, as the Recipe menu does, such as \"LRGB\" or \"Narrowband with RGB stars\". A recipe that shows stars apart has them separated, which runs the tools.",
             "inputSchema": object(json!({ "instance": instance, "name": { "type": "string" } }), &["name"]),
@@ -247,6 +252,11 @@ impl Server {
                 json!({ "stops": arguments["stops"] }),
             ),
             "studio_export" => forward(self.instance(arguments)?, "export", arguments.clone()),
+            "studio_show_clipping" => forward(
+                self.instance(arguments)?,
+                "show_clipping",
+                json!({ "on": arguments["on"].as_bool().unwrap_or(true) }),
+            ),
             "studio_use_recipe" => forward(
                 self.instance(arguments)?,
                 "use_recipe",

@@ -213,6 +213,11 @@ impl Studio {
                     json!({ "split": split })
                 }),
             "set_step" => self.control_set_step(params),
+            "show_clipping" => {
+                let on = params["on"].as_bool().unwrap_or(true);
+                self.canvas.edit(|canvas| canvas.show_clipping = on);
+                Ok(json!({ "show_clipping": on }))
+            }
             "export" => match params["path"].as_str() {
                 Some(path) => {
                     let format = params["format"]
