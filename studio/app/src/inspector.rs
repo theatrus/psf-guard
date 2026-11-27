@@ -1411,12 +1411,9 @@ impl Studio {
             .as_str()
             .unwrap_or_default()
             .to_string();
-        // The layered stretches need the whole image, which a view stretch
-        // of every channel does not have.
         let kinds = STRETCHES
             .iter()
             .enumerate()
-            .filter(|(_, (name, _))| !matches!(*name, "layered" | "layered-hdr"))
             .map(|(index, (name, label))| {
                 let name = *name;
                 Self::pick(

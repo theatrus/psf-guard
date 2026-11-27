@@ -264,7 +264,6 @@ pub(super) fn stretch_settings(kind: &str) -> &'static [(&'static str, &'static 
             ("target_background", "Background", 0.05, 0.5),
             ("aggressiveness", "Black point", 0.0, 1.0),
             ("contrast_recovery", "Contrast", 0.0, 1.0),
-            ("headroom", "Headroom, stops", 0.0, 4.0),
             ("knee", "Lift above white starts at", 0.5, 0.95),
             ("core_compression", "Core compression", 0.0, 1.0),
             (
@@ -349,7 +348,7 @@ pub(super) fn new_stretch(kind: &str) -> serde_json::Value {
         }),
         "layered-hdr" => json!({
             "type": kind, "target_background": 0.15, "aggressiveness": 0.5,
-            "contrast_recovery": 0.0, "headroom": 2.0, "knee": 0.75,
+            "contrast_recovery": 0.0, "knee": 0.75,
             "core_compression": 0.7, "core_threshold": 100.0, "core_scale": 12.0,
         }),
         _ => json!({ "type": "identity" }),
@@ -412,16 +411,8 @@ pub(super) fn is_drawn(stage: StageKind, step: &StepRecord, bands: &Bands) -> bo
                                 .any(|band| bands.has_tools(band))
                         }))
         }
-        (StepKind::Operation { .. }, StageKind::Stretch) if stretch_model(step).is_some() => {
-            // The layered stretch is drawn when the store stretched the
-            // step's input over the whole image.
-            !stretch_model(step).is_some_and(|model| needs_image(&model))
-                || step
-                    .band
-                    .as_deref()
-                    .and_then(|band| bands.band_of(band))
-                    .is_some_and(|band| bands.stretched_plane(band).is_some())
-        }
+        // Every stretch of an input is drawn, the layered ones included.
+        (StepKind::Operation { .. }, StageKind::Stretch) if stretch_model(step).is_some() => true,
         (StepKind::Operation { operation, .. }, StageKind::Stretch) => {
             operation == flow_operations::STRETCH
                 || (operation == flow_operations::STAR_STRETCH && bands.has_star_layer())
@@ -594,7 +585,7 @@ pub(super) fn stretch_model(step: &StepRecord) -> Option<StretchModel> {
 ///
 /// What the canvas cannot draw is recorded as left out: a background
 /// correction for a view before the input's tools, where the store
-/// corrected the tools' result, and a stretch that needs the engine.
+/// corrected the tools' result, and a stretch the canvas does not know.
 fn band_source(
     document: &Document,
     bands: &Bands,
@@ -625,19 +616,6 @@ fn band_source(
         }
         state.background = 0.0;
     }
-    // A channel whose stretches need the whole image is drawn from the
-    // plane the store stretched, as it is.
-    if let (PlannedStretch::Document(steps), Some(stretched)) =
-        (&plan.stretch, bands.stretched_plane(band))
-    {
-        let layered = steps
-            .iter()
-            .filter_map(|id| document.step(*id))
-            .any(|(_, step)| stretch_model(step).is_some_and(|model| needs_image(&model)));
-        if layered {
-            return (state, stretched, None, Vec::new(), true);
-        }
-    }
     // A band the store holds stretched for display has no stretch to draw.
     if bands.is_display(band) {
         return (
@@ -656,12 +634,8 @@ fn band_source(
             .iter()
             .filter_map(|id| document.step(*id))
             .filter_map(|(_, step)| match stretch_model(step) {
-                Some(model) if needs_image(&model) => {
-                    omitted.push(format!("a stretch of {label} that needs the engine"));
-                    None
-                }
                 None => {
-                    omitted.push(format!("a stretch of {label} that needs the engine"));
+                    omitted.push(format!("a stretch of {label} the canvas does not know"));
                     None
                 }
                 Some(model) => Some(model),

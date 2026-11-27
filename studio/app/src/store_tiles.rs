@@ -3,17 +3,17 @@
 
 use crate::image_steps::{Domain, ImageShape, Region};
 use crate::studio_model::{
-    background_corrected_channel, stretched_channel, tools_channel, MemoryBudget, RegionReader,
-    SampleFormat, StoreLevel, StoreOptions, StudioError, TileStore,
+    background_corrected_channel, tools_channel, MemoryBudget, RegionReader, SampleFormat,
+    StoreLevel, StoreOptions, StudioError, TileStore,
 };
 use psf_studio_render::synth::{generate_tile, TileKey, BANDS, DOC_HEIGHT, DOC_WIDTH, TILE};
 use psf_studio_render::{Pyramid, TileSource};
 use seiza_compose::gpu::GpuInput;
-use seiza_compose::picture::{Transfer, TransferStage};
+use seiza_compose::picture::{LayeredStage, Transfer, TransferStage};
 use seiza_compose::ReferenceRegion;
 use seiza_stretch::{
-    ResolvedSampleDomain, SampleDomain, SampleNormalization, StretchAnalysis, StretchConfig,
-    StretchModel, StretchParams,
+    LayeredMaps, ResolvedCurve, ResolvedLayered, ResolvedSampleDomain, SampleDomain,
+    SampleNormalization, StretchAnalysis, StretchConfig, StretchModel, StretchParams,
 };
 use std::collections::VecDeque;
 use std::path::Path;
@@ -43,6 +43,40 @@ pub struct BandStretch {
     /// Whether the band is already stretched for display, so its stretch
     /// leaves its samples as they are.
     display: bool,
+    /// The whole band at a quarter of the resolution, from 0 to 1 as the
+    /// stretch reads it, with its width and height: what a layered
+    /// stretch's maps are measured from.
+    quarter: Option<Arc<(Vec<f32>, usize, usize)>>,
+    /// Layered maps measured before, by what moves them.
+    maps: Mutex<Vec<(MapsKey, Arc<LayeredMaps>)>>,
+}
+
+/// Every channel of an image at a quarter of the resolution, and their
+/// width and height.
+type Quarter = (Vec<Arc<Vec<f32>>>, (usize, usize));
+
+/// What a layered stretch's maps depend on: the band's background
+/// statistics, the core compression's settings and whether there is
+/// contrast recovery and at what scale. The black point and background
+/// target move the curve, not the maps.
+type MapsKey = [u64; 7];
+
+fn maps_key(layered: &ResolvedLayered) -> MapsKey {
+    let hdr = layered.hdr.unwrap_or_default();
+    let recovery = if layered.params.contrast_recovery > 0.0 {
+        f64::from(layered.params.scale_separation)
+    } else {
+        0.0
+    };
+    [
+        layered.median.to_bits(),
+        layered.noise.to_bits(),
+        u64::from(layered.hdr.is_some()),
+        hdr.core_compression.to_bits(),
+        hdr.core_threshold.to_bits(),
+        hdr.core_scale.to_bits(),
+        recovery.to_bits(),
+    ]
 }
 
 /// What a plane stretched for display is divided by on the way to the
@@ -51,6 +85,11 @@ pub struct BandStretch {
 fn display_scale() -> f32 {
     seiza_compose::tone::extended_srgb_encode(seiza_compose::tone::MAX_HEADROOM.exp2())
 }
+
+/// How much brighter than the quarter-resolution level's largest sample a
+/// band's largest sample at full resolution may be: those samples are means
+/// of sixteen.
+const QUARTER_MARGIN: f32 = 1.25;
 
 /// The samples Seiza analyses per band, at most.
 const ANALYSIS_SAMPLES: usize = 300_000;
@@ -81,7 +120,40 @@ impl BandStretch {
             analysis,
             unit,
             display: false,
+            quarter: None,
+            maps: Mutex::new(Vec::new()),
         })
+    }
+
+    /// The maps of a layered `curve` over this band, measured from its
+    /// quarter-resolution copy, or taken from the last measure with the
+    /// same settings. `None` for another curve or a band with no copy.
+    fn layered_maps(&self, curve: &ResolvedCurve) -> Option<Arc<LayeredMaps>> {
+        let ResolvedCurve::Layered(layered) = curve else {
+            return None;
+        };
+        let quarter = self.quarter.as_ref()?;
+        let key = maps_key(layered);
+        let mut known = self.maps.lock().ok()?;
+        if let Some((_, maps)) = known.iter().find(|(other, _)| *other == key) {
+            return Some(maps.clone());
+        }
+        let (samples, width, height) = quarter.as_ref();
+        let maps = Arc::new(layered.measure(samples, *width, *height));
+        // A few settings back and forth are kept, not every one.
+        if known.len() == 4 {
+            known.remove(0);
+        }
+        known.push((key, maps.clone()));
+        Some(maps)
+    }
+
+    /// Gives the band its quarter-resolution copy, `width` by `height`
+    /// samples as they are in the image.
+    fn set_quarter(&mut self, samples: &[f32], width: usize, height: usize) {
+        if let Ok(unit) = self.domain.apply(samples, 1) {
+            self.quarter = Some(Arc::new((unit, width, height)));
+        }
     }
 
     /// The band's stretch as a transfer of its samples, as they are in the
@@ -95,9 +167,11 @@ impl BandStretch {
     /// `nudge` is added to the background target of every automatic
     /// midtones stage; the benchmark uses it to time a stretch change.
     ///
-    /// A stage Seiza refuses is left out. The layered stretch is one: it
-    /// needs the image, not samples of it.
-    pub fn transfer(&self, stages: &[StretchModel], nudge: f64) -> Transfer {
+    /// A stage Seiza refuses is left out. A layered stretch reads maps of
+    /// the whole band at a quarter of its resolution; `headroom`, in stops,
+    /// is the picture's, which the HDR layered stretch reaches into (0 for
+    /// an SDR picture).
+    pub fn transfer(&self, stages: &[StretchModel], nudge: f64, headroom: f64) -> Transfer {
         let unit = TransferStage::Clamp {
             low: 0.0,
             high: 1.0,
@@ -118,6 +192,12 @@ impl BandStretch {
                         ..*params
                     })
                 }
+                // The HDR layered stretch reaches as far as the picture does.
+                StretchModel::LayeredHdr(params) => {
+                    let mut params = *params;
+                    params.hdr.headroom = headroom;
+                    StretchModel::LayeredHdr(params)
+                }
                 other => other.clone(),
             };
             let config = StretchConfig {
@@ -131,7 +211,23 @@ impl BandStretch {
             };
             let Ok(plan) = plan else { continue };
             let curve = plan.curves()[0];
-            transfer.extend([TransferStage::Curve(curve), unit.clone()]);
+            // A layered stretch reads maps of the whole band, so it is
+            // drawn as the first stage only.
+            if let (ResolvedCurve::Layered(layered), Some(maps), 0) =
+                (curve, self.layered_maps(&curve), at)
+            {
+                let stage = LayeredStage::new(layered, maps);
+                let peak = stage.peak();
+                transfer.extend([
+                    TransferStage::Layered(stage),
+                    TransferStage::Clamp {
+                        low: 0.0,
+                        high: peak,
+                    },
+                ]);
+            } else {
+                transfer.extend([TransferStage::Curve(curve), unit.clone()]);
+            }
             if at + 1 < stages.len() {
                 let mut next = seen.take().unwrap_or_else(|| self.unit.clone());
                 for sample in &mut next {
@@ -173,6 +269,11 @@ pub struct Bands {
     /// Per band: samples of the band as stacked, after its tools, and
     /// corrected.
     samples: Vec<[Option<Vec<f32>>; 3]>,
+    /// Per band: the whole band as stacked, after its tools, and corrected,
+    /// at a quarter of the resolution, for layered stretches' maps.
+    quarter: Vec<[Option<Arc<Vec<f32>>>; 3]>,
+    /// The width and height of the quarter-resolution copies.
+    quarter_size: (usize, usize),
     /// Per band: the value a canvas sample of 1 stands for.
     scales: Vec<f32>,
     /// Per tile channel: the value a canvas sample of 1 stands for.
@@ -180,9 +281,6 @@ pub struct Bands {
     /// The bands whose stretches are resolved together: red, green and
     /// blue once color calibration has balanced them. Empty otherwise.
     linked: Vec<usize>,
-    /// Per band: the tile channel that holds it after its stretches, when
-    /// the store stretched it over the whole image.
-    pub stretched: Vec<Option<usize>>,
     /// The bands the store holds already stretched for display, such as
     /// stars after the star stretch. They are drawn as they are.
     display: Vec<usize>,
@@ -271,12 +369,6 @@ impl Bands {
         };
     }
 
-    /// The tile channel that holds a band after its stretches, if the
-    /// store has one.
-    pub fn stretched_plane(&self, band: usize) -> Option<usize> {
-        self.stretched.get(band).copied().flatten()
-    }
-
     /// Whether a band is already stretched for display.
     pub fn is_display(&self, band: usize) -> bool {
         self.display.contains(&band)
@@ -339,6 +431,24 @@ impl Bands {
         )
     }
 
+    /// The whole band at a quarter of the resolution in the state given
+    /// for it, as the samples of its stretch analysis are.
+    fn quarter_in(&self, band: usize, states: &[BandState]) -> Option<Vec<f32>> {
+        let [stacked, tools, corrected] = self.quarter.get(band)?;
+        let state = states.get(band).copied().unwrap_or_default();
+        let stacked = stacked.as_ref()?;
+        let base = tools.as_ref().filter(|_| state.tools).unwrap_or(stacked);
+        let matches = state.tools == tools.is_some();
+        Some(match corrected {
+            Some(after) if state.background > 0.0 && matches => base
+                .iter()
+                .zip(after.iter())
+                .map(|(a, b)| a + (b - a) * state.background)
+                .collect(),
+            _ => base.to_vec(),
+        })
+    }
+
     /// Each band's stretch analysis in the state given for it: the
     /// analysis of the samples the stretch is applied to. A band with no
     /// state given is as stacked.
@@ -380,6 +490,10 @@ impl Bands {
                     BandStretch::analyse(own)
                 }?;
                 stretch.display = self.display.contains(&band);
+                if let Some(quarter) = self.quarter_in(band, states) {
+                    let (width, height) = self.quarter_size;
+                    stretch.set_quarter(&quarter, width, height);
+                }
                 Ok(stretch)
             })
             .collect()
@@ -405,6 +519,48 @@ impl StoreTiles {
             scales: vec![1.0; shape.channels],
             display: Vec::new(),
         })
+    }
+
+    /// Every channel of the whole image at a quarter of the resolution, and
+    /// its width and height: the store's level of that size, whose pixels
+    /// are means of the image's, or the image reduced here when the store
+    /// has no such level.
+    fn quarter(&self) -> Result<Quarter, String> {
+        let (level, reduce) = match self.levels.get(2) {
+            Some(level) => (level, false),
+            None => (&self.levels[0], true),
+        };
+        let shape = level.shape();
+        let mut channels = vec![Vec::with_capacity(shape.width * shape.height); self.bands];
+        let strip = 256.min(shape.height.max(1));
+        let mut y = 0;
+        while y < shape.height {
+            let rows = strip.min(shape.height - y);
+            let samples = level
+                .read(Region::new(0, y, shape.width, rows))
+                .map_err(|error| error.to_string())?;
+            for (index, sample) in samples.iter().enumerate() {
+                channels[index % self.bands].push(*sample);
+            }
+            y += rows;
+        }
+        if !reduce {
+            return Ok((
+                channels.into_iter().map(Arc::new).collect(),
+                (shape.width, shape.height),
+            ));
+        }
+        let mut size = (0, 0);
+        let reduced = channels
+            .iter()
+            .map(|plane| {
+                let (reduced, width, height) =
+                    seiza_stretch::reduce_luminance(plane, shape.width, shape.height);
+                size = (width, height);
+                Arc::new(reduced)
+            })
+            .collect();
+        Ok((reduced, size))
     }
 
     /// Reads samples of each band for its stretch, from patches of the
@@ -435,12 +591,23 @@ impl StoreTiles {
                 }
             }
         }
-        let largest = |samples: &[f32]| {
-            samples
+        // The whole image at a quarter of the resolution, each channel's
+        // own: what layered stretches measure their maps from, and where a
+        // small bright object the patches miss is found.
+        let (quarter, quarter_size) = self.quarter()?;
+        let largest_of = |channel: usize| {
+            let brightest = quarter.get(channel).map_or(f32::MIN_POSITIVE, |plane| {
+                plane
+                    .iter()
+                    .copied()
+                    .filter(|sample| sample.is_finite())
+                    .fold(f32::MIN_POSITIVE, f32::max)
+            });
+            channels[channel]
                 .iter()
                 .copied()
                 .filter(|sample| sample.is_finite())
-                .fold(f32::MIN_POSITIVE, f32::max)
+                .fold(brightest * QUARTER_MARGIN, f32::max)
         };
         // A channel named after another with a suffix holds that channel
         // in another state, and is not a band of its own.
@@ -463,7 +630,7 @@ impl StoreTiles {
             let scale = [Some(channel), tools, corrected]
                 .into_iter()
                 .flatten()
-                .map(|plane| largest(&channels[plane]))
+                .map(largest_of)
                 .fold(f32::MIN_POSITIVE, f32::max);
             // The stars a tool took out of an input take the input's scale,
             // so one stretch serves both.
@@ -489,18 +656,16 @@ impl StoreTiles {
             bands.names.push(name.unwrap_or_default());
             bands.tools.push(tools);
             bands.corrected.push(corrected);
-            bands.stretched.push(
-                bands
-                    .names
-                    .last()
-                    .and_then(|name| named(stretched_channel(name)))
-                    .filter(|plane| self.display.contains(&self.names[*plane])),
-            );
             bands.scales.push(scale);
             bands.samples.push([
                 Some(channels[channel].clone()),
                 tools.map(|plane| channels[plane].clone()),
                 corrected.map(|plane| channels[plane].clone()),
+            ]);
+            bands.quarter.push([
+                quarter.get(channel).cloned(),
+                tools.and_then(|plane| quarter.get(plane).cloned()),
+                corrected.and_then(|plane| quarter.get(plane).cloned()),
             ]);
         }
         // A channel that is no band and no band's other state, such as the
@@ -513,13 +678,14 @@ impl StoreTiles {
             if display {
                 self.scales[channel] = display_scale();
             } else if !is_band(channel) && self.scales[channel] == 1.0 {
-                self.scales[channel] = largest(&channels[channel]);
+                self.scales[channel] = largest_of(channel);
             }
         }
         if self.names.is_empty() {
             bands.names = names_for(bands.len());
         }
         bands.plane_scales = self.scales.clone();
+        bands.quarter_size = quarter_size;
         Ok(bands)
     }
 }
@@ -798,17 +964,57 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_layered_stretch_reads_maps_of_the_whole_band_and_the_picture_s_headroom() {
+        // A faint sky with a bright core, at full and quarter resolution.
+        let (width, height) = (64, 64);
+        let value = |x: usize, y: usize| {
+            let r2 = (x as f32 - 32.0).powi(2) + (y as f32 - 32.0).powi(2);
+            100.0 + ((x * 7 + y * 13) % 11) as f32 + 5000.0 * (-r2 / 40.0).exp()
+        };
+        let full: Vec<f32> = (0..width * height)
+            .map(|at| value(at % width, at / width))
+            .collect();
+        let quarter: Vec<f32> = (0..16 * 16)
+            .map(|at| {
+                let (x, y) = ((at % 16) * 4, (at / 16) * 4);
+                (0..16).map(|k| value(x + k % 4, y + k / 4)).sum::<f32>() / 16.0
+            })
+            .collect();
+        let mut band = BandStretch::analyse(&full).unwrap();
+        band.set_quarter(&quarter, 16, 16);
+        let model: StretchModel =
+            serde_json::from_value(serde_json::json!({ "type": "layered-hdr" })).unwrap();
+        let hdr = band.transfer(std::slice::from_ref(&model), 0.0, 2.0);
+        let stage = hdr
+            .stages
+            .iter()
+            .find_map(|stage| match stage {
+                TransferStage::Layered(stage) => Some(stage),
+                _ => None,
+            })
+            .expect("a layered stage");
+        assert!(stage.peak() > 1.5, "{}", stage.peak());
+        assert!(!stage.maps.core.is_empty());
+        // An SDR picture's HDR stretch rolls off to white.
+        let sdr = band.transfer(std::slice::from_ref(&model), 0.0, 0.0);
+        assert!(sdr.stages.iter().any(|stage| matches!(
+            stage,
+            TransferStage::Clamp { high, .. } if (*high - 1.0).abs() < 1e-4
+        )));
+    }
+
+    #[test]
     fn a_band_with_no_stretch_is_left_linear() {
         let samples: Vec<f32> = (0..4000).map(|index| 100.0 + (index % 97) as f32).collect();
         let band = BandStretch::analyse(&samples).unwrap();
         // No stretch: the band's range mapped to 0 to 1, and no curve. The
         // view stretch is given as a stretch when a view wants one.
-        let linear = band.transfer(&[], 0.0);
+        let linear = band.transfer(&[], 0.0, 0.0);
         assert!(linear
             .stages
             .iter()
             .all(|stage| !matches!(stage, TransferStage::Curve(_))));
-        let viewed = band.transfer(&[StretchModel::AutoMtf(StretchParams::default())], 0.0);
+        let viewed = band.transfer(&[StretchModel::AutoMtf(StretchParams::default())], 0.0, 0.0);
         assert!(viewed
             .stages
             .iter()

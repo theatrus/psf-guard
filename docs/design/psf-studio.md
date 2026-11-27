@@ -2417,11 +2417,19 @@ Setup's routing table and part cards follow the same rules.
 ### The layered stretch
 
 Seiza's layered stretch treats large and fine structure apart, so it
-needs the image and cannot be one curve per input. It is offered with the
-other stretches. The canvas draws it from a result computed when the
-store is prepared, as it does for a tool. Until then the input is drawn
-linear, and the view lists the stretch as left out; the view stretch never
-stands in for it.
+needs more than each pixel. The canvas draws it live, through Seiza's
+compositor: when Studio opens a store it reads every band at a quarter of
+the resolution from the store's pyramid, and a layered stretch measures
+its maps from that copy (the HDR core compression's base and the contrast
+recovery's large-scale layer), again only when a setting that moves them
+changes. The curve, the core compression, the HDR tail and the detail gain
+are worked out per pixel, on the GPU for the canvas and on the CPU for an
+export, so moving Black point, Background or Core compression redraws at
+once. The HDR layered stretch reaches as far as the picture's headroom;
+in an SDR picture it rolls off to white. Each band is stretched on its
+own, so calibrated red, green and blue keep their balance through their
+shared statistics, not through one luminance. The plain layered stretch's
+star-core compression is not drawn yet.
 
 ### What is built
 

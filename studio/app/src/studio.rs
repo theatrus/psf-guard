@@ -370,7 +370,7 @@ impl Scene {
                 let nudge = nudges.get(*band).copied().unwrap_or(0.0);
                 self.stretches.get(*band).map_or_else(
                     || Transfer::of([seiza_compose::picture::TransferStage::Scale(0.0)]),
-                    |stretch| stretch.transfer(stages, nudge),
+                    |stretch| stretch.transfer(stages, nudge, f64::from(self.headroom)),
                 )
             })
             .collect()
