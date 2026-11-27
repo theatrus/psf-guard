@@ -1029,7 +1029,7 @@ impl Studio {
         });
         let was_opened = opened.is_some();
         let mut document = opened.unwrap_or_else(|| panes::flow_document(&band_info.names));
-        crate::tone_step::adopt_headroom(&mut document);
+        adopt(&mut document);
         let scene_worker = scene_worker::SceneWorker::start(canvas.clone());
         let mut studio =
             Self {
@@ -1501,6 +1501,13 @@ pub fn run(options: Options) {
         .expect("opening the window");
         cx.activate(true);
     });
+}
+
+/// Brings a document saved by an earlier build up to date as it opens: its
+/// HDR headroom on the picture, and its palettes' layers read top down.
+fn adopt(document: &mut Document) {
+    crate::tone_step::adopt_headroom(document);
+    document.list_palette_layers_top_down();
 }
 
 #[path = "export.rs"]

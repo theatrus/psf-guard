@@ -1176,7 +1176,10 @@ impl Studio {
                 crate::studio_model::Document::from_json(&text).map_err(|error| error.to_string())
             });
         match opened {
-            Ok(opened) => self.open_store(store, Some((document, opened)), None),
+            Ok(mut opened) => {
+                super::adopt(&mut opened);
+                self.open_store(store, Some((document, opened)), None)
+            }
             Err(error) => {
                 self.tools.status = format!("Not opened: the document could not be read ({error})");
             }

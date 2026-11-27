@@ -31,7 +31,7 @@ fn a_narrowband_document_gets_narrowband_layers() {
         .iter()
         .map(|layer| layer.name.as_str())
         .collect();
-    assert_eq!(layers, ["SII as red", "Ha as green", "OIII as blue"]);
+    assert_eq!(layers, ["OIII as blue", "Ha as green", "SII as red"]);
     assert!(document.uses_palette(&PALETTES[2]));
 }
 
@@ -99,8 +99,9 @@ fn another_palette_keeps_a_layers_mask_and_the_layers_above() {
     document.apply_palette(&PALETTES[4]);
     let layers = document.layers();
     assert_eq!(layers.len(), 4);
-    assert_eq!(layers[0].name, "Ha as red");
-    assert!(layers[0].mask.is_some());
+    // HSO reads Ha, SII, OIII from the top.
+    assert_eq!(layers[2].name, "Ha as red");
+    assert!(layers[2].mask.is_some());
     assert_eq!(layers[3].name, "Exposure");
 }
 
@@ -305,7 +306,12 @@ fn a_step_of_one_layer_is_found_changed_and_removed_like_any_step() {
 #[test]
 fn before_a_layers_own_edit_is_the_layer_without_it() {
     let mut document = document(&["red", "green", "blue"]);
-    let red = document.layers()[0].id;
+    let red = document
+        .layers()
+        .iter()
+        .find(|layer| layer.name == "R as red")
+        .unwrap()
+        .id;
     let mut steps = Vec::new();
     for name in ["Exposure", "Curves"] {
         let layer = adjustment(name);
@@ -362,7 +368,7 @@ fn a_group_keeps_its_members_beneath_it_and_moves_with_them() {
     let group = document.group_layer(ids[1]).unwrap();
     assert_eq!(
         stack_of(&document),
-        ["R as red", "G as green in group", "Group", "B as blue"]
+        ["B as blue", "G as green in group", "Group", "R as red"]
     );
     // The group blends as the layer it was made around did.
     assert_eq!(document.layers()[2].blend, BlendMode::Add);
@@ -370,14 +376,14 @@ fn a_group_keeps_its_members_beneath_it_and_moves_with_them() {
     assert!(document.group_layer(group).is_err());
     assert!(document.group_layer(ids[1]).is_err());
 
-    // Blue joins the group, on top of green.
+    // Red joins the group, on top of green.
     assert!(document.place_layer(ids[2], 2, Some(group)));
     assert_eq!(
         stack_of(&document),
         [
-            "R as red",
+            "B as blue",
             "G as green in group",
-            "B as blue in group",
+            "R as red in group",
             "Group"
         ]
     );
@@ -389,9 +395,9 @@ fn a_group_keeps_its_members_beneath_it_and_moves_with_them() {
         stack_of(&document),
         [
             "G as green in group",
-            "B as blue in group",
+            "R as red in group",
             "Group",
-            "R as red"
+            "B as blue"
         ]
     );
 
@@ -399,11 +405,11 @@ fn a_group_keeps_its_members_beneath_it_and_moves_with_them() {
     assert!(document.place_layer(ids[1], 4, None));
     assert_eq!(
         stack_of(&document),
-        ["B as blue in group", "Group", "R as red", "G as green"]
+        ["R as red in group", "Group", "B as blue", "G as green"]
     );
 
     assert!(document.ungroup(group));
-    assert_eq!(stack_of(&document), ["B as blue", "R as red", "G as green"]);
+    assert_eq!(stack_of(&document), ["R as red", "B as blue", "G as green"]);
     assert!(!document.ungroup(ids[0]));
     assert_eq!(document.layers().len(), 3);
 }
@@ -535,21 +541,21 @@ fn a_foraxx_palette_mixes_inputs_by_their_signal() {
     assert_eq!(masks[0].name, "OIII signal");
     assert_eq!(masks[1].name, "Ha × OIII signal");
     assert_eq!(
-        layers[0].mask,
+        layers[4].mask,
         Some(MaskRecord::Shared {
             mask: masks[0].id,
             inverted: false,
         })
     );
     assert_eq!(
-        layers[1].mask,
+        layers[3].mask,
         Some(MaskRecord::Shared {
             mask: masks[0].id,
             inverted: true,
         })
     );
     assert_eq!(document.layers_using_mask(masks[1].id).count(), 2);
-    assert_eq!(layers[4].mask, None);
+    assert_eq!(layers[0].mask, None);
 
     // Back to a plain palette, the shared masks are gone.
     document.apply_palette(&PALETTES[2]);
@@ -607,7 +613,7 @@ fn another_input_for_a_slot_remakes_the_layers_and_masks_and_keeps_the_tweaks() 
             mode: StrokeMode::Subtract,
         }
     ));
-    let sii_layer = document.layers()[0].id;
+    let sii_layer = document.layers()[4].id;
     document.layer_mut(sii_layer).unwrap().opacity = 0.5;
 
     // The OIII slot is given the SII input.
@@ -615,10 +621,10 @@ fn another_input_for_a_slot_remakes_the_layers_and_masks_and_keeps_the_tweaks() 
     let layers = document.layers();
     assert_eq!(layers.len(), 5);
     // The layer is the one it was.
-    assert_eq!((layers[0].id, layers[0].opacity), (sii_layer, 0.5));
+    assert_eq!((layers[4].id, layers[4].opacity), (sii_layer, 0.5));
     // The layers that showed the slot show its new input.
-    assert_eq!(layers[4].name, "SII as blue");
-    assert!(matches!(&layers[3].source, LayerSource::Band { band } if band == "sii"));
+    assert_eq!(layers[0].name, "SII as blue");
+    assert!(matches!(&layers[1].source, LayerSource::Band { band } if band == "sii"));
     // The mask is the one it was, reading the new input, tweaks kept.
     let remade = document.mask(mask).unwrap();
     assert_eq!(remade.inputs, ["sii"]);
@@ -633,7 +639,7 @@ fn another_input_for_a_slot_remakes_the_layers_and_masks_and_keeps_the_tweaks() 
 
     // Removing a mask leaves its layers showing everywhere.
     document.remove_mask(mask);
-    assert!(document.layers()[0].mask.is_none());
+    assert!(document.layers()[4].mask.is_none());
     assert_eq!(document.masks().len(), 1);
 }
 
@@ -721,4 +727,59 @@ fn a_color_groups_tools_belong_to_its_inputs_and_stay_out_of_psf_guards_setup() 
     // PSF Guard removes stars on each channel stack alone: the groups'
     // steps are not part of the color setup.
     assert_eq!(color_setup_from_document(&document).unwrap(), before);
+}
+
+/// The layers' names, top first, as the layer list shows them.
+fn listed(document: &Document) -> Vec<String> {
+    document
+        .layers()
+        .iter()
+        .rev()
+        .map(|layer| layer.name.clone())
+        .collect()
+}
+
+#[test]
+fn a_palette_reads_top_down_in_its_order_with_luminance_on_top() {
+    assert_eq!(
+        listed(&document(&["red", "green", "blue"])),
+        ["R as red", "G as green", "B as blue"]
+    );
+    // A luminance layer does not add, so it stays on top.
+    assert_eq!(
+        listed(&document(&["red", "green", "blue", "luminance"])),
+        ["L as luminance", "R as red", "G as green", "B as blue"]
+    );
+}
+
+#[test]
+fn a_document_saved_bottom_up_reads_top_down_when_opened() {
+    let made = document(&["ha", "oiii", "sii"]);
+    // Before, a palette stacked its layers in its own order from the
+    // bottom, so SHO read OIII, Ha, SII from the top.
+    let mut saved: Value = serde_json::to_value(&made).unwrap();
+    let combine = saved["stages"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|stage| stage["kind"] == "combine")
+        .unwrap();
+    combine["layers"].as_array_mut().unwrap().reverse();
+    let mut old: Document = serde_json::from_value(saved.clone()).unwrap();
+    assert_eq!(listed(&old), ["OIII as blue", "Ha as green", "SII as red"]);
+    assert!(old.list_palette_layers_top_down());
+    assert_eq!(listed(&old), ["SII as red", "Ha as green", "OIII as blue"]);
+    // Done once: a second pass leaves the layers as they are.
+    assert!(!old.list_palette_layers_top_down());
+
+    // A run with a clipped layer is left as it was: clipping depends on
+    // the order.
+    let mut clipped: Document = serde_json::from_value(saved).unwrap();
+    let top = clipped.layers().last().unwrap().id;
+    clipped.layer_mut(top).unwrap().clipped = true;
+    assert!(!clipped.list_palette_layers_top_down());
+    assert_eq!(
+        listed(&clipped),
+        ["OIII as blue", "Ha as green", "SII as red"]
+    );
 }

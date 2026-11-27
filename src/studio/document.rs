@@ -841,6 +841,63 @@ impl Document {
     /// group moves with its members and joins no group.
     ///
     /// Returns whether the document has the layer.
+    /// Lists the layers a palette made in the palette's order from the top,
+    /// as palettes now stack them. A document saved before stacks them in
+    /// the palette's order from the bottom, so R, G and B read B, G, R in
+    /// the layer list. Only such a run is turned over: a part's palette
+    /// layers still in that order, next to each other, all added and none
+    /// clipped, with no clipped layer above them. Adding is the same in any
+    /// order, so the picture does not change. Returns whether a run moved.
+    pub fn list_palette_layers_top_down(&mut self) -> bool {
+        let parts: Vec<(Option<Uuid>, String)> = std::iter::once(None)
+            .chain(
+                self.layers()
+                    .iter()
+                    .filter(|layer| layer.source == LayerSource::Group)
+                    .map(|layer| Some(layer.id)),
+            )
+            .filter_map(|part| Some((part, self.palette_in(part)?.name.clone())))
+            .collect();
+        let mut moved = false;
+        for (part, name) in parts {
+            let Some(palette) = super::palette::PALETTES
+                .iter()
+                .find(|palette| palette.name == name)
+            else {
+                continue;
+            };
+            let layers = &mut self.stages[StageKind::Combine as usize].layers;
+            let members: Vec<usize> = layers
+                .iter()
+                .enumerate()
+                .filter(|(_, layer)| layer.group == part && layer.slot.is_some())
+                .map(|(at, _)| at)
+                .collect();
+            let (Some(&first), Some(&last)) = (members.first(), members.last()) else {
+                continue;
+            };
+            let slots: Vec<&str> = members
+                .iter()
+                .filter_map(|at| layers[*at].slot.as_deref())
+                .collect();
+            let old_order: Vec<&str> = palette.layers.iter().map(|layer| layer.channel).collect();
+            let turnable = members.len() > 1
+                && last - first + 1 == members.len()
+                && slots == old_order
+                && members
+                    .iter()
+                    .all(|at| layers[*at].blend == BlendMode::Add && !layers[*at].clipped)
+                && layers
+                    .get(last + 1)
+                    .is_none_or(|above| !above.clipped || above.group != part);
+            if turnable {
+                layers[first..=last].reverse();
+                moved = true;
+            }
+        }
+        moved
+    }
+
     pub fn place_layer(&mut self, id: Uuid, position: usize, group: Option<Uuid>) -> bool {
         let layers = &mut self.stages[StageKind::Combine as usize].layers;
         let Some(at) = layers.iter().position(|layer| layer.id == id) else {

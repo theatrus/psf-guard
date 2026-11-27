@@ -521,6 +521,7 @@ impl Document {
         }
         if !by_place {
             balance_colors(&mut layers);
+            reverse_additive_runs(&mut layers);
         }
         if by_place {
             // Each kept layer goes back where it was. Put back from the
@@ -641,6 +642,27 @@ impl Document {
 /// A layer behind a shared mask is left out and keeps its color: such
 /// layers share a color between them by their masks, so they do not add
 /// together everywhere.
+/// Puts each run of additive layers in reverse, so a palette's layers are
+/// stacked bottom first yet read top down in the palette's order, as the
+/// rest of the flow does: R, G, B from the top. Adding is the same in any
+/// order, so the picture does not change; a layer of another blend, such as
+/// a luminance layer, keeps its place.
+pub(super) fn reverse_additive_runs(layers: &mut [LayerRecord]) {
+    let mut start = 0;
+    while start < layers.len() {
+        if layers[start].blend != BlendMode::Add || layers[start].clipped {
+            start += 1;
+            continue;
+        }
+        let end = layers[start..]
+            .iter()
+            .position(|layer| layer.blend != BlendMode::Add || layer.clipped)
+            .map_or(layers.len(), |run| start + run);
+        layers[start..end].reverse();
+        start = end;
+    }
+}
+
 pub fn balance_colors(layers: &mut [LayerRecord]) {
     let adds = |layer: &LayerRecord| {
         layer.blend == BlendMode::Add

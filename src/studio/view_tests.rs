@@ -106,7 +106,8 @@ fn a_channel_view_draws_one_channel_in_gray_with_no_finish_steps() {
         .iter()
         .map(|c| c.channel.as_str())
         .collect();
-    assert_eq!(drawn, RGB);
+    // Bottom first: the list reads red, green, blue from the top.
+    assert_eq!(drawn, ["blue", "green", "red"]);
 }
 
 #[test]
@@ -178,7 +179,7 @@ fn a_view_that_stops_between_two_channels_stretches_says_so() {
         .iter()
         .map(|channel| matches!(channel.stretch, PlannedStretch::Document(_)))
         .collect();
-    assert_eq!(stretched, [true, false, false]);
+    assert_eq!(stretched, [false, false, true]);
     assert!(plan
         .description
         .contains("for the 2 channel(s) not stretched yet"));
@@ -299,7 +300,8 @@ fn a_blended_view_draws_band_layers_and_adjustments_in_order() {
         .iter()
         .map(|c| c.channel.as_str())
         .collect();
-    assert_eq!(drawn, RGB);
+    // Bottom first: the list reads red, green, blue from the top.
+    assert_eq!(drawn, ["blue", "green", "red"]);
 
     // Up to a layer: that layer and those beneath it.
     let up_to = plan(
@@ -335,7 +337,7 @@ fn a_blended_view_draws_band_layers_and_adjustments_in_order() {
     );
     assert!(alone
         .description
-        .starts_with("The layer B as blue on its own, in gray"));
+        .starts_with("The layer R as red on its own, in gray"));
     // One input's layer on its own is drawn in gray; the stack is not.
     assert!(alone.gray);
     assert!(!up_to.gray);

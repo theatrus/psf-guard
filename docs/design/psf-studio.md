@@ -1782,6 +1782,15 @@ marks where a group's members start and end (`StackEntry::GroupBegin`,
 `GroupEnd`). A view that stops inside a group shows the group as far as it
 goes; one member alone is shown as it is, not as its group blends it.
 
+A palette's layers read top down in the palette's order, as the rest of
+the flow does: R, G, B and Ha, OIII from the top. The palette lists them
+bottom first, so each run of added layers is stacked in reverse; adding is
+the same in any order, and a layer of another blend, such as luminance,
+keeps its place on top. A document saved before stacks them the other
+way; Studio turns such a run over as it opens the document
+(`Document::list_palette_layers_top_down`) when the run is still in the
+palette's order, all added, none clipped and with no clipped layer above.
+
 A layer may be **clipped to the layer beneath it** (`LayerRecord::clipped`).
 It then shows only inside that layer's mask, and not at all while that
 layer is hidden. The layer beneath is the nearest one in the same group

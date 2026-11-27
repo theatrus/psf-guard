@@ -73,10 +73,10 @@ fn a_recipe_makes_its_parts_and_keeps_adjustment_layers_above_them() {
     assert_eq!(
         parts(&document),
         [
-            ("Nebula".to_string(), names(&["ha", "oiii"])),
+            ("Nebula".to_string(), names(&["oiii", "ha"])),
             (
                 "RGB stars".to_string(),
-                names(&["red@stars", "green@stars", "blue@stars"])
+                names(&["blue@stars", "green@stars", "red@stars"])
             ),
         ]
     );
@@ -130,7 +130,7 @@ fn an_input_joins_a_part_without_the_rest_changing() {
     assert_eq!(
         parts(&document),
         [
-            ("Color".to_string(), names(&["red", "green", "blue", "ha"])),
+            ("Color".to_string(), names(&["blue", "green", "red", "ha"])),
             ("Luminance".to_string(), names(&["luminance"])),
         ]
     );
@@ -152,7 +152,7 @@ fn an_input_joins_a_part_without_the_rest_changing() {
     assert!(document.set_palette_input_in(Some(color), "red", "nii"));
     assert_eq!(
         parts(&document)[0].1,
-        names(&["nii", "green", "blue", "ha"])
+        names(&["blue", "green", "nii", "ha"])
     );
 
     // An input can also go on top of everything, in no part.
