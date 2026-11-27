@@ -3029,8 +3029,12 @@ Gaps to fix, roughly in the order they got in the way:
   an RMS of 2 × 10⁻⁴), 446 pixels apart across and 348 down, so the
   average keeps 22% and 16% of their fundamental: about 80% of the pattern
   goes. It doubles the tool's time, and the second pass is cached on its
-  own. Still open: a shift matched to each image's tile spacing would take
-  the rest.
+  own. Since 2026-11-27 the spacing is measured from the difference of the
+  two passes (the autocorrelation of its profile across and down, the
+  shortest strong lag), and when half of it is more than 24 pixels from the
+  move, a third pass moved by half the spacing on each axis is averaged
+  with the first in place of the second. A synthetic image with seams 446
+  and 348 pixels apart is measured exactly.
 - [x] **Sky floor on every stretch kind.** An input's stretch of any other
   kind has a **Sky floor** too, kept beside its model as `sky_floor` and
   drawn as PixInsight's histogram transformation after it, with shadows at
@@ -3048,9 +3052,14 @@ Gaps to fix, roughly in the order they got in the way:
   stretch's.
 - [x] **Stars' own stretch and star reduction.** A stars input can take a
   stretch of its own, and a stars layer or group a Star reduction (see
-  “A stretch of their own, and star reduction”). Still open: the star
-  stretch of RGB stars is applied when the store is prepared, not on the
-  canvas.
+  “A stretch of their own, and star reduction”). Since 2026-11-27 the star
+  stretch of RGB stars is drawn on the canvas: Studio stores keep the stars
+  linear, and the canvas works out the stretched stars from the whole image
+  in the background (Seiza's RGB star stretch: each star sample over the
+  range of the three channels with their stars, then the midtones curve
+  `1 / (1 + 3^amount)`), keyed by the amount, with the stars reduced in
+  full as a second plane a layer blends toward. A store prepared before
+  keeps its stretched stars.
 - [x] **Frame limits.** A frame now draws up to 24 layers, 15 masks and 12
   layered stretches. Past those a layer is still left out or drawn with its
   curve alone, and the pane says so.
@@ -3071,13 +3080,28 @@ Gaps to fix, roughly in the order they got in the way:
   is open; the toolbar says “Changed since this run started” and offers
   **Run again after**. A stopped or failed run drops the queued one. PSF
   Guard's color tools (`color_rc_astro`) run as a color group's tool
-  steps. Still open: the narrowband star steps, which run after the
-  channels are normalized together.
-- [ ] **Layers.** No groups in groups or pass-through groups; a group cannot
-  be clipped or healed; a shared mask cannot go on a layer's own
-  adjustment; a layer cannot have a painted and a shared mask, or clip to
-  its shared mask. Layers and parts move with Move up and Move down, and a
-  part dragged moves whole. A layer dragged within its part goes above the
+  steps. Since 2026-11-27 the narrowband settings that act after the
+  channels are mapped are drawn live: the balance (the Narrowband step's
+  inspector turns it on and moves its shadow protection and boosts), which
+  the scene worker resolves in the background from H-alpha, OIII and SII at
+  a quarter of the resolution through their stretches, with Seiza's
+  `balance_narrowband`, and which each balanced channel's stretch ends with
+  (`TransferStage::Balance`); and the green reduction, an adjustment layer
+  (`Adjustment::GreenReduction`) made from a setup's settings and written
+  back to them. Star separation, star processing, the star stretch and
+  star reduction are Studio's own steps already. Tried on a copy of the
+  Cat's Eye: the balance took OIII's teal down to H-alpha, the green median
+  of a 1024-pixel square from 0.211 to 0.154.
+- [x] **Layers.** Done 2026-11-27: groups nest up to four deep (Seiza's
+  `MAX_GROUP_DEPTH`; deeper ones are flattened by Seiza and refused by the
+  document); a group's layers can pass through, each blending straight onto
+  what is beneath with the group's opacity and masks; a group can be
+  clipped and healed (the heal is its top member); a layer's own adjustment
+  can be behind a shared mask; a layer behind a shared mask keeps a painted
+  mask (`painted_too`), which limits it as well; and a layer clipped to one
+  behind a shared mask is behind it too. An entry behind two shared masks
+  is listed as not drawn. Still open: a range mask on a step. Layers and
+  parts move with Move up and Move down, and a part dragged moves whole. A layer dragged within its part goes above the
   row it is dropped on, or below it when dropped on the row's lower half
   (tried in the window on the Iris's RGB stars), so it no longer needs the
   thin gap between two rows.
@@ -3085,16 +3109,39 @@ Gaps to fix, roughly in the order they got in the way:
   adjustment layers (“Steps on the picture are adjustment layers”), drawn
   by Seiza's compositor, which draws a heal and Tone's local contrast
   beneath other layers, in a group or not, in stages.
-- [ ] **History panel.** Asked for on 2026-11-27: a panel like
-  Lightroom's History that lists the document's edits in order, so a
-  person sees what changed in the stack and can step back to any of them.
-  Undo and Redo keep the edits already (up to 200); the panel needs each
-  edit's description (which step or layer, which setting, from and to)
-  and a way to show the picture at an earlier edit without losing the
-  later ones.
-- [ ] **Setup and hand-off.** No Setup page or recipe record in the
-  document, no server target or sign-in in Studio, no table of every
-  input's tools, no round trip to another editor.
+- [x] **History panel.** Done 2026-11-27: the tree ends with History, the
+  document as opened and each edit in a few words (`describe_edit`
+  compares the document before and after: a layer added, removed or moved,
+  a setting with its value before and after, the first two changes named
+  and the rest counted), with the edits undone dimmed. Clicking an edit
+  undoes or redoes up to it; the later ones stay to redo. Tried on the Iris
+  copy: going back two edits put both opacities back and left Redo on.
+- [ ] **Setup and hand-off.** Done 2026-11-27: the document records the
+  recipe its layers were made with; the Combined picture's inspector
+  starts with Tools by input, every input's tools in order with the inputs
+  a run is due for; and Open in external editor writes the final picture
+  as a 16-bit TIFF beside the document, opens it in its default app, and
+  reads the file back when the app saves it, through the Finish stage's
+  junction, until Use Studio's result. Still open: a server target and
+  sign-in in Studio, and a Setup page that brings these together.
+- [x] **Heals.** Done 2026-11-27: a heal is matched to its surroundings,
+  its shift measured when it is made from the ring around the stroke and
+  the ring around its source, on the picture the heal reads (rendered on
+  the CPU); Option-click sets the source, which the canvas marks, and a
+  selected heal shows where it copies from; a heal with an adjustment
+  layer selected is a Heal layer right above it, so above Star removal it
+  fixes the starless picture; a stars layer's heals fix its stars inside
+  its group. Seiza stages a heal or Tone's local contrast in the stack, in
+  a group or not, with its clip and computed mask. Tried on the Iris copy:
+  a heal above Star removal measured a shift of (0.019, 0.012, 0.005).
+- [x] **Tools and stretches beneath other layers.** Done 2026-11-27: a
+  tool layer in a group runs on its group's members beneath it and its
+  result goes back in their place; an output stretch resolved from the
+  picture's statistics beneath other layers reads samples of what is
+  beneath it, rendered on the CPU in the background at the canvas's
+  patches. What the scene worker resolves in the background (these
+  samples and the narrowband balance) is published, so samplings, exports,
+  heal measurements and tools' images draw it too.
 - [x] **UI thread.** A store given at start with a readable document
   beside it opens on a thread of its own after the window shows: the
   window answers with the document's steps while the canvas draws one

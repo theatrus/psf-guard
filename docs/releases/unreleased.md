@@ -97,3 +97,29 @@
   **Star removal** and heal to fix the starless picture: the heal becomes
   a layer right above it, beneath the stars. Select the **Stars it took
   out** layer and heal to remove or fix a star there alone.
+
+- In PSF Studio a heal is matched to the brightness around it, and the area
+  it copies from shows over the canvas. A group can be healed, and a Heal
+  layer can have a mask of its own.
+- PSF Studio's groups can hold groups, four deep, and a group's layers can
+  pass through, each blending straight onto the layers beneath. A group can
+  be clipped. A layer behind a shared mask can have a painted mask as well,
+  and an adjustment of one layer can be behind a shared mask.
+- In PSF Studio a tool layer inside a group runs on the group's layers
+  beneath it, and an output stretch with layers above it is worked out from
+  the layers beneath it.
+- PSF Studio stretches RGB stars on the canvas, so the **Star stretch**
+  amount redraws without preparing the store again. It also draws the
+  narrowband balance and the green reduction live: turn the balance on and
+  move its boosts in the Narrowband step, and add **Green reduction** like
+  any other adjustment.
+- BlurXTerminator's shifted second pass now measures how far apart its
+  seams are and, when it moved by the wrong amount, runs once more moved by
+  half of that, which removes more of the seam pattern.
+- PSF Studio has a **History** panel at the bottom of the tree: each edit
+  in a few words, such as "Ha: opacity 100% → 60%". Click an edit to go
+  back to it; later edits stay until you make a new one.
+- **Open in external editor** in PSF Studio's Final picture opens the
+  picture as a 16-bit TIFF in its default app, such as Photoshop, and
+  brings the edit back when you save it there. The Combined picture lists
+  every input's tools in one table.
