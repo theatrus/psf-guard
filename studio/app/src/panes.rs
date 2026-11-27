@@ -485,6 +485,13 @@ fn segments(stroke: &Stroke) -> Vec<Segment> {
     }
 }
 
+/// Whether the canvas draws a step's mask: none, or a painted one. A
+/// range mask or a shared mask on a step is kept in the document, and the
+/// step is left out rather than drawn over the whole picture.
+fn draws_step_mask(mask: &Option<MaskRecord>) -> bool {
+    matches!(mask, None | Some(MaskRecord::Painted(_)))
+}
+
 fn mask_strokes(mask: &Option<MaskRecord>) -> Vec<Segment> {
     match mask {
         Some(MaskRecord::Painted(mask)) => mask
@@ -500,6 +507,16 @@ fn step_strokes(step: &StepRecord) -> Vec<Segment> {
     match &step.kind {
         StepKind::Heal { stroke, .. } => segments(stroke),
         StepKind::Operation { .. } => mask_strokes(&step.mask),
+    }
+}
+
+/// What kind of mask a step has, in a word or two.
+fn mask_kind(mask: &Option<MaskRecord>) -> &'static str {
+    match mask {
+        Some(MaskRecord::Painted(_)) => "painted mask",
+        Some(MaskRecord::Range { .. }) => "range mask",
+        Some(MaskRecord::Shared { .. }) => "shared mask",
+        None => "mask",
     }
 }
 
@@ -572,6 +589,14 @@ fn push_own_adjustments(
         let Some(kind) = adjustment_kind(operation) else {
             continue;
         };
+        if !draws_step_mask(&step.mask) {
+            omitted.push(format!(
+                "{operation} of {}, whose {} the canvas does not draw",
+                owner.name,
+                mask_kind(&step.mask)
+            ));
+            continue;
+        }
         match mask_for(mask_strokes(&step.mask)) {
             Ok(mask) if layers.len() < MAX_LAYERS => layers.push(Layer {
                 opacity: step.opacity,
@@ -1236,6 +1261,14 @@ pub(super) fn scene(
         };
         if finish.len() == MAX_FINISH_STEPS {
             omitted.push(step.kind.name().to_string());
+            continue;
+        }
+        if !draws_step_mask(&step.mask) {
+            omitted.push(format!(
+                "{}, whose {} the canvas does not draw",
+                step.kind.name(),
+                mask_kind(&step.mask)
+            ));
             continue;
         }
         let Ok(mask) = mask_for(step_strokes(step)) else {

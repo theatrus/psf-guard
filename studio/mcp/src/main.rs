@@ -156,6 +156,18 @@ fn tools() -> Value {
             }), &["step", "channel"]),
         },
         {
+            "name": "studio_add_step",
+            "description": "Adds a step at the end of a stage, as the inspector's Add step does. `stage` is sources, linear, stretch, combine, finish or export; `operation` the step's name, such as \"Tone and color\", \"Curves\" or \"Stretch\"; `band` the input it is for, when it is one input's; `settings` its settings; `mask` a mask as the document stores it, such as {\"kind\": \"range\", \"low\": 0.5, \"high\": 1.0, \"feather\": 0.1}. Returns the step's id.",
+            "inputSchema": object(json!({
+                "instance": instance,
+                "stage": { "type": "string" },
+                "operation": { "type": "string" },
+                "band": { "type": "string" },
+                "settings": {},
+                "mask": {}
+            }), &["stage", "operation"]),
+        },
+        {
             "name": "studio_remove_step",
             "description": "Removes a step from the document by its id.",
             "inputSchema": object(json!({ "instance": instance, "step": { "type": "string" } }), &["step"]),
@@ -304,6 +316,17 @@ impl Server {
                     "step": arguments["step"],
                     "channel": arguments["channel"],
                     "later": arguments["later"],
+                }),
+            ),
+            "studio_add_step" => forward(
+                self.instance(arguments)?,
+                "add_step",
+                json!({
+                    "stage": arguments["stage"],
+                    "operation": arguments["operation"],
+                    "band": arguments["band"],
+                    "settings": arguments.get("settings").cloned().unwrap_or(Value::Null),
+                    "mask": arguments.get("mask").cloned().unwrap_or(Value::Null),
                 }),
             ),
             "studio_remove_step" => forward(

@@ -309,6 +309,56 @@ impl Studio {
                 }
                 _ => Err("`band` and `provider` are needed".to_string()),
             },
+            // A step added at the end of a stage, as the inspector's Add
+            // step does: a Finish step, a stretch of an input, and so on.
+            "add_step" => {
+                let stage = params["stage"]
+                    .as_str()
+                    .ok_or_else(|| "`stage` is needed".to_string())
+                    .and_then(|stage| {
+                        stage
+                            .parse::<StageKind>()
+                            .map_err(|error| error.to_string())
+                    });
+                let operation = params["operation"].as_str();
+                match (stage, operation) {
+                    (Ok(stage), Some(operation)) => {
+                        let accepts = if stage.works_on() == crate::image_steps::Domain::Linear {
+                            crate::image_steps::Accepts::Either
+                        } else {
+                            crate::image_steps::Accepts::Display
+                        };
+                        let mut step = StepRecord::new(StepKind::Operation {
+                            operation: operation.to_string(),
+                            accepts,
+                            settings: params.get("settings").cloned().unwrap_or(Value::Null),
+                        });
+                        if let Some(band) = params["band"].as_str() {
+                            step = step.for_band(band);
+                        }
+                        let mask = params
+                            .get("mask")
+                            .filter(|mask| !mask.is_null())
+                            .map(|mask| serde_json::from_value(mask.clone()));
+                        match mask {
+                            Some(Err(error)) => Err(format!("`mask` is not a mask: {error}")),
+                            mask => {
+                                step.mask = mask.and_then(Result::ok);
+                                let id = step.id;
+                                match self.document.insert_step(stage, usize::MAX, step) {
+                                    Ok(()) => {
+                                        self.refresh_canvas();
+                                        Ok(json!({ "step": id.to_string() }))
+                                    }
+                                    Err(error) => Err(error.to_string()),
+                                }
+                            }
+                        }
+                    }
+                    (Err(error), _) => Err(error),
+                    (_, None) => Err("`operation` is needed".to_string()),
+                }
+            }
             "remove_step" => match params["step"]
                 .as_str()
                 .and_then(|id| id.parse::<uuid::Uuid>().ok())

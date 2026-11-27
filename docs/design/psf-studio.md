@@ -2958,8 +2958,15 @@ Gaps to fix, roughly in the order they got in the way:
 - [ ] **UI thread.** The store given at start opens before the window
   shows (about 260 ms for the Cat's Eye); export and the parity check build
   their scene on the UI thread.
-- [ ] **Not tried in the app:** the histogram of a masked area, several
-  local Tone steps at once, a second stretch after an HDR one.
+- [x] **Tried in the app** on the Iris (`psf-studio-mcp`, with its new
+  `studio_add_step`): two Tone and color steps with painted masks draw
+  together; selecting each shows the histogram of its area (18.5% above
+  SDR white in the brightened core, none in the darkened corner); and a
+  midtones stretch after the HDR layered stretch keeps the headroom (the
+  core's brightest 1.09 at one stop). A Finish step or a layer's own
+  adjustment with a range mask or a shared mask was drawn over the whole
+  picture; it is now left out, and the pane lists it, until the canvas
+  draws such masks on steps.
 
 ## Suggested order of work
 
