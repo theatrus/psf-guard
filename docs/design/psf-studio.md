@@ -2011,18 +2011,26 @@ Seiza's compositor design record. On the canvas the windows are measured in
 screen pixels, so zoomed out they cover the same part of the picture at the
 canvas's resolution.
 
-**HDR.** HDR belongs to the whole picture: the Final picture's
-inspector has an HDR switch and a Headroom, 0 to 4 stops (2 to start),
-which the document keeps. With HDR on, every stage may be brighter than
+**HDR.** HDR belongs to the whole picture: the View toolbar and the Final
+picture's inspector have an HDR switch and a Headroom, 0 to 4 stops (2 to
+start), and the inspector a Knee, which the document keeps. With HDR on, every stage may be brighter than
 SDR white up to the headroom: the stretches, the combined picture and every
 Finish step, and every view of the picture shows it so (Seiza's
 `Picture::headroom`). HDR is a mode of the picture, not of one stretch:
 every input's stretch follows it. Layered, HDR puts the brightest structure
 there with its core compression; plain Layered becomes Layered, HDR
-without core compression; any other stretch continues above a knee at
-three quarters of SDR white along Seiza's `HdrTail`, up to the peak at the
-band's brightest, measured over the whole band at a quarter of its
-resolution. A stretch after an HDR one shapes the range up to white and
+without core compression; any other stretch continues above the picture's
+knee, three quarters of its output unless the Knee moves it, along Seiza's
+`HdrTail`, up to the peak at the band's brightest sample. That brightest
+sample is the scale the canvas draws the band with (bands stretched
+together share theirs). It is usually far above the 1 of the stretch's
+range, which a percentile sets: a tail that ended at that 1 put every
+brighter pixel at the peak, flat. On the Iris with automatic midtones, a
+quarter to two fifths of the core sat at the peak that way; with the tail
+reaching to the brightest sample, none does. A lower knee gives the core
+more of the headroom: from a knee of 0.75 to 0.35, the core's spread from
+its median to its 99th percentile grew from 0.57 to 0.66. While HDR is on,
+each Stretch step but Layered, HDR shows the Knee too. A stretch after an HDR one shapes the range up to white and
 keeps what is above it (`TransferStage::BelowWhite`). Tone and color keeps
 the headroom, and Exposure and Whites put more there; the **Clipping**
 toggle in the View toolbar marks what reaches the peak. A document from when HDR was a switch of the Tone and color step
@@ -2796,7 +2804,8 @@ standard input and output that forwards its tools to these sockets.
   the status line; the inputs whose tools changed since the store was
   prepared; the histogram's clipping; and what Studio is still busy with.
 - **Edits.** Select a row, divide the canvas, merge settings into a step
-  or a layer, run the tools. Edits go through the document as a person's
+  or a layer, run the tools. In a merge a `null` removes its key, and a
+  stretch switched to another kind starts from that kind's settings. Edits go through the document as a person's
   do, and are saved the same way.
 - **Waiting.** Busy lists what keeps the canvas from showing the document
   as it is: scenes being built or not yet drawn in their panes, a frame
@@ -2842,19 +2851,24 @@ Gaps to fix, roughly in the order they got in the way:
   average, or keep the background model from following it.
 - [ ] **Sky floor on every stretch kind.** Only the layered stretches have
   one.
-- [ ] **A knee for every stretch in HDR mode.** Other stretches take a fixed
-  knee at three quarters of white, and none compresses its core; a core can
-  sit at the peak (a quarter to two fifths of the Iris's core with
-  automatic midtones). More HDR stretches, or core compression as a stage
-  any stretch can take, would answer it.
+- [x] **A knee for every stretch in HDR mode.** The picture's Knee moves
+  where every stretch continues into the headroom, and the tail reaches the
+  peak at the band's brightest sample, so no core is left flat at the peak.
+  Still open: core compression, which raises local contrast in the core, is
+  only in Layered, HDR; a stage any stretch can take, or more HDR
+  stretches, would carry it further. The knee is the picture's, not each
+  stretch's.
 - [x] **Stars' own stretch and star reduction.** A stars input can take a
   stretch of its own, and a stars layer or group a Star reduction (see
   “A stretch of their own, and star reduction”). Still open: the star
   stretch of RGB stars is applied when the store is prepared, not on the
   canvas.
-- [ ] **Frame limits.** A frame draws at most 12 layers and 7 masks, and at
-  most 4 layered stretches; past that a layer is left out or drawn with its
+- [x] **Frame limits.** A frame now draws up to 24 layers, 15 masks and 12
+  layered stretches. Past those a layer is still left out or drawn with its
   curve alone, and the pane says so.
+- [x] **Inputs whose stars a layer shows.** An input was listed as not used
+  when only its stars were in the picture; it now shows where its stars go,
+  such as “→ RGB stars (stars)”.
 - [ ] **Undo history.** Only Undo stroke exists.
 - [ ] **Tool runs.** A run cannot be queued behind another; tools on the
   combined color image (`color_rc_astro`) and the narrowband star steps
@@ -2862,7 +2876,9 @@ Gaps to fix, roughly in the order they got in the way:
 - [ ] **Layers.** No groups in groups or pass-through groups; a group cannot
   be clipped or healed; a shared mask cannot go on a layer's own
   adjustment; a layer cannot have a painted and a shared mask, or clip to
-  its shared mask; layers cannot be dragged to reorder.
+  its shared mask. Layers and parts move with Move up and Move down, and a
+  part dragged moves whole; dragging a layer within a part still needs
+  work.
 - [ ] **One way to adjust.** Finish steps and adjustment layers are two;
   exposure, curves and saturation are Studio's shader code, not Seiza's.
 - [ ] **Setup and hand-off.** No Setup page or recipe record in the

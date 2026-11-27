@@ -9,6 +9,13 @@ use seiza_compose::tone::{Tone, CONTROLS, MAX_HEADROOM};
 /// every Tone and color step takes it from there.
 pub const HEADROOM: (&str, &str, f32, f32) = ("headroom", "Headroom", 0.0, MAX_HEADROOM);
 
+/// The picture's HDR knee control: where each stretch's continuation into
+/// the headroom starts, as the stretch's output.
+pub const HDR_KNEE: (&str, &str, f32, f32) = ("hdr_knee", "Knee", 0.3, 0.95);
+
+/// The HDR knee of a picture that sets none: three quarters of white.
+pub const DEFAULT_HDR_KNEE: f32 = 0.75;
+
 /// The headroom a picture has when HDR is first turned on: two stops, four
 /// times SDR white's light.
 pub const DEFAULT_HEADROOM: f32 = 2.0;

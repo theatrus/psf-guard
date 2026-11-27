@@ -539,6 +539,13 @@ pub struct Document {
     /// white up to there. `None` is an SDR picture.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub headroom: Option<f32>,
+    /// In an HDR picture, where each stretch's continuation into the
+    /// headroom starts, as the stretch's output, from 0.3 to 0.95. A lower
+    /// knee gives the bright core more of the headroom, and more contrast
+    /// there. `None` is three quarters. An HDR layered stretch keeps its
+    /// own knee.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hdr_knee: Option<f32>,
 }
 
 /// What part of the image a picture keeps.
@@ -600,6 +607,7 @@ impl Document {
             palette: None,
             crop: CropRecord::Automatic,
             headroom: None,
+            hdr_knee: None,
         }
     }
 

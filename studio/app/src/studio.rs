@@ -109,6 +109,8 @@ enum SliderId {
     FinishParam(usize),
     /// The picture's HDR headroom.
     Headroom,
+    /// Where an HDR picture's stretches continue into the headroom.
+    HdrKnee,
     /// One setting of the view stretch, by its place in the list of that
     /// stretch's settings.
     ViewStretchParam(usize),
@@ -129,8 +131,9 @@ enum SliderId {
 }
 
 impl SliderId {
-    const ALL: [SliderId; 11] = [
+    const ALL: [SliderId; 12] = [
         SliderId::Headroom,
+        SliderId::HdrKnee,
         SliderId::Opacity,
         SliderId::Hue,
         SliderId::Saturation,
@@ -372,6 +375,8 @@ pub struct Scene {
     version: u64,
     /// The picture's headroom above SDR white, in stops: 0 for SDR.
     headroom: f32,
+    /// Where each stretch continues into the headroom, as its output.
+    knee: f32,
     /// The planes worked out from the store, and their tile channels.
     planes: Arc<Vec<(crate::derived::DerivedKey, usize)>>,
     /// Planes worked out from the whole image that the layers read, such as
@@ -422,7 +427,13 @@ impl Scene {
                 self.stretches.get(*band).map_or_else(
                     || Transfer::of([seiza_compose::picture::TransferStage::Scale(0.0)]),
                     |stretch| {
-                        stretch.transfer(stages, nudge, f64::from(self.headroom), &planes, missing)
+                        stretch.transfer(
+                            stages,
+                            nudge,
+                            (f64::from(self.headroom), f64::from(self.knee)),
+                            &planes,
+                            missing,
+                        )
                     },
                 )
             })

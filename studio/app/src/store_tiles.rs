@@ -48,6 +48,10 @@ pub struct BandStretch {
     /// stretch reads it, with its width and height: what a layered
     /// stretch's maps are measured from.
     quarter: Option<Arc<(Vec<f32>, usize, usize)>>,
+    /// The brightest sample the canvas draws of the band, as it is in the
+    /// image: the top of an HDR picture's headroom. Shared by bands
+    /// stretched together, so their colors keep up to it.
+    brightest: Option<f32>,
     /// Layered maps measured before, by what moves them.
     maps: Mutex<Vec<(MapsKey, Arc<LayeredMaps>)>>,
     /// Which band this is, in which state: what names the planes worked
@@ -145,6 +149,7 @@ impl BandStretch {
             unit,
             display: false,
             quarter: None,
+            brightest: None,
             maps: Mutex::new(Vec::new()),
             band: 0,
             state: BandState::default(),
@@ -184,18 +189,32 @@ impl BandStretch {
     /// brightest, measured over the whole band at a quarter of its
     /// resolution. `None` without that copy, or when the curve has no room
     /// for a tail.
-    fn hdr_tail(&self, curve: ResolvedCurve, headroom: f64) -> Option<seiza_stretch::HdrTail> {
+    fn hdr_tail(
+        &self,
+        curve: ResolvedCurve,
+        (headroom, knee): (f64, f64),
+    ) -> Option<seiza_stretch::HdrTail> {
         let (samples, _, _) = self.quarter.as_deref()?;
-        let white = samples
+        // The tail reaches the peak at the band's brightest, which is often
+        // above the 1 of the stretch's range: a range set at a percentile
+        // leaves a bright core above it, and a tail that ended at 1 would
+        // put that core at the peak, flat.
+        let quarter = samples
             .iter()
             .copied()
             .filter(|sample| sample.is_finite())
-            .fold(0.0_f32, f32::max)
-            .min(1.0);
+            .fold(0.0_f32, f32::max);
+        let brightest = self
+            .brightest
+            .and_then(|brightest| self.domain.apply(&[brightest], 1).ok())
+            .and_then(|unit| unit.first().copied())
+            .filter(|unit| unit.is_finite());
+        let white = brightest.map_or(quarter, |brightest| brightest.max(quarter));
         seiza_stretch::HdrTail::resolve(
             curve,
             seiza_stretch::HdrTailParams {
                 headroom,
+                knee,
                 white: f64::from(white),
                 ..Default::default()
             },
@@ -222,9 +241,10 @@ impl BandStretch {
     /// midtones stage; the benchmark uses it to time a stretch change.
     ///
     /// A stage Seiza refuses is left out. A layered stretch reads maps of
-    /// the whole band at a quarter of its resolution; `headroom`, in stops,
-    /// is the picture's, which the HDR layered stretch reaches into (0 for
-    /// an SDR picture).
+    /// the whole band at a quarter of its resolution. `hdr` is the
+    /// picture's headroom in stops (0 for an SDR picture), which every
+    /// stretch reaches into, and its knee: the output where a stretch other
+    /// than the HDR layered one turns into its continuation there.
     ///
     /// A layered stretch reads planes worked out from the whole image: the
     /// luminance of red, green and blue stretched together, and the fine
@@ -235,10 +255,11 @@ impl BandStretch {
         &self,
         stages: &[StretchModel],
         nudge: f64,
-        headroom: f64,
+        hdr: (f64, f64),
         planes: &dyn Fn(&DerivedKey) -> Option<usize>,
         missing: &mut Vec<DerivedKey>,
     ) -> Transfer {
+        let (headroom, knee) = hdr;
         let unit = TransferStage::Clamp {
             low: 0.0,
             high: 1.0,
@@ -275,6 +296,7 @@ impl BandStretch {
                         layered: *params,
                         hdr: seiza_stretch::LayeredHdr {
                             headroom,
+                            knee,
                             core_compression: 0.0,
                             ..Default::default()
                         },
@@ -352,7 +374,7 @@ impl BandStretch {
                     },
                 ]);
             } else if let Some(tail) = (at == 0 && headroom > 0.0)
-                .then(|| self.hdr_tail(curve, headroom))
+                .then(|| self.hdr_tail(curve, hdr))
                 .flatten()
             {
                 // In an HDR picture any stretch continues into the headroom
@@ -751,6 +773,15 @@ impl Bands {
                     let (width, height) = self.quarter_size;
                     stretch.set_quarter(&quarter, width, height);
                 }
+                let together = if self.linked.contains(&band) {
+                    self.linked.as_slice()
+                } else {
+                    std::slice::from_ref(&band)
+                };
+                stretch.brightest = together
+                    .iter()
+                    .filter_map(|band| self.scales.get(*band).copied())
+                    .reduce(f32::max);
                 Ok(stretch)
             })
             .collect()
@@ -1315,7 +1346,7 @@ mod tests {
         let hdr = band.transfer(
             std::slice::from_ref(&model),
             0.0,
-            2.0,
+            (2.0, 0.75),
             &|_| None,
             &mut Vec::new(),
         );
@@ -1333,7 +1364,7 @@ mod tests {
         let sdr = band.transfer(
             std::slice::from_ref(&model),
             0.0,
-            0.0,
+            (0.0, 0.75),
             &|_| None,
             &mut Vec::new(),
         );
@@ -1350,7 +1381,7 @@ mod tests {
         let chained = band.transfer(
             &[model.clone(), midtones.clone()],
             0.0,
-            2.0,
+            (2.0, 0.75),
             &|_| None,
             &mut Vec::new(),
         );
@@ -1368,7 +1399,7 @@ mod tests {
         let alone = band.transfer(
             std::slice::from_ref(&midtones),
             0.0,
-            2.0,
+            (2.0, 0.75),
             &|_| None,
             &mut Vec::new(),
         );
@@ -1379,10 +1410,36 @@ mod tests {
         let mut brightest = [*full.iter().max_by(|a, b| a.total_cmp(b)).unwrap()];
         alone.apply(&mut brightest);
         assert!(brightest[0] > 1.5, "{brightest:?}");
+        // A core above the 1 of the stretch's range keeps its detail: the
+        // tail reaches the peak at the band's brightest, not at that 1.
+        let (_, white) = band.domain.input_range();
+        band.brightest = Some(white * 8.0);
+        let core = band.transfer(
+            std::slice::from_ref(&midtones),
+            0.0,
+            (2.0, 0.75),
+            &|_| None,
+            &mut Vec::new(),
+        );
+        let mut levels = [white, white * 2.0, white * 4.0, white * 8.0];
+        core.apply(&mut levels);
+        assert!(
+            levels.windows(2).all(|pair| pair[0] < pair[1]),
+            "{levels:?}"
+        );
+        let peak = core.stages.iter().find_map(|stage| match stage {
+            TransferStage::TailedCurve { tail, .. } => Some(tail.peak),
+            _ => None,
+        });
+        assert!(
+            peak.is_some_and(|peak| (levels[3] - peak).abs() < 1e-3),
+            "{levels:?} {peak:?}"
+        );
+        band.brightest = None;
         let sdr_alone = band.transfer(
             std::slice::from_ref(&midtones),
             0.0,
-            0.0,
+            (0.0, 0.75),
             &|_| None,
             &mut Vec::new(),
         );
@@ -1395,7 +1452,7 @@ mod tests {
         let hdr_layered = band.transfer(
             std::slice::from_ref(&layered),
             0.0,
-            2.0,
+            (2.0, 0.75),
             &|_| None,
             &mut Vec::new(),
         );
@@ -1408,7 +1465,7 @@ mod tests {
         let plain = band.transfer(
             &[midtones.clone(), midtones],
             0.0,
-            0.0,
+            (0.0, 0.75),
             &|_| None,
             &mut Vec::new(),
         );
@@ -1441,7 +1498,7 @@ mod tests {
         let waiting = band.transfer(
             std::slice::from_ref(&model),
             0.0,
-            0.0,
+            (0.0, 0.75),
             &|_| None,
             &mut missing,
         );
@@ -1453,7 +1510,7 @@ mod tests {
         let ready = band.transfer(
             std::slice::from_ref(&model),
             0.0,
-            0.0,
+            (0.0, 0.75),
             &|wanted| (*wanted == key).then_some(7),
             &mut Vec::new(),
         );
@@ -1479,7 +1536,7 @@ mod tests {
         let band = BandStretch::analyse(&samples).unwrap();
         // No stretch: the band's range mapped to 0 to 1, and no curve. The
         // view stretch is given as a stretch when a view wants one.
-        let linear = band.transfer(&[], 0.0, 0.0, &|_| None, &mut Vec::new());
+        let linear = band.transfer(&[], 0.0, (0.0, 0.75), &|_| None, &mut Vec::new());
         assert!(linear
             .stages
             .iter()
@@ -1487,7 +1544,7 @@ mod tests {
         let viewed = band.transfer(
             &[StretchModel::AutoMtf(StretchParams::default())],
             0.0,
-            0.0,
+            (0.0, 0.75),
             &|_| None,
             &mut Vec::new(),
         );

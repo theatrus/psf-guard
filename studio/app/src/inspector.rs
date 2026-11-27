@@ -283,6 +283,16 @@ impl Studio {
                 cx,
             ));
         }
+        // In an HDR picture every stretch continues into the headroom; the
+        // knee is the picture's, shown here where the core is worked on.
+        if self.document.headroom.is_some() && kind != "layered-hdr" {
+            block = block
+                .child(Self::heading("HDR"))
+                .child(self.knee_slider(cx))
+                .children(Self::help(
+                    "Above the knee, this stretch continues into the picture's headroom, up to the band's brightest sample. A lower knee gives the bright core more of the headroom and more contrast there. The knee is the picture's, so it moves every stretch.",
+                ));
+        }
         block.child(Self::act(
             "Add stretch",
             "stretch-add",
@@ -1503,16 +1513,33 @@ impl Studio {
         ));
         if let Some(headroom) = headroom {
             let (_, label, low, high) = crate::tone_step::HEADROOM;
-            block = block.child(self.labelled_slider(
-                format!("{label} {headroom:.1} stops"),
-                SliderId::Headroom,
-                (headroom - low) / (high - low),
-                cx,
-            ));
+            block = block
+                .child(self.labelled_slider(
+                    format!("{label} {headroom:.1} stops"),
+                    SliderId::Headroom,
+                    (headroom - low) / (high - low),
+                    cx,
+                ))
+                .child(self.knee_slider(cx));
         }
         block.children(Self::help(
-            "With HDR on, the whole picture may be brighter than SDR white, up to the headroom (each stop doubles the light): the stretches, the combined picture and every Finish step. An HDR stretch, such as Layered, HDR, puts the brightest structure there, and Tone and color keeps it. Every view of the picture shows it brighter than white on an HDR display. Export it as AVIF or as a 32-bit float TIFF to keep it.",
+            "With HDR on, the whole picture may be brighter than SDR white, up to the headroom (each stop doubles the light): the stretches, the combined picture and every Finish step. Every stretch continues above its knee into the headroom, so the band's brightest sample reaches the top; Layered, HDR also compresses the core. A lower knee gives the bright core more of the headroom and more contrast there. Every view of the picture shows it brighter than white on an HDR display. Export it as AVIF, a 32-bit float TIFF, FITS or XISF to keep it.",
         ))
+    }
+
+    /// The picture's HDR knee, as a slider.
+    fn knee_slider(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let (_, label, low, high) = crate::tone_step::HDR_KNEE;
+        let knee = self
+            .document
+            .hdr_knee
+            .unwrap_or(crate::tone_step::DEFAULT_HDR_KNEE);
+        self.labelled_slider(
+            format!("{label} {knee:.2}"),
+            SliderId::HdrKnee,
+            (knee - low) / (high - low),
+            cx,
+        )
     }
 
     /// Export: the final picture at full resolution, to a file.

@@ -152,12 +152,23 @@ fn settings_of(step: &StepRecord) -> Value {
     }
 }
 
-/// `patch` merged into `base`: objects key by key, anything else replaced.
+/// `patch` merged into `base`: objects key by key, a `null` removing its
+/// key, and anything else replaced. An object whose `type` the patch
+/// changes, such as a stretch model of another kind, is replaced whole, so
+/// the old kind's settings do not stay behind.
 fn merge(base: &mut Value, patch: &Value) {
     match (base, patch) {
-        (Value::Object(base), Value::Object(patch)) => {
+        (Value::Object(base), Value::Object(patch))
+            if patch
+                .get("type")
+                .is_none_or(|kind| base.get("type").is_none_or(|was| was == kind)) =>
+        {
             for (key, value) in patch {
-                merge(base.entry(key.clone()).or_insert(Value::Null), value);
+                if value.is_null() {
+                    base.remove(key);
+                } else {
+                    merge(base.entry(key.clone()).or_insert(Value::Null), value);
+                }
             }
         }
         (base, patch) => *base = patch.clone(),
@@ -250,8 +261,16 @@ impl Studio {
                     .as_f64()
                     .map(|stops| stops.clamp(0.0, 4.0) as f32);
                 self.document.headroom = stops.filter(|stops| *stops > 0.0);
+                // The knee, when given, as the HDR block's Knee sets it.
+                if let Some(knee) = params["knee"].as_f64() {
+                    let (_, _, low, high) = crate::tone_step::HDR_KNEE;
+                    self.document.hdr_knee = Some((knee as f32).clamp(low, high));
+                }
                 self.refresh_canvas();
-                Ok(json!({ "headroom": self.document.headroom }))
+                Ok(json!({
+                    "headroom": self.document.headroom,
+                    "knee": self.document.hdr_knee.unwrap_or(crate::tone_step::DEFAULT_HDR_KNEE),
+                }))
             }
             "use_recipe" => {
                 let name = params["name"].as_str().unwrap_or_default();
@@ -513,6 +532,12 @@ impl Studio {
             if settings.is_null() {
                 return Err("that step has no settings".to_string());
             }
+            // A stretch switched to another kind starts from that kind's
+            // settings, as the inspector's choice does.
+            let kind = params["settings"]["model"]["type"].as_str();
+            if let Some(kind) = kind.filter(|kind| settings["model"]["type"] != *kind) {
+                settings["model"] = super::panes::new_stretch(kind);
+            }
             merge(&mut settings, &params["settings"]);
             if !self.document.set_step_settings(id, settings) {
                 return Err("the settings were refused".to_string());
@@ -733,4 +758,31 @@ fn write_capture(
         "divided_by": pending.divide,
         "pane_label": label,
     }))
+}
+
+#[cfg(test)]
+mod merge_tests {
+    use super::merge;
+    use serde_json::json;
+
+    #[test]
+    fn a_patch_merges_removes_and_replaces_a_changed_kind() {
+        let mut settings = json!({
+            "color_strategy": "linked",
+            "model": { "type": "layered", "knee": 0.75, "sky_floor": 0.1 },
+        });
+        merge(
+            &mut settings,
+            &json!({ "model": { "knee": 0.6, "sky_floor": null } }),
+        );
+        assert_eq!(
+            settings,
+            json!({ "color_strategy": "linked", "model": { "type": "layered", "knee": 0.6 } })
+        );
+        merge(&mut settings, &json!({ "model": { "type": "auto-mtf" } }));
+        assert_eq!(
+            settings,
+            json!({ "color_strategy": "linked", "model": { "type": "auto-mtf" } })
+        );
+    }
 }

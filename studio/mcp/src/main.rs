@@ -108,7 +108,7 @@ fn tools() -> Value {
         },
         {
             "name": "studio_set_step",
-            "description": "Changes a step: `settings` is merged into its settings, key by key (for a stretch, {\"model\": {\"target_background\": 0.12}}); `enabled` turns it on or off. The document is saved as Studio saves every edit.",
+            "description": "Changes a step: `settings` is merged into its settings, key by key (for a stretch, {\"model\": {\"target_background\": 0.12}}). A null removes its key, and a stretch whose `type` changes starts from that kind's settings, as the inspector's choice does ({\"model\": {\"type\": \"auto-mtf\"}} switches a stretch to automatic midtones). `enabled` turns it on or off. The document is saved as Studio saves every edit.",
             "inputSchema": object(json!({
                 "instance": instance,
                 "step": { "type": "string" },
@@ -118,7 +118,7 @@ fn tools() -> Value {
         },
         {
             "name": "studio_set_layer",
-            "description": "Changes a layer: `patch` is merged into the layer as the document stores it, such as {\"opacity\": 0.5}, {\"visible\": false} or {\"blend\": \"screen\"}.",
+            "description": "Changes a layer: `patch` is merged into the layer as the document stores it, such as {\"opacity\": 0.5}, {\"visible\": false}, {\"blend\": \"screen\"} or {\"star_reduction\": 0.5}. A null removes its key.",
             "inputSchema": object(json!({
                 "instance": instance,
                 "layer": { "type": "string" },
@@ -127,8 +127,8 @@ fn tools() -> Value {
         },
         {
             "name": "studio_set_headroom",
-            "description": "Makes the picture HDR with this many stops of headroom above SDR white (0 to 4), or SDR with 0, as the Final picture's HDR setting does.",
-            "inputSchema": object(json!({ "instance": instance, "stops": { "type": "number" } }), &["stops"]),
+            "description": "Makes the picture HDR with this many stops of headroom above SDR white (0 to 4), or SDR with 0, as the Final picture's HDR setting does. `knee`, from 0.3 to 0.95, sets where every stretch but the HDR layered one continues into the headroom, as the stretch's output (0.75 when never set).",
+            "inputSchema": object(json!({ "instance": instance, "stops": { "type": "number" }, "knee": { "type": "number" } }), &["stops"]),
         },
         {
             "name": "studio_export",
@@ -254,7 +254,7 @@ impl Server {
             "studio_set_headroom" => forward(
                 self.instance(arguments)?,
                 "set_headroom",
-                json!({ "stops": arguments["stops"] }),
+                json!({ "stops": arguments["stops"], "knee": arguments["knee"] }),
             ),
             "studio_export" => forward(self.instance(arguments)?, "export", arguments.clone()),
             "studio_show_clipping" => forward(

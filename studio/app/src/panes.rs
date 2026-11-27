@@ -786,7 +786,9 @@ impl Scene {
         std::hash::Hash::hash(&source_generation, &mut hasher);
         std::hash::Hash::hash(
             &format!(
-                "{:?}{:?}{:?}{:?}{:?}{:?}{:?}",
+                "{:?}{:?}{:?}{:?}{:?}{:?}{:?}{:?}{:?}",
+                self.headroom,
+                self.knee,
                 self.layers,
                 self.layer_bands,
                 self.layer_stretches,
@@ -1389,6 +1391,7 @@ pub(super) fn scene(
         stretches: Arc::default(),
         version,
         headroom: document.headroom.unwrap_or(0.0),
+        knee: document.hdr_knee.unwrap_or(tone_step::DEFAULT_HDR_KNEE),
         planes: Arc::new(bands.derived_planes()),
         wanted_planes,
         place: None,
@@ -1867,6 +1870,10 @@ impl Studio {
             SliderId::Headroom => {
                 let (_, _, low, high) = tone_step::HEADROOM;
                 self.document.headroom = Some(low + (high - low) * position);
+            }
+            SliderId::HdrKnee => {
+                let (_, _, low, high) = tone_step::HDR_KNEE;
+                self.document.hdr_knee = Some(low + (high - low) * position);
             }
             SliderId::FinishParam(index) => {
                 let Some(id) = self.selected_step() else {
