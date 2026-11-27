@@ -61,6 +61,9 @@ struct Pending {
 pub(super) struct SceneWorker {
     shared: Arc<(Mutex<Pending>, Condvar)>,
     beneath: Arc<BeneathSampler>,
+    /// What the worker resolved in the background, for scenes built
+    /// elsewhere: a sampling, an export, a tool's image.
+    published: Arc<Mutex<crate::output_stretch::Resolved>>,
 }
 
 /// Samples of the picture beneath output stretches that have other layers
@@ -189,14 +192,25 @@ impl SceneWorker {
         let shared = Arc::new((Mutex::new(Pending::default()), Condvar::new()));
         let worker = shared.clone();
         let beneath = Arc::new(BeneathSampler::default());
+        let published = Arc::new(Mutex::new(crate::output_stretch::Resolved::default()));
         std::thread::Builder::new()
             .name("scenes".into())
             .spawn({
                 let beneath = beneath.clone();
-                move || run(&worker, &canvas, &beneath)
+                let published = published.clone();
+                move || run(&worker, &canvas, &beneath, &published)
             })
             .expect("spawning the scene worker");
-        Self { shared, beneath }
+        Self {
+            shared,
+            beneath,
+            published,
+        }
+    }
+
+    /// What the worker resolved in the background, as it was last.
+    pub fn resolved(&self) -> crate::output_stretch::Resolved {
+        self.published.lock().expect("published").clone()
     }
 
     /// Whether samples of what is beneath a stretch came in since this was
@@ -258,7 +272,12 @@ impl Caches {
     }
 }
 
-fn run(shared: &(Mutex<Pending>, Condvar), canvas: &CanvasHandle, beneath: &Arc<BeneathSampler>) {
+fn run(
+    shared: &(Mutex<Pending>, Condvar),
+    canvas: &CanvasHandle,
+    beneath: &Arc<BeneathSampler>,
+    published: &Mutex<crate::output_stretch::Resolved>,
+) {
     let mut caches = Caches {
         final_peak: 1.0,
         ..Caches::default()
@@ -281,6 +300,7 @@ fn run(shared: &(Mutex<Pending>, Condvar), canvas: &CanvasHandle, beneath: &Arc<
         let superseded = || shared.0.lock().expect("scene worker").job.is_some();
         prepare_beneath(&job, &mut caches, beneath);
         prepare_balance(&job, &mut caches, beneath);
+        *published.lock().expect("published") = caches.chains.resolved();
         let outcome = build(&job, &mut caches, canvas, &superseded);
         if super::timing() {
             eprintln!(
@@ -627,8 +647,7 @@ fn picture_request(job: &SceneJob, caches: &mut Caches) -> Option<Option<Arc<Pic
     }
     // Stretches beneath other layers are drawn in the sampled picture, from
     // the samples of what is beneath them.
-    let mut chains = ResolvedChains::default();
-    chains.beneath = caches.chains.beneath.clone();
+    let mut chains = ResolvedChains::from_resolved(&caches.chains.resolved());
     let (mut scene, states) = scene(
         &job.document,
         &job.band_info,

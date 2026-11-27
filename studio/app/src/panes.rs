@@ -489,8 +489,27 @@ pub(super) fn is_drawn(stage: StageKind, step: &StepRecord, bands: &Bands) -> bo
 }
 
 /// The band of a stretch table row that leaves samples as they are: the row
-/// of the planes a store holds stretched for display.
+/// of planes worked out already stretched, such as a tool's result.
 pub(super) const DISPLAY_ROW: usize = usize::MAX;
+
+/// Rows from here up leave samples as they are.
+pub(super) const DISPLAY_FLOOR: usize = DISPLAY_ROW - 65_536;
+
+/// The row of a band whose plane the store holds stretched for display: it
+/// leaves samples as they are, and still names the band.
+pub(super) fn display_row_of(band: usize) -> usize {
+    DISPLAY_ROW - 1 - band.min(65_534)
+}
+
+/// The band a stretch table row draws, a band the store stretched among
+/// them; `None` for a plane worked out already stretched.
+pub(super) fn band_of_row(row: usize) -> Option<usize> {
+    match row {
+        DISPLAY_ROW => None,
+        row if row >= DISPLAY_FLOOR => Some(DISPLAY_ROW - 1 - row),
+        row => Some(row),
+    }
+}
 
 /// A stroke's path as the segments the canvas draws.
 fn segments(stroke: &Stroke) -> Vec<Segment> {
@@ -575,7 +594,9 @@ pub(super) fn balance_source(
         .iter()
         .filter_map(|name| {
             let band = bands.band_of(name)?;
-            let row = layer_bands.iter().position(|known| *known == band)?;
+            let row = layer_bands
+                .iter()
+                .position(|known| band_of_row(*known) == Some(band))?;
             Some((band, row))
         })
         .collect();
@@ -1899,8 +1920,12 @@ pub(super) fn scene(
             stages
         };
         // A plane the store stretched has a table row of its own, which
-        // leaves its samples as they are.
-        let stretched_as = if display { DISPLAY_ROW } else { stretched_as };
+        // leaves its samples as they are, and still says whose band it is.
+        let stretched_as = if display {
+            display_row_of(band)
+        } else {
+            stretched_as
+        };
         // Stretched stars are display samples already.
         let (plane, blended, stretched_as, stages) = match stretched {
             Some((stars, reduced)) => (stars, reduced, DISPLAY_ROW, Vec::new()),
@@ -2294,7 +2319,11 @@ pub(super) fn scene(
             };
             // A plane the store stretched has a table row of its own, which
             // leaves its samples as they are.
-            let stretched_as = if display { DISPLAY_ROW } else { stretched_as };
+            let stretched_as = if display {
+                display_row_of(band)
+            } else {
+                stretched_as
+            };
             let known =
                 layer_bands
                     .iter()
@@ -2840,11 +2869,16 @@ impl Studio {
     /// Takes in what the scene worker built: which samplings the scenes
     /// ask for, and the histogram once its samples are read.
     pub(super) fn follow_scenes(&mut self) {
-        // Samples of what is beneath a stretch came in: the scenes are
-        // built again with them.
+        // Samples of what is beneath a stretch, or a balance, came in: the
+        // scenes are built again with them.
         if self.scene_worker.take_beneath_fresh() {
             self.refresh_canvas();
         }
+        // A sampling or a heal's measure builds its scene from what the
+        // worker resolved.
+        let resolved = self.scene_worker.resolved();
+        self.resolved_chains.beneath = resolved.beneath;
+        self.resolved_chains.balance = resolved.balance;
         let Some(outcome) = self.scene_worker.take_outcome() else {
             return;
         };

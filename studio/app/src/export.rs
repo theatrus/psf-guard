@@ -139,6 +139,7 @@ impl Studio {
         // An editor reads 16 bits.
         let tiff_float = self.tiff_float && for_editor.is_none();
         let planes = self.derived.clone();
+        let resolved = self.scene_worker.resolved();
         let run = Arc::new(ExportRun {
             path: path.clone(),
             progress: AtomicU32::new(0),
@@ -157,7 +158,7 @@ impl Studio {
                 picture_samples
                     .as_ref()
                     .map(|(id, samples)| (*id, samples.as_slice())),
-                &mut crate::output_stretch::ResolvedChains::default(),
+                &mut crate::output_stretch::ResolvedChains::from_resolved(&resolved),
                 // The view stretch is for looking only: an export leaves a
                 // channel nothing stretches linear.
                 &[],
@@ -434,6 +435,7 @@ impl Studio {
             (width, height),
         );
         let planes = self.derived.clone();
+        let resolved = self.scene_worker.resolved();
         std::thread::spawn(move || {
             let (mut probe, states) = scene(
                 &document,
@@ -441,7 +443,7 @@ impl Studio {
                 &Place::Final.view(),
                 scene_version,
                 None,
-                &mut crate::output_stretch::ResolvedChains::default(),
+                &mut crate::output_stretch::ResolvedChains::from_resolved(&resolved),
                 &view_stretch,
             );
             probe.stretches = Arc::new(band_info.stretches(&states).unwrap_or_default());

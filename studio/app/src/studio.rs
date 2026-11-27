@@ -433,28 +433,20 @@ impl Scene {
         self.layer_bands
             .iter()
             .zip(&self.layer_stretches)
-            .map(|(band, stages)| {
+            .map(|(row, stages)| {
+                let band = panes::band_of_row(*row);
                 // A plane the store stretched is shown as it is.
-                if *band == panes::DISPLAY_ROW {
-                    return Transfer::identity();
-                }
-                let nudge = nudges.get(*band).copied().unwrap_or(0.0);
-                let mut transfer = self.stretches.get(*band).map_or_else(
-                    || Transfer::of([seiza_compose::picture::TransferStage::Scale(0.0)]),
-                    |stretch| {
-                        stretch.transfer(
-                            stages,
-                            nudge,
-                            (f64::from(self.headroom), f64::from(self.knee)),
-                            &planes,
-                            missing,
-                        )
-                    },
-                );
+                let mut transfer = if *row >= panes::DISPLAY_FLOOR {
+                    Transfer::identity()
+                } else {
+                    self.stretch_of(*row, stages, nudges, &planes, missing)
+                };
                 // A narrowband channel matched to H-alpha ends with its
                 // balance.
-                if let Some((_, background, midtone)) =
-                    self.balance.iter().find(|(known, _, _)| known == band)
+                if let Some((_, background, midtone)) = self
+                    .balance
+                    .iter()
+                    .find(|(known, _, _)| Some(*known) == band)
                 {
                     transfer
                         .stages
@@ -466,6 +458,31 @@ impl Scene {
                 transfer
             })
             .collect()
+    }
+
+    /// The transfer of row `band`'s stretch, moved by its nudge. A band
+    /// with no analysis yet draws nothing.
+    fn stretch_of(
+        &self,
+        band: usize,
+        stages: &[seiza_stretch::StretchModel],
+        nudges: &[f64],
+        planes: &dyn Fn(&crate::derived::DerivedKey) -> Option<usize>,
+        missing: &mut Vec<crate::derived::DerivedKey>,
+    ) -> Transfer {
+        let nudge = nudges.get(band).copied().unwrap_or(0.0);
+        self.stretches.get(band).map_or_else(
+            || Transfer::of([seiza_compose::picture::TransferStage::Scale(0.0)]),
+            |stretch| {
+                stretch.transfer(
+                    stages,
+                    nudge,
+                    (f64::from(self.headroom), f64::from(self.knee)),
+                    planes,
+                    missing,
+                )
+            },
+        )
     }
 
     /// The Finish steps as text, for an id of what the scene draws that

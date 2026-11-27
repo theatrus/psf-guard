@@ -101,6 +101,34 @@ pub struct ResolvedChains {
 /// midtone of its curve.
 pub type BalanceCurve = (usize, f32, f32);
 
+/// What the scene worker resolved in the background that a scene built
+/// elsewhere needs too: the samples beneath stretches with layers above
+/// them, and the narrowband balance.
+#[derive(Clone, Default)]
+pub struct Resolved {
+    pub beneath: std::collections::HashMap<uuid::Uuid, (u64, std::sync::Arc<Vec<f32>>)>,
+    pub balance: Option<(u64, Vec<BalanceCurve>)>,
+}
+
+impl ResolvedChains {
+    /// Chains that start from what the scene worker resolved.
+    pub fn from_resolved(resolved: &Resolved) -> Self {
+        Self {
+            beneath: resolved.beneath.clone(),
+            balance: resolved.balance.clone(),
+            ..Self::default()
+        }
+    }
+
+    /// What these chains hold that the scene worker resolved.
+    pub fn resolved(&self) -> Resolved {
+        Resolved {
+            beneath: self.beneath.clone(),
+            balance: self.balance.clone(),
+        }
+    }
+}
+
 /// One chain resolved: the id of the samples it was resolved from (none
 /// when it reads no samples), the chain, and how the canvas draws each
 /// stretch of it.

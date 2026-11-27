@@ -434,6 +434,7 @@ impl Studio {
         let base = self.base_bands.clone();
         let planes: Vec<Arc<DerivedPlane>> = self.derived.clone();
         let picture_samples = self.picture_samples.clone();
+        let resolved = self.scene_worker.resolved();
         let levels = usize::from(self.levels);
         self.start_job(move |run| {
             let mut planes = planes;
@@ -442,8 +443,15 @@ impl Studio {
             for step in &pending {
                 // The image the tool takes, as the steps before it leave it.
                 super::tools::set_line(run, &format!("{}: rendering its image", step.words));
-                let image =
-                    render_input(&document, &base, &planes, &picture_samples, &store, step)?;
+                let image = render_input(
+                    &document,
+                    &base,
+                    &planes,
+                    &picture_samples,
+                    &resolved,
+                    &store,
+                    step,
+                )?;
                 let input = folder.join(format!("{}.input.fits", step.identity));
                 write_fits(&input, &image)?;
                 let mut command = Command::new(&binary);
@@ -495,6 +503,7 @@ fn render_input(
     base: &Arc<crate::store_tiles::Bands>,
     planes: &[Arc<DerivedPlane>],
     picture_samples: &Option<(u64, Arc<Vec<f32>>)>,
+    resolved: &crate::output_stretch::Resolved,
     store: &Path,
     step: &LateStep,
 ) -> Result<seiza_stacking_image::Image, String> {
@@ -524,6 +533,7 @@ fn render_input(
                         base,
                         planes,
                         picture_samples,
+                        resolved,
                         store,
                         step,
                         &view,
@@ -563,6 +573,7 @@ fn render_input(
         base,
         planes,
         picture_samples,
+        resolved,
         store,
         step,
         &place.view(),
@@ -571,11 +582,13 @@ fn render_input(
 
 /// The image a late step's tool takes, of `view`, rendered at full
 /// resolution, as [`render_input`] describes.
+#[allow(clippy::too_many_arguments)]
 fn render_view(
     document: &Document,
     base: &Arc<crate::store_tiles::Bands>,
     planes: &[Arc<DerivedPlane>],
     picture_samples: &Option<(u64, Arc<Vec<f32>>)>,
+    resolved: &crate::output_stretch::Resolved,
     store: &Path,
     step: &LateStep,
     view: &crate::studio_model::View,
@@ -589,7 +602,7 @@ fn render_view(
         picture_samples
             .as_ref()
             .map(|(id, samples)| (*id, samples.as_slice())),
-        &mut crate::output_stretch::ResolvedChains::default(),
+        &mut crate::output_stretch::ResolvedChains::from_resolved(resolved),
         &[],
     );
     if !scene.wanted_planes.is_empty() {
