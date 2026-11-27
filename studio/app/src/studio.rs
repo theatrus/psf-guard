@@ -100,6 +100,9 @@ enum SliderId {
     FinishParam(usize),
     /// The picture's HDR headroom.
     Headroom,
+    /// One setting of the view stretch, by its place in the list of that
+    /// stretch's settings.
+    ViewStretchParam(usize),
     /// The selected shared mask's reach.
     Reach,
     /// How far the selected shared mask is smoothed.
@@ -332,7 +335,7 @@ pub struct Scene {
     /// The document band each stretch is of, in order: one per layer that
     /// shows a band, then the ones only computed masks read.
     layer_bands: Vec<usize>,
-    /// The stretches, in the same order. None is a preview stretch.
+    /// The stretches, in the same order. None is the view stretch.
     layer_stretches: Vec<Vec<seiza_stretch::StretchModel>>,
     finish: Vec<FinishStep>,
     /// Heals of single layers and inputs.
@@ -730,6 +733,12 @@ pub struct Studio {
     tiff_float: bool,
     /// The headroom HDR comes back with when it is turned on again.
     last_headroom: f32,
+    /// The view stretch: Seiza's stretch, as its settings, that draws a
+    /// channel nothing in the view stretches yet. It is for looking only,
+    /// so the document does not keep it and no export uses it.
+    view_stretch: serde_json::Value,
+    /// Whether the inspector shows the view stretch's settings.
+    view_stretch_open: bool,
     /// Where to write the parity report, until it is written.
     parity_report: Option<PathBuf>,
     /// The levels in the document's pyramid.
@@ -877,6 +886,7 @@ impl Studio {
                         [SliderId::ToneHue(layer), SliderId::ToneSaturation(layer)]
                     }))
                     .chain((0..8).map(SliderId::StretchParam))
+                    .chain((0..8).map(SliderId::ViewStretchParam))
                     .chain((0..seiza_compose::tone::CONTROLS.len()).map(SliderId::FinishParam))
                     .chain((0..tools::MAX_TOOL_SETTINGS).map(SliderId::ToolParam))
                     .map(|id| (id, Rc::default()))
@@ -913,6 +923,8 @@ impl Studio {
                 export_line: String::new(),
                 tiff_float: false,
                 last_headroom: crate::tone_step::DEFAULT_HEADROOM,
+                view_stretch: panes::new_stretch("auto-mtf"),
+                view_stretch_open: false,
                 parity_report,
                 levels,
                 tools,

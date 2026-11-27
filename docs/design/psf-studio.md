@@ -1342,14 +1342,14 @@ draw buttons and hand the result to the canvas.
 
 A person picks three things. Each is a row of buttons under the stages,
 and a sentence under them says what is on screen, such as “green on its
-own, after the Linear stage, drawn with a preview stretch, not saved,
+own, after the Linear stage, drawn with the view stretch, not saved,
 because the view stops before the stretch.”
 
 | Choice | Options | What it means |
 |---|---|---|
 | Show | One tab per channel, and Combined | A channel is drawn on its own, in gray. Combined blends the layers as the Combine stage does |
 | Up to | Start of stage, Selected step, End of stage, Final | The last step the view applies. This is how a person sees an intermediate result. Changing stage moves it to the end of that stage |
-| Stretch | Document's, Preview | The document's stretch is each channel's own Stretch steps. The preview stretch is automatic, per channel, for looking only, and is never saved. A channel the view has not stretched yet is drawn with the preview stretch, and the sentence says so |
+| Stretch | Document's, Preview | The document's stretch is each channel's own Stretch steps. The view stretch is for looking only and is never saved or exported. A channel the view has not stretched yet is drawn with the view stretch, and the sentence says so |
 
 `studio::plan(document, view)` returns what a canvas draws: for each
 channel the background step that applies and the stretch to use, whether
@@ -1398,8 +1398,12 @@ Not done in the view:
 - **A step's result in the middle of a channel's chain** is shown only for
   the steps the canvas can apply: the background strength, the stretch
   and the Finish steps. Other steps are recorded and not drawn.
-- **The preview stretch has no controls,** and cannot be linked across
-  channels.
+- **The view stretch** is set with **View stretch** in the View toolbar:
+  any of Seiza's stretches but the layered ones, Automatic midtones to
+  start. Studio keeps it while it runs; the document does not, and an
+  export leaves a channel nothing stretches linear. It is used only where
+  nothing stretches a channel, never in place of a document's stretch. It
+  cannot be linked across channels.
 - **Brushes are offered in the Finish stage only,** where the canvas draws
   masks and heals. They were shown in every stage and did nothing there.
 - **A channel's own Background step changes its strength only.** The fit
@@ -1803,8 +1807,8 @@ to make, not one for what to edit and another for what to look at.
   edits up to and including that one (`Place::LayerEdit`). The row before
   it is the same layer without the edit, so a before and after of one edit
   compares like with like.
-- A place before an input's stretch is drawn with a preview stretch, and
-  the pane's label says so: “Ha · as stacked · preview stretch, not saved.”
+- A place before an input's stretch is drawn with the view stretch, and
+  the pane's label says so: “Ha · as stacked · view stretch, not saved.”
   There is no separate stretch choice.
 
 `Place::view` gives the `View` that `plan` already turned into what a
@@ -2415,8 +2419,9 @@ Setup's routing table and part cards follow the same rules.
 Seiza's layered stretch treats large and fine structure apart, so it
 needs the image and cannot be one curve per input. It is offered with the
 other stretches. The canvas draws it from a result computed when the
-store is prepared, as it does for a tool, and shows the input with a
-preview stretch until then.
+store is prepared, as it does for a tool. Until then the input is drawn
+linear, and the view lists the stretch as left out; the view stretch never
+stands in for it.
 
 ### What is built
 

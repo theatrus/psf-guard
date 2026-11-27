@@ -1404,6 +1404,58 @@ impl Studio {
             ))
     }
 
+    /// The view stretch: what draws a channel nothing stretches yet, for
+    /// looking only.
+    fn inspect_view_stretch(&self, cx: &mut Context<Self>) -> AnyElement {
+        let kind = self.view_stretch["type"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        // The layered stretches need the whole image, which a view stretch
+        // of every channel does not have.
+        let kinds = STRETCHES
+            .iter()
+            .enumerate()
+            .filter(|(_, (name, _))| !matches!(*name, "layered" | "layered-hdr"))
+            .map(|(index, (name, label))| {
+                let name = *name;
+                Self::pick(
+                    *label,
+                    ("view-stretch-kind", index),
+                    name == kind,
+                    cx,
+                    move |this| this.view_stretch = new_stretch(name),
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut block = column()
+            .child(Self::title(
+                "View stretch",
+                "For looking only. Not saved or exported.",
+            ))
+            .child(Self::field(
+                "Stretch",
+                self.menu("view-stretch-kind", "Kind", kinds, cx),
+            ));
+        for (index, (key, label, low, high)) in stretch_settings(&kind).iter().enumerate() {
+            let value = self.view_stretch[*key].as_f64().unwrap_or(*low);
+            block = block.child(self.labelled_slider(
+                format!("{label} {value:.2}"),
+                SliderId::ViewStretchParam(index),
+                ((value - low) / (high - low)) as f32,
+                cx,
+            ));
+        }
+        block
+            .child(Self::act("Done", "view-stretch-done", false, cx, |this| {
+                this.view_stretch_open = false
+            }))
+            .children(Self::help(
+                "The view stretch draws a channel that nothing in the view stretches yet: before the Stretch stage, or a channel with no Stretch step. A channel the document stretches is always drawn with the document's stretch. The view stretch only changes what you see: the document does not keep it, and an export leaves such a channel linear.",
+            ))
+            .into_any_element()
+    }
+
     fn inspect_final(&self, cx: &mut Context<Self>) -> AnyElement {
         column()
             .child(Self::title("Final picture", "Every step of the document."))
@@ -1655,6 +1707,7 @@ impl Studio {
 
     pub(super) fn inspector(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let controls = match self.selected.clone() {
+            _ if self.view_stretch_open => self.inspect_view_stretch(cx),
             Row::Input(channel) => self.inspect_input(&channel, cx),
             Row::InputStep { channel, step } => self.inspect_input_step(&channel, step, cx),
             Row::Layer(id) => match self.layer(id) {

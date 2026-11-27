@@ -106,6 +106,9 @@ impl Studio {
                 .as_ref()
                 .map(|(id, samples)| (*id, samples.as_slice())),
             &mut self.resolved_chains,
+            // The view stretch is for looking only: an export leaves a
+            // channel nothing stretches linear.
+            &[],
         );
         final_scene.stretches = self.analysis(&states);
         let picture = final_scene.picture(&[]);
@@ -328,6 +331,7 @@ impl Studio {
             self.scene_version,
             None,
             &mut crate::output_stretch::ResolvedChains::default(),
+            &self.view_stretch_stages(),
         );
         probe.stretches = self.analysis(&states);
         let combined = probe.combined(&[]);

@@ -155,7 +155,7 @@ impl Row {
 
 impl Place {
     /// The view a canvas draws for this place. A place before an input's
-    /// stretch is drawn with a preview stretch, which is not saved.
+    /// stretch is drawn with the view stretch, which is not saved.
     pub fn view(&self) -> View {
         let own_until = match self {
             Place::LayerEdit { layer, after } => Some(OwnUntil {
@@ -335,7 +335,7 @@ impl Place {
             .iter()
             .any(|channel| channel.stretch == PlannedStretch::Preview);
         if previewed {
-            format!("{what} · preview stretch, not saved")
+            format!("{what} · view stretch, not saved")
         } else {
             what
         }

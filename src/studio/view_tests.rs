@@ -128,7 +128,7 @@ fn a_view_applies_the_steps_up_to_where_it_stops() {
     assert_eq!(before.channels[0].stretch, PlannedStretch::Preview);
     assert_eq!(
         before.description,
-        "red on its own, before the Linear stage, drawn with a preview stretch, not saved, because the view stops before the stretch."
+        "red on its own, before the Linear stage, drawn with the view stretch, not saved, because the view stops before the stretch."
     );
 
     // After the background step: corrected, still not stretched.
@@ -154,7 +154,7 @@ fn a_view_applies_the_steps_up_to_where_it_stops() {
         PlannedStretch::Document(_)
     ));
 
-    // A person may ask for the preview stretch anywhere.
+    // A person may ask for the view stretch anywhere.
     let preview = plan(
         &document,
         &view(red(), UpTo::Final, DisplayStretch::Preview),
@@ -162,7 +162,7 @@ fn a_view_applies_the_steps_up_to_where_it_stops() {
     assert_eq!(preview.channels[0].stretch, PlannedStretch::Preview);
     assert!(preview
         .description
-        .ends_with("a preview stretch, not saved."));
+        .ends_with("the view stretch, not saved."));
 }
 
 #[test]

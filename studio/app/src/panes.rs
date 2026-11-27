@@ -600,6 +600,7 @@ fn band_source(
     bands: &Bands,
     band: usize,
     plan: &ChannelPlan,
+    view_stretch: &[StretchModel],
     omitted: &mut Vec<String>,
 ) -> (
     BandState,
@@ -648,7 +649,9 @@ fn band_source(
         );
     }
     let stages = match &plan.stretch {
-        PlannedStretch::Preview => Vec::new(),
+        // A channel nothing stretches yet is drawn with the view stretch,
+        // and an output leaves it linear.
+        PlannedStretch::Preview => view_stretch.to_vec(),
         PlannedStretch::Document(steps) => steps
             .iter()
             .filter_map(|id| document.step(*id))
@@ -736,6 +739,8 @@ fn push_heal(
 /// `picture_samples` are RGB samples of the combined picture, with the id of
 /// the sampling they came from, for the output stretches Seiza resolves from
 /// the picture. `chains` keeps output stretches resolved before.
+/// `view_stretch` stretches a channel nothing in the view stretches yet; an
+/// export gives none, so the view stretch never reaches a file.
 pub(super) fn scene(
     document: &Document,
     bands: &Bands,
@@ -743,6 +748,7 @@ pub(super) fn scene(
     version: u64,
     picture_samples: Option<(u64, &[f32])>,
     chains: &mut output_stretch::ResolvedChains,
+    view_stretch: &[StretchModel],
 ) -> (Scene, Vec<BandState>) {
     let planned = plan(document, view);
     let mut states = vec![BandState::default(); bands.len()];
@@ -882,7 +888,7 @@ pub(super) fn scene(
             continue;
         };
         let (state, plane, blended, own_stages, display) =
-            band_source(document, bands, band, channel, &mut omitted);
+            band_source(document, bands, band, channel, view_stretch, &mut omitted);
         states[band] = state;
         // The stars a tool took out of an input are stretched as that
         // input is, so the two go back together.
@@ -890,8 +896,14 @@ pub(super) fn scene(
         let stages = if stretched_as == band {
             own_stages
         } else {
-            let (like_state, _, _, stages, _) =
-                band_source(document, bands, stretched_as, like, &mut omitted);
+            let (like_state, _, _, stages, _) = band_source(
+                document,
+                bands,
+                stretched_as,
+                like,
+                view_stretch,
+                &mut omitted,
+            );
             states[stretched_as] = like_state;
             stages
         };
@@ -1127,7 +1139,7 @@ pub(super) fn scene(
                 continue;
             };
             let (state, plane, blended, own_stages, display) =
-                band_source(document, bands, band, plan, &mut omitted);
+                band_source(document, bands, band, plan, view_stretch, &mut omitted);
             states[band] = state;
             // The stars a tool took out of an input are stretched as that
             // input is, so the two go back together.
@@ -1135,8 +1147,14 @@ pub(super) fn scene(
             let stages = if stretched_as == band {
                 own_stages
             } else {
-                let (like_state, _, _, stages, _) =
-                    band_source(document, bands, stretched_as, like, &mut omitted);
+                let (like_state, _, _, stages, _) = band_source(
+                    document,
+                    bands,
+                    stretched_as,
+                    like,
+                    view_stretch,
+                    &mut omitted,
+                );
                 states[stretched_as] = like_state;
                 stages
             };
@@ -1434,6 +1452,7 @@ impl Studio {
             self.scene_version,
             None,
             &mut output_stretch::ResolvedChains::default(),
+            &self.view_stretch_stages(),
         );
         scene.stretches = self.analysis(&states);
         let crop = self.crop_rect();
@@ -1485,6 +1504,13 @@ impl Studio {
     }
 
     /// Turns the selected Tone and color step's HDR on or off.
+    /// The view stretch, as the stretches of a channel nothing stretches
+    /// yet. Seiza's automatic midtones stretch if its settings do not read.
+    pub(super) fn view_stretch_stages(&self) -> Vec<StretchModel> {
+        vec![serde_json::from_value(self.view_stretch.clone())
+            .unwrap_or(StretchModel::AutoMtf(Default::default()))]
+    }
+
     /// Makes the whole picture HDR, at the headroom it had or two stops, or
     /// SDR.
     pub(super) fn set_hdr(&mut self, on: bool) {
@@ -1599,6 +1625,7 @@ impl Studio {
                 *place = pinned.clone();
             }
         }
+        let view_stretch = self.view_stretch_stages();
         let scenes: Vec<Scene> = places
             .iter()
             .map(|place| {
@@ -1611,6 +1638,7 @@ impl Studio {
                         .as_ref()
                         .map(|(id, samples)| (*id, samples.as_slice())),
                     &mut chains,
+                    &view_stretch,
                 );
                 // The stretch is applied to the corrected samples, so each
                 // band's analysis follows its background strength.
@@ -1629,6 +1657,7 @@ impl Studio {
                     .as_ref()
                     .map(|(id, samples)| (*id, samples.as_slice())),
                 &mut chains,
+                &view_stretch,
             );
             // A Finish step with a mask shows the histogram of its area: the
             // samples its strokes cover at least half.
@@ -1753,6 +1782,13 @@ impl Studio {
     pub(super) fn slider_moved(&mut self, slider: SliderId, position: f32) {
         match slider {
             SliderId::ToolParam(index) => self.tool_slider_moved(index, position),
+            SliderId::ViewStretchParam(index) => {
+                let kind = self.view_stretch["type"].as_str().unwrap_or_default();
+                let Some((key, _, low, high)) = stretch_settings(kind).get(index) else {
+                    return;
+                };
+                self.view_stretch[*key] = (low + (high - low) * f64::from(position)).into();
+            }
             SliderId::Headroom => {
                 let (_, _, low, high) = tone_step::HEADROOM;
                 self.document.headroom = Some(low + (high - low) * position);
@@ -2168,6 +2204,13 @@ impl Studio {
             )
             .child(div().pl_3().child(Self::note("View")))
             .child(Self::segmented().children(splits))
+            .child(div().pl_2().child(Self::act(
+                "View stretch",
+                "view-stretch",
+                self.view_stretch_open,
+                cx,
+                |this| this.view_stretch_open = !this.view_stretch_open,
+            )))
             .child(
                 div()
                     .flex_1()

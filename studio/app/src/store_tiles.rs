@@ -89,8 +89,8 @@ impl BandStretch {
     /// stretches in `stages` in order, each resolved by Seiza and kept
     /// within 0 to 1. Each stage after the first is resolved from the
     /// band's samples as the stages before it left them, as Seiza's stretch
-    /// stack does. With no stage it is Seiza's automatic midtones stretch,
-    /// for a preview.
+    /// stack does. With no stage the band is left linear, kept within 0 to
+    /// 1.
     ///
     /// `nudge` is added to the background target of every automatic
     /// midtones stage; the benchmark uses it to time a stretch change.
@@ -106,8 +106,6 @@ impl BandStretch {
         if self.display {
             return Transfer::of([unit]);
         }
-        let preview = [StretchModel::AutoMtf(StretchParams::default())];
-        let stages = if stages.is_empty() { &preview } else { stages };
         let mut transfer = vec![TransferStage::Domain(self.domain)];
         // The band's samples as the stages so far left them. They are only
         // needed from the second stage on.
@@ -792,5 +790,28 @@ pub fn source(open: Option<&Path>) -> Result<(Arc<dyn TileSource>, Bands), Strin
             Arc::new(psf_studio_render::synth::Synthetic),
             analyse_synthetic(),
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_band_with_no_stretch_is_left_linear() {
+        let samples: Vec<f32> = (0..4000).map(|index| 100.0 + (index % 97) as f32).collect();
+        let band = BandStretch::analyse(&samples).unwrap();
+        // No stretch: the band's range mapped to 0 to 1, and no curve. The
+        // view stretch is given as a stretch when a view wants one.
+        let linear = band.transfer(&[], 0.0);
+        assert!(linear
+            .stages
+            .iter()
+            .all(|stage| !matches!(stage, TransferStage::Curve(_))));
+        let viewed = band.transfer(&[StretchModel::AutoMtf(StretchParams::default())], 0.0);
+        assert!(viewed
+            .stages
+            .iter()
+            .any(|stage| matches!(stage, TransferStage::Curve(_))));
     }
 }

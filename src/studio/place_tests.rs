@@ -206,7 +206,7 @@ fn a_place_before_the_stretch_is_labelled_as_a_preview() {
     assert_eq!(stretched.label(&document), "Ha · after Stretch");
     assert_eq!(
         Row::Input("ha".to_string()).place(false).label(&document),
-        "Ha · as stacked · preview stretch, not saved"
+        "Ha · as stacked · view stretch, not saved"
     );
     let before = stretched.before(&document);
     assert_ne!(before, stretched);
@@ -228,9 +228,7 @@ fn a_place_before_the_stretch_is_labelled_as_a_preview() {
         plan(&twice, &again.view()).channels[0].stretch,
         PlannedStretch::Document(vec![last, second_id])
     );
-    assert!(before
-        .label(&document)
-        .ends_with("preview stretch, not saved"));
+    assert!(before.label(&document).ends_with("view stretch, not saved"));
 }
 
 #[test]

@@ -6,7 +6,7 @@
 //! - **Up to where:** the steps applied, from none to all of them. This is
 //!   how a person sees an intermediate result.
 //! - **With what stretch:** the stretch the document gives each channel, or
-//!   a preview stretch that is for looking only and is never saved.
+//!   the view stretch that is for looking only and is never saved.
 //!
 //! [`plan`] turns the choice and the document into what a canvas draws.
 //! Nothing here knows of a toolkit or a GPU, so a canvas in a native window
@@ -58,7 +58,7 @@ pub enum UpTo {
 #[serde(rename_all = "snake_case")]
 pub enum DisplayStretch {
     /// Each channel's own stretch, from the document. A channel the view
-    /// has not stretched yet falls back to the preview stretch.
+    /// has not stretched yet falls back to the view stretch.
     #[default]
     Document,
     /// An automatic stretch of each channel on its own, for looking only.
@@ -93,7 +93,7 @@ pub struct View {
 pub enum PlannedStretch {
     /// The channel's stretch steps the view applies, in order.
     Document(Vec<Uuid>),
-    /// The preview stretch.
+    /// The view stretch.
     Preview,
 }
 
@@ -456,12 +456,12 @@ pub fn plan(document: &Document, view: &View) -> ViewPlan {
     let stretch = if previewed == 0 {
         "the document's stretch".to_string()
     } else if view.stretch == DisplayStretch::Preview {
-        "a preview stretch, not saved".to_string()
+        "the view stretch, not saved".to_string()
     } else if previewed == channels.len() {
-        "a preview stretch, not saved, because the view stops before the stretch".to_string()
+        "the view stretch, not saved, because the view stops before the stretch".to_string()
     } else {
         format!(
-            "the document's stretch, and a preview stretch, not saved, for the {previewed} channel(s) not stretched yet"
+            "the document's stretch, and the view stretch, not saved, for the {previewed} channel(s) not stretched yet"
         )
     };
     ViewPlan {
