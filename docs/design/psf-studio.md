@@ -2428,8 +2428,15 @@ export, so moving Black point, Background or Core compression redraws at
 once. The HDR layered stretch reaches as far as the picture's headroom;
 in an SDR picture it rolls off to white. Each band is stretched on its
 own, so calibrated red, green and blue keep their balance through their
-shared statistics, not through one luminance. The plain layered stretch's
-star-core compression is not drawn yet.
+shared statistics. Two things a layered stretch reads need the whole
+image at full resolution, so Studio works them out as tasks while a
+person edits, with their progress in the status line: the fine blur that
+star-core compression measures detail against, and, for red, green and
+blue calibrated together, their luminance, which the stretch reads and
+each channel then follows. Until a plane is done the canvas draws without
+it; when it is, the canvas draws from a source that adds it to the
+store's channels, its tiles load again, and exports read it too. On the
+Cat's Eye store a band's fine blur takes under half a second.
 
 ### What is built
 

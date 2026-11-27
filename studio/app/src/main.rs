@@ -23,6 +23,9 @@ mod bench;
 /// What the canvas draws, and the Seiza picture it becomes.
 #[cfg(target_os = "macos")]
 mod canvas;
+/// Planes worked out from the whole image while a person edits.
+#[cfg(target_os = "macos")]
+mod derived;
 /// The histogram of the finished picture.
 #[cfg(target_os = "macos")]
 mod histogram;

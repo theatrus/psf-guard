@@ -352,6 +352,8 @@ pub struct Scene {
     version: u64,
     /// The picture's headroom above SDR white, in stops: 0 for SDR.
     headroom: f32,
+    /// The planes worked out from the store, and their tile channels.
+    planes: Arc<Vec<(crate::derived::DerivedKey, usize)>>,
 }
 
 impl Scene {
@@ -359,6 +361,28 @@ impl Scene {
     /// added to each band's background target. A stretch whose band has
     /// no analysis yet draws nothing.
     fn transfers(&self, nudges: &[f64]) -> Vec<Transfer> {
+        self.transfers_missing(nudges, &mut Vec::new())
+    }
+
+    /// The planes worked out from the whole image that the scene's
+    /// stretches read and that are not done yet.
+    pub(super) fn missing_planes(&self) -> Vec<crate::derived::DerivedKey> {
+        let mut missing = Vec::new();
+        self.transfers_missing(&[], &mut missing);
+        missing
+    }
+
+    fn transfers_missing(
+        &self,
+        nudges: &[f64],
+        missing: &mut Vec<crate::derived::DerivedKey>,
+    ) -> Vec<Transfer> {
+        let planes = |key: &crate::derived::DerivedKey| {
+            self.planes
+                .iter()
+                .find(|(known, _)| known == key)
+                .map(|(_, channel)| *channel)
+        };
         self.layer_bands
             .iter()
             .zip(&self.layer_stretches)
@@ -370,7 +394,9 @@ impl Scene {
                 let nudge = nudges.get(*band).copied().unwrap_or(0.0);
                 self.stretches.get(*band).map_or_else(
                     || Transfer::of([seiza_compose::picture::TransferStage::Scale(0.0)]),
-                    |stretch| stretch.transfer(stages, nudge, f64::from(self.headroom)),
+                    |stretch| {
+                        stretch.transfer(stages, nudge, f64::from(self.headroom), &planes, missing)
+                    },
                 )
             })
             .collect()
@@ -710,6 +736,12 @@ pub struct Studio {
     scene_version: u64,
     /// Where each band is in a tile, and its samples for the stretch.
     band_info: Arc<Bands>,
+    /// The store's bands as opened, without the planes worked out from it.
+    base_bands: Arc<Bands>,
+    /// Planes worked out from the whole image, and the tasks working out
+    /// more.
+    derived: Vec<Arc<crate::derived::DerivedPlane>>,
+    derive_tasks: Vec<crate::derived::DeriveTask>,
     /// Stretch analyses already made, by each band's background strength.
     analysed: Vec<(Vec<BandState>, Arc<Vec<BandStretch>>)>,
     /// The latest samples of the combined picture, with the id of the
@@ -843,6 +875,7 @@ impl Studio {
                 this.follow_links();
                 this.follow_picture();
                 this.follow_export();
+                this.follow_derived();
                 // Every change is kept: the document is saved as soon as it
                 // differs from the file.
                 this.save_document();
@@ -912,8 +945,11 @@ impl Studio {
                 toggled: HashSet::new(),
                 stroke: None,
                 scene_version: 0,
+                base_bands: band_info.clone(),
                 band_info,
                 analysed: Vec::new(),
+                derived: Vec::new(),
+                derive_tasks: Vec::new(),
                 picture_samples: None,
                 picture_wanted: None,
                 source_generation: 0,

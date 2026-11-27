@@ -1,6 +1,7 @@
 //! A tile store on disk as the canvas's source of tiles, and the synthetic
 //! document written out as a store to try it with.
 
+use crate::derived::{BandRead, DerivedKey, DerivedKind, DerivedPlane};
 use crate::image_steps::{Domain, ImageShape, Region};
 use crate::studio_model::{
     background_corrected_channel, tools_channel, MemoryBudget, RegionReader, SampleFormat,
@@ -49,6 +50,25 @@ pub struct BandStretch {
     quarter: Option<Arc<(Vec<f32>, usize, usize)>>,
     /// Layered maps measured before, by what moves them.
     maps: Mutex<Vec<(MapsKey, Arc<LayeredMaps>)>>,
+    /// Which band this is, in which state: what names the planes worked
+    /// out for its stretch.
+    band: usize,
+    state: BandState,
+    /// For red, green and blue stretched together: their luminance, which
+    /// a layered stretch reads and each channel follows.
+    linked: Option<Arc<LinkedLuminance>>,
+}
+
+/// The luminance of red, green and blue stretched together, as a layered
+/// stretch reads it.
+pub struct LinkedLuminance {
+    /// Red, green and blue, and each one's state.
+    bands: Vec<usize>,
+    states: Vec<BandState>,
+    /// The analysis of the luminance's samples, from 0 to 1.
+    analysis: StretchAnalysis,
+    /// The luminance at a quarter of the resolution, from 0 to 1.
+    quarter: Option<Arc<(Vec<f32>, usize, usize)>>,
 }
 
 /// Every channel of an image at a quarter of the resolution, and their
@@ -122,17 +142,24 @@ impl BandStretch {
             display: false,
             quarter: None,
             maps: Mutex::new(Vec::new()),
+            band: 0,
+            state: BandState::default(),
+            linked: None,
         })
     }
 
     /// The maps of a layered `curve` over this band, measured from its
     /// quarter-resolution copy, or taken from the last measure with the
     /// same settings. `None` for another curve or a band with no copy.
-    fn layered_maps(&self, curve: &ResolvedCurve) -> Option<Arc<LayeredMaps>> {
+    fn layered_maps(
+        &self,
+        curve: &ResolvedCurve,
+        quarter: Option<&Arc<(Vec<f32>, usize, usize)>>,
+    ) -> Option<Arc<LayeredMaps>> {
         let ResolvedCurve::Layered(layered) = curve else {
             return None;
         };
-        let quarter = self.quarter.as_ref()?;
+        let quarter = quarter?;
         let key = maps_key(layered);
         let mut known = self.maps.lock().ok()?;
         if let Some((_, maps)) = known.iter().find(|(other, _)| *other == key) {
@@ -171,7 +198,20 @@ impl BandStretch {
     /// the whole band at a quarter of its resolution; `headroom`, in stops,
     /// is the picture's, which the HDR layered stretch reaches into (0 for
     /// an SDR picture).
-    pub fn transfer(&self, stages: &[StretchModel], nudge: f64, headroom: f64) -> Transfer {
+    ///
+    /// A layered stretch reads planes worked out from the whole image: the
+    /// luminance of red, green and blue stretched together, and the fine
+    /// blur star-core compression needs. `planes` gives the tile channel of
+    /// one that is done; one that is not is added to `missing`, and the
+    /// stretch is drawn without it meanwhile.
+    pub fn transfer(
+        &self,
+        stages: &[StretchModel],
+        nudge: f64,
+        headroom: f64,
+        planes: &dyn Fn(&DerivedKey) -> Option<usize>,
+        missing: &mut Vec<DerivedKey>,
+    ) -> Transfer {
         let unit = TransferStage::Clamp {
             low: 0.0,
             high: 1.0,
@@ -210,13 +250,57 @@ impl BandStretch {
                 Some(seen) => config.resolve_for(seen, 1),
             };
             let Ok(plan) = plan else { continue };
-            let curve = plan.curves()[0];
+            let mut curve = plan.curves()[0];
+            // Red, green and blue stretched together with a layered stretch
+            // read their luminance, once the plane of it is done.
+            let range = self.domain.input_range();
+            let mut quarter = self.quarter.as_ref();
+            let mut luminance = None;
+            if let (ResolvedCurve::Layered(_), Some(linked), 0) = (curve, &self.linked, at) {
+                let key = DerivedKey {
+                    kind: DerivedKind::Luminance,
+                    bands: linked.bands.clone(),
+                    states: linked.states.clone(),
+                    range,
+                };
+                match (planes(&key), config.resolve(&linked.analysis)) {
+                    (Some(channel), Ok(plan)) => {
+                        curve = plan.curves()[0];
+                        quarter = linked.quarter.as_ref();
+                        luminance = Some(channel);
+                    }
+                    _ => missing.push(key),
+                }
+            }
             // A layered stretch reads maps of the whole band, so it is
             // drawn as the first stage only.
             if let (ResolvedCurve::Layered(layered), Some(maps), 0) =
-                (curve, self.layered_maps(&curve), at)
+                (curve, self.layered_maps(&curve, quarter), at)
             {
-                let stage = LayeredStage::new(layered, maps);
+                // Star cores are measured against the fine blur of what the
+                // stretch reads.
+                let fine = layered.compresses_star_cores().then(|| {
+                    let key = match (&self.linked, luminance) {
+                        (Some(linked), Some(_)) => DerivedKey {
+                            kind: DerivedKind::Fine,
+                            bands: linked.bands.clone(),
+                            states: linked.states.clone(),
+                            range,
+                        },
+                        _ => DerivedKey {
+                            kind: DerivedKind::Fine,
+                            bands: vec![self.band],
+                            states: vec![self.state],
+                            range,
+                        },
+                    };
+                    let channel = planes(&key);
+                    if channel.is_none() {
+                        missing.push(key);
+                    }
+                    channel
+                });
+                let stage = LayeredStage::new(layered, maps).with_guides(luminance, fine.flatten());
                 let peak = stage.peak();
                 transfer.extend([
                     TransferStage::Layered(stage),
@@ -253,8 +337,13 @@ pub struct BandState {
 /// tile, samples to analyse for its stretch, and the tile channels that
 /// hold it after its processing tools and with its background corrected in
 /// full, when the store has them.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Bands {
+    /// The store the bands are in, for the planes worked out from it.
+    pub store: Option<Arc<StoreTiles>>,
+    /// The planes worked out from the store, and the tile channel each is
+    /// drawn from: after the store's own.
+    derived: Vec<(DerivedKey, usize)>,
     /// Per band: the input's name, as PSF Guard's settings give it, such
     /// as `ha` or `red`.
     pub names: Vec<String>,
@@ -388,6 +477,40 @@ impl Bands {
         self.tile_band.len()
     }
 
+    /// The bands with `planes` worked out from the store drawn after the
+    /// store's channels, from `self` without any.
+    pub fn with_derived(&self, planes: &[Arc<DerivedPlane>]) -> Bands {
+        let mut bands = self.clone();
+        let first = bands.plane_scales.len() - bands.derived.len();
+        bands.plane_scales.truncate(first);
+        bands.derived = planes
+            .iter()
+            .enumerate()
+            .map(|(index, plane)| (plane.key.clone(), first + index))
+            .collect();
+        bands
+            .plane_scales
+            .extend(planes.iter().map(|plane| plane.scale));
+        bands
+    }
+
+    /// The planes worked out from the store, and their tile channels.
+    pub fn derived_planes(&self) -> Vec<(DerivedKey, usize)> {
+        self.derived.clone()
+    }
+
+    /// Where a band's samples are read from in `state`, for a plane worked
+    /// out from them.
+    pub fn band_read(&self, band: usize, state: BandState) -> BandRead {
+        let (plane, corrected) = self.planes(band, state);
+        BandRead {
+            plane,
+            corrected: corrected
+                .filter(|_| state.background > 0.0)
+                .map(|channel| (channel, state.background)),
+        }
+    }
+
     /// Where each tile channel is on the GPU, as Seiza's compositor reads
     /// it: its layer in a tile, and the value a canvas sample of 1 stands
     /// for.
@@ -480,6 +603,51 @@ impl Bands {
             .iter()
             .flat_map(|band| samples[*band].iter().copied())
             .collect();
+        let state_of = |band: usize| states.get(band).copied().unwrap_or_default();
+        // Red, green and blue together: their luminance, in the range they
+        // share, for a layered stretch.
+        let linked = match self.linked.as_slice() {
+            [red, green, blue] if !together.is_empty() => {
+                let shared = BandStretch::analyse(&together)?;
+                let luminance = |channels: [&[f32]; 3]| -> Vec<f32> {
+                    let count = channels.iter().map(|plane| plane.len()).min().unwrap_or(0);
+                    (0..count)
+                        .map(|at| {
+                            seiza_stretch::rgb_luminance(
+                                channels[0][at],
+                                channels[1][at],
+                                channels[2][at],
+                            )
+                        })
+                        .collect()
+                };
+                let sampled = luminance([&samples[*red], &samples[*green], &samples[*blue]]);
+                let finite: Vec<f32> = sampled.iter().copied().filter(|v| v.is_finite()).collect();
+                let unit = shared
+                    .domain
+                    .apply(&finite, 1)
+                    .map_err(|error| error.to_string())?;
+                let analysis = StretchAnalysis::analyze(&unit, 1, ANALYSIS_SAMPLES)
+                    .map_err(|error| error.to_string())?;
+                let quarters: Option<Vec<Vec<f32>>> = [*red, *green, *blue]
+                    .iter()
+                    .map(|band| self.quarter_in(*band, states))
+                    .collect();
+                let quarter = quarters.and_then(|planes| {
+                    let physical = luminance([&planes[0], &planes[1], &planes[2]]);
+                    let unit = shared.domain.apply(&physical, 1).ok()?;
+                    let (width, height) = self.quarter_size;
+                    Some(Arc::new((unit, width, height)))
+                });
+                Some(Arc::new(LinkedLuminance {
+                    bands: vec![*red, *green, *blue],
+                    states: vec![state_of(*red), state_of(*green), state_of(*blue)],
+                    analysis,
+                    quarter,
+                }))
+            }
+            _ => None,
+        };
         samples
             .iter()
             .enumerate()
@@ -490,6 +658,11 @@ impl Bands {
                     BandStretch::analyse(own)
                 }?;
                 stretch.display = self.display.contains(&band);
+                stretch.band = band;
+                stretch.state = state_of(band);
+                if self.linked.contains(&band) {
+                    stretch.linked = linked.clone();
+                }
                 if let Some(quarter) = self.quarter_in(band, states) {
                     let (width, height) = self.quarter_size;
                     stretch.set_quarter(&quarter, width, height);
@@ -519,6 +692,11 @@ impl StoreTiles {
             scales: vec![1.0; shape.channels],
             display: Vec::new(),
         })
+    }
+
+    /// The store's full-resolution level.
+    pub fn full_level(&self) -> Option<&crate::studio_model::StoreLevel> {
+        self.levels.first()
     }
 
     /// Every channel of the whole image at a quarter of the resolution, and
@@ -871,6 +1049,8 @@ pub fn open_store(path: &Path) -> Result<(StoreTiles, Bands), String> {
 /// the export is the picture the canvas shows.
 pub struct StoreSource {
     store: StoreTiles,
+    /// Planes worked out from the store, read after its own channels.
+    planes: Vec<Arc<DerivedPlane>>,
     /// The regions read lately, all channels interleaved: a tile reads each
     /// of its inputs over the same region in turn, so a couple per thread
     /// that renders tiles is enough. Each is a tile and its margin in every
@@ -882,8 +1062,15 @@ impl StoreSource {
     pub fn new(store: StoreTiles) -> Self {
         Self {
             store,
+            planes: Vec::new(),
             recent: Mutex::new(VecDeque::new()),
         }
+    }
+
+    /// The source with `planes` worked out from the store as inputs after
+    /// its channels, as the canvas draws them.
+    pub fn with_planes(self, planes: Vec<Arc<DerivedPlane>>) -> Self {
+        Self { planes, ..self }
     }
 
     fn region(&self, rect: ReferenceRegion) -> Result<Arc<Vec<f32>>, seiza_compose::Error> {
@@ -924,9 +1111,13 @@ impl seiza_compose::render::Source for StoreSource {
     fn read(&self, input: usize, rect: ReferenceRegion) -> Result<Vec<f32>, seiza_compose::Error> {
         let bands = self.store.bands;
         if input >= bands {
-            return Err(seiza_compose::Error::Color(format!(
-                "the store has no channel {input}"
-            )));
+            return self
+                .planes
+                .get(input - bands)
+                .map(|plane| plane.read(rect))
+                .ok_or_else(|| {
+                    seiza_compose::Error::Color(format!("the store has no channel {input}"))
+                });
         }
         let scale = self.store.scales[input];
         let samples = self.region(rect)?;
@@ -949,8 +1140,10 @@ impl seiza_compose::render::Source for StoreSource {
 pub fn source(open: Option<&Path>) -> Result<(Arc<dyn TileSource>, Bands), String> {
     match open {
         Some(path) => {
-            let (store, bands) = open_store(path)?;
-            Ok((Arc::new(store), bands))
+            let (store, mut bands) = open_store(path)?;
+            let store = Arc::new(store);
+            bands.store = Some(store.clone());
+            Ok((store, bands))
         }
         None => Ok((
             Arc::new(psf_studio_render::synth::Synthetic),
@@ -984,7 +1177,13 @@ mod tests {
         band.set_quarter(&quarter, 16, 16);
         let model: StretchModel =
             serde_json::from_value(serde_json::json!({ "type": "layered-hdr" })).unwrap();
-        let hdr = band.transfer(std::slice::from_ref(&model), 0.0, 2.0);
+        let hdr = band.transfer(
+            std::slice::from_ref(&model),
+            0.0,
+            2.0,
+            &|_| None,
+            &mut Vec::new(),
+        );
         let stage = hdr
             .stages
             .iter()
@@ -996,11 +1195,59 @@ mod tests {
         assert!(stage.peak() > 1.5, "{}", stage.peak());
         assert!(!stage.maps.core.is_empty());
         // An SDR picture's HDR stretch rolls off to white.
-        let sdr = band.transfer(std::slice::from_ref(&model), 0.0, 0.0);
+        let sdr = band.transfer(
+            std::slice::from_ref(&model),
+            0.0,
+            0.0,
+            &|_| None,
+            &mut Vec::new(),
+        );
         assert!(sdr.stages.iter().any(|stage| matches!(
             stage,
             TransferStage::Clamp { high, .. } if (*high - 1.0).abs() < 1e-4
         )));
+    }
+
+    #[test]
+    fn star_cores_wait_for_their_plane_then_read_it() {
+        let full: Vec<f32> = (0..64 * 64)
+            .map(|at| 100.0 + (at % 13) as f32 + if at == 2080 { 3000.0 } else { 0.0 })
+            .collect();
+        let mut band = BandStretch::analyse(&full).unwrap();
+        band.set_quarter(&full[..16 * 16], 16, 16);
+        let model: StretchModel = serde_json::from_value(serde_json::json!({
+            "type": "layered", "dynamic_range_compression": 0.8
+        }))
+        .unwrap();
+        let fine = |stages: &[TransferStage]| {
+            stages.iter().find_map(|stage| match stage {
+                TransferStage::Layered(stage) => Some(stage.fine),
+                _ => None,
+            })
+        };
+        // Before the plane is done the stretch is drawn without star cores,
+        // and asks for it.
+        let mut missing = Vec::new();
+        let waiting = band.transfer(
+            std::slice::from_ref(&model),
+            0.0,
+            0.0,
+            &|_| None,
+            &mut missing,
+        );
+        assert_eq!(fine(&waiting.stages), Some(None));
+        assert_eq!(missing.len(), 1);
+        assert_eq!(missing[0].kind, DerivedKind::Fine);
+        // Once it is done, the stage reads it.
+        let key = missing[0].clone();
+        let ready = band.transfer(
+            std::slice::from_ref(&model),
+            0.0,
+            0.0,
+            &|wanted| (*wanted == key).then_some(7),
+            &mut Vec::new(),
+        );
+        assert_eq!(fine(&ready.stages), Some(Some(7)));
     }
 
     #[test]
@@ -1009,12 +1256,18 @@ mod tests {
         let band = BandStretch::analyse(&samples).unwrap();
         // No stretch: the band's range mapped to 0 to 1, and no curve. The
         // view stretch is given as a stretch when a view wants one.
-        let linear = band.transfer(&[], 0.0, 0.0);
+        let linear = band.transfer(&[], 0.0, 0.0, &|_| None, &mut Vec::new());
         assert!(linear
             .stages
             .iter()
             .all(|stage| !matches!(stage, TransferStage::Curve(_))));
-        let viewed = band.transfer(&[StretchModel::AutoMtf(StretchParams::default())], 0.0, 0.0);
+        let viewed = band.transfer(
+            &[StretchModel::AutoMtf(StretchParams::default())],
+            0.0,
+            0.0,
+            &|_| None,
+            &mut Vec::new(),
+        );
         assert!(viewed
             .stages
             .iter()

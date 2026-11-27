@@ -124,6 +124,7 @@ impl Studio {
         };
         let region = within(rect, (width, height));
         let tiff_float = self.tiff_float;
+        let planes = self.derived.clone();
         let run = Arc::new(ExportRun {
             path: path.clone(),
             progress: AtomicU32::new(0),
@@ -133,7 +134,7 @@ impl Studio {
         self.export = Some(run.clone());
         self.tell_export(&format!("Exporting {}…", file_name(&path)));
         std::thread::spawn(move || {
-            let result = export(&picture, &store, region, tiff_float, &run);
+            let result = export(&picture, &store, &planes, region, tiff_float, &run);
             *run.done.lock().expect("export result") = Some(result);
         });
     }
@@ -179,12 +180,13 @@ fn within(rect: [u32; 4], size: (u32, u32)) -> ReferenceRegion {
 fn export(
     picture: &Picture,
     store: &Path,
+    planes: &[Arc<crate::derived::DerivedPlane>],
     region: ReferenceRegion,
     tiff_float: bool,
     run: &ExportRun,
 ) -> Result<(), String> {
     let (store, _) = crate::store_tiles::open_store(store)?;
-    let source = StoreSource::new(store);
+    let source = StoreSource::new(store).with_planes(planes.to_vec());
     let image = render_image(
         picture,
         &source,
@@ -350,8 +352,9 @@ impl Studio {
             ],
             (width, height),
         );
+        let planes = self.derived.clone();
         std::thread::spawn(move || {
-            let text = parity(&combined, &store, region, &patches, size, &gpu)
+            let text = parity(&combined, &store, &planes, region, &patches, size, &gpu)
                 .unwrap_or_else(|error| format!("{{\"error\": {error:?}}}"));
             if let Err(error) = std::fs::write(&report, text) {
                 eprintln!("could not write {}: {error}", report.display());
@@ -366,13 +369,14 @@ impl Studio {
 fn parity(
     combined: &Picture,
     store: &Path,
+    planes: &[Arc<crate::derived::DerivedPlane>],
     region: ReferenceRegion,
     patches: &[[u32; 2]],
     size: u32,
     gpu: &[f32],
 ) -> Result<String, String> {
     let (store, _) = crate::store_tiles::open_store(store)?;
-    let source = StoreSource::new(store);
+    let source = StoreSource::new(store).with_planes(planes.to_vec());
     let image = render_image(combined, &source, region, &RenderOptions::default())
         .map_err(|error| error.to_string())?;
     let size = size as usize;

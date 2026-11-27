@@ -764,6 +764,79 @@ impl Studio {
         }
     }
 
+    /// Takes in the planes worked out from the whole image that are done,
+    /// and starts tasks for the ones the canvas's stretches wait for: two
+    /// at a time, as each reads the whole store.
+    pub(super) fn follow_derived(&mut self) {
+        let mut finished = false;
+        let mut running = Vec::new();
+        for task in std::mem::take(&mut self.derive_tasks) {
+            let done = task.done.lock().expect("derived plane").take();
+            match done {
+                None => running.push(task),
+                Some(Ok(plane)) => {
+                    self.derived.retain(|known| known.key != plane.key);
+                    self.derived.push(Arc::new(plane));
+                    finished = true;
+                }
+                Some(Err(error)) => {
+                    self.tools.status = format!("{} stopped: {error}", task.describe());
+                }
+            }
+        }
+        self.derive_tasks = running;
+        if finished {
+            self.show_derived();
+        }
+        let Some(store) = self.base_bands.store.clone() else {
+            return;
+        };
+        let scenes = self.canvas.read(|shared| shared.canvas.scenes.clone());
+        let mut wanted: Vec<crate::derived::DerivedKey> = Vec::new();
+        for key in scenes.iter().flat_map(|scene| scene.missing_planes()) {
+            if !wanted.contains(&key) {
+                wanted.push(key);
+            }
+        }
+        for key in wanted {
+            let known = self.derived.iter().any(|plane| plane.key == key)
+                || self.derive_tasks.iter().any(|task| task.key == key);
+            if known {
+                continue;
+            }
+            if self.derive_tasks.len() >= 2 {
+                break;
+            }
+            let reads = key
+                .bands
+                .iter()
+                .zip(&key.states)
+                .map(|(band, state)| self.base_bands.band_read(*band, *state))
+                .collect();
+            self.derive_tasks
+                .push(crate::derived::DeriveTask::start(store.clone(), key, reads));
+        }
+    }
+
+    /// Draws the store with the planes worked out from it, which load again
+    /// tile by tile.
+    fn show_derived(&mut self) {
+        let Some(store) = self.base_bands.store.clone() else {
+            return;
+        };
+        self.band_info = Arc::new(self.base_bands.with_derived(&self.derived));
+        let source = Arc::new(crate::derived::DerivedSource {
+            store,
+            planes: self.derived.clone(),
+        });
+        {
+            let mut shared = self.canvas.0 .0.lock().expect("canvas state");
+            shared.canvas.inputs = Arc::new(self.band_info.gpu_inputs());
+            shared.new_source = Some(source);
+        }
+        self.refresh_canvas();
+    }
+
     /// Whether a run of `psf-guard` is in hand.
     pub(super) fn is_running(&self) -> bool {
         self.tools.run.is_some()
@@ -774,7 +847,15 @@ impl Studio {
     /// started. `psf-guard` reports a tool's progress as a line such as
     /// `ha: RC-Astro StarXTerminator (40%)`.
     pub(super) fn run_progress(&self) -> Option<(String, Option<f32>, std::time::Duration)> {
-        let run = self.tools.run.as_ref()?;
+        let Some(run) = self.tools.run.as_ref() else {
+            // A plane being worked out from the whole image.
+            let task = self.derive_tasks.first()?;
+            let what = match self.derive_tasks.len() {
+                1 => task.describe().to_string(),
+                more => format!("{} and {} more", task.describe(), more - 1),
+            };
+            return Some((what, Some(task.share()), task.started.elapsed()));
+        };
         let run = run.lock().expect("tool run");
         let line = run.line.trim();
         let share = line
@@ -997,6 +1078,13 @@ impl Studio {
     ) {
         let pyramid = source.pyramid();
         self.band_info = Arc::new(bands);
+        self.base_bands = self.band_info.clone();
+        // Planes of the store before are of no use now.
+        for task in &self.derive_tasks {
+            task.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        self.derive_tasks.clear();
+        self.derived.clear();
         self.analysed.clear();
         self.source_generation += 1;
         self.levels = pyramid.levels;

@@ -5760,7 +5760,7 @@ dependencies = [
 [[package]]
 name = "seiza-stats"
 version = "0.1.2"
-source = "git+https://github.com/theatrus/seiza?rev=f792ef13353a2daf1cc03175dbbf6b7a96dc5d56#f792ef13353a2daf1cc03175dbbf6b7a96dc5d56"
+source = "git+https://github.com/theatrus/seiza?rev=331359253dd301b3abb6eb6b423ba3b5200fa18e#331359253dd301b3abb6eb6b423ba3b5200fa18e"
 dependencies = [
  "bytemuck",
 ]
@@ -5768,10 +5768,10 @@ dependencies = [
 [[package]]
 name = "seiza-stretch"
 version = "0.4.0"
-source = "git+https://github.com/theatrus/seiza?rev=f792ef13353a2daf1cc03175dbbf6b7a96dc5d56#f792ef13353a2daf1cc03175dbbf6b7a96dc5d56"
+source = "git+https://github.com/theatrus/seiza?rev=331359253dd301b3abb6eb6b423ba3b5200fa18e#331359253dd301b3abb6eb6b423ba3b5200fa18e"
 dependencies = [
  "rayon",
- "seiza-stats 0.1.2 (git+https://github.com/theatrus/seiza?rev=f792ef13353a2daf1cc03175dbbf6b7a96dc5d56)",
+ "seiza-stats 0.1.2 (git+https://github.com/theatrus/seiza?rev=331359253dd301b3abb6eb6b423ba3b5200fa18e)",
  "serde",
  "thiserror 2.0.21",
 ]
