@@ -2025,9 +2025,12 @@ knee, three quarters of its output unless the Knee moves it, along Seiza's
 sample is the scale the canvas draws the band with (bands stretched
 together share theirs). It is usually far above the 1 of the stretch's
 range, which a percentile sets: a tail that ended at that 1 put every
-brighter pixel at the peak, flat. On the Iris with automatic midtones, a
-quarter to two fifths of the core sat at the peak that way; with the tail
-reaching to the brightest sample, none does. A lower knee gives the core
+brighter pixel at the peak, flat. On the Iris with automatic midtones,
+55 to 86% of a 256-pixel square of the core, by channel, sat at the peak
+that way, with no spread between its median and its 99th percentile; with
+the tail reaching to the brightest sample, none does. (An earlier note here
+gave a quarter to two fifths: that run's switch to automatic midtones had
+not taken, and the canvas drew the inputs unstretched.) A lower knee gives the core
 more of the headroom: from a knee of 0.75 to 0.35, the core's spread from
 its median to its 99th percentile grew from 0.57 to 0.66. While HDR is on,
 each Stretch step but Layered, HDR shows the Knee too. A stretch after an HDR one shapes the range up to white and
