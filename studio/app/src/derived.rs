@@ -44,6 +44,9 @@ pub enum DerivedKind {
         amount_milli: u32,
         reduced: bool,
     },
+    /// One channel of the picture as an external editor saved it, read
+    /// from the file.
+    Edited { channel: u8 },
     /// One channel of what a processing tool step in the Combine or Finish
     /// stage made, read from the file it wrote: its result, or the stars a
     /// star removal took out.
@@ -202,6 +205,7 @@ impl DeriveTask {
             DerivedKind::Fine => "Measuring star cores",
             DerivedKind::ReducedStars(_) => "Reducing stars",
             DerivedKind::StretchedStars { .. } => "Stretching stars",
+            DerivedKind::Edited { .. } => "Reading the edited file",
             DerivedKind::Tool { .. } => "Reading a tool's result",
         }
     }
@@ -250,7 +254,9 @@ fn work_out(
     let reduced = match key.kind {
         DerivedKind::ReducedStars(pick) if pick < reads.len() => Some(pick),
         DerivedKind::ReducedStars(_) => return Err("no such band to reduce".to_string()),
-        DerivedKind::Tool { .. } => return Err("a tool's result is read from its file".to_string()),
+        DerivedKind::Tool { .. } | DerivedKind::Edited { .. } => {
+            return Err("it is read from its file".to_string());
+        }
         DerivedKind::StretchedStars { .. } => unreachable!("worked out above"),
         _ => None,
     };

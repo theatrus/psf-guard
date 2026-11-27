@@ -967,6 +967,10 @@ pub struct Studio {
     final_peak: f32,
     /// The export of the final picture under way, if any.
     export: Option<Arc<export::ExportRun>>,
+    /// The file an editor saved, while it is read.
+    editor_reading: Option<editor::EditorReading>,
+    /// When the file out with an editor was last looked at.
+    editor_looked: Option<Instant>,
     /// What the last export said: how far it has got, or how it ended.
     export_line: String,
     /// Whether a TIFF export holds 32-bit floats, in place of 16 bits.
@@ -1156,6 +1160,7 @@ impl Studio {
                 this.follow_picture();
                 this.follow_scenes();
                 this.follow_export();
+                this.follow_editor();
                 this.follow_derived();
                 this.follow_store_opening();
                 this.follow_late();
@@ -1237,6 +1242,8 @@ impl Studio {
                 final_wanted: None,
                 final_peak: 1.0,
                 export: None,
+                editor_reading: None,
+                editor_looked: None,
                 export_line: String::new(),
                 tiff_float: false,
                 export_format: None,
@@ -1744,6 +1751,8 @@ fn adopt(document: &mut Document) {
 
 #[path = "control.rs"]
 mod control;
+#[path = "editor.rs"]
+mod editor;
 #[path = "export.rs"]
 mod export;
 #[path = "heal.rs"]

@@ -27,6 +27,9 @@ pub(super) struct ExportRun {
     stop: AtomicBool,
     /// Set when the export has ended: the file written, or why not.
     done: Mutex<Option<Result<(), String>>>,
+    /// For an editor: the key for everything before the junction when the
+    /// file was written. The file then opens in its default app.
+    for_editor: Option<String>,
 }
 
 impl ExportRun {
@@ -37,7 +40,7 @@ impl ExportRun {
 
 impl Studio {
     /// Shows a line about the export under the Export button.
-    fn tell_export(&mut self, line: &str) {
+    pub(super) fn tell_export(&mut self, line: &str) {
         self.export_line = line.to_string();
     }
 
@@ -103,6 +106,12 @@ impl Studio {
     /// Renders the final picture on the CPU and saves it to `path`, on a
     /// thread of its own.
     pub(super) fn start_export(&mut self, path: PathBuf) {
+        self.start_export_for(path, None);
+    }
+
+    /// Exports the final picture to `path`; with `for_editor`, a 16-bit
+    /// TIFF for an editor, which opens in its default app once written.
+    pub(super) fn start_export_for(&mut self, path: PathBuf, for_editor: Option<String>) {
         if let Err(reason) = self.export_ready() {
             self.tell_export(&reason);
             return;
@@ -127,13 +136,15 @@ impl Studio {
             None => [0, 0, width, height],
         };
         let region = within(rect, (width, height));
-        let tiff_float = self.tiff_float;
+        // An editor reads 16 bits.
+        let tiff_float = self.tiff_float && for_editor.is_none();
         let planes = self.derived.clone();
         let run = Arc::new(ExportRun {
             path: path.clone(),
             progress: AtomicU32::new(0),
             stop: AtomicBool::new(false),
             done: Mutex::new(None),
+            for_editor,
         });
         self.export = Some(run.clone());
         self.tell_export(&format!("Exporting {}…", file_name(&path)));
@@ -172,7 +183,15 @@ impl Studio {
             }
             Some(Ok(())) => {
                 self.export = None;
-                self.tell_export(&format!("Exported {name}."));
+                match &run.for_editor {
+                    Some(upstream) => match self.exported_for_editor(&run.path, upstream) {
+                        Ok(()) => self.tell_export(&format!(
+                            "Opened {name} in its default app. Save it there to bring the edit back."
+                        )),
+                        Err(reason) => self.tell_export(&format!("{name} was written, but {reason}")),
+                    },
+                    None => self.tell_export(&format!("Exported {name}.")),
+                }
             }
             Some(Err(reason)) => {
                 self.export = None;

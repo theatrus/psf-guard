@@ -6,8 +6,7 @@
 
 use super::panes::{
     amount, amount_in, amount_range, is_drawn, mask_words, new_stretch, operation,
-    output_stretch_step, stretch_settings, ADJUSTMENTS, CONTROL, MAX_SKY_FLOOR, PANE, QUIET,
-    SKY_FLOOR, STRETCHES,
+    output_stretch_step, stretch_settings, ADJUSTMENTS, MAX_SKY_FLOOR, PANE, SKY_FLOOR, STRETCHES,
 };
 use super::{SliderId, Studio, Tool, PANEL_WIDTH};
 use crate::image_steps::Accepts;
@@ -1910,7 +1909,7 @@ impl Studio {
             .child(self.export_block(cx))
             .child(self.crop_block(cx))
             .child(self.finish_menu(cx))
-            .child(self.junction_block())
+            .child(self.junction_block(cx))
             .into_any_element()
     }
 
@@ -1980,32 +1979,49 @@ impl Studio {
         )
     }
 
-    fn junction_block(&self) -> gpui::Div {
-        // The key for everything before the junction comes from the engine's
-        // cache keys, which the canvas does not use yet.
-        let status = match self.document.stage(StageKind::Finish).junction.status("") {
-            JunctionStatus::Computed => "Export uses Studio's own result.",
-            JunctionStatus::WaitingForEdit => "A file is open in an external editor.",
-            JunctionStatus::Edited => "Export uses the file edited outside Studio.",
+    /// The round trip to another editor: what the canvas shows, and the
+    /// buttons that open the picture there and come back.
+    fn junction_block(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let status = self.editor_status();
+        let out = !matches!(status, JunctionStatus::Computed);
+        let words = match status {
+            JunctionStatus::Computed => "The canvas and Export show Studio's picture.",
+            JunctionStatus::WaitingForEdit => {
+                "The picture is open in another app. Save it there and Studio brings the edit back."
+            }
+            JunctionStatus::Edited => "The canvas and Export show the file the other app saved.",
             JunctionStatus::EditedFromOlderResult => {
-                "The edited file was made from an older result."
+                "The canvas and Export show the file the other app saved, which does not include the changes made in Studio since it was opened there."
             }
             JunctionStatus::WaitingOnOlderResult => {
-                "The file in the external editor was made from an older result."
+                "The picture is open in another app, and has changed in Studio since. Open it again to edit the current picture."
             }
         };
         column()
             .child(Self::heading("External editor"))
-            .child(div().text_xs().child(status))
+            .child(div().text_xs().child(words))
             .child(
-                div()
-                    .px_2()
-                    .py_1()
-                    .rounded_sm()
-                    .bg(rgb(CONTROL))
-                    .text_color(rgb(QUIET))
-                    .child("Open in external editor"),
+                wrap()
+                    .child(Self::act(
+                        if out { "Open again" } else { "Open in external editor" },
+                        "editor-open",
+                        false,
+                        cx,
+                        |this| this.open_in_editor(),
+                    ))
+                    .when(out, |row| {
+                        row.child(Self::act(
+                            "Use Studio's result",
+                            "editor-back",
+                            false,
+                            cx,
+                            |this| this.use_studio_result(),
+                        ))
+                    }),
             )
+            .children(Self::help(
+                "Opens the final picture as a 16-bit TIFF in its default app, such as Photoshop. The file is kept beside the document.",
+            ))
             .children(Self::help(
                 "Disabled: Studio cannot write the file for an editor yet.",
             ))

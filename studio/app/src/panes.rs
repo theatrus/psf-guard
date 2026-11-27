@@ -2146,6 +2146,55 @@ pub(super) fn scene(
     }
     // The shared masks the entries are behind: the entry's place in
     // `layers`, the mask, whether it is inverted, and a name to report.
+    // The picture an external editor saved, once it is read: it stands for
+    // every layer and step Studio drew, as the editor saw them.
+    if document
+        .stage(StageKind::Finish)
+        .junction
+        .edited_file()
+        .is_some()
+    {
+        let channels: Vec<usize> = (0..3)
+            .map_while(|channel| {
+                bands
+                    .derived_planes()
+                    .into_iter()
+                    .find(|(key, _)| key.kind == DerivedKind::Edited { channel })
+                    .map(|(_, plane)| plane)
+            })
+            .collect();
+        if channels.is_empty() {
+            omitted.push("the edited file, until it is read".to_string());
+        } else {
+            layers.clear();
+            layer_bands.clear();
+            layer_stretches.clear();
+            heals.clear();
+            masked.clear();
+            shared_wanted.clear();
+            finish.clear();
+            let primaries = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+            for (index, plane) in channels.iter().enumerate() {
+                layers.push(Layer {
+                    band: *plane,
+                    color: if channels.len() == 3 {
+                        primaries[index]
+                    } else {
+                        [1.0; 3]
+                    },
+                    working: true,
+                    blend: if index == 0 {
+                        Blend::Normal
+                    } else {
+                        Blend::Add
+                    },
+                    ..plain_layer()
+                });
+                layer_bands.push(DISPLAY_ROW);
+                layer_stretches.push(Vec::new());
+            }
+        }
+    }
     // The layers of a group whose layers pass through blend straight onto
     // what is beneath them, each limited by the group's opacity and masks.
     for (at, layer) in masked.clone() {
