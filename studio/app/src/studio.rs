@@ -48,11 +48,14 @@ pub struct Options {
     /// Where to write how far the CPU render of the picture's sampled
     /// patches is from the canvas's, once the canvas has sampled them.
     pub parity_report: Option<PathBuf>,
+    /// Whether Studio listens on its control socket, for `psf-studio-mcp`.
+    pub control: bool,
 }
 
 impl Default for Options {
     fn default() -> Self {
         Self {
+            control: true,
             bench_output: None,
             bench_frames: 600,
             vsync: true,
@@ -179,6 +182,8 @@ pub struct CanvasState {
     fitted: bool,
     /// The name of a capture to take on the next frame.
     pub capture: Option<String>,
+    /// A capture the control socket asked for, by its number.
+    pub control_capture: Option<u64>,
     /// Set to measure the GPU's cost of the next frame with no display.
     pub measure_gpu: bool,
     pub gpu_frame_ms: Option<f32>,
@@ -243,6 +248,7 @@ impl CanvasState {
             crop: None,
             fitted: false,
             capture: None,
+            control_capture: None,
             measure_gpu: false,
             gpu_frame_ms: None,
             probe: None,
@@ -503,6 +509,8 @@ struct Shared {
     picture: Option<(u64, Arc<Vec<f32>>)>,
     /// The samples of the final picture last read, likewise.
     final_picture: Option<(u64, Arc<Vec<f32>>)>,
+    /// The frame copied for the control socket, with its capture's number.
+    control_captured: Option<(u64, psf_studio_render::Captured)>,
 }
 
 /// The UI thread's side of the canvas.
@@ -565,6 +573,7 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
             canvas.final_probe = shared.canvas.final_probe.clone();
             canvas.wipe = shared.canvas.wipe;
             canvas.crop = shared.canvas.crop;
+            canvas.control_capture = shared.canvas.control_capture.take();
             if !shared.canvas.fitted && canvas.surface_size.0 > 1 {
                 canvas.fit();
                 shared.canvas.view = canvas.view;
@@ -640,9 +649,22 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
             crop: canvas.crop,
         };
         let capture = canvas.capture.take();
-        renderer.capture_next = capture.is_some() && options.capture_prefix.is_some();
+        let control_capture = canvas.control_capture.take();
+        renderer.capture_next =
+            (capture.is_some() && options.capture_prefix.is_some()) || control_capture.is_some();
         let result = renderer.render(&frame);
-        if let (Some(name), Some(prefix), Some((width, height, pixels))) =
+        if let Some(id) = control_capture {
+            let mut shared = lock.lock().expect("canvas state");
+            match renderer.captured.take() {
+                Some(captured) => shared.control_captured = Some((id, captured)),
+                // A frame that was not drawn is captured on the next one.
+                None => {
+                    shared.canvas.control_capture.get_or_insert(id);
+                    shared.dirty = true;
+                }
+            }
+        }
+        if let (Some(name), Some(prefix), Some(captured)) =
             (capture, &options.capture_prefix, renderer.captured.take())
         {
             let name: String = name
@@ -650,7 +672,9 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
                 .filter(|character| character.is_ascii_alphanumeric())
                 .collect();
             let path = format!("{}-{name}.png", prefix.display());
-            if let Err(error) = write_png(&path, width, height, &pixels) {
+            let (width, height, rgb) =
+                captured.rgb8([0, 0, captured.width, captured.height], 1.0, 1);
+            if let Err(error) = write_png(&path, width, height, &rgb) {
                 eprintln!("could not write {path}: {error}");
             }
         }
@@ -833,6 +857,8 @@ pub struct Studio {
     scene_version: u64,
     /// The thread that builds the canvas's scenes.
     scene_worker: scene_worker::SceneWorker,
+    /// The control socket `psf-studio-mcp` drives Studio through.
+    control: Option<control::Control>,
     /// Counts the changes to the bands' samples, so the scene worker makes
     /// its stretch analyses again.
     bands_generation: u64,
@@ -894,6 +920,7 @@ pub struct Studio {
 
 impl Studio {
     fn new(options: Options, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let control_wanted = options.control;
         let parity_report = options.parity_report.clone();
         // SAFETY: `NSView` is an AppKit class, windows are opened on the main
         // thread, and the new view is in no other view hierarchy.
@@ -915,6 +942,7 @@ impl Studio {
                 readout: Readout::default(),
                 picture: None,
                 final_picture: None,
+                control_captured: None,
             }),
             Condvar::new(),
         )));
@@ -985,6 +1013,24 @@ impl Studio {
             }
             Err(error) => canvas.0 .0.lock().expect("canvas state").readout.error = Some(error),
         }
+
+        // Requests from the control socket are answered within a few
+        // frames, as a person's clicks are.
+        cx.spawn(async move |this, cx| loop {
+            cx.background_executor()
+                .timer(Duration::from_millis(25))
+                .await;
+            let updated = this.update(cx, |this, cx| {
+                if this.control.is_some() {
+                    this.follow_control();
+                    cx.notify();
+                }
+            });
+            if updated.is_err() {
+                break;
+            }
+        })
+        .detach();
 
         // The render thread draws on its own; the panel's numbers follow it.
         cx.spawn(async move |this, cx| loop {
@@ -1070,6 +1116,7 @@ impl Studio {
                 stroke: None,
                 scene_version: 0,
                 scene_worker,
+                control: control_wanted.then(control::Control::start).flatten(),
                 bands_generation: 0,
                 base_bands: band_info.clone(),
                 band_info,
@@ -1455,20 +1502,15 @@ fn output(options: &Options) -> Result<Output, String> {
     })
 }
 
-fn write_png(path: &str, width: u32, height: u32, bgra: &[u8]) -> Result<(), String> {
+/// Writes red, green and blue bytes to an 8-bit PNG file.
+fn write_png(path: &str, width: u32, height: u32, rgb: &[u8]) -> Result<(), String> {
     let file = std::fs::File::create(path).map_err(|error| error.to_string())?;
     let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), width, height);
     encoder.set_color(png::ColorType::Rgb);
     encoder.set_depth(png::BitDepth::Eight);
-    let rgb: Vec<u8> = bgra
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .flat_map(|pixel| [pixel[2], pixel[1], pixel[0]])
-        .collect();
     encoder
         .write_header()
-        .and_then(|mut writer| writer.write_image_data(&rgb))
+        .and_then(|mut writer| writer.write_image_data(rgb))
         .map_err(|error| error.to_string())
 }
 
@@ -1510,6 +1552,8 @@ fn adopt(document: &mut Document) {
     document.list_palette_layers_top_down();
 }
 
+#[path = "control.rs"]
+mod control;
 #[path = "export.rs"]
 mod export;
 #[path = "inspector.rs"]

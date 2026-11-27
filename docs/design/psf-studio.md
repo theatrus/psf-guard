@@ -2732,6 +2732,40 @@ Order: the layout first, since every later piece adds controls. Then 1 to
 narrowband into RGB). Then 4, for RGB stars, and the layered stretch. Then
 5.
 
+## Driving Studio from an assistant (2026-11-26)
+
+An assistant working on Studio needs to see what Studio shows, not what a
+screenshot of a covered window or an SDR capture leaves of it. Each window
+listens on a control socket, `$TMPDIR/psf-studio/<pid>.sock`, made by
+`studio/app/src/control.rs`, which only its user can open
+(`--no-control` turns it off). A request is a line of JSON; Studio answers
+it on the UI thread, within a few frames, as it does a click.
+`psf-studio-mcp` (`studio/mcp`) is a Model Context Protocol server over
+standard input and output that forwards its tools to these sockets.
+
+- **State.** The rows a person can select, with their ids and settings;
+  the selection; each pane's label, the place wanted and the place drawn;
+  the status line; the inputs whose tools changed since the store was
+  prepared; the histogram's clipping; and what Studio is still busy with.
+- **Edits.** Select a row, divide the canvas, merge settings into a step
+  or a layer, run the tools. Edits go through the document as a person's
+  do, and are saved the same way.
+- **Waiting.** Busy lists what keeps the canvas from showing the document
+  as it is: scenes being built or not yet drawn in their panes, a frame
+  to draw, tiles loading, tasks and tool runs, and samplings not read.
+  The server waits until it has been empty twice.
+- **Seeing.** A capture copies the next frame the render thread draws, as
+  the display was given it: 8-bit, or half floats on an extended surface,
+  which the request may divide by a value (such as the HDR peak) before
+  it is encoded. A covered window's surface has no texture, so a frame to
+  capture is then drawn into one of the surface's size. A sample renders
+  a region of the final picture on the CPU at full resolution, as an
+  export does, and returns each channel's values with the shares above
+  SDR white and at the peak, and an image of the region.
+
+The server opens a window on a copy of a document unless asked not to,
+and closes only windows it opened: a window a person works in is theirs.
+
 ## Suggested order of work
 
 1. The investigations listed in the previous section.

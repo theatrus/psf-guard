@@ -844,6 +844,11 @@ impl Studio {
     }
 
     /// The open picture's store, if any.
+    /// The document file the picture is saved to, if it has one.
+    pub(super) fn document_path(&self) -> Option<&std::path::Path> {
+        self.tools.document.as_deref()
+    }
+
     pub(super) fn store_path(&self) -> Option<&std::path::Path> {
         self.tools.store.as_deref()
     }

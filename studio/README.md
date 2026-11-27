@@ -127,6 +127,34 @@ any other count as that many layers, up to eight. Each band's stretch is
 Seiza's automatic midtones stretch, resolved from patches of the image at
 full resolution; the band's slider sets where the background lands.
 
+## Drive Studio from an assistant
+
+Each running Studio window listens on a control socket of its own,
+`$TMPDIR/psf-studio/<pid>.sock`, which only your user can open. Start it with
+`--no-control` to leave the socket off. `psf-studio-mcp` is a Model Context
+Protocol server that drives windows through these sockets, so an assistant
+such as Claude Code can see what Studio shows. Build both programs:
+
+```bash
+cargo build --release -p psf-studio -p psf-studio-mcp
+```
+
+Then register the server with Claude Code, from this directory:
+
+```bash
+claude mcp add psf-studio -- "$PWD/target/release/psf-studio-mcp"
+```
+
+The server's tools open a window on a copy of a document (`studio_open`),
+read what it shows (`studio_state`), select rows and change settings
+(`studio_select`, `studio_set_step`, `studio_set_layer`), wait until the
+canvas has caught up (`studio_wait_idle`), and return the canvas or a region
+of the final picture rendered on the CPU as images with their values
+(`studio_capture`, `studio_sample`). A window it opens runs `psf-studio`
+from beside the server, or `PSF_STUDIO_BIN`, with `psf-guard` from this
+repository's release build, or `PSF_GUARD`. It closes only windows it
+opened. `PSF_STUDIO_CONTROL_DIR` moves the sockets for both programs.
+
 ## Run the measurements
 
 Keep the window visible and in front while a measurement runs. A covered

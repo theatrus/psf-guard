@@ -10,7 +10,7 @@
 # `experiments/` holds the measurements the design record cites: the crop
 # preview, the browser canvas, and their results.
 [workspace]
-members = ["render", "app", "color", "experiments/crop"]
+members = ["render", "app", "color", "mcp", "experiments/crop"]
 resolver = "3"
 
 [workspace.package]

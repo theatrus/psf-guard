@@ -49,6 +49,8 @@ pub(super) struct SceneOutcome {
 struct Pending {
     job: Option<SceneJob>,
     outcome: Option<SceneOutcome>,
+    /// Whether the worker is building a job's scenes now.
+    building: bool,
 }
 
 /// The thread that builds scenes, and what passes between it and the UI.
@@ -72,6 +74,12 @@ impl SceneWorker {
         let (lock, wake) = &*self.shared;
         lock.lock().expect("scene worker").job = Some(job);
         wake.notify_one();
+    }
+
+    /// Whether a request waits or is being built.
+    pub fn busy(&self) -> bool {
+        let pending = self.shared.0.lock().expect("scene worker");
+        pending.job.is_some() || pending.building
     }
 
     /// What the worker last built, once.
@@ -123,6 +131,7 @@ fn run(shared: &(Mutex<Pending>, Condvar), canvas: &CanvasHandle) {
             let mut pending = lock.lock().expect("scene worker");
             loop {
                 if let Some(job) = pending.job.take() {
+                    pending.building = true;
                     break job;
                 }
                 pending = wake.wait(pending).expect("scene worker");
@@ -139,8 +148,10 @@ fn run(shared: &(Mutex<Pending>, Condvar), canvas: &CanvasHandle) {
                 started.elapsed().as_secs_f64() * 1e3
             );
         }
+        let mut pending = shared.0.lock().expect("scene worker");
+        pending.building = false;
         if let Some(outcome) = outcome {
-            shared.0.lock().expect("scene worker").outcome = Some(outcome);
+            pending.outcome = Some(outcome);
         }
     }
 }

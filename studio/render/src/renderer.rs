@@ -221,8 +221,8 @@ pub struct Renderer {
     last: LastFrame,
     /// Set to copy the next frame into [`Self::captured`].
     pub capture_next: bool,
-    /// The last captured frame: width, height, and BGRA bytes.
-    pub captured: Option<(u32, u32, Vec<u8>)>,
+    /// The last captured frame.
+    pub captured: Option<Captured>,
     /// The samplings of the picture under way, one per [`ProbeSlot`].
     probes: [Option<PictureProbe>; 2],
     /// The tiles each sampling still needs, asked for after the view's.
@@ -254,6 +254,79 @@ pub enum Sampled {
     /// The picture's samples, red, green and blue interleaved, patch after
     /// patch.
     Ready(Vec<f32>),
+}
+
+/// A frame copied from the surface, as the display was given it.
+#[derive(Clone, Debug)]
+pub struct Captured {
+    pub width: u32,
+    pub height: u32,
+    pub pixels: CapturedPixels,
+}
+
+/// A captured frame's samples, in the surface's own format.
+#[derive(Clone, Debug)]
+pub enum CapturedPixels {
+    /// Blue, green, red and alpha bytes of an 8-bit surface.
+    Bgra8(Vec<u8>),
+    /// Red, green, blue and alpha halves of an extended surface: values on
+    /// the display's curve, above 1 where the picture is brighter than SDR
+    /// white.
+    Rgba16Float(Vec<u16>),
+}
+
+impl Captured {
+    /// The frame's red, green and blue as bytes, over `region` (x, y,
+    /// width, height, kept within the frame), with a half-float frame's
+    /// values divided by `divide` first so values above SDR white can be
+    /// seen, and every `step`-th pixel kept.
+    pub fn rgb8(&self, region: [u32; 4], divide: f32, step: u32) -> (u32, u32, Vec<u8>) {
+        let x0 = region[0].min(self.width.saturating_sub(1));
+        let y0 = region[1].min(self.height.saturating_sub(1));
+        let width = region[2].clamp(1, self.width - x0);
+        let height = region[3].clamp(1, self.height - y0);
+        let step = step.max(1);
+        let (out_width, out_height) = (width.div_ceil(step), height.div_ceil(step));
+        let mut out = Vec::with_capacity((out_width * out_height * 3) as usize);
+        let divide = if divide > 0.0 { divide } else { 1.0 };
+        for y in (y0..y0 + height).step_by(step as usize) {
+            for x in (x0..x0 + width).step_by(step as usize) {
+                let at = (y * self.width + x) as usize * 4;
+                match &self.pixels {
+                    CapturedPixels::Bgra8(bytes) => {
+                        out.extend([bytes[at + 2], bytes[at + 1], bytes[at]]);
+                    }
+                    CapturedPixels::Rgba16Float(halves) => {
+                        out.extend(halves[at..at + 3].iter().map(|bits| {
+                            let value = half::f16::from_bits(*bits).to_f32() / divide;
+                            (value.clamp(0.0, 1.0) * 255.0).round() as u8
+                        }));
+                    }
+                }
+            }
+        }
+        (out_width, out_height, out)
+    }
+
+    /// The largest value of a half-float frame over `region`: how far above
+    /// SDR white the brightest pixel is drawn. 1 for an 8-bit frame.
+    pub fn brightest(&self, region: [u32; 4]) -> f32 {
+        let CapturedPixels::Rgba16Float(halves) = &self.pixels else {
+            return 1.0;
+        };
+        let mut brightest = 0.0_f32;
+        let x1 = (region[0] + region[2]).min(self.width);
+        let y1 = (region[1] + region[3]).min(self.height);
+        for y in region[1].min(y1)..y1 {
+            for x in region[0].min(x1)..x1 {
+                let at = (y * self.width + x) as usize * 4;
+                for bits in &halves[at..at + 3] {
+                    brightest = brightest.max(half::f16::from_bits(*bits).to_f32());
+                }
+            }
+        }
+        brightest
+    }
 }
 
 /// A sampling of the picture: the patches read so far, and the targets the
@@ -602,12 +675,21 @@ impl Renderer {
         let _ = self.device.poll(wgpu::PollType::Poll);
 
         let acquire_started = Instant::now();
-        let target = match self.surface.get_current_texture() {
+        // A covered window's surface has no texture. A frame someone asked
+        // to capture is drawn into one of the surface's size instead, and not
+        // shown.
+        let (target, offscreen) = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(texture)
-            | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
+            | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => (Some(texture), None),
             other => {
                 self.surface.configure(&self.device, &self.config);
-                return Err(format!("the surface had no texture: {other:?}"));
+                if !self.capture_next {
+                    return Err(format!("the surface had no texture: {other:?}"));
+                }
+                (
+                    None,
+                    Some(self.surface_sized("offscreen frame", wgpu::TextureUsages::empty())),
+                )
             }
         };
         stats.acquire_ms = acquire_started.elapsed().as_secs_f32() * 1000.0;
@@ -754,13 +836,21 @@ impl Renderer {
             .write_buffer(&self.present_uniform, 0, bytemuck::bytes_of(&uniform));
 
         let target_view = target
-            .texture
+            .as_ref()
+            .map(|target| &target.texture)
+            .or(offscreen.as_ref())
+            .expect("a surface texture or an offscreen one")
             .create_view(&wgpu::TextureViewDescriptor::default());
-        // Captures are written as 8-bit PNG files, so only an 8-bit surface
-        // is captured.
-        let eight_bit = self.config.format == wgpu::TextureFormat::Bgra8Unorm;
-        let capture_texture = (std::mem::take(&mut self.capture_next) && eight_bit)
+        // An 8-bit surface is captured as BGRA bytes, a half-float one as
+        // its RGBA halves; another format is not captured.
+        let pixel_bytes = match self.config.format {
+            wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb => Some(4),
+            wgpu::TextureFormat::Rgba16Float => Some(8),
+            _ => None,
+        };
+        let capture_texture = (std::mem::take(&mut self.capture_next) && pixel_bytes.is_some())
             .then(|| self.surface_sized("capture", wgpu::TextureUsages::COPY_SRC));
+        let pixel_bytes = pixel_bytes.unwrap_or(4);
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
@@ -768,7 +858,7 @@ impl Renderer {
         let capture = capture_texture.map(|texture| {
             let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
             self.present(&mut encoder, &view);
-            let row_bytes = (self.config.width * 4).next_multiple_of(256);
+            let row_bytes = (self.config.width * pixel_bytes).next_multiple_of(256);
             let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("capture"),
                 size: row_bytes as u64 * self.config.height as u64,
@@ -790,17 +880,29 @@ impl Renderer {
             (buffer, row_bytes as usize)
         });
         self.queue.submit([encoder.finish()]);
-        self.queue.present(target);
+        if let Some(target) = target {
+            self.queue.present(target);
+        }
         if let Some((buffer, row_bytes)) = capture {
             buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
             let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
             if let Ok(mapped) = buffer.slice(..).get_mapped_range() {
                 let width = self.config.width as usize;
-                let mut pixels = Vec::with_capacity(width * 4 * self.config.height as usize);
+                let line = width * pixel_bytes as usize;
+                let mut bytes = Vec::with_capacity(line * self.config.height as usize);
                 for row in mapped.chunks(row_bytes) {
-                    pixels.extend_from_slice(&row[..width * 4]);
+                    bytes.extend_from_slice(&row[..line]);
                 }
-                self.captured = Some((self.config.width, self.config.height, pixels));
+                let pixels = if pixel_bytes == 8 {
+                    CapturedPixels::Rgba16Float(bytemuck::pod_collect_to_vec(&bytes))
+                } else {
+                    CapturedPixels::Bgra8(bytes)
+                };
+                self.captured = Some(Captured {
+                    width: self.config.width,
+                    height: self.config.height,
+                    pixels,
+                });
             }
         }
 

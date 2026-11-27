@@ -248,7 +248,7 @@ fn export(
 /// Interleaved RGB in the working space, mapped into `display`'s primaries
 /// as the canvas maps it: a color the display cannot show keeps its
 /// luminance and hue.
-fn for_display(rgb: &[f32], display: WorkingSpace) -> Vec<f32> {
+pub(super) fn for_display(rgb: &[f32], display: WorkingSpace) -> Vec<f32> {
     rgb.as_chunks::<3>()
         .0
         .iter()
