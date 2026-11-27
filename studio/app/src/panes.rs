@@ -1471,6 +1471,15 @@ impl Studio {
 
     /// Makes the whole picture HDR, at the headroom it had or two stops, or
     /// SDR.
+    /// Moves an HDR picture's headroom by `stops`, within 0.5 and 4.
+    pub(super) fn step_headroom(&mut self, stops: f32) {
+        if let Some(headroom) = self.document.headroom {
+            let headroom = (headroom + stops).clamp(0.5, 4.0);
+            self.document.headroom = Some(headroom);
+            self.last_headroom = headroom;
+        }
+    }
+
     pub(super) fn set_hdr(&mut self, on: bool) {
         self.last_headroom = self.document.headroom.unwrap_or(self.last_headroom);
         self.document.headroom = on.then_some(self.last_headroom);
@@ -2181,6 +2190,35 @@ impl Studio {
                 cx,
                 |this| this.view_stretch_open = !this.view_stretch_open,
             )))
+            // HDR belongs to the whole picture, so its switch and headroom
+            // sit with the view, wherever the work is.
+            .child(div().pl_3().child(Self::note("Picture")))
+            .child(div().pl_2().child(Self::act(
+                "HDR",
+                "toolbar-hdr",
+                self.document.headroom.is_some(),
+                cx,
+                |this| {
+                    let on = this.document.headroom.is_none();
+                    this.set_hdr(on);
+                },
+            )))
+            .when_some(self.document.headroom, |bar, headroom| {
+                bar.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .pl_1()
+                        .child(Self::act("−", "headroom-less", false, cx, |this| {
+                            this.step_headroom(-0.5)
+                        }))
+                        .child(Self::note(format!("{headroom:.1} stops")))
+                        .child(Self::act("+", "headroom-more", false, cx, |this| {
+                            this.step_headroom(0.5)
+                        })),
+                )
+            })
             .child(div().pl_2().child(Self::act(
                 "Clipping",
                 "show-clipping",

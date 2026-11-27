@@ -165,15 +165,22 @@ impl Studio {
     /// The parts an input goes to, as words for its row in the tree.
     pub(super) fn goes_to(&self, input: &str) -> Option<String> {
         let parts = self.document.parts();
-        let mut names: Vec<&str> = Vec::new();
+        let mut names: Vec<String> = Vec::new();
         for route in self.document.routes() {
-            if route.shows != input {
+            // An input goes where a layer shows it, or shows a state of it,
+            // such as its stars.
+            if route.shows != input && route.input != input {
                 continue;
             }
-            let name = route
+            let part = route
                 .part
                 .and_then(|part| parts.iter().find(|group| group.id == part))
                 .map_or("top", |group| group.name.as_str());
+            let name = if route.shows == input {
+                part.to_string()
+            } else {
+                format!("{part} ({})", state_word(&route.shows))
+            };
             if !names.contains(&name) {
                 names.push(name);
             }
@@ -194,13 +201,18 @@ impl Studio {
             .document
             .routes()
             .into_iter()
-            .filter(|route| route.shows == input)
+            .filter(|route| route.shows == input || route.input == input)
             .map(|route| {
                 let part = route
                     .part
                     .and_then(|part| parts.iter().find(|(id, _)| *id == part))
                     .map_or("Top", |(_, name)| name.as_str())
                     .to_string();
+                let part = if route.shows == input {
+                    part
+                } else {
+                    format!("{part} ({})", state_word(&route.shows))
+                };
                 let layer = route.layer;
                 let color = self
                     .layer(layer)
@@ -341,4 +353,10 @@ impl Studio {
         self.document.remove_part(part);
         self.selected = Row::Combined;
     }
+}
+
+/// What a state of an input is, in a word: `stars` for `ha@stars`, `line`
+/// for `ha@line`.
+fn state_word(channel: &str) -> &str {
+    channel.split_once('@').map_or(channel, |(_, state)| state)
 }

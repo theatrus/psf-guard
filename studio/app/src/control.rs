@@ -343,6 +343,7 @@ impl Studio {
                 json!({
                     "row": Row::Input(channel.clone()),
                     "label": channel_label(&channel),
+                    "goes_to": self.goes_to(&channel),
                     "steps": steps,
                 })
             })
