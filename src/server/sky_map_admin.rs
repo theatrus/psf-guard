@@ -710,6 +710,8 @@ mod tests {
                 role,
                 username: None,
                 api_token: false,
+                scope: crate::auth_registry::TokenScope::All,
+                studio_writes: role == AccessRole::ReadWrite,
             }))
         };
         let (reader, editor) = (access(AccessRole::ReadOnly), access(AccessRole::ReadWrite));

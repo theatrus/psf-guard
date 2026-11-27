@@ -154,6 +154,9 @@ pub struct AppState {
     pub sync_contacts: crate::server::rig_plugins::SyncContacts,
     /// Outstanding one-time pairing codes (see `server::pairing`).
     pub pairing: crate::server::pairing::PairingStore,
+    /// PSF Studio connects waiting for approval, and link tickets (see
+    /// `server::studio_connect`).
+    pub studio_connects: crate::server::studio_connect::StudioConnects,
     /// Serializes registry load-modify-save cycles. Every writer must hold
     /// it: the management CRUD routes and the pairing/revoke exchange all
     /// read the file, mutate, and save — two interleaved writers silently
@@ -600,6 +603,7 @@ impl AppState {
             sync_sequences: Default::default(),
             sync_contacts: crate::server::rig_plugins::SyncContacts::new(&cache_dir),
             pairing: crate::server::pairing::PairingStore::new(),
+            studio_connects: crate::server::studio_connect::StudioConnects::new(),
             registry_write: tokio::sync::Mutex::new(()),
             astrometry: Arc::new(crate::astrometry::AstrometryContext::new(astrometry_config)),
             satellites: Arc::new(satellites),
@@ -953,6 +957,7 @@ impl AppState {
             sync_sequences: Default::default(),
             sync_contacts: crate::server::rig_plugins::SyncContacts::in_memory(),
             pairing: crate::server::pairing::PairingStore::new(),
+            studio_connects: crate::server::studio_connect::StudioConnects::new(),
             registry_write: tokio::sync::Mutex::new(()),
             astrometry: Arc::new(crate::astrometry::AstrometryContext::default()),
             satellites: Arc::new(

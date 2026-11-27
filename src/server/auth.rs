@@ -18,7 +18,7 @@ use std::{
 };
 
 use crate::{
-    auth_registry::{AuthRegistry, AuthTokenRecord, AuthUserRecord, TOKEN_PREFIX},
+    auth_registry::{AuthRegistry, AuthTokenRecord, AuthUserRecord, TokenScope, TOKEN_PREFIX},
     config::ServerAuthConfig,
     server::{api::ApiResponse, state::AppState},
 };
@@ -39,6 +39,11 @@ pub struct RequestAccess {
     /// request rather than a browser session. Token management stays with
     /// sessions, so a token cannot mint more tokens.
     pub api_token: bool,
+    /// What the token may be used for; `All` for a session.
+    pub scope: TokenScope,
+    /// Whether the request may save Studio documents: an editor's session
+    /// or token, or a Studio token whose user is an editor.
+    pub studio_writes: bool,
 }
 
 impl RequestAccess {
@@ -99,9 +104,23 @@ pub struct AuthTokenSummary {
     /// read-only when the token asked for that.
     pub role: AccessRole,
     pub read_only: bool,
+    /// `studio` for a PSF Studio connection.
+    pub scope: TokenScope,
     pub created_at: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<i64>,
+}
+
+/// What a bearer token grants now.
+#[derive(Debug, Clone)]
+pub(crate) struct TokenGrant {
+    pub username: String,
+    /// The token's access: its user's role, narrowed to read-only when the
+    /// token is read-only.
+    pub role: AccessRole,
+    pub scope: TokenScope,
+    /// The role of the token's user, which a Studio token's writes follow.
+    pub user_role: AccessRole,
 }
 
 /// A freshly minted token. The `token` field is the only time the secret
@@ -217,7 +236,7 @@ impl ServerAuth {
         }
     }
 
-    fn claim_login_slot(&self) -> bool {
+    pub(crate) fn claim_login_slot(&self) -> bool {
         let mut limit = self.login_rate_limit.lock().unwrap();
         let now = Instant::now();
         let replenished = limit.available
@@ -396,7 +415,7 @@ impl ServerAuth {
 
     /// Resolve a bearer token to the user and role it grants now. An expired
     /// token, a token whose user is gone, or an unknown secret answer `None`.
-    pub(crate) fn token_access(&self, secret: &str) -> Option<(String, AccessRole)> {
+    pub(crate) fn token_access(&self, secret: &str) -> Option<TokenGrant> {
         let now = crate::auth_registry::unix_now();
         let token = {
             let tokens = self.tokens.read().unwrap();
@@ -418,7 +437,12 @@ impl ServerAuth {
         } else {
             user_role
         };
-        Some((token.username, role))
+        Some(TokenGrant {
+            username: token.username,
+            role,
+            scope: token.scope,
+            user_role,
+        })
     }
 
     fn token_summary(&self, token: &AuthTokenRecord) -> AuthTokenSummary {
@@ -440,6 +464,7 @@ impl ServerAuth {
                 user_role
             },
             read_only: token.read_only,
+            scope: token.scope,
             created_at: token.created_at,
             expires_at: token.expires_at,
         }
@@ -470,8 +495,10 @@ impl ServerAuth {
         label: &str,
         read_only: bool,
         expires_in_days: Option<u32>,
+        scope: TokenScope,
     ) -> anyhow::Result<MintedToken> {
-        let (secret, record) = AuthTokenRecord::mint(username, label, read_only, expires_in_days)?;
+        let (secret, record) =
+            AuthTokenRecord::mint_scoped(username, label, read_only, expires_in_days, scope)?;
         let stored = record.clone();
         self.update_users(registry_path, move |registry| registry.add_token(stored))?;
         Ok(MintedToken {
@@ -723,43 +750,62 @@ pub async fn authorize_api(
             role: AccessRole::ReadWrite,
             username: None,
             api_token: false,
+            scope: TokenScope::All,
+            studio_writes: true,
         });
         return next.run(request).await;
     };
 
     // A bearer token wins over any cookie the client also sent: a script that
     // presents one wants to be judged by it.
-    let (username, role, api_token) = if let Some(secret) = bearer_token(request.headers()) {
-        let Some((username, role)) = auth.token_access(secret) else {
-            return (
-                StatusCode::UNAUTHORIZED,
-                [(CACHE_CONTROL, "no-store")],
-                Json(ApiResponse::<()>::error(
-                    "The API token is invalid, expired, or revoked".to_string(),
-                )),
+    let (username, role, api_token, scope, studio_writes) =
+        if let Some(secret) = bearer_token(request.headers()) {
+            let Some(grant) = auth.token_access(secret) else {
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    [(CACHE_CONTROL, "no-store")],
+                    Json(ApiResponse::<()>::error(
+                        "The API token is invalid, expired, or revoked".to_string(),
+                    )),
+                )
+                    .into_response();
+            };
+            let studio_writes = match grant.scope {
+                TokenScope::All => grant.role == AccessRole::ReadWrite,
+                TokenScope::Studio => grant.user_role == AccessRole::ReadWrite,
+            };
+            (grant.username, grant.role, true, grant.scope, studio_writes)
+        } else {
+            let Some(session) = session_from_headers(&auth, request.headers()) else {
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    [(CACHE_CONTROL, "no-store")],
+                    Json(ApiResponse::<()>::error("Sign in to continue".to_string())),
+                )
+                    .into_response();
+            };
+            let studio_writes = session.role == AccessRole::ReadWrite;
+            (
+                session.username,
+                session.role,
+                false,
+                TokenScope::All,
+                studio_writes,
             )
-                .into_response();
         };
-        (username, role, true)
-    } else {
-        let Some(session) = session_from_headers(&auth, request.headers()) else {
-            return (
-                StatusCode::UNAUTHORIZED,
-                [(CACHE_CONTROL, "no-store")],
-                Json(ApiResponse::<()>::error("Sign in to continue".to_string())),
-            )
-                .into_response();
-        };
-        (session.username, session.role, false)
-    };
     let can_compute = auth.can_compute(role);
-    if role == AccessRole::ReadOnly && requires_write(request.method(), path, can_compute) {
+    if let Some(refusal) = refusal(
+        request.method(),
+        path,
+        role,
+        scope,
+        studio_writes,
+        can_compute,
+    ) {
         return (
             StatusCode::FORBIDDEN,
             [(CACHE_CONTROL, "no-store")],
-            Json(ApiResponse::<()>::error(
-                "This account has read-only access".to_string(),
-            )),
+            Json(ApiResponse::<()>::error(refusal.to_string())),
         )
             .into_response();
     }
@@ -768,6 +814,8 @@ pub async fn authorize_api(
         role,
         username: Some(username),
         api_token,
+        scope,
+        studio_writes,
     });
     let mut response = next.run(request).await;
     mark_response_private(&mut response);
@@ -886,7 +934,61 @@ fn uses_remote_bearer_token(path: &str) -> bool {
 }
 
 fn is_public_auth_path(path: &str) -> bool {
-    matches!(path, "/auth/status" | "/auth/login" | "/auth/logout")
+    matches!(
+        path,
+        "/auth/status"
+            | "/auth/login"
+            | "/auth/logout"
+            | "/auth/studio/connect"
+            | "/auth/studio/token"
+    )
+}
+
+/// Whether a path is one of a database's Studio documents: what a Studio
+/// token may write.
+pub(crate) fn is_studio_document_path(path: &str) -> bool {
+    path.strip_prefix("/db/")
+        .and_then(|rest| rest.split_once('/'))
+        .is_some_and(|(_, rest)| {
+            rest == "studio-documents" || rest.starts_with("studio-documents/")
+        })
+}
+
+pub(crate) const READ_ONLY_REFUSAL: &str = "This account has read-only access";
+pub(crate) const STUDIO_SCOPE_REFUSAL: &str =
+    "A PSF Studio connection can read, and save Studio documents, but not do this";
+
+/// Why a request is refused, if it is: a write a read-only account may not
+/// make, or anything a Studio token may not do. Studio documents follow
+/// `studio_writes` rather than the role, so a Studio token of an editor
+/// saves them although the token is read-only everywhere else.
+fn refusal(
+    method: &Method,
+    path: &str,
+    role: AccessRole,
+    scope: TokenScope,
+    studio_writes: bool,
+    can_compute: bool,
+) -> Option<&'static str> {
+    let reads = matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS);
+    if is_studio_document_path(path) {
+        return (!reads && !studio_writes).then_some(READ_ONLY_REFUSAL);
+    }
+    if scope == TokenScope::Studio
+        && (path == "/mcp"
+            || path.starts_with("/mcp/")
+            || path.starts_with("/auth/")
+            || (path == "/me/preferences" && !reads))
+    {
+        return Some(STUDIO_SCOPE_REFUSAL);
+    }
+    (role == AccessRole::ReadOnly && requires_write(method, path, can_compute)).then_some(
+        if scope == TokenScope::Studio {
+            STUDIO_SCOPE_REFUSAL
+        } else {
+            READ_ONLY_REFUSAL
+        },
+    )
 }
 
 fn requires_write(method: &Method, path: &str, can_compute: bool) -> bool {
@@ -905,11 +1007,13 @@ fn requires_write(method: &Method, path: &str, can_compute: bool) -> bool {
     }
     // MCP carries every operation as a POST and ends sessions with DELETE;
     // each tool checks the role itself. Token management checks ownership
-    // in its handlers so a viewer can mint and revoke their own tokens. A
-    // viewer saves their own view preferences: they change no catalog.
+    // in its handlers so a viewer can mint and revoke their own tokens, and
+    // connect PSF Studio, whose token then reads only. A viewer saves their
+    // own view preferences: they change no catalog.
     if path == "/mcp"
         || path.starts_with("/mcp/")
         || path.starts_with("/auth/tokens")
+        || path.starts_with("/auth/studio/")
         || path == "/me/preferences"
     {
         return false;
@@ -1118,6 +1222,70 @@ mod tests {
         assert_eq!(
             auth.sessions.lock().unwrap().len(),
             MAX_SESSIONS_PER_USER + 1
+        );
+    }
+
+    #[test]
+    fn studio_document_paths_are_a_databases_studio_documents_only() {
+        assert!(is_studio_document_path("/db/main/studio-documents"));
+        assert!(is_studio_document_path(
+            "/db/main/studio-documents/abc/files/00"
+        ));
+        assert!(!is_studio_document_path("/db/main/studio-documents-old"));
+        assert!(!is_studio_document_path(
+            "/db/main/projects/1/studio-documents"
+        ));
+        assert!(!is_studio_document_path("/studio-documents"));
+    }
+
+    #[test]
+    fn a_studio_token_writes_studio_documents_and_nothing_else() {
+        let studio = |method: &Method, path: &str, writes: bool| {
+            refusal(
+                method,
+                path,
+                AccessRole::ReadOnly,
+                TokenScope::Studio,
+                writes,
+                true,
+            )
+        };
+        assert_eq!(
+            studio(&Method::PUT, "/db/main/studio-documents/a", true),
+            None
+        );
+        assert_eq!(
+            studio(&Method::PUT, "/db/main/studio-documents/a", false),
+            Some(READ_ONLY_REFUSAL)
+        );
+        assert_eq!(studio(&Method::GET, "/db/main/projects", false), None);
+        // Display calculations a viewer may run, such as a frame's solve.
+        assert_eq!(
+            studio(&Method::POST, "/db/main/images/1/astrometry", true),
+            None
+        );
+        for path in ["/db/main/images/1/grade", "/mcp", "/me/preferences"] {
+            assert_eq!(
+                studio(&Method::POST, path, true),
+                Some(STUDIO_SCOPE_REFUSAL),
+                "{path}"
+            );
+        }
+        assert_eq!(
+            studio(&Method::GET, "/auth/tokens", true),
+            Some(STUDIO_SCOPE_REFUSAL)
+        );
+        // A session of a viewer may not save documents.
+        assert_eq!(
+            refusal(
+                &Method::POST,
+                "/db/main/studio-documents",
+                AccessRole::ReadOnly,
+                TokenScope::All,
+                false,
+                true
+            ),
+            Some(READ_ONLY_REFUSAL)
         );
     }
 

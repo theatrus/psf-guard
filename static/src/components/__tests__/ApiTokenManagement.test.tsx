@@ -25,6 +25,7 @@ const existing: AuthTokenSummary = {
   label: 'nightly script',
   role: 'read_write',
   read_only: false,
+  scope: 'all',
   created_at: 1_758_000_000,
 };
 
@@ -42,6 +43,7 @@ describe('ApiTokenManagement', () => {
           label: 'claude',
           role: 'read_only',
           read_only: true,
+          scope: 'all',
           created_at: 1_758_100_000,
           expires_at: 1_758_100_000 + 30 * 86_400,
         };
@@ -90,7 +92,7 @@ describe('ApiTokenManagement', () => {
       http.post('/api/auth/tokens', async ({ request }) => {
         created = await request.json() as Record<string, unknown>;
         const summary: AuthTokenSummary = {
-          id: 'agent1', username: 'editor', label: String(created.label), role: 'read_only', read_only: true, created_at: 1_758_100_000,
+          id: 'agent1', username: 'editor', label: String(created.label), role: 'read_only', read_only: true, scope: 'all', created_at: 1_758_100_000,
         };
         return HttpResponse.json(ok({ token, summary, tokens: [summary] }));
       }),

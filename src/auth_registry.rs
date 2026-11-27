@@ -147,6 +147,27 @@ pub const TOKEN_PREFIX: &str = "psfg_";
 pub const MAX_TOKEN_LABEL_LENGTH: usize = 80;
 pub const MAX_TOKEN_DAYS: u32 = 3650;
 
+/// What a token may be used for.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TokenScope {
+    /// Everything its user's role allows, narrowed by `read_only`.
+    #[default]
+    All,
+    /// A PSF Studio connection: every read its user's role allows, and
+    /// saving Studio documents when the user is an editor. Nothing else.
+    ///
+    /// A Studio token is stored with `read_only` set, so a PSF Guard
+    /// that does not know this scope treats it as read-only, never as more.
+    Studio,
+}
+
+impl TokenScope {
+    pub fn is_all(&self) -> bool {
+        *self == Self::All
+    }
+}
+
 /// A personal API token for scripts and agents. The registry keeps only the
 /// SHA-256 of the secret; the secret is shown once, when it is minted. A
 /// token never grants more than its user has, and `read_only` narrows it.
@@ -158,6 +179,8 @@ pub struct AuthTokenRecord {
     token_hash: String,
     #[serde(default)]
     pub read_only: bool,
+    #[serde(default, skip_serializing_if = "TokenScope::is_all")]
+    pub scope: TokenScope,
     /// Unix seconds.
     pub created_at: i64,
     /// Unix seconds; `None` never expires.
@@ -177,6 +200,7 @@ impl fmt::Debug for AuthTokenRecord {
             .field("username", &self.username)
             .field("label", &self.label)
             .field("read_only", &self.read_only)
+            .field("scope", &self.scope)
             .field("created_at", &self.created_at)
             .field("expires_at", &self.expires_at)
             .field("token_hash", &"[redacted]")
@@ -193,6 +217,19 @@ impl AuthTokenRecord {
         read_only: bool,
         expires_in_days: Option<u32>,
     ) -> Result<(String, Self)> {
+        Self::mint_scoped(username, label, read_only, expires_in_days, TokenScope::All)
+    }
+
+    /// Make a new token for a scope. A Studio token is always stored
+    /// read-only: see [`TokenScope::Studio`].
+    pub fn mint_scoped(
+        username: &str,
+        label: &str,
+        read_only: bool,
+        expires_in_days: Option<u32>,
+        scope: TokenScope,
+    ) -> Result<(String, Self)> {
+        let read_only = read_only || scope == TokenScope::Studio;
         validate_username(username)?;
         let label = normalize_token_label(label)?;
         if let Some(days) = expires_in_days
@@ -209,6 +246,7 @@ impl AuthTokenRecord {
             label,
             token_hash: hash_token(&secret),
             read_only,
+            scope,
             created_at: now,
             expires_at: expires_in_days.map(|days| now + i64::from(days) * 86_400),
             extra: UnknownFields::new(),

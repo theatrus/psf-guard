@@ -70,6 +70,19 @@ fn open_sync_pair(from: &str, to: &str, registry: Option<&str>) -> Result<SyncPa
 /// A file first, then the environment, then the argument: `--token` is
 /// visible in `ps` to every user on the machine, so it is the last resort
 /// rather than the obvious one.
+/// The API token `psf-guard studio` sends: `PSF_GUARD_TOKEN` first, which
+/// PSF Studio sets because an argument is visible in `ps`, then `--token`.
+fn studio_token(argument: Option<String>, environment: Option<String>) -> Option<String> {
+    environment
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            argument
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        })
+}
+
 fn read_peer_token(token: Option<&str>, token_file: Option<&str>) -> Result<String> {
     if let Some(path) = token_file {
         let contents = std::fs::read_to_string(path)
@@ -1491,7 +1504,7 @@ pub fn main() -> Result<()> {
                     crate::commands::studio_sources::StudioFrom::Server {
                         server,
                         database,
-                        token,
+                        token: studio_token(token, std::env::var("PSF_GUARD_TOKEN").ok()),
                         project_id,
                         target_id,
                         channels,
@@ -2373,4 +2386,21 @@ fn reported_image_guids(registry: &std::path::Path) -> Result<std::collections::
     store
         .reported_image_guids()
         .with_context(|| format!("reading collaboration reports from {}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::studio_token;
+
+    #[test]
+    fn studio_takes_the_environment_token_before_the_argument() {
+        let some = |value: &str| Some(value.to_string());
+        assert_eq!(
+            studio_token(some("argument"), some(" psfg_env ")),
+            some("psfg_env")
+        );
+        assert_eq!(studio_token(some("psfg_arg"), some("  ")), some("psfg_arg"));
+        assert_eq!(studio_token(some("psfg_arg"), None), some("psfg_arg"));
+        assert_eq!(studio_token(None, None), None);
+    }
 }

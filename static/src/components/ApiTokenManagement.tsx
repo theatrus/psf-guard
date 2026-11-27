@@ -103,7 +103,11 @@ export default function ApiTokenManagement({
   };
 
   const revoke = async (token: AuthTokenSummary) => {
-    if (!window.confirm(`Revoke the token "${token.label}"? Anything using it stops at once.`)) {
+    const question =
+      token.scope === 'studio'
+        ? `Revoke "${token.label}"? That PSF Studio is signed out at once and has to connect again.`
+        : `Revoke the token "${token.label}"? Anything using it stops at once.`;
+    if (!window.confirm(question)) {
       return;
     }
     setSaving(true);
@@ -229,7 +233,11 @@ export default function ApiTokenManagement({
             </div>
             <div className="user-row-details">
               <span className="muted">
-                {token.role === 'read_write' ? 'Editor' : 'Read only'}
+                {token.scope === 'studio'
+                  ? 'PSF Studio connection'
+                  : token.role === 'read_write'
+                    ? 'Editor'
+                    : 'Read only'}
               </span>
               <span className="muted">Created {formatTokenDate(token.created_at)}</span>
               <span className="muted">{describeTokenExpiry(token)}</span>

@@ -63,6 +63,7 @@ import type { GuidFillReport, GuidReport, ImportedCopiesMerge, ImportedCopiesRep
   AccountPreferences,
   AuthStatus,
   AuthTokenSummary,
+  StudioConnectWaiting,
   AuthUserSummary,
   CreateAuthTokenRequest,
   CreateAuthUserRequest,
@@ -1130,6 +1131,25 @@ export const apiClient = {
     );
     if (!data.data) throw new Error(data.error || 'Failed to remove user');
     return data.data;
+  },
+
+  getStudioConnect: async (code: string): Promise<StudioConnectWaiting> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<StudioConnectWaiting>>(
+      '/auth/studio/approve',
+      { params: { code } }
+    );
+    if (!data.data) throw new Error(data.error || 'No PSF Studio is waiting with this code');
+    return data.data;
+  },
+
+  decideStudioConnect: async (code: string, allow: boolean): Promise<void> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<unknown>>('/auth/studio/approve', {
+      code,
+      allow,
+    });
+    if (!data.success) throw new Error(data.error || 'The code could not be approved');
   },
 
   getAuthTokens: async (): Promise<AuthTokenSummary[]> => {

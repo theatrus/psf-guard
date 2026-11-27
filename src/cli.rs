@@ -1179,7 +1179,9 @@ pub enum Commands {
         #[arg(long)]
         db: String,
 
-        /// An API token, when the server asks for one
+        /// An API token, when the server asks for one. Prefer
+        /// PSF_GUARD_TOKEN, which PSF Studio sets: an argument is visible to
+        /// every process on the machine.
         #[arg(long)]
         token: Option<String>,
 

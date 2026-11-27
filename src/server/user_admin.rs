@@ -226,6 +226,7 @@ pub async fn create_token(
             &request.label,
             request.read_only,
             request.expires_in_days,
+            crate::auth_registry::TokenScope::All,
         )
     })
     .await

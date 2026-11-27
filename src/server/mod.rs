@@ -78,6 +78,7 @@ pub mod state;
 pub mod static_file_service;
 pub mod storage;
 pub mod storage_settings;
+pub mod studio_connect;
 pub mod sync_preview;
 pub mod sync_sequence;
 pub mod ts_sync;
@@ -788,6 +789,13 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route("/auth/status", get(auth::status))
         .route("/auth/login", post(auth::login))
         .route("/auth/logout", post(auth::logout))
+        .route("/auth/studio/connect", post(studio_connect::connect_route))
+        .route(
+            "/auth/studio/approve",
+            get(studio_connect::waiting_route).post(studio_connect::approve_route),
+        )
+        .route("/auth/studio/ticket", post(studio_connect::ticket_route))
+        .route("/auth/studio/token", post(studio_connect::token_route))
         .route(
             "/auth/users",
             get(user_admin::list_users).post(user_admin::create_user),
