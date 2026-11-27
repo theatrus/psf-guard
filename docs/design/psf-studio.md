@@ -2378,9 +2378,22 @@ beneath it and can be dragged anywhere in the stack:
   step layer that maps each pixel alone inside the layer pass. A heal or
   Tone's local contrast beneath other layers ends a stage: the GPU draws
   the layers beneath it to a texture, the step reads it around each pixel,
-  and the layers above start from what the step made. Inside a group, a
-  heal is listed as not drawn and local contrast is drawn one pixel at a
-  time; a heal with a mask of its layer is listed as not drawn.
+  and the layers above start from what the step made. Inside a group the
+  step works on the group's members alone. A heal with a mask of its layer
+  is listed as not drawn.
+- **Healing blemishes.** With the Heal tool, Option-click sets where the
+  next stroke copies from; later strokes keep that distance until the next
+  Option-click, and a heal's inspector says how far it copies from. A heal
+  goes where the selection is: on an input, on a layer alone (a stars
+  layer's heals fix its stars inside its group, before they are screened
+  over the picture), right above a selected adjustment layer as a Heal
+  layer on the picture as that layer leaves it (above Star removal, it
+  heals the starless picture beneath the stars), or on top of the picture.
+  The control server's `heal` method and `studio_heal` paint the same
+  stroke. Tried on the Iris copy: a heal on the stars layer took a star
+  out (the square's brightest red from 0.91 to the next star's 0.86), and
+  a heal above Star removal changed the starless picture only; the parity
+  check gave the same figures with both heals as with none.
 - **Checked** on a copy of the Iris with a heal beneath the stars layer:
   Studio's parity check (Seiza's CPU render against the canvas's patches)
   gave the same figures with the heal shown and hidden (mean 6.2e-5,
@@ -3071,7 +3084,7 @@ Gaps to fix, roughly in the order they got in the way:
 - [x] **One way to adjust.** Done 2026-11-27: steps on the picture are
   adjustment layers (“Steps on the picture are adjustment layers”), drawn
   by Seiza's compositor, which draws a heal and Tone's local contrast
-  beneath other layers in stages. Left: those steps inside a group.
+  beneath other layers, in a group or not, in stages.
 - [ ] **History panel.** Asked for on 2026-11-27: a panel like
   Lightroom's History that lists the document's edits in order, so a
   person sees what changed in the stack and can step back to any of them.

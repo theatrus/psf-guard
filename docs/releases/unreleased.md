@@ -92,4 +92,8 @@
   a layer above it, “Stars it took out”, screened over the picture, which
   you can hide, fade or move. Documents with Finish steps open with those
   steps as layers on top, in the same order, so the picture is unchanged.
-  A heal inside a group is not drawn yet.
+- In PSF Studio, Option-click with the **Heal** tool sets where the heal
+  copies from, and later strokes copy from the same distance. Select
+  **Star removal** and heal to fix the starless picture: the heal becomes
+  a layer right above it, beneath the stars. Select the **Stars it took
+  out** layer and heal to remove or fix a star there alone.

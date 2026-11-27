@@ -705,17 +705,12 @@ fn push_step_layer(
         return Pushed::Nothing;
     };
     // A heal is limited to its stroke. Seiza draws one beneath other
-    // layers only outside a group and with no other mask.
+    // layers, in a group or not, when it has no other mask.
     let heal = matches!(step.kind, StepKind::Heal { .. });
-    if heal && (layer.group.is_some() || layer.mask.is_some()) {
+    if heal && layer.mask.is_some() {
         omitted.push(format!(
-            "{}, a heal {}, which the canvas does not draw yet",
-            layer.name,
-            if layer.group.is_some() {
-                "inside a group"
-            } else {
-                "with a mask of its layer"
-            }
+            "{}, a heal with a mask of its layer, which the canvas does not draw yet",
+            layer.name
         ));
         return Pushed::Nothing;
     }
@@ -1376,7 +1371,14 @@ pub(super) fn scene(
                     omitted.push(made.name.clone());
                     continue;
                 };
-                if layers.len() + 5 > MAX_LAYERS {
+                // Its own heals fix the stars alone, before they are
+                // screened over the picture.
+                let own_heals: Vec<&StepRecord> = made
+                    .steps
+                    .iter()
+                    .filter(|own| own.enabled && matches!(own.kind, StepKind::Heal { .. }))
+                    .collect();
+                if layers.len() + 5 + own_heals.len() > MAX_LAYERS {
                     omitted.push(made.name.clone());
                     continue;
                 }
@@ -1392,6 +1394,29 @@ pub(super) fn scene(
                     *step,
                     true,
                 );
+                for own in own_heals {
+                    let StepKind::Heal { offset, shift, .. } = &own.kind else {
+                        continue;
+                    };
+                    match mask_for(step_strokes(own)) {
+                        Ok(Some(stroke)) => {
+                            layers.push(Layer {
+                                mark: Mark::Step(steps.len()),
+                                mask: Some(stroke),
+                                ..plain_layer()
+                            });
+                            steps.push(FinishKind::Heal {
+                                offset: *offset,
+                                shift: std::array::from_fn(|channel| {
+                                    shift.get(channel).copied().unwrap_or(0.0)
+                                }),
+                            });
+                        }
+                        // A heal with no stroke heals nothing.
+                        Ok(None) => {}
+                        Err(()) => omitted.push(format!("a heal of {}", made.name)),
+                    }
+                }
                 layers.push(Layer {
                     mark: Mark::GroupEnd,
                     opacity: made.opacity,
@@ -2409,40 +2434,74 @@ impl Studio {
                 }
             }
             Tool::Heal => {
-                // Copy from three radii to the right until a person can
-                // choose the source. The brightness shift is measured by the
-                // engine from the image, which the canvas cannot read yet,
-                // so the copy is not matched to its surroundings.
-                let offset = [(stroke.radius * 3.0) as i64, 0];
-                let step = StepRecord::new(StepKind::Heal {
-                    stroke,
-                    offset,
-                    shift: Vec::new(),
-                });
-                let id = step.id;
-                let row = match self.selected.clone() {
-                    Row::Input(channel) | Row::InputStep { channel, .. } => self
-                        .document
-                        .insert_step(StageKind::Linear, usize::MAX, step.for_band(&channel))
-                        .ok()
-                        .map(|()| Row::InputStep { channel, step: id }),
-                    Row::Layer(layer) | Row::LayerStep { layer, .. } => {
-                        let shows_pixels = self
-                            .layer(layer)
-                            .is_some_and(|layer| layer.source.shows_pixels());
-                        (shows_pixels && self.document.insert_layer_step(layer, step).is_ok())
-                            .then_some(Row::LayerStep { layer, step: id })
-                    }
-                    Row::Combined | Row::Finish(_) | Row::Final | Row::Mask(_) => {
-                        Some(Row::Layer(self.document.add_picture_step(step)))
-                    }
-                };
-                if let Some(row) = row {
+                // Copy from where an Option-click set, or from three radii
+                // to the right.
+                let offset = self
+                    .heal_offset
+                    .unwrap_or([(stroke.radius * 3.0) as i64, 0]);
+                if let Some(row) = self.add_heal(stroke, offset) {
                     self.selected = row;
                 }
             }
         }
         self.refresh_canvas();
+    }
+
+    /// Adds a heal of `stroke`, copying from `offset` away, where the
+    /// selection is: to the selected input, to the selected layer, above the
+    /// selected adjustment, or on top of the picture. Returns the row it
+    /// added, or `None` when the selection has nothing to heal.
+    pub(super) fn add_heal(&mut self, stroke: Stroke, offset: [i64; 2]) -> Option<Row> {
+        // The brightness shift is measured by the engine from the image,
+        // which the canvas cannot read yet, so the copy is not matched to its
+        // surroundings.
+        let step = StepRecord::new(StepKind::Heal {
+            stroke,
+            offset,
+            shift: Vec::new(),
+        });
+        let id = step.id;
+        match self.selected.clone() {
+            Row::Input(channel) | Row::InputStep { channel, .. } => self
+                .document
+                .insert_step(StageKind::Linear, usize::MAX, step.for_band(&channel))
+                .ok()
+                .map(|()| Row::InputStep { channel, step: id }),
+            Row::Layer(layer) | Row::LayerStep { layer, .. } => {
+                let shows_pixels = self
+                    .layer(layer)
+                    .is_some_and(|layer| layer.source.shows_pixels());
+                if shows_pixels {
+                    self.document
+                        .insert_layer_step(layer, step)
+                        .is_ok()
+                        .then_some(Row::LayerStep { layer, step: id })
+                } else {
+                    // An adjustment, such as a star removal, has no pixels
+                    // of its own: the heal is a layer right above it, on the
+                    // picture as it leaves it.
+                    self.heal_above(layer, step).map(Row::Layer)
+                }
+            }
+            Row::Combined | Row::Finish(_) | Row::Final | Row::Mask(_) => {
+                Some(Row::Layer(self.document.add_picture_step(step)))
+            }
+        }
+    }
+
+    /// Puts a heal layer right above `layer`, in its group, and returns the
+    /// heal layer's id. `None` when `layer` is gone or is a group.
+    fn heal_above(&mut self, layer: Uuid, step: StepRecord) -> Option<Uuid> {
+        let layers = self.document.layers();
+        let at = layers.iter().position(|other| other.id == layer)?;
+        if layers[at].source == LayerSource::Group {
+            return None;
+        }
+        let mut heal = crate::studio_model::adjustment_layer(step);
+        heal.group = layers[at].group;
+        let id = heal.id;
+        self.document.insert_layer(at + 1, heal).ok()?;
+        Some(id)
     }
 
     /// Applies a slider's new position, from 0 to 1, to the selected row.
@@ -3465,6 +3524,94 @@ mod tests {
             .steps
             .iter()
             .any(|kind| matches!(kind, FinishKind::Tone(_))));
+    }
+
+    #[test]
+    fn a_stars_layer_heals_its_stars_inside_its_group() {
+        use super::{flow_document, scene, Bands};
+        use crate::canvas::Mark;
+        use crate::derived::{DerivedKey, DerivedKind, DerivedPlane};
+        use crate::studio_model::{
+            stars_layer, tool_step, Place, StepKind, StepRecord, Stroke, StrokeMode,
+        };
+        use seiza_compose::picture::FinishKind;
+        let inputs = ["ha".to_string(), "oiii".to_string()];
+        let mut document = flow_document(&inputs);
+        let removal = tool_step(serde_json::json!({ "provider": "sxt" }));
+        let removal_id = removal.id;
+        document.add_picture_step(removal);
+        let stars = document.layers().last().unwrap().id;
+        let heal = StepRecord::new(StepKind::Heal {
+            stroke: Stroke {
+                points: vec![[10.0, 10.0]],
+                radius: 4.0,
+                hardness: 0.6,
+                mode: StrokeMode::Add,
+            },
+            offset: [12, 0],
+            shift: Vec::new(),
+        });
+        document.insert_layer_step(stars, heal).unwrap();
+        assert_eq!(
+            document.layers().last().unwrap().name,
+            stars_layer(removal_id).name
+        );
+        let mut bands = Bands::default();
+        bands.names = inputs.to_vec();
+        bands.tile_band = vec![0, 1];
+        bands.steps = vec![Vec::new(), Vec::new()];
+        // The tool's result and its stars, as a run leaves them.
+        let planes: Vec<std::sync::Arc<DerivedPlane>> = [false, true]
+            .into_iter()
+            .flat_map(|stars| (0..3).map(move |channel| (stars, channel)))
+            .map(|(stars, channel)| {
+                std::sync::Arc::new(DerivedPlane::of_samples(
+                    DerivedKey {
+                        kind: DerivedKind::Tool {
+                            step: removal_id,
+                            channel,
+                            stars,
+                        },
+                        bands: Vec::new(),
+                        states: Vec::new(),
+                        range: (0.0, 1.0),
+                    },
+                    16,
+                    16,
+                    vec![0.5; 256],
+                    1,
+                ))
+            })
+            .collect();
+        let bands = bands.with_derived(&planes);
+        let (drawn, _) = scene(
+            &document,
+            &bands,
+            &Place::Final.view(),
+            0,
+            None,
+            &mut crate::output_stretch::ResolvedChains::default(),
+            &[],
+        );
+        let marks: Vec<Mark> = drawn.layers.iter().map(|layer| layer.mark).collect();
+        let heal_at = marks
+            .iter()
+            .position(|mark| matches!(mark, Mark::Step(index) if matches!(drawn.steps[*index], FinishKind::Heal { .. })))
+            .unwrap_or_else(|| panic!("no heal among {marks:?}; left out {:?}", drawn.omitted));
+        // Between the stars group's start and its end.
+        assert!(matches!(
+            marks[..heal_at]
+                .iter()
+                .rev()
+                .find(|mark| !matches!(mark, Mark::Layer)),
+            Some(Mark::GroupBegin)
+        ));
+        assert!(matches!(
+            marks[heal_at + 1..]
+                .iter()
+                .find(|mark| !matches!(mark, Mark::Layer)),
+            Some(Mark::GroupEnd)
+        ));
     }
 
     #[test]

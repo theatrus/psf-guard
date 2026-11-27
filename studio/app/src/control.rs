@@ -380,6 +380,35 @@ impl Studio {
                     (_, None) => Err("`operation` is needed".to_string()),
                 }
             }
+            // A heal stroke, as the Heal tool paints it where the selection
+            // is: `points` in document pixels, `radius`, and `offset`, where
+            // it copies from relative to each healed pixel.
+            "heal" => {
+                let points: Option<Vec<[f32; 2]>> =
+                    serde_json::from_value(params["points"].clone()).ok();
+                match points.filter(|points| !points.is_empty()) {
+                    Some(points) => {
+                        let radius = params["radius"].as_f64().unwrap_or(20.0) as f32;
+                        let offset = serde_json::from_value(params["offset"].clone())
+                            .unwrap_or([(radius * 3.0) as i64, 0]);
+                        let stroke = crate::studio_model::Stroke {
+                            points,
+                            radius,
+                            hardness: 0.6,
+                            mode: crate::studio_model::StrokeMode::Add,
+                        };
+                        match self.add_heal(stroke, offset) {
+                            Some(row) => {
+                                self.selected = row.clone();
+                                self.refresh_canvas();
+                                Ok(json!({ "row": row }))
+                            }
+                            None => Err("the selected row has nothing to heal".to_string()),
+                        }
+                    }
+                    None => Err("`points` (a list of [x, y]) is needed".to_string()),
+                }
+            }
             "remove_step" => match params["step"]
                 .as_str()
                 .and_then(|id| id.parse::<uuid::Uuid>().ok())

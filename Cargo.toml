@@ -190,7 +190,7 @@ toml_edit = "0.25"
 # stretch, which `studio-files` materializes for PSF Studio. Remove once a
 # Seiza release has it.
 [patch.crates-io]
-seiza-stretch = { git = "https://github.com/theatrus/seiza", rev = "b37c551e8031172a1c5fcd376acfc8da0afec925" }
+seiza-stretch = { git = "https://github.com/theatrus/seiza", rev = "01a2a348ed45a96367d08be64dccce63471665b9" }
 # seiza-stretch from there reads its own seiza-stats; one copy of it, so the
 # RPM build can vendor every crate.
-seiza-stats = { git = "https://github.com/theatrus/seiza", rev = "b37c551e8031172a1c5fcd376acfc8da0afec925" }
+seiza-stats = { git = "https://github.com/theatrus/seiza", rev = "01a2a348ed45a96367d08be64dccce63471665b9" }

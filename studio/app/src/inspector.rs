@@ -164,6 +164,26 @@ impl Studio {
             }),
             StepKind::Heal { .. } => None,
         };
+        // Where a heal copies from, from the healed pixels.
+        let copies = match &step.kind {
+            StepKind::Heal { offset: [x, y], .. } => {
+                let part = |amount: i64, positive: &str, negative: &str| match amount {
+                    0 => None,
+                    amount if amount > 0 => Some(format!("{amount} px {positive}")),
+                    amount => Some(format!("{} px {negative}", -amount)),
+                };
+                let parts: Vec<String> = [part(*x, "right", "left"), part(*y, "down", "up")]
+                    .into_iter()
+                    .flatten()
+                    .collect();
+                Some(if parts.is_empty() {
+                    "Copies from the healed pixels themselves.".to_string()
+                } else {
+                    format!("Copies from {}.", parts.join(" and "))
+                })
+            }
+            StepKind::Operation { .. } => None,
+        };
         column()
             .child(Self::act(
                 if enabled { "On" } else { "Off" },
@@ -175,6 +195,7 @@ impl Studio {
                 },
             ))
             .children(slider)
+            .children(copies.map(Self::note))
             // A step of a layer or of the picture has an opacity. A step of
             // an input is applied in full.
             .when(
@@ -1883,13 +1904,16 @@ impl Studio {
             Row::Input(channel) | Row::InputStep { channel, .. } => {
                 format!("the {} input only", channel_label(channel))
             }
-            Row::Layer(layer) | Row::LayerStep { layer, .. } => self
-                .layer(*layer)
-                .filter(|layer| layer.source.shows_pixels())
-                .map_or_else(
-                    || "nothing: an adjustment or a group has no pixels to heal".to_string(),
-                    |layer| format!("the layer {} only", layer.name),
+            Row::Layer(layer) | Row::LayerStep { layer, .. } => match self.layer(*layer) {
+                Some(layer) if layer.source.shows_pixels() => {
+                    format!("the layer {} only", layer.name)
+                }
+                Some(layer) if layer.source.is_adjustment() => format!(
+                    "the picture as {} leaves it, as a Heal layer right above it",
+                    layer.name
                 ),
+                _ => "nothing: a group has no pixels to heal".to_string(),
+            },
             Row::Combined | Row::Finish(_) | Row::Final | Row::Mask(_) => {
                 "the whole picture".to_string()
             }
@@ -1911,7 +1935,7 @@ impl Studio {
             Tool::Pan => "Drag to move the view. Every pane moves together.".to_string(),
             Tool::Brush => "Drag to paint the selected row's mask.".to_string(),
             Tool::Heal => format!(
-                "Drag over a blemish. Each stroke becomes a Heal step of {}.",
+                "Option-click where the heal copies from, then drag over a blemish; later strokes copy from the same distance. Each stroke becomes a Heal step of {}.",
                 self.heal_target()
             ),
             Tool::Crop => {

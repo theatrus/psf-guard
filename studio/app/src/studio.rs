@@ -863,6 +863,13 @@ pub struct Studio {
     mask_shown: bool,
     /// Whether the brush takes away from a mask, in place of adding to it.
     brush_removes: bool,
+    /// Where the next heal stroke copies from, in document pixels: set by
+    /// an Option-click with the Heal tool.
+    heal_source: Option<[f64; 2]>,
+    /// How far heal strokes copy from, once a source was set: the source
+    /// less the first stroke's start, kept for later strokes as a clone
+    /// brush keeps it.
+    heal_offset: Option<[i64; 2]>,
     /// The brush's radius on screen, in points.
     brush_size: f32,
     /// Where a crop being drawn started, in document pixels.
@@ -1170,6 +1177,8 @@ impl Studio {
                 alone: false,
                 mask_shown: false,
                 brush_removes: false,
+                heal_source: None,
+                heal_offset: None,
                 brush_size: 24.0,
                 crop_from: None,
                 protect_from: None,
@@ -1308,8 +1317,23 @@ impl Studio {
             }
             return;
         }
+        if self.tool == Tool::Heal && event.modifiers.alt {
+            // Option-click: where the next heal copies from.
+            self.heal_source = Some(self.to_document(event.position));
+            self.heal_offset = None;
+            self.drag = None;
+            return;
+        }
         if self.tool != Tool::Pan {
             let at = self.to_document(event.position);
+            if self.tool == Tool::Heal
+                && let Some(source) = self.heal_source.take()
+            {
+                self.heal_offset = Some([
+                    (source[0] - at[0]).round() as i64,
+                    (source[1] - at[1]).round() as i64,
+                ]);
+            }
             self.stroke = Some(Stroke {
                 points: vec![[at[0] as f32, at[1] as f32]],
                 radius: self.brush_radius(),

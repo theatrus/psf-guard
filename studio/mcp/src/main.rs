@@ -169,6 +169,16 @@ fn tools() -> Value {
             }), &["stage", "operation"]),
         },
         {
+            "name": "studio_heal",
+            "description": "Paints one heal stroke where the selection is, as the Heal tool does: on the selected input, on the selected layer alone (a stars layer included), right above the selected adjustment layer as a Heal layer on the picture as it leaves it (a star removal's starless picture, say), or on top of the picture. `points` are [x, y] in document pixels, `radius` the brush radius (20 when not given), `offset` [dx, dy] where it copies from relative to each healed pixel (three radii to the right when not given). Select the row first with studio_select. Returns the row the heal added.",
+            "inputSchema": object(json!({
+                "instance": instance,
+                "points": { "type": "array", "items": { "type": "array", "items": { "type": "number" } } },
+                "radius": { "type": "number" },
+                "offset": { "type": "array", "items": { "type": "integer" } }
+            }), &["points"]),
+        },
+        {
             "name": "studio_remove_step",
             "description": "Removes a step from the document by its id.",
             "inputSchema": object(json!({ "instance": instance, "step": { "type": "string" } }), &["step"]),
@@ -317,6 +327,15 @@ impl Server {
                     "step": arguments["step"],
                     "channel": arguments["channel"],
                     "later": arguments["later"],
+                }),
+            ),
+            "studio_heal" => forward(
+                self.instance(arguments)?,
+                "heal",
+                json!({
+                    "points": arguments["points"],
+                    "radius": arguments["radius"],
+                    "offset": arguments["offset"],
                 }),
             ),
             "studio_add_step" => forward(
