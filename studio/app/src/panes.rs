@@ -1542,7 +1542,44 @@ impl Studio {
 
     /// Takes the samples of the combined picture the render thread read,
     /// and draws the output stretches from them.
+    /// The histogram of the final picture's samples, once the GPU has read
+    /// the ones the picture now asks for. Until then the last one stays.
+    pub(super) fn update_histogram(&mut self) {
+        let Some((id, samples)) = self.final_samples.clone() else {
+            return;
+        };
+        if self.final_wanted != Some(id) {
+            return;
+        }
+        // A Finish step with a mask shows the histogram of its area: the
+        // samples its strokes cover at least half.
+        let covers = self.masked_area(samples.len() / 3);
+        let pixels = samples.as_chunks::<3>().0;
+        let chosen: Vec<f32> = match &covers {
+            Some(covers) => pixels
+                .iter()
+                .zip(covers)
+                .filter(|(_, cover)| **cover >= 0.5)
+                .flat_map(|(pixel, _)| *pixel)
+                .collect(),
+            None => samples.to_vec(),
+        };
+        let mut histogram = crate::histogram::Histogram::of(&chosen, 1, self.final_peak);
+        histogram.masked = covers.is_some();
+        self.histogram = Some(Arc::new(histogram));
+    }
+
     pub(super) fn follow_picture(&mut self) {
+        let sampled = self.canvas.read(|shared| shared.final_picture.clone());
+        if let Some((id, samples)) = sampled
+            && self
+                .final_samples
+                .as_ref()
+                .is_none_or(|(known, _)| *known != id)
+        {
+            self.final_samples = Some((id, samples));
+            self.update_histogram();
+        }
         let Some((id, samples)) = self.canvas.read(|shared| shared.picture.clone()) else {
             return;
         };
@@ -1576,8 +1613,10 @@ impl Studio {
     /// Sends the canvas what the document now asks it to draw: one scene
     /// per pane.
     pub(super) fn refresh_canvas(&mut self) {
+        let started = std::time::Instant::now();
         self.scene_version += 1;
         let probe = self.picture_request();
+        let requested = started.elapsed();
         // Samples of an earlier picture stand in until the new ones are
         // read, so an output stretch keeps its place while the picture
         // changes.
@@ -1621,9 +1660,13 @@ impl Studio {
                 scene
             })
             .collect();
-        self.histogram = self.histogram_wanted().then_some(()).and_then(|()| {
-            let (_, samples) = samples.as_ref()?;
-            let (scene, _) = scene(
+        let built = started.elapsed();
+        // The histogram counts the final picture as the GPU draws it, at the
+        // patches the combined picture is sampled at: its Finish steps are
+        // the GPU's, not worked out again here.
+        let final_request = self.histogram_wanted().then_some(()).and_then(|()| {
+            let picture = self.picture_wanted?;
+            let (mut scene, states) = scene(
                 &self.document,
                 &self.band_info,
                 &Place::Final.view(),
@@ -1634,37 +1677,57 @@ impl Studio {
                 &mut chains,
                 &view_stretch,
             );
-            // A Finish step with a mask shows the histogram of its area: the
-            // samples its strokes cover at least half.
-            let covers = self.masked_area(samples.len() / 3);
-            let pixels = samples.as_chunks::<3>().0;
-            let chosen: Vec<f32> = match &covers {
-                Some(covers) => pixels
-                    .iter()
-                    .zip(covers)
-                    .filter(|(_, cover)| **cover >= 0.5)
-                    .flat_map(|(pixel, _)| *pixel)
-                    .collect(),
-                // Every fourth pixel of the samples is plenty for a
-                // histogram, and keeps a slider's drag smooth.
-                None => pixels.iter().step_by(4).flatten().copied().collect(),
-            };
-            let finished = crate::canvas::finished_samples(&scene.finish, scene.headroom, &chosen);
-            // An HDR picture is clipped at its peak, as the canvas shows it.
-            let peak = seiza_compose::picture::Picture {
-                finish: scene.finish.clone(),
-                space: crate::canvas::WORKING_SPACE,
-                headroom: scene.headroom,
-                ..Default::default()
-            }
-            .peak();
-            let mut histogram = crate::histogram::Histogram::of(&finished, 1, peak);
-            histogram.masked = covers.is_some();
-            Some(Arc::new(histogram))
+            scene.stretches = self.analysis(&states);
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            std::hash::Hash::hash(&picture, &mut hasher);
+            std::hash::Hash::hash(
+                &format!("{:?}{:?}", scene.finish, scene.headroom),
+                &mut hasher,
+            );
+            Some((std::hash::Hasher::finish(&hasher), scene))
         });
+        match final_request {
+            Some((id, scene)) if self.final_wanted != Some(id) => {
+                self.final_wanted = Some(id);
+                self.final_peak = seiza_compose::picture::Picture {
+                    finish: scene.finish.clone(),
+                    space: crate::canvas::WORKING_SPACE,
+                    headroom: scene.headroom,
+                    ..Default::default()
+                }
+                .peak();
+                let crop = self.crop_rect();
+                let (width, height) = self.canvas.read(|shared| shared.canvas.document_size);
+                let rect = crop.unwrap_or([0.0, 0.0, width as f32, height as f32]);
+                let (patches, size) = picture_patches(rect);
+                let request = Arc::new(PictureRequest {
+                    id,
+                    scene,
+                    patches,
+                    size,
+                });
+                self.canvas
+                    .edit(|canvas| canvas.final_probe = Some(request));
+            }
+            Some(_) => {}
+            None => {
+                self.final_wanted = None;
+                self.histogram = None;
+                self.canvas.edit(|canvas| canvas.final_probe = None);
+            }
+        }
+        self.update_histogram();
         self.resolved_chains = chains;
         self.places = places;
         let scenes = Arc::new(scenes);
+        if super::timing() {
+            eprintln!(
+                "refresh: picture request {:.1} ms, scenes {:.1} ms, histogram {:.1} ms",
+                requested.as_secs_f64() * 1e3,
+                (built - requested).as_secs_f64() * 1e3,
+                (started.elapsed() - built).as_secs_f64() * 1e3,
+            );
+        }
         // The selected row's mask shows over the image while a person has
         // it switched on, so they see what they have painted.
         let overlay = if self.mask_shown {

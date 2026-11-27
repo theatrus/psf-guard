@@ -2053,9 +2053,13 @@ mask shows the histogram of its area.
 **Histogram.** The inspector of the Final picture, of a Tone step and of an
 output stretch shows the histogram of the final picture: red, green, blue
 and luminance, with the share of pixels clipped to black and to white.
-Studio computes it from the full-resolution samples of the combined picture
-that output stretches already use, with the Finish steps applied by Seiza's
-CPU render. Masks and heals are left out of the histogram.
+The render thread samples the final picture on the GPU, every Finish step
+drawn as the canvas draws it, at the same full-resolution patches the
+combined picture is sampled at, and Studio only counts the samples. It
+used to work the Finish steps out again on the CPU, which took about a
+second on the main thread for each slider move; counting now takes a few
+milliseconds, and the GPU's sampling about 30 ms between frames. Set
+`PSF_STUDIO_TIMING` to print where an edit's time goes.
 
 **Export.** **Export** in the Final picture's inspector writes the whole
 picture, cropped, at full resolution: TIFF at 16 bits per channel or as

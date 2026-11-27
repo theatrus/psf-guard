@@ -12,7 +12,9 @@ use objc2::{
     rc::{Allocated, Retained},
     runtime::AnyObject,
 };
-use psf_studio_render::{pane_rect, Frame, FrameStats, Output, Pane, Renderer, Sampled, View};
+use psf_studio_render::{
+    pane_rect, Frame, FrameStats, Output, Pane, ProbeSlot, Renderer, Sampled, View,
+};
 use raw_window_handle::{
     AppKitDisplayHandle, AppKitWindowHandle, RawDisplayHandle, RawWindowHandle,
 };
@@ -183,6 +185,9 @@ pub struct CanvasState {
     /// The combined picture to sample for the output stretches that Seiza
     /// resolves from the picture, when the document has one.
     probe: Option<Arc<PictureRequest>>,
+    /// The final picture to sample for the histogram: the same patches,
+    /// with every Finish step drawn by the GPU.
+    final_probe: Option<Arc<PictureRequest>>,
 }
 
 /// A sampling of the combined picture that the UI asks the render thread
@@ -241,6 +246,7 @@ impl CanvasState {
             measure_gpu: false,
             gpu_frame_ms: None,
             probe: None,
+            final_probe: None,
         }
     }
 
@@ -433,6 +439,13 @@ impl Scene {
 /// Every tile channel's samples over the whole image, or why not.
 type WholeSamples = Result<Vec<Vec<f32>>, String>;
 
+/// Whether Studio prints where its time goes, for finding slow edits: set
+/// `PSF_STUDIO_TIMING` to see it.
+pub(super) fn timing() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("PSF_STUDIO_TIMING").is_some())
+}
+
 /// A task sampling every band over the whole image.
 pub(super) struct WholeSampling {
     done: Arc<Mutex<Option<WholeSamples>>>,
@@ -485,6 +498,8 @@ struct Shared {
     /// The samples of the combined picture last read, with the id of the
     /// request they answer: set by the render thread, read by the UI.
     picture: Option<(u64, Arc<Vec<f32>>)>,
+    /// The samples of the final picture last read, likewise.
+    final_picture: Option<(u64, Arc<Vec<f32>>)>,
 }
 
 /// The UI thread's side of the canvas.
@@ -525,6 +540,8 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
     // of the one under way, packed for the GPU.
     let mut sampled: Option<u64> = None;
     let mut probe_scene: Option<(u64, GpuScene)> = None;
+    let mut final_scene: Option<(u64, GpuScene)> = None;
+    let mut final_sampled: Option<u64> = None;
     loop {
         let input_at = {
             let mut shared = lock.lock().expect("canvas state");
@@ -542,6 +559,7 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
             canvas.inputs = shared.canvas.inputs.clone();
             canvas.scenes = shared.canvas.scenes.clone();
             canvas.probe = shared.canvas.probe.clone();
+            canvas.final_probe = shared.canvas.final_probe.clone();
             canvas.wipe = shared.canvas.wipe;
             canvas.crop = shared.canvas.crop;
             if !shared.canvas.fitted && canvas.surface_size.0 > 1 {
@@ -582,7 +600,14 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
         let version = canvas.scenes.first().map_or(0, |scene| scene.version);
         let stretch_inputs = (canvas.sliders, version);
         if stretched_for != Some(stretch_inputs) {
+            let packing = Instant::now();
             gpu_scenes = canvas.gpu_scenes();
+            if timing() {
+                eprintln!(
+                    "render: packed scenes in {:.1} ms",
+                    packing.elapsed().as_secs_f64() * 1e3
+                );
+            }
             stretched_for = Some(stretch_inputs);
             stretches_version += 1;
         }
@@ -646,8 +671,46 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
         animate = stats.tiles_coarse > 0 || stats.tiles_in_flight > 0 || stats.tiles_uploaded > 0;
         // A sampling no document asks for any more is stopped.
         if canvas.probe.is_none() && probe_scene.take().is_some() {
-            renderer.stop_sampling();
+            renderer.stop_sampling(ProbeSlot::First);
             sampled = None;
+        }
+        if canvas.final_probe.is_none() && final_scene.take().is_some() {
+            renderer.stop_sampling(ProbeSlot::Second);
+            final_sampled = None;
+        }
+        // The final picture, every Finish step drawn by the GPU, is sampled
+        // the same way for the histogram.
+        if let Some(request) = canvas.final_probe.clone()
+            && final_sampled != Some(request.id)
+        {
+            if final_scene.as_ref().is_none_or(|(id, _)| *id != request.id) {
+                let picture = request.scene.picture(&canvas.nudges());
+                final_scene = Some((request.id, GpuScene::new(&picture, &canvas.inputs)));
+            }
+            let scene = &final_scene.as_ref().expect("the request's scene").1;
+            let sampling = Instant::now();
+            let result = renderer.sample_picture(
+                ProbeSlot::Second,
+                request.id,
+                scene,
+                canvas.crop,
+                &request.patches,
+                request.size,
+            );
+            if timing() {
+                eprintln!(
+                    "render: sampled the final picture in {:.1} ms",
+                    sampling.elapsed().as_secs_f64() * 1e3
+                );
+            }
+            match result {
+                Sampled::Ready(samples) => {
+                    final_sampled = Some(request.id);
+                    lock.lock().expect("canvas state").final_picture =
+                        Some((request.id, Arc::new(samples)));
+                }
+                Sampled::Pending { .. } => animate = true,
+            }
         }
         // The combined picture is sampled between frames, a few patches at
         // a time, until every patch is read.
@@ -660,6 +723,7 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
             }
             let scene = &probe_scene.as_ref().expect("the request's scene").1;
             match renderer.sample_picture(
+                ProbeSlot::First,
                 request.id,
                 scene,
                 canvas.crop,
@@ -790,6 +854,12 @@ pub struct Studio {
     resolved_chains: crate::output_stretch::ResolvedChains,
     /// The histogram of the final picture, while the inspector shows it.
     histogram: Option<Arc<crate::histogram::Histogram>>,
+    /// The final picture's samples last read for the histogram, with the
+    /// id of the sampling, and the id of the sampling asked for.
+    final_samples: Option<(u64, Arc<Vec<f32>>)>,
+    final_wanted: Option<u64>,
+    /// The brightest value the final picture asked for shows.
+    final_peak: f32,
     /// The export of the final picture under way, if any.
     export: Option<Arc<export::ExportRun>>,
     /// What the last export said: how far it has got, or how it ended.
@@ -834,6 +904,7 @@ impl Studio {
                 input_at: None,
                 readout: Readout::default(),
                 picture: None,
+                final_picture: None,
             }),
             Condvar::new(),
         )));
@@ -989,6 +1060,9 @@ impl Studio {
                 source_generation: 0,
                 resolved_chains: Default::default(),
                 histogram: None,
+                final_samples: None,
+                final_wanted: None,
+                final_peak: 1.0,
                 export: None,
                 export_line: String::new(),
                 tiff_float: false,

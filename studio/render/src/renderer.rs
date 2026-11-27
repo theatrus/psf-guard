@@ -223,10 +223,27 @@ pub struct Renderer {
     pub capture_next: bool,
     /// The last captured frame: width, height, and BGRA bytes.
     pub captured: Option<(u32, u32, Vec<u8>)>,
-    /// The sampling of the picture under way, if any.
-    probe: Option<PictureProbe>,
-    /// The tiles the sampling still needs, asked for after the view's.
-    probe_wanted: Vec<TileKey>,
+    /// The samplings of the picture under way, one per [`ProbeSlot`].
+    probes: [Option<PictureProbe>; 2],
+    /// The tiles each sampling still needs, asked for after the view's.
+    probe_wanted: [Vec<TileKey>; 2],
+}
+
+/// Which of two samplings of the picture a call is about, so a host can
+/// sample two scenes at once: the combined picture and the final one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProbeSlot {
+    First,
+    Second,
+}
+
+impl ProbeSlot {
+    fn index(self) -> usize {
+        match self {
+            Self::First => 0,
+            Self::Second => 1,
+        }
+    }
 }
 
 /// How far [`Renderer::sample_picture`] has got.
@@ -465,8 +482,8 @@ impl Renderer {
             last: LastFrame::default(),
             capture_next: false,
             captured: None,
-            probe: None,
-            probe_wanted: Vec::new(),
+            probes: [None, None],
+            probe_wanted: [Vec::new(), Vec::new()],
         })
     }
 
@@ -474,7 +491,8 @@ impl Renderer {
     /// prepared again. Every tile of the document before is dropped.
     pub fn replace_source(&mut self, source: Arc<dyn TileSource>) {
         // A sampling of the old document's picture is of no use now.
-        self.stop_sampling();
+        self.stop_sampling(ProbeSlot::First);
+        self.stop_sampling(ProbeSlot::Second);
         let pyramid = source.pyramid();
         let bands = source.bands().max(1);
         let mut cache = TileCache::new(self.cache_budget_bytes, bands);
@@ -612,6 +630,7 @@ impl Renderer {
         wanted.extend(
             self.probe_wanted
                 .iter()
+                .flatten()
                 .filter(|key| !wanted.contains(key))
                 .copied()
                 .collect::<Vec<_>>(),
@@ -813,6 +832,7 @@ impl Renderer {
     /// on one sampling; a new `id` starts again.
     pub fn sample_picture(
         &mut self,
+        slot: ProbeSlot,
         id: u64,
         scene: &GpuScene,
         crop: Option<[f32; 4]>,
@@ -820,21 +840,21 @@ impl Renderer {
         size: u32,
     ) -> Sampled {
         let size = size.max(1);
-        if self
-            .probe
+        let at = slot.index();
+        if self.probes[at]
             .as_ref()
             .is_none_or(|probe| probe.id != id || probe.size != size)
         {
-            self.probe = Some(PictureProbe {
+            self.probes[at] = Some(PictureProbe {
                 id,
                 size,
                 samples: vec![None; patches.len()],
                 targets: self.compositor.targets(size, size),
             });
         }
-        let mut probe = self.probe.take().expect("a sampling");
+        let mut probe = self.probes[at].take().expect("a sampling");
         probe.samples.resize(patches.len(), None);
-        self.probe_wanted.clear();
+        self.probe_wanted[at].clear();
         // The patches drawn in this call are copied into one buffer, read
         // once at the end, so the call waits for the GPU once.
         let row_bytes = (size * 8).next_multiple_of(256);
@@ -863,8 +883,8 @@ impl Renderer {
                 .copied()
                 .collect();
             if !missing.is_empty() {
-                let room = PROBE_TILES_WANTED.saturating_sub(self.probe_wanted.len());
-                self.probe_wanted.extend(missing.into_iter().take(room));
+                let room = PROBE_TILES_WANTED.saturating_sub(self.probe_wanted[at].len());
+                self.probe_wanted[at].extend(missing.into_iter().take(room));
                 continue;
             }
             for key in &keys {
@@ -949,7 +969,7 @@ impl Renderer {
             .filter(|samples| samples.is_some())
             .count();
         let result = if done == patches.len() {
-            self.probe_wanted.clear();
+            self.probe_wanted[at].clear();
             Sampled::Ready(probe.samples.iter().flatten().flatten().copied().collect())
         } else {
             Sampled::Pending {
@@ -957,15 +977,15 @@ impl Renderer {
                 of: patches.len(),
             }
         };
-        self.probe = Some(probe);
+        self.probes[at] = Some(probe);
         result
     }
 
     /// Stops a sampling of the picture: forgets the patches read and asks
     /// for no more of its tiles.
-    pub fn stop_sampling(&mut self) {
-        self.probe = None;
-        self.probe_wanted.clear();
+    pub fn stop_sampling(&mut self, slot: ProbeSlot) {
+        self.probes[slot.index()] = None;
+        self.probe_wanted[slot.index()].clear();
     }
 
     /// Draws the last frame's first pane again `frames` times over the whole

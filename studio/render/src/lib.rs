@@ -9,6 +9,6 @@ pub mod synth;
 mod tiles;
 
 pub use renderer::{
-    pane_rect, Frame, FrameStats, Output, Pane, Renderer, Sampled, View, WorkingSpace,
+    pane_rect, Frame, FrameStats, Output, Pane, ProbeSlot, Renderer, Sampled, View, WorkingSpace,
 };
 pub use source::{Pyramid, TileSource};
