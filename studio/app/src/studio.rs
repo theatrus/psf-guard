@@ -451,6 +451,12 @@ impl Scene {
 
     /// The scene as the Seiza picture the canvas draws, with each band's
     /// stretch moved by `nudges`.
+    /// The Finish steps as text, for an id of what the scene draws that
+    /// counts them: [`Self::picture_id`] counts only what they act on.
+    pub(super) fn finish_words(&self) -> String {
+        format!("{:?}", self.finish)
+    }
+
     pub(super) fn picture(&self, nudges: &[f64]) -> Picture {
         Picture {
             headroom: self.headroom,

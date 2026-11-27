@@ -517,6 +517,33 @@ fn not_run(step: &StepRecord, on: &str) -> String {
     )
 }
 
+/// The output stretches of adjustment layers that have other layers above
+/// them, by their steps' ids: each changes only what is beneath it, so it
+/// is resolved from samples of that. A stretch with only other steps on the
+/// picture above it is on top.
+pub(super) fn beneath_other_layers(document: &Document) -> std::collections::HashSet<Uuid> {
+    let layers = document.layers();
+    let mut found = std::collections::HashSet::new();
+    let mut above_only_steps = true;
+    for layer in layers.iter().rev() {
+        let step = layer.source.adjustment_step();
+        let on_picture = layer.group.is_none() && step.is_some_and(is_step_layer);
+        if !layer.visible {
+            continue;
+        }
+        if let Some(step) = step
+            && output_stretch_config(step).is_some()
+            && (!above_only_steps || layer.group.is_some())
+        {
+            found.insert(step.id);
+        }
+        if !on_picture {
+            above_only_steps = false;
+        }
+    }
+    found
+}
+
 /// An output stretch step's settings, when it is one.
 fn output_stretch_config(step: &StepRecord) -> Option<seiza_stretch::StretchConfig> {
     match &step.kind {
@@ -554,6 +581,10 @@ fn finish_kind(
                 omitted.push(match why {
                     output_stretch::NotDrawn::NeedsSamples => {
                         "an output stretch, until the picture has been sampled".to_string()
+                    }
+                    output_stretch::NotDrawn::NeedsSamplesBeneath => {
+                        "an output stretch, until the layers beneath it have been sampled"
+                            .to_string()
                     }
                     output_stretch::NotDrawn::Refused(reason) => {
                         format!("an output stretch Seiza could not resolve: {reason}")
@@ -1273,15 +1304,47 @@ pub(super) fn scene(
             is_drawn(StageKind::Finish, step, bands) && output_stretch_config(step).is_some()
         })
         .collect();
-    let configs: Vec<_> = stretch_steps
+    // A stretch with other layers above it is resolved alone, from samples
+    // of what is beneath it; the stretches on top, as a chain, from samples
+    // of the picture.
+    let beneath_others = beneath_other_layers(document);
+    let (alone, chained): (Vec<&StepRecord>, Vec<&StepRecord>) = stretch_steps
+        .into_iter()
+        .partition(|step| beneath_others.contains(&step.id));
+    let configs: Vec<_> = chained
         .iter()
         .filter_map(|step| output_stretch_config(step))
         .collect();
-    let mut stretches: HashMap<Uuid, Result<_, output_stretch::NotDrawn>> = stretch_steps
+    let mut stretches: HashMap<Uuid, Result<_, output_stretch::NotDrawn>> = chained
         .iter()
         .map(|step| step.id)
         .zip(chains.resolve(&configs, picture_samples))
         .collect();
+    for step in alone {
+        let Some(config) = output_stretch_config(step) else {
+            continue;
+        };
+        let samples = chains.beneath.get(&step.id).cloned();
+        let resolved = chains
+            .resolve(
+                std::slice::from_ref(&config),
+                samples
+                    .as_ref()
+                    .map(|(id, samples)| (*id, samples.as_slice())),
+            )
+            .pop();
+        if let Some(resolved) = resolved {
+            stretches.insert(
+                step.id,
+                resolved.map_err(|why| match why {
+                    output_stretch::NotDrawn::NeedsSamples => {
+                        output_stretch::NotDrawn::NeedsSamplesBeneath
+                    }
+                    other => other,
+                }),
+            );
+        }
+    }
     // What each layer marked as a step does.
     let mut steps: Vec<FinishKind> = Vec::new();
     // The steps in the stack so far, for Texture, which measures the
@@ -2350,6 +2413,8 @@ impl Studio {
             source_generation: self.source_generation,
             crop: self.crop_rect(),
             document_size: (width, height),
+            store: self.store_path().map(std::path::Path::to_path_buf),
+            planes: self.derived.clone(),
         });
         self.places = places;
         // The selected row's mask shows over the image while a person has
@@ -2409,6 +2474,11 @@ impl Studio {
     /// Takes in what the scene worker built: which samplings the scenes
     /// ask for, and the histogram once its samples are read.
     pub(super) fn follow_scenes(&mut self) {
+        // Samples of what is beneath a stretch came in: the scenes are
+        // built again with them.
+        if self.scene_worker.take_beneath_fresh() {
+            self.refresh_canvas();
+        }
         let Some(outcome) = self.scene_worker.take_outcome() else {
             return;
         };
@@ -3642,6 +3712,77 @@ mod tests {
                 .find(|mark| !matches!(mark, Mark::Layer)),
             Some(Mark::GroupEnd)
         ));
+    }
+
+    #[test]
+    fn a_stretch_beneath_other_layers_is_resolved_from_what_is_beneath_it() {
+        use super::{beneath_other_layers, flow_document, new_stretch, scene, Bands};
+        use crate::canvas::Mark;
+        use crate::studio_model::{Place, StepKind, StepRecord};
+        use seiza_compose::picture::FinishKind;
+        let inputs = ["ha".to_string(), "oiii".to_string()];
+        let mut document = flow_document(&inputs);
+        let adjustments: Vec<_> = document
+            .layers()
+            .iter()
+            .filter(|layer| layer.source.is_adjustment())
+            .map(|layer| layer.id)
+            .collect();
+        for id in adjustments {
+            document.remove_layer(id);
+        }
+        let stretch = StepRecord::new(StepKind::Operation {
+            operation: crate::studio_model::flow_operations::OUTPUT_STRETCH.to_string(),
+            accepts: crate::image_steps::Accepts::Display,
+            settings: serde_json::json!({ "model": new_stretch("auto-mtf"), "color_strategy": "linked" }),
+        });
+        let stretch_id = stretch.id;
+        document.add_picture_step(stretch);
+        // On top, it is resolved from samples of the picture.
+        assert!(beneath_other_layers(&document).is_empty());
+        // With a layer above it, from samples of what is beneath it.
+        let top = document.layers()[0].clone();
+        let mut above = top.clone();
+        above.id = uuid::Uuid::new_v4();
+        let count = document.layers().len();
+        document.insert_layer(count, above).unwrap();
+        assert!(beneath_other_layers(&document).contains(&stretch_id));
+        let mut bands = Bands::default();
+        bands.names = inputs.to_vec();
+        bands.tile_band = vec![0, 1];
+        bands.steps = vec![Vec::new(), Vec::new()];
+        let draw = |chains: &mut crate::output_stretch::ResolvedChains| {
+            scene(
+                &document,
+                &bands,
+                &Place::Final.view(),
+                0,
+                None,
+                chains,
+                &[],
+            )
+            .0
+        };
+        let waiting = draw(&mut Default::default());
+        assert!(waiting
+            .omitted
+            .iter()
+            .any(|words| words.contains("until the layers beneath it have been sampled")));
+        let mut chains = crate::output_stretch::ResolvedChains::default();
+        let samples: Vec<f32> = (0..3000).map(|at| (at % 97) as f32 / 400.0).collect();
+        chains
+            .beneath
+            .insert(stretch_id, (7, std::sync::Arc::new(samples)));
+        let drawn = draw(&mut chains);
+        assert!(
+            drawn.layers.iter().any(|entry| matches!(
+                entry.mark,
+                Mark::Step(index) if matches!(drawn.steps[index], FinishKind::Stretch(_))
+            )),
+            "{:?}",
+            drawn.omitted
+        );
+        let _ = layer;
     }
 
     #[test]

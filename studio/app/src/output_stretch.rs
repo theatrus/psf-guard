@@ -26,6 +26,9 @@ pub enum NotDrawn {
     /// The stretch is resolved from the picture, and the canvas has no
     /// samples of the picture yet.
     NeedsSamples,
+    /// The stretch has other layers above it and is resolved from samples
+    /// of the layers beneath it, which the canvas does not have yet.
+    NeedsSamplesBeneath,
     /// Seiza refused to resolve the stretch.
     Refused(String),
 }
@@ -84,6 +87,10 @@ pub fn resolve_chain(
 pub struct ResolvedChains {
     entries: Vec<ResolvedChain>,
     noise: Vec<(u64, String, f32)>,
+    /// Samples of the picture beneath an output stretch that has other
+    /// layers above it, by the stretch step's id, with the id of their
+    /// sampling: such a stretch is resolved from what is beneath it.
+    pub beneath: std::collections::HashMap<uuid::Uuid, (u64, std::sync::Arc<Vec<f32>>)>,
 }
 
 /// One chain resolved: the id of the samples it was resolved from (none
