@@ -24,7 +24,7 @@ fn id(text: String) -> SharedString {
 impl Studio {
     /// The document's inputs: its channels as prepared, without the
     /// states of one, such as its stars, that the store also holds.
-    fn inputs(&self) -> Vec<String> {
+    pub(super) fn inputs(&self) -> Vec<String> {
         self.document
             .channels()
             .into_iter()
@@ -283,6 +283,25 @@ impl Studio {
     }
 
     /// The menus over the layers: start from a recipe, or add a part.
+    /// Makes the picture from a recipe's parts. A recipe that shows stars
+    /// apart has them separated.
+    pub(super) fn choose_recipe(&mut self, recipe: &crate::studio_model::Recipe) {
+        let inputs = self.inputs();
+        self.document.use_recipe(recipe, &inputs);
+        self.selected = Row::Combined;
+        self.separate_stars();
+    }
+
+    /// Adds a part of `kind` and selects it; a part that shows stars apart
+    /// has them separated.
+    pub(super) fn add_part_of(&mut self, kind: PartKind) {
+        let inputs = self.inputs();
+        if let Some(part) = self.document.add_part(kind, &inputs) {
+            self.selected = Row::Layer(part);
+        }
+        self.separate_stars();
+    }
+
     pub(super) fn parts_bar(&self, cx: &mut Context<Self>) -> gpui::Div {
         let inputs = self.inputs();
         let recipes = recipes_for(&inputs)
@@ -290,11 +309,7 @@ impl Studio {
             .enumerate()
             .map(|(index, recipe)| {
                 Self::pick(recipe.name, ("recipe", index), false, cx, move |this| {
-                    let inputs = this.inputs();
-                    this.document.use_recipe(recipe, &inputs);
-                    this.selected = Row::Combined;
-                    // A recipe that shows stars apart has them separated.
-                    this.separate_stars();
+                    this.choose_recipe(recipe);
                 })
             })
             .collect();
@@ -304,11 +319,7 @@ impl Studio {
             .enumerate()
             .map(|(index, kind)| {
                 Self::pick(kind.label(), ("add-part", index), false, cx, move |this| {
-                    let inputs = this.inputs();
-                    if let Some(part) = this.document.add_part(kind, &inputs) {
-                        this.selected = Row::Layer(part);
-                    }
-                    this.separate_stars();
+                    this.add_part_of(kind);
                 })
             })
             .collect();

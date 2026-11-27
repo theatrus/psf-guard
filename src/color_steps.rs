@@ -286,6 +286,21 @@ pub fn correct_channel_backgrounds(
     Ok(())
 }
 
+/// The regions a background fit keeps out of its samples: the ones the
+/// settings give, which a person draws in a PSF Studio document, and the
+/// catalog's emission when `protect_catalog_emission` is on. The server
+/// refuses regions from a client, so there only the catalog's apply.
+fn regions_to_protect(
+    extraction: &StackBackgroundExtraction,
+    catalog: Vec<ProtectedRegion>,
+) -> Vec<ProtectedRegion> {
+    let mut regions = extraction.config.protected_regions.clone();
+    if extraction.protect_catalog_emission {
+        regions.extend(catalog);
+    }
+    regions
+}
+
 pub(crate) fn fit_channel_background(
     image: &LinearImage,
     extraction: &StackBackgroundExtraction,
@@ -293,11 +308,7 @@ pub(crate) fn fit_channel_background(
     mut on_fallback: impl FnMut(&str),
 ) -> Result<(BackgroundFit, Option<String>), seiza_background::Error> {
     let mut config = extraction.config.clone();
-    if extraction.protect_catalog_emission {
-        config.protected_regions = protected_regions;
-    } else {
-        config.protected_regions.clear();
-    }
+    config.protected_regions = regions_to_protect(extraction, protected_regions);
     let protected_fit = !config.protected_regions.is_empty();
     match seiza_background::fit_background(
         &image.data,
@@ -351,7 +362,7 @@ pub(crate) fn refit_channel_background(
     let mut config = extraction.config.clone();
     config.model = model.clone();
     config.protected_regions = if first.diagnostics.protected_regions > 0 {
-        protected_regions
+        regions_to_protect(extraction, protected_regions)
     } else {
         Vec::new()
     };
@@ -711,6 +722,46 @@ pub fn unscreen(original: f32, starless: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_region_drawn_in_the_settings_is_kept_with_or_without_the_catalog() {
+        use seiza_background::{BackgroundConfig, CorrectionMode};
+        let values: Vec<f32> = (0..64 * 64)
+            .map(|at| {
+                let (x, y) = ((at % 64) as f32 / 63.0, (at / 64) as f32 / 63.0);
+                0.1 + x * 0.02 + y * 0.03
+            })
+            .collect();
+        let image = LinearImage::new(64, 64, 1, values).unwrap();
+        let drawn = ProtectedRegion::Ellipse {
+            center: [0.5, 0.5],
+            radii: [0.15, 0.15],
+            rotation_degrees: 0.0,
+        };
+        let catalog = ProtectedRegion::Ellipse {
+            center: [0.2, 0.2],
+            radii: [0.05, 0.05],
+            rotation_degrees: 0.0,
+        };
+        let extraction = |protect_catalog_emission| StackBackgroundExtraction {
+            config: BackgroundConfig {
+                protected_regions: vec![drawn.clone()],
+                ..BackgroundConfig::default()
+            },
+            correction_mode: CorrectionMode::Subtract,
+            strength: 1.0,
+            protect_catalog_emission,
+        };
+        let protected = |on: bool| {
+            let (fit, fallback) =
+                fit_channel_background(&image, &extraction(on), vec![catalog.clone()], |_| {})
+                    .unwrap();
+            assert!(fallback.is_none());
+            fit.diagnostics.protected_regions
+        };
+        assert_eq!(protected(true), 2);
+        assert_eq!(protected(false), 1);
+    }
     use seiza_background::{BackgroundConfig, CorrectionMode};
 
     #[test]

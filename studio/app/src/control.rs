@@ -213,6 +213,54 @@ impl Studio {
                     json!({ "split": split })
                 }),
             "set_step" => self.control_set_step(params),
+            "use_recipe" => {
+                let name = params["name"].as_str().unwrap_or_default();
+                match crate::studio_model::recipes_for(&self.inputs())
+                    .into_iter()
+                    .find(|recipe| recipe.name == name)
+                {
+                    Some(recipe) => {
+                        self.choose_recipe(recipe);
+                        self.refresh_canvas();
+                        Ok(json!({ "recipe": recipe.name, "status": self.run_status() }))
+                    }
+                    None => Err(format!(
+                        "no recipe `{name}` fits these inputs; these do: {:?}",
+                        crate::studio_model::recipes_for(&self.inputs())
+                            .iter()
+                            .map(|recipe| recipe.name)
+                            .collect::<Vec<_>>()
+                    )),
+                }
+            }
+            "add_part" => {
+                let name = params["kind"].as_str().unwrap_or_default();
+                let inputs = self.inputs();
+                match crate::studio_model::PartKind::ALL
+                    .into_iter()
+                    .find(|kind| kind.label() == name && kind.fits(&inputs))
+                {
+                    Some(kind) => {
+                        self.add_part_of(kind);
+                        self.refresh_canvas();
+                        Ok(json!({ "added": kind.label(), "selected": self.selected }))
+                    }
+                    None => Err(format!("no part `{name}` fits these inputs")),
+                }
+            }
+            "set_tool" => {
+                let input = params["input"].as_str().unwrap_or_default().to_string();
+                let category = params["category"].as_str().unwrap_or_default().to_string();
+                if !self.document.channels().contains(&input) {
+                    Err(format!("no input `{input}`"))
+                } else if !["sharpen", "denoise", "star_removal"].contains(&category.as_str()) {
+                    Err("`category` is sharpen, denoise or star_removal".to_string())
+                } else {
+                    self.set_tool(&input, &category, params["provider"].as_str());
+                    self.refresh_canvas();
+                    Ok(json!({ "tools_not_run": self.inputs_to_run() }))
+                }
+            }
             "set_layer" => self.control_set_layer(params),
             "run_tools" => {
                 if let Some(why) = self.cannot_run() {

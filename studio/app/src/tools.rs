@@ -390,7 +390,7 @@ impl Studio {
     /// Chooses the provider of one kind of tool for an input, or none.
     /// When the input's stars are removed with its group, the choice is
     /// the group's.
-    fn set_tool(&mut self, channel: &str, category: &str, provider: Option<&str>) {
+    pub(super) fn set_tool(&mut self, channel: &str, category: &str, provider: Option<&str>) {
         let together = (category == STARS)
             .then(|| self.stars_together(channel))
             .flatten();

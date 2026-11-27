@@ -126,6 +126,26 @@ fn tools() -> Value {
             }), &["layer", "patch"]),
         },
         {
+            "name": "studio_use_recipe",
+            "description": "Makes the picture from a recipe, as the Recipe menu does, such as \"LRGB\" or \"Narrowband with RGB stars\". A recipe that shows stars apart has them separated, which runs the tools.",
+            "inputSchema": object(json!({ "instance": instance, "name": { "type": "string" } }), &["name"]),
+        },
+        {
+            "name": "studio_add_part",
+            "description": "Adds a part, as the Add part menu does: \"RGB stars\", \"Stars\", \"Nebula\", \"Color\", \"Luminance\" or \"Lines\". A part that shows stars apart has them separated, which runs the tools.",
+            "inputSchema": object(json!({ "instance": instance, "kind": { "type": "string" } }), &["kind"]),
+        },
+        {
+            "name": "studio_set_tool",
+            "description": "Chooses an input's processing tool of one kind: `category` sharpen, denoise or star_removal, `provider` such as bxt, nxt, noise-model or sxt (leave out for none). Run the tools to apply it.",
+            "inputSchema": object(json!({
+                "instance": instance,
+                "input": { "type": "string" },
+                "category": { "type": "string" },
+                "provider": { "type": "string" }
+            }), &["input", "category"]),
+        },
+        {
             "name": "studio_run_tools",
             "description": "Runs every input's processing tools and prepares the store again, as Run tools does.",
             "inputSchema": object(json!({ "instance": instance }), &[]),
@@ -207,6 +227,17 @@ impl Server {
             "studio_set_layer" => {
                 forward(self.instance(arguments)?, "set_layer", arguments.clone())
             }
+            "studio_use_recipe" => forward(
+                self.instance(arguments)?,
+                "use_recipe",
+                json!({ "name": arguments["name"] }),
+            ),
+            "studio_add_part" => forward(
+                self.instance(arguments)?,
+                "add_part",
+                json!({ "kind": arguments["kind"] }),
+            ),
+            "studio_set_tool" => forward(self.instance(arguments)?, "set_tool", arguments.clone()),
             "studio_run_tools" => forward(self.instance(arguments)?, "run_tools", json!({})),
             "studio_wait_idle" => {
                 let pid = self.instance(arguments)?;
