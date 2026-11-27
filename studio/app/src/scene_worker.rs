@@ -8,7 +8,7 @@
 //! The worker writes the scenes to the canvas, which the render thread
 //! draws, and leaves what the UI thread needs to know for it to pick up.
 
-use super::panes::{beneath_other_layers, needs_picture, scene};
+use super::panes::{balance_source, beneath_other_layers, needs_picture, scene};
 use super::{picture_patches, CanvasHandle, PictureRequest, Scene};
 use crate::output_stretch::ResolvedChains;
 use crate::store_tiles::{BandState, BandStretch, Bands};
@@ -83,14 +83,11 @@ struct BeneathState {
     queued: Option<BeneathJob>,
 }
 
-/// One sampling of the picture beneath a stretch.
+/// One job in the background: what it works out, by the id of what it is
+/// worked out from.
 struct BeneathJob {
     id: u64,
-    picture: seiza_compose::picture::Picture,
-    store: std::path::PathBuf,
-    planes: Vec<Arc<crate::derived::DerivedPlane>>,
-    patches: Vec<[u32; 2]>,
-    size: u32,
+    work: Box<dyn FnOnce() -> Option<Vec<f32>> + Send>,
 }
 
 impl BeneathSampler {
@@ -127,7 +124,8 @@ impl BeneathSampler {
     fn run(self: Arc<Self>, mut job: BeneathJob) {
         loop {
             let started = Instant::now();
-            let samples = sample_patches(&job);
+            let id = job.id;
+            let samples = (job.work)();
             if super::timing() {
                 eprintln!(
                     "scenes: sampled what is beneath a stretch in {:.1} ms",
@@ -136,7 +134,7 @@ impl BeneathSampler {
             }
             let mut state = self.state.lock().expect("beneath samples");
             if let Some(samples) = samples {
-                state.ready.insert(0, (job.id, Arc::new(samples)));
+                state.ready.insert(0, (id, Arc::new(samples)));
                 state.ready.truncate(8);
                 self.fresh.store(true, std::sync::atomic::Ordering::Release);
             }
@@ -154,23 +152,29 @@ impl BeneathSampler {
     }
 }
 
-/// The picture of `job` at its patches, rendered on the CPU: red, green and
-/// blue interleaved, patch after patch, as the canvas samples them. `None`
-/// when the store cannot be read.
-fn sample_patches(job: &BeneathJob) -> Option<Vec<f32>> {
+/// `picture` at `patches`, rendered on the CPU from the store: red, green
+/// and blue interleaved, patch after patch, as the canvas samples them.
+/// `None` when the store cannot be read.
+fn sample_patches(
+    picture: &seiza_compose::picture::Picture,
+    store: &std::path::Path,
+    planes: Vec<Arc<crate::derived::DerivedPlane>>,
+    patches: &[[u32; 2]],
+    size: u32,
+) -> Option<Vec<f32>> {
     use seiza_compose::render::{render_image, RenderOptions};
-    let (tiles, _) = crate::store_tiles::open_store(&job.store).ok()?;
-    let source = crate::store_tiles::StoreSource::new(tiles).with_planes(job.planes.clone());
-    let size = job.size as usize;
-    let mut samples = Vec::with_capacity(job.patches.len() * size * size * 3);
-    for origin in &job.patches {
+    let (tiles, _) = crate::store_tiles::open_store(store).ok()?;
+    let source = crate::store_tiles::StoreSource::new(tiles).with_planes(planes);
+    let size = size as usize;
+    let mut samples = Vec::with_capacity(patches.len() * size * size * 3);
+    for origin in patches {
         let region = seiza_compose::ReferenceRegion {
             x: origin[0] as usize,
             y: origin[1] as usize,
             width: size,
             height: size,
         };
-        let image = render_image(&job.picture, &source, region, &RenderOptions::default()).ok()?;
+        let image = render_image(picture, &source, region, &RenderOptions::default()).ok()?;
         if image.channels == 3 {
             samples.extend_from_slice(&image.data);
         } else {
@@ -276,6 +280,7 @@ fn run(shared: &(Mutex<Pending>, Condvar), canvas: &CanvasHandle, beneath: &Arc<
         // store the canvas no longer shows.
         let superseded = || shared.0.lock().expect("scene worker").job.is_some();
         prepare_beneath(&job, &mut caches, beneath);
+        prepare_balance(&job, &mut caches, beneath);
         let outcome = build(&job, &mut caches, canvas, &superseded);
         if super::timing() {
             eprintln!(
@@ -370,18 +375,130 @@ fn prepare_beneath(job: &SceneJob, caches: &mut Caches, sampler: &Arc<BeneathSam
             }
             None => {
                 let (patches, size) = picture_patches(patch_rect(job));
+                let picture = beneath.picture(&[]);
+                let planes = job.planes.clone();
                 sampler.request(BeneathJob {
                     id,
-                    picture: beneath.picture(&[]),
-                    store,
-                    planes: job.planes.clone(),
-                    patches,
-                    size,
+                    work: Box::new(move || {
+                        sample_patches(&picture, &store, planes, &patches, size)
+                    }),
                 });
                 return;
             }
         }
     }
+}
+
+/// Puts the narrowband balance into the chains once it is resolved for the
+/// stretches the final picture draws, and asks for it in the background
+/// when it is not: H-alpha, OIII and SII at a quarter of the resolution,
+/// each through its stretch, balanced as Seiza balances them.
+fn prepare_balance(job: &SceneJob, caches: &mut Caches, sampler: &Arc<BeneathSampler>) {
+    // A new store leaves the balance of the old one behind.
+    let (mut picture, states) = scene(
+        &job.document,
+        &job.band_info,
+        &Place::Final.view(),
+        job.scene_version,
+        None,
+        &mut caches.chains,
+        &job.view_stretch,
+    );
+    let Some(source) = balance_source(
+        &job.document,
+        &job.band_info,
+        &picture.layer_bands,
+        &picture.layer_stretches,
+        &states,
+    ) else {
+        caches.chains.balance = None;
+        return;
+    };
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::hash::Hash::hash(&(source.id, job.bands_generation), &mut hasher);
+    let id = std::hash::Hasher::finish(&hasher);
+    if caches
+        .chains
+        .balance
+        .as_ref()
+        .is_some_and(|(known, _)| *known == source.id)
+    {
+        return;
+    }
+    if let Some(found) = sampler.ready(id) {
+        // Background then midtone for each balanced band, NaN for one
+        // left as it is.
+        let list = source
+            .channels
+            .iter()
+            .zip(found.chunks(2))
+            .skip(1)
+            .filter(|(_, curve)| curve.iter().all(|value| value.is_finite()))
+            .map(|((band, _), curve)| (*band, curve[0], curve[1]))
+            .collect();
+        caches.chains.balance = Some((source.id, list));
+        return;
+    }
+    picture.stretches = caches.analysis(&job.band_info, &states);
+    let transfers = picture.transfers(&[]);
+    let reads: Option<Vec<(Vec<f32>, seiza_compose::picture::Transfer)>> = source
+        .channels
+        .iter()
+        .map(|(band, row)| {
+            Some((
+                job.band_info.quarter_in(*band, &states)?,
+                transfers.get(*row)?.clone(),
+            ))
+        })
+        .collect();
+    let Some(reads) = reads else {
+        return;
+    };
+    let (width, height) = job.band_info.quarter_size();
+    let options = source.options;
+    sampler.request(BeneathJob {
+        id,
+        work: Box::new(move || balance_quarter(&reads, width, height, &options)),
+    });
+}
+
+/// The narrowband balance of H-alpha, OIII and maybe SII, each at a quarter
+/// of the resolution through its stretch: for each band, the background
+/// and midtone of its curve, or NaN for a band left as it is.
+fn balance_quarter(
+    reads: &[(Vec<f32>, seiza_compose::picture::Transfer)],
+    width: usize,
+    height: usize,
+    options: &seiza_compose::NarrowbandBalanceOptions,
+) -> Option<Vec<f32>> {
+    let pixels = width * height;
+    let mut data = vec![0.0_f32; pixels * 3];
+    for (channel, (quarter, transfer)) in reads.iter().enumerate().take(3) {
+        for (at, value) in quarter.iter().enumerate().take(pixels) {
+            // Each sample where it is at full resolution, for a layered
+            // stretch's maps.
+            let (x, y) = ((at % width) as i64 * 4 + 2, (at / width) as i64 * 4 + 2);
+            let mut sample = [*value];
+            transfer.apply_guided(&mut sample, [x, y], 1, &|_| None);
+            data[at * 3 + channel] = if sample[0].is_finite() {
+                sample[0].clamp(0.0, 1.0)
+            } else {
+                f32::NAN
+            };
+        }
+    }
+    let mut image = seiza_compose::LinearImage::new(width, height, 3, data).ok()?;
+    let report = seiza_compose::balance_narrowband(&mut image, options).ok()?;
+    Some(
+        report
+            .channels
+            .iter()
+            .flat_map(|channel| match (channel.background, channel.midtone) {
+                (Some(background), Some(midtone)) => [background as f32, midtone as f32],
+                _ => [f32::NAN; 2],
+            })
+            .collect(),
+    )
 }
 
 /// The scenes of `job`'s places, written to the canvas with the samplings
@@ -534,4 +651,40 @@ fn picture_request(job: &SceneJob, caches: &mut Caches) -> Option<Option<Arc<Pic
         patches,
         size,
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// H-alpha bright, OIII faint: OIII gets a curve, through each band's
+    /// transfer, and H-alpha, the reference, none.
+    #[test]
+    fn the_balance_is_resolved_from_the_stretched_quarters() {
+        let (width, height) = (120, 90);
+        let plane = |level: f32, gain: f32| -> Vec<f32> {
+            (0..width * height)
+                .map(|at| {
+                    let (x, y) = ((at % width) as f32, (at / width) as f32);
+                    let wave = ((x * 0.09).sin() * (y * 0.07).cos()).max(0.0);
+                    level + gain * wave + ((at * 7919) % 97) as f32 / 97.0 * 0.01
+                })
+                .collect()
+        };
+        let identity = seiza_compose::picture::Transfer::identity();
+        let reads = vec![
+            (plane(0.15, 0.6), identity.clone()),
+            (plane(0.1, 0.15), identity.clone()),
+        ];
+        let options = seiza_compose::NarrowbandBalanceOptions {
+            has_sii: false,
+            ..Default::default()
+        };
+        let curves = balance_quarter(&reads, width, height, &options).unwrap();
+        assert!(curves[0].is_nan() && curves[1].is_nan(), "{curves:?}");
+        assert!(
+            curves[2].is_finite() && curves[3] > 0.0 && curves[3] < 0.5,
+            "{curves:?}"
+        );
+    }
 }

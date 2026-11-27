@@ -49,11 +49,24 @@ const MASK_CONTEXT: u32 = 0x7a4a12;
 
 /// The adjustments offered in the Combine stage, for one layer or for the
 /// layers beneath: the name and what the canvas does.
-pub(super) const ADJUSTMENTS: [(&str, Adjustment); 3] = [
+pub(super) const ADJUSTMENTS: [(&str, Adjustment); 4] = [
     ("Exposure", Adjustment::Exposure),
     ("Curves", Adjustment::Curves),
     ("Saturation", Adjustment::Saturation),
+    (GREEN_REDUCTION, Adjustment::GreenReduction),
 ];
+
+/// The narrowband balance's settings a person moves: the key, its label,
+/// and its range.
+pub(super) const BALANCE_CONTROLS: [(&str, &str, f64, f64); 3] = [
+    ("shadow_protection", "Shadow protection", 0.0, 1.0),
+    ("oiii_boost", "OIII boost", 0.25, 4.0),
+    ("sii_boost", "SII boost", 0.25, 4.0),
+];
+
+/// The adjustment that takes green down toward the brighter of red and
+/// blue, as a narrowband palette's green excess is taken out.
+pub(super) const GREEN_REDUCTION: &str = flow_operations::GREEN_REDUCTION;
 
 pub(super) fn operation(name: &str, accepts: Accepts) -> StepRecord {
     StepRecord::new(StepKind::Operation {
@@ -176,6 +189,7 @@ pub(super) fn amount_range(operation: &str) -> Option<(f32, f32)> {
         "Exposure" => Some((-2.0, 2.0)),
         "Curves" => Some((-1.0, 1.0)),
         "Saturation" => Some((0.0, 2.0)),
+        GREEN_REDUCTION => Some((0.0, 1.0)),
         flow_operations::BACKGROUND => Some((0.0, 1.0)),
         flow_operations::STAR_STRETCH => Some((0.0, 8.0)),
         _ => None,
@@ -435,6 +449,15 @@ pub(super) fn is_drawn(stage: StageKind, step: &StepRecord, bands: &Bands) -> bo
         }
         // Every stretch of an input is drawn, the layered ones included.
         (StepKind::Operation { .. }, StageKind::Stretch) if stretch_model(step).is_some() => true,
+        // The narrowband balance is drawn while it is on.
+        (
+            StepKind::Operation {
+                operation,
+                settings,
+                ..
+            },
+            StageKind::Stretch,
+        ) if operation == flow_operations::NARROWBAND => settings["balance"].is_object(),
         (StepKind::Operation { operation, .. }, StageKind::Stretch) => {
             operation == flow_operations::STRETCH
                 || (operation == flow_operations::STAR_STRETCH && bands.has_star_layer())
@@ -515,6 +538,73 @@ fn not_run(step: &StepRecord, on: &str) -> String {
         "{} on {on}, which has not run for these edits",
         step.kind.name()
     )
+}
+
+/// What a scene's narrowband balance is resolved from: the balance's
+/// settings from the document's Narrowband step, and H-alpha's, OIII's and
+/// SII's bands and their rows among the scene's stretches.
+pub(super) struct BalanceSource {
+    /// Changes when anything the balance is resolved from does.
+    pub id: u64,
+    pub options: seiza_compose::NarrowbandBalanceOptions,
+    /// H-alpha, OIII and SII: each one's band, and its row in the scene.
+    pub channels: Vec<(usize, usize)>,
+}
+
+/// What `scene`'s narrowband balance is resolved from. `None` when the
+/// document balances nothing, or the scene draws no H-alpha and OIII.
+pub(super) fn balance_source(
+    document: &Document,
+    bands: &Bands,
+    layer_bands: &[usize],
+    layer_stretches: &[Vec<StretchModel>],
+    states: &[BandState],
+) -> Option<BalanceSource> {
+    let step = document
+        .stage(StageKind::Stretch)
+        .steps
+        .iter()
+        .find(|step| step.enabled && step.kind.name() == flow_operations::NARROWBAND)?;
+    let StepKind::Operation { settings, .. } = &step.kind else {
+        return None;
+    };
+    let balance = settings.get("balance").filter(|value| !value.is_null())?;
+    let mut options: seiza_compose::NarrowbandBalanceOptions =
+        serde_json::from_value(balance.clone()).ok()?;
+    let channels: Vec<(usize, usize)> = ["ha", "oiii", "sii"]
+        .iter()
+        .filter_map(|name| {
+            let band = bands.band_of(name)?;
+            let row = layer_bands.iter().position(|known| *known == band)?;
+            Some((band, row))
+        })
+        .collect();
+    // H-alpha first, then OIII.
+    let names: Vec<&str> = channels
+        .iter()
+        .filter_map(|(band, _)| bands.names.get(*band).map(String::as_str))
+        .collect();
+    if names.first() != Some(&"ha") || names.get(1) != Some(&"oiii") {
+        return None;
+    }
+    options.has_sii = names.len() == 3;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::hash::Hash::hash(
+        &format!(
+            "{options:?}{:?}{:?}",
+            channels
+                .iter()
+                .map(|(band, row)| (band, &layer_stretches[*row], states.get(*band)))
+                .collect::<Vec<_>>(),
+            bands.names
+        ),
+        &mut hasher,
+    );
+    Some(BalanceSource {
+        id: std::hash::Hasher::finish(&hasher),
+        options,
+        channels,
+    })
 }
 
 /// The output stretches of adjustment layers that have other layers above
@@ -2247,6 +2337,16 @@ pub(super) fn scene(
     on_top.reverse();
     on_top.append(&mut finish);
     let finish = on_top;
+    // The narrowband balance, once resolved for these stretches.
+    let balance = balance_source(document, bands, &layer_bands, &layer_stretches, &states)
+        .and_then(|source| {
+            chains
+                .balance
+                .as_ref()
+                .filter(|(id, _)| *id == source.id)
+                .map(|(_, list)| list.clone())
+        })
+        .unwrap_or_default();
     let scene = Scene {
         computed,
         layers,
@@ -2254,6 +2354,7 @@ pub(super) fn scene(
         layer_stretches,
         finish,
         steps,
+        balance,
         heals,
         masks,
         omitted,
@@ -2872,6 +2973,27 @@ impl Studio {
                     settings = tone_step::new_settings();
                 }
                 settings[key] = f64::from(low + (high - low) * position).into();
+                self.document.set_step_settings(id, settings);
+            }
+            SliderId::BalanceParam(index) => {
+                let Some(id) = self.selected_step() else {
+                    return;
+                };
+                let Some((_, step)) = self.document.step(id) else {
+                    return;
+                };
+                let StepKind::Operation { settings, .. } = &step.kind else {
+                    return;
+                };
+                let Some((key, _, low, high)) = BALANCE_CONTROLS.get(index) else {
+                    return;
+                };
+                let mut settings = settings.clone();
+                if !settings["balance"].is_object() {
+                    return;
+                }
+                let value = low + (high - low) * f64::from(position);
+                settings["balance"][*key] = ((value * 100.0).round() / 100.0).into();
                 self.document.set_step_settings(id, settings);
             }
             SliderId::StretchParam(index) => {

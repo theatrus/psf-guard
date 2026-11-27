@@ -815,9 +815,14 @@ impl Bands {
         }
     }
 
+    /// The width and height of the bands at a quarter of the resolution.
+    pub(crate) fn quarter_size(&self) -> (usize, usize) {
+        self.quarter_size
+    }
+
     /// The whole band at a quarter of the resolution in the state given
     /// for it, as the samples of its stretch analysis are.
-    fn quarter_in(&self, band: usize, states: &[BandState]) -> Option<Vec<f32>> {
+    pub(crate) fn quarter_in(&self, band: usize, states: &[BandState]) -> Option<Vec<f32>> {
         let copies = self.quarter.get(band)?;
         let state = states.get(band).copied().unwrap_or_default();
         let (base, blended) = self.states_drawn(band, state);

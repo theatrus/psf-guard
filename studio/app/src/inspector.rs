@@ -126,6 +126,68 @@ impl Studio {
             ))
     }
 
+    /// The narrowband balance: on or off, and its settings, which the canvas
+    /// draws at once. It matches OIII, and SII, to H-alpha, each by a curve
+    /// resolved from the stretched channels.
+    fn balance_block(&self, step: &StepRecord, cx: &mut Context<Self>) -> gpui::Div {
+        let id = step.id;
+        let StepKind::Operation { settings, .. } = &step.kind else {
+            return column();
+        };
+        let balance = settings["balance"].clone();
+        let on = balance.is_object();
+        let switch = Self::act(
+            if on { "Balance on" } else { "Balance off" },
+            "balance-on",
+            on,
+            cx,
+            move |this| {
+                let Some((
+                    _,
+                    StepRecord {
+                        kind: StepKind::Operation { settings, .. },
+                        ..
+                    },
+                )) = this.document.step(id)
+                else {
+                    return;
+                };
+                let mut settings = settings.clone();
+                settings["balance"] = if on {
+                    serde_json::Value::Null
+                } else {
+                    serde_json::json!({
+                        "shadow_protection": 1.0,
+                        "oiii_boost": 1.0,
+                        "sii_boost": 1.0,
+                    })
+                };
+                this.document.set_step_settings(id, settings);
+            },
+        );
+        let sliders = super::panes::BALANCE_CONTROLS
+            .iter()
+            .enumerate()
+            .filter(|_| on)
+            .map(|(index, (key, label, low, high))| {
+                let value = balance[*key].as_f64().unwrap_or(1.0);
+                self.labelled_slider(
+                    format!("{label} {value:.2}"),
+                    SliderId::BalanceParam(index),
+                    ((value - low) / (high - low)) as f32,
+                    cx,
+                )
+            })
+            .collect::<Vec<_>>();
+        column()
+            .child(Self::heading("Balance"))
+            .child(switch)
+            .children(sliders)
+            .children(Self::help(
+                "Matches OIII, and SII, to H-alpha: each by a curve worked out from the stretched channels, which the canvas draws once it is resolved. Shadow protection keeps the darkest sky as it is.",
+            ))
+    }
+
     /// What every step's controls share: on or off, its amount, whether the
     /// canvas draws it, and its mask.
     fn step_controls(
@@ -196,6 +258,9 @@ impl Studio {
             ))
             .children(slider)
             .children(copies.map(Self::note))
+            .when(name == flow_operations::NARROWBAND, |pane| {
+                pane.child(self.balance_block(step, cx))
+            })
             // A step of a layer or of the picture has an opacity. A step of
             // an input is applied in full.
             .when(

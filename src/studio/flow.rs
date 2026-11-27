@@ -63,6 +63,9 @@ pub mod flow_operations {
     pub const STAR_STRETCH: &str = "Star stretch";
     /// Narrowband stretches, balance, star masks and green reduction.
     pub const NARROWBAND: &str = "Narrowband balance and stars";
+    /// Green down toward the brighter of red and blue, as a narrowband
+    /// palette's green excess is taken out: an adjustment layer.
+    pub const GREEN_REDUCTION: &str = "Green reduction";
     /// One display stretch of the composed image.
     pub const OUTPUT_STRETCH: &str = "Output stretch";
     /// Settings this build does not know, kept so they are not lost.
@@ -606,10 +609,20 @@ pub fn document_from_color_setup(
             }
         }
     }
+    // The narrowband step keeps the settings Studio has no step of its own
+    // for; its green reduction is an adjustment layer, drawn live.
+    let mut green_reduction = None;
     if let Some(narrowband) = settings.get("narrowband").filter(|v| !v.is_null()) {
+        let mut narrowband = narrowband.clone();
+        if let Some(object) = narrowband.as_object_mut() {
+            green_reduction = object
+                .remove("green_reduction")
+                .and_then(|amount| amount.as_f64())
+                .filter(|amount| *amount > 0.0);
+        }
         add(
             StageKind::Stretch,
-            operation(op::NARROWBAND, Accepts::Either, narrowband),
+            operation(op::NARROWBAND, Accepts::Either, &narrowband),
         )?;
     }
 
@@ -651,6 +664,16 @@ pub fn document_from_color_setup(
     let names: Vec<String> = channels.iter().map(|channel| channel.to_string()).collect();
     if let Some(palette) = super::default_palette(&names) {
         document.apply_palette(palette);
+    }
+    // The green reduction acts on the mapped colors, beneath the output
+    // stretches.
+    if let Some(amount) = green_reduction {
+        let layer = adjustment_layer(operation(
+            op::GREEN_REDUCTION,
+            Accepts::Display,
+            &serde_json::json!({ "amount": amount }),
+        ));
+        document.insert_layer(usize::MAX, layer)?;
     }
     for stretch in &output_stretches {
         let layer = adjustment_layer(operation(op::OUTPUT_STRETCH, Accepts::Display, stretch));
@@ -773,6 +796,23 @@ pub fn color_setup_from_document(document: &Document) -> Result<Value, StudioErr
                 }
             }
             _ => {}
+        }
+    }
+
+    // A narrowband picture's green reduction: its shown layer at the top
+    // level, as PSF Guard reduces the mapped colors.
+    if let Some(Value::Object(narrowband)) = settings.get_mut("narrowband") {
+        let amount = document.layers().iter().find_map(|layer| {
+            let step = layer.source.adjustment_step()?;
+            (layer.visible && layer.group.is_none() && step.kind.name() == op::GREEN_REDUCTION)
+                .then(|| match &step.kind {
+                    StepKind::Operation { settings, .. } => settings["amount"].as_f64(),
+                    StepKind::Heal { .. } => None,
+                })
+                .flatten()
+        });
+        if let Some(amount) = amount {
+            narrowband.insert("green_reduction".to_string(), amount.into());
         }
     }
 

@@ -1316,7 +1316,7 @@ impl Document {
         // processing tools; a step that reads the whole picture beneath it,
         // such as an output stretch, stays a layer of the stack.
         let own_kind = |step: &StepRecord| {
-            ["Exposure", "Curves", "Saturation"].contains(&step.kind.name())
+            ["Exposure", "Curves", "Saturation", "Green reduction"].contains(&step.kind.name())
                 || super::flow::is_tool_step(step)
         };
         // A layer kept the older way is brought up to date first.

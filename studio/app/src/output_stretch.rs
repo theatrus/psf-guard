@@ -91,7 +91,15 @@ pub struct ResolvedChains {
     /// layers above it, by the stretch step's id, with the id of their
     /// sampling: such a stretch is resolved from what is beneath it.
     pub beneath: std::collections::HashMap<uuid::Uuid, (u64, std::sync::Arc<Vec<f32>>)>,
+    /// The narrowband balance resolved last, with the id of what it was
+    /// resolved from: each band matched to H-alpha, with the background and
+    /// midtone of its curve.
+    pub balance: Option<(u64, Vec<BalanceCurve>)>,
 }
+
+/// One band's narrowband balance: the band, and the background and
+/// midtone of its curve.
+pub type BalanceCurve = (usize, f32, f32);
 
 /// One chain resolved: the id of the samples it was resolved from (none
 /// when it reads no samples), the chain, and how the canvas draws each

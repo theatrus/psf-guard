@@ -66,6 +66,8 @@ pub enum Adjustment {
     Curves,
     /// Saturation. 1 leaves the color unchanged.
     Saturation,
+    /// Green down toward the brighter of red and blue, from 0 to 1.
+    GreenReduction,
 }
 
 /// One entry of a scene's layers: a band, stretched, colored and blended,
@@ -176,6 +178,9 @@ pub fn picture(parts: &SceneParts, stretches: &[Transfer]) -> Picture {
                     Adjustment::Exposure => SeizaAdjustment::Exposure(amount),
                     Adjustment::Curves => SeizaAdjustment::Curves(amount.clamp(-1.0, 1.0)),
                     Adjustment::Saturation => SeizaAdjustment::Saturation(amount),
+                    Adjustment::GreenReduction => {
+                        SeizaAdjustment::GreenReduction(amount.clamp(0.0, 1.0))
+                    }
                 }),
                 (Mark::Layer, None) => {
                     let transfer = stretch(row);

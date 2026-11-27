@@ -109,6 +109,9 @@ enum SliderId {
     /// One control of the selected Tone and color step, by its place in
     /// [`seiza_compose::tone::CONTROLS`].
     FinishParam(usize),
+    /// One setting of the narrowband balance, by its place in
+    /// [`panes::BALANCE_CONTROLS`].
+    BalanceParam(usize),
     /// The picture's HDR headroom.
     Headroom,
     /// Where an HDR picture's stretches continue into the headroom.
@@ -370,6 +373,9 @@ pub struct Scene {
     /// What each layer marked as a step does: a Finish step that changes
     /// only the layers beneath it.
     steps: Vec<seiza_compose::picture::FinishKind>,
+    /// The narrowband balance: each band matched to H-alpha, with the
+    /// background and midtone of its curve.
+    balance: Vec<(usize, f32, f32)>,
     /// Heals of single layers and inputs.
     heals: Vec<LayerHeal>,
     /// The masks computed from inputs that the layers refer to.
@@ -433,7 +439,7 @@ impl Scene {
                     return Transfer::identity();
                 }
                 let nudge = nudges.get(*band).copied().unwrap_or(0.0);
-                self.stretches.get(*band).map_or_else(
+                let mut transfer = self.stretches.get(*band).map_or_else(
                     || Transfer::of([seiza_compose::picture::TransferStage::Scale(0.0)]),
                     |stretch| {
                         stretch.transfer(
@@ -444,19 +450,32 @@ impl Scene {
                             missing,
                         )
                     },
-                )
+                );
+                // A narrowband channel matched to H-alpha ends with its
+                // balance.
+                if let Some((_, background, midtone)) =
+                    self.balance.iter().find(|(known, _, _)| known == band)
+                {
+                    transfer
+                        .stages
+                        .push(seiza_compose::picture::TransferStage::Balance {
+                            background: *background,
+                            midtone: *midtone,
+                        });
+                }
+                transfer
             })
             .collect()
     }
 
-    /// The scene as the Seiza picture the canvas draws, with each band's
-    /// stretch moved by `nudges`.
     /// The Finish steps as text, for an id of what the scene draws that
     /// counts them: [`Self::picture_id`] counts only what they act on.
     pub(super) fn finish_words(&self) -> String {
         format!("{:?}", self.finish)
     }
 
+    /// The scene as the Seiza picture the canvas draws, with each band's
+    /// stretch moved by `nudges`.
     pub(super) fn picture(&self, nudges: &[f64]) -> Picture {
         Picture {
             headroom: self.headroom,
