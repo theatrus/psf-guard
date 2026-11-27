@@ -32,8 +32,8 @@ use uuid::Uuid;
 #[derive(Clone, Debug)]
 pub(super) struct LateStep {
     pub id: Uuid,
-    /// The layer whose own step it is, or `None` for a Finish step.
-    pub layer: Option<Uuid>,
+    /// What the tool runs on.
+    pub on: LateOn,
     pub enabled: bool,
     /// The tool: `{"provider": ..., "parameters": {...}}`.
     pub tool: Value,
@@ -43,6 +43,17 @@ pub(super) struct LateStep {
     /// The step in a few words, for messages: "Noise reduction on the
     /// picture".
     pub words: String,
+}
+
+/// What a late tool step runs on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum LateOn {
+    /// One layer alone: the step is that layer's own.
+    Layer(Uuid),
+    /// The layers beneath an adjustment layer that holds the step.
+    Beneath(Uuid),
+    /// The picture after the Finish steps before it.
+    Picture,
 }
 
 impl LateStep {
@@ -87,9 +98,10 @@ fn store_version(store: &Path) -> String {
 
 /// The document as far as a late tool step reads it, as JSON: for a
 /// Finish step, everything but the Finish steps from it on and the Export
-/// stage; for a layer's own step, the inputs and that layer alone with its
-/// own steps before the tool.
-fn upstream(document: &Document, step: &StepRecord, layer: Option<Uuid>) -> Value {
+/// stage; for an adjustment layer's, the layers beneath it; for a layer's
+/// own step, the inputs and that layer alone with its own steps before the
+/// tool.
+fn upstream(document: &Document, step: &StepRecord, on: LateOn) -> Value {
     let mut value: Value = serde_json::from_str(&document.to_json()).unwrap_or(Value::Null);
     value["name"] = Value::Null;
     // Whether a star removal's stars are shown changes no tool's image.
@@ -108,13 +120,27 @@ fn upstream(document: &Document, step: &StepRecord, layer: Option<Uuid>) -> Valu
                 list.truncate(at);
             }
         };
-        match layer {
-            None => {
+        match on {
+            LateOn::Picture => {
                 if let Some(finish) = stages.get_mut(stage(StageKind::Finish)) {
                     truncate(&mut finish["steps"]);
                 }
             }
-            Some(layer) => {
+            LateOn::Beneath(layer) => {
+                if let Some(finish) = stages.get_mut(stage(StageKind::Finish)) {
+                    finish["steps"] = Value::Array(Vec::new());
+                }
+                if let Some(combine) = stages.get_mut(stage(StageKind::Combine))
+                    && let Some(layers) = combine["layers"].as_array_mut()
+                {
+                    let at = layers
+                        .iter()
+                        .position(|other| other["id"] == layer.to_string())
+                        .unwrap_or(layers.len());
+                    layers.truncate(at);
+                }
+            }
+            LateOn::Layer(layer) => {
                 if let Some(finish) = stages.get_mut(stage(StageKind::Finish)) {
                     finish["steps"] = Value::Array(Vec::new());
                 }
@@ -154,7 +180,7 @@ fn strip_stars_shown(value: &mut Value) {
 pub(super) fn late_steps(document: &Document, store: &Path) -> Vec<LateStep> {
     use sha2::{Digest, Sha256};
     let version = store_version(store);
-    let make = |step: &StepRecord, layer: Option<Uuid>, words: String| -> Option<LateStep> {
+    let make = |step: &StepRecord, on: LateOn, words: String| -> Option<LateStep> {
         let tool = tool_of(step)?.clone();
         // Whether its stars are shown changes what is drawn, not what the
         // tool makes.
@@ -164,7 +190,7 @@ pub(super) fn late_steps(document: &Document, store: &Path) -> Vec<LateStep> {
         }
         let text = format!(
             "{version}|{}|{}",
-            upstream(document, step, layer),
+            upstream(document, step, on),
             serde_json::to_string(&made_by).unwrap_or_default()
         );
         let identity = Sha256::digest(text.as_bytes())
@@ -174,7 +200,7 @@ pub(super) fn late_steps(document: &Document, store: &Path) -> Vec<LateStep> {
             .collect();
         Some(LateStep {
             id: step.id,
-            layer,
+            on,
             enabled: step.enabled,
             tool,
             identity,
@@ -185,13 +211,26 @@ pub(super) fn late_steps(document: &Document, store: &Path) -> Vec<LateStep> {
     for layer in document.layers() {
         for step in layer.steps.iter().filter(|step| is_tool_step(step)) {
             let words = format!("{} on {}", step.kind.name(), layer.name);
-            steps.extend(make(step, Some(layer.id), words));
+            steps.extend(make(step, LateOn::Layer(layer.id), words));
+        }
+        // A tool in a group would run on part of the stack; the canvas
+        // draws a tool only outside one.
+        if let Some(step) = layer.source.adjustment_step()
+            && is_tool_step(step)
+            && layer.group.is_none()
+        {
+            let words = format!("{} on the layers beneath it", step.kind.name());
+            let mut late = make(step, LateOn::Beneath(layer.id), words);
+            if let Some(late) = &mut late {
+                late.enabled = layer.visible;
+            }
+            steps.extend(late);
         }
     }
     for step in &document.stage(StageKind::Finish).steps {
         if is_tool_step(step) {
             let words = format!("{} on the picture", step.kind.name());
-            steps.extend(make(step, None, words));
+            steps.extend(make(step, LateOn::Picture, words));
         }
     }
     steps
@@ -452,8 +491,22 @@ fn render_input(
     step: &LateStep,
 ) -> Result<seiza_stacking_image::Image, String> {
     let bands = base.with_derived(planes);
-    let place = match step.layer {
-        Some(layer) => {
+    let place = match step.on {
+        LateOn::Beneath(layer) => {
+            let layers = document.layers();
+            let at = layers
+                .iter()
+                .position(|other| other.id == layer)
+                .ok_or("its layer is gone")?;
+            let beneath = at
+                .checked_sub(1)
+                .ok_or("there is no layer beneath it to run on")?;
+            Place::Layer {
+                layer: layers[beneath].id,
+                alone: false,
+            }
+        }
+        LateOn::Layer(layer) => {
             let owner = document.layers().iter().find(|other| other.id == layer);
             let before = owner.and_then(|owner| {
                 let at = owner.steps.iter().position(|other| other.id == step.id)?;
@@ -464,7 +517,7 @@ fn render_input(
                 after: before,
             }
         }
-        None => {
+        LateOn::Picture => {
             let finish = &document.stage(StageKind::Finish).steps;
             let at = finish
                 .iter()
@@ -512,9 +565,9 @@ fn render_input(
     )
     .map_err(|error| error.to_string())?;
     let (width, height) = (rendered.width, rendered.height);
-    Ok(match step.layer {
+    Ok(match step.on {
         // A layer alone is gray: its first channel is the layer.
-        Some(_) => seiza_stacking_image::Image {
+        LateOn::Layer(_) => seiza_stacking_image::Image {
             width,
             height,
             channels: 1,
@@ -525,7 +578,7 @@ fn render_input(
                 .copied()
                 .collect(),
         },
-        None => seiza_stacking_image::Image {
+        LateOn::Beneath(_) | LateOn::Picture => seiza_stacking_image::Image {
             width,
             height,
             channels: rendered.channels,
@@ -637,11 +690,38 @@ mod tests {
         }
         assert_ne!(identity(&document, tool_id), on_layer);
         let late = late_steps(&document, Path::new("/nonexistent/picture.pgtiles"));
-        assert_eq!(late[0].layer, Some(layers[0]));
+        assert_eq!(late[0].on, LateOn::Layer(layers[0]));
         assert_eq!(
             late[0].words,
             format!("Noise reduction on {}", document.layers()[0].name)
         );
-        assert!(late[1..].iter().all(|step| step.layer.is_none()));
+        assert!(late[1..].iter().all(|step| step.on == LateOn::Picture));
+    }
+
+    #[test]
+    fn a_tool_layer_runs_on_the_layers_beneath_it() {
+        let inputs = ["ha".to_string(), "oiii".to_string()];
+        let mut document = super::super::panes::flow_document(&inputs);
+        let bottom = document.layers()[0].id;
+        let tool = tool_step(serde_json::json!({ "provider": "sxt" }));
+        let tool_id = tool.id;
+        let layer = document.add_picture_step(tool);
+        // A star removal adds a layer of the stars it took out above it.
+        let top = document.layers().last().unwrap();
+        assert!(matches!(
+            top.source,
+            crate::studio_model::LayerSource::Step { step, .. } if step == tool_id
+        ));
+        let late = late_steps(&document, Path::new("/nonexistent/picture.pgtiles"));
+        let found = late.iter().find(|late| late.id == tool_id).unwrap();
+        assert_eq!(found.on, LateOn::Beneath(layer));
+        let first = identity(&document, tool_id);
+        // A layer above it, its stars among them, does not change its input.
+        let stars = document.layers().last().unwrap().id;
+        document.layer_mut(stars).unwrap().visible = false;
+        assert_eq!(identity(&document, tool_id), first);
+        // A layer beneath it does.
+        document.layer_mut(bottom).unwrap().opacity = 0.5;
+        assert_ne!(identity(&document, tool_id), first);
     }
 }

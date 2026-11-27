@@ -349,14 +349,27 @@ impl Studio {
                             mask => {
                                 step.mask = mask.and_then(Result::ok);
                                 let id = step.id;
+                                // A step on the picture is an adjustment
+                                // layer on top of every layer.
                                 let inserted = match layer {
-                                    Some(layer) => self.document.insert_layer_step(layer, step),
-                                    None => self.document.insert_step(stage, usize::MAX, step),
+                                    Some(layer) => {
+                                        self.document.insert_layer_step(layer, step).map(|()| None)
+                                    }
+                                    None if stage == StageKind::Finish => {
+                                        Ok(Some(self.document.add_picture_step(step)))
+                                    }
+                                    None => self
+                                        .document
+                                        .insert_step(stage, usize::MAX, step)
+                                        .map(|()| None),
                                 };
                                 match inserted {
-                                    Ok(()) => {
+                                    Ok(layer) => {
                                         self.refresh_canvas();
-                                        Ok(json!({ "step": id.to_string() }))
+                                        Ok(json!({
+                                            "step": id.to_string(),
+                                            "layer": layer.map(|layer| layer.to_string()),
+                                        }))
                                     }
                                     Err(error) => Err(error.to_string()),
                                 }

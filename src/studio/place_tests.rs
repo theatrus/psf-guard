@@ -16,9 +16,12 @@ fn names(channels: &[&str]) -> Vec<String> {
 fn adjustment(name: &str) -> LayerRecord {
     LayerRecord::new(
         name,
-        LayerSource::Adjustment {
-            operation: name.to_string(),
-            settings: serde_json::json!({ "amount": 0.7 }),
+        LayerSource::Adjust {
+            step: StepRecord::new(StepKind::Operation {
+                operation: name.to_string(),
+                accepts: crate::image_steps::Accepts::Display,
+                settings: serde_json::json!({ "amount": 0.7 }),
+            }),
         },
     )
 }
@@ -143,13 +146,11 @@ fn an_adjustment_belongs_to_one_layer_or_to_the_stack() {
     assert_eq!(layers[3].opacity, 0.4);
     assert_eq!(layers[3].id, layer);
     assert!(layers[2].steps.is_empty());
-    assert_eq!(
-        layers[3].source,
-        LayerSource::Adjustment {
-            operation: "Exposure".to_string(),
-            settings: serde_json::json!({ "amount": 0.7 }),
-        }
-    );
+    // The same step, kept by the layer: found by its id.
+    let kept = layers[3].source.adjustment_step().unwrap();
+    assert_eq!(kept.id, step);
+    assert_eq!(kept.kind.name(), "Exposure");
+    assert_eq!(document.layer_of_adjustment(step), Some(layer));
 }
 
 #[test]
@@ -429,6 +430,7 @@ fn a_view_blends_a_group_on_its_own() {
                 StackEntry::Adjustment { .. } => "adjustment",
                 StackEntry::GroupBegin { .. } => "begin",
                 StackEntry::GroupEnd { .. } => "end",
+                StackEntry::Made { .. } => "made",
             })
             .collect()
     };

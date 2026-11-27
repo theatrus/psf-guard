@@ -1864,7 +1864,15 @@ impl Studio {
                     "Runs the tool a second time on the image moved by half a tile, and averages the two, so the seams between BlurXTerminator's tiles fall in different places.",
                 ));
         }
-        if category == STARS {
+        // A tool layer's stars are a layer of their own, which is shown,
+        // faded or moved as any layer is.
+        let stars_layer = self.document.layer_of_adjustment(id).is_some();
+        if category == STARS && stars_layer {
+            block = block.children(Self::help(
+                "The stars it takes out are the layer Stars it took out, screened over the picture. Hide, fade or move that layer to change where they go back.",
+            ));
+        }
+        if category == STARS && !stars_layer {
             let shown = super::late_tools::stars_shown(step);
             block = block
                 .child(Self::heading("Stars"))

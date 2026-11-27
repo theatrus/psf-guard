@@ -109,16 +109,10 @@ pub(super) fn flow_document(inputs: &[String]) -> Document {
         layer.blend = fresh.blend;
         layer.color = fresh.color.map(|color| color.map(|part| part / count));
     }
-    // Two adjustments PSF Guard's flow does not have, so the Finish stage
-    // has something to draw. They stay out of PSF Guard's settings.
+    // Two adjustments on top that PSF Guard's flow does not have, to start
+    // the picture's own edits. They stay out of PSF Guard's settings.
     for name in ["Curves", "Saturation"] {
-        document
-            .insert_step(
-                StageKind::Finish,
-                usize::MAX,
-                operation(name, Accepts::Display),
-            )
-            .expect("a Finish step fits its stage");
+        document.add_picture_step(operation(name, Accepts::Display));
     }
     document
 }
@@ -412,6 +406,13 @@ fn adjustment_kind(operation: &str) -> Option<Adjustment> {
         .map(|(_, kind)| *kind)
 }
 
+/// Whether an adjustment layer's step changes the picture as a Finish step
+/// does, rather than as one of the canvas's adjustments: a stretch, Tone, a
+/// heal or a tool.
+pub(super) fn is_step_layer(step: &StepRecord) -> bool {
+    !matches!(&step.kind, StepKind::Operation { operation, .. } if adjustment_kind(operation).is_some())
+}
+
 /// Whether the canvas draws a step, or only keeps it in the document.
 pub(super) fn is_drawn(stage: StageKind, step: &StepRecord, bands: &Bands) -> bool {
     match (&step.kind, stage) {
@@ -514,6 +515,265 @@ fn not_run(step: &StepRecord, on: &str) -> String {
         "{} on {on}, which has not run for these edits",
         step.kind.name()
     )
+}
+
+/// An output stretch step's settings, when it is one.
+fn output_stretch_config(step: &StepRecord) -> Option<seiza_stretch::StretchConfig> {
+    match &step.kind {
+        StepKind::Operation {
+            operation,
+            settings,
+            ..
+        } if operation == flow_operations::OUTPUT_STRETCH => output_stretch::config_of(settings),
+        _ => None,
+    }
+}
+
+/// What a Finish step reads besides itself, wherever it sits.
+struct StepContext<'a> {
+    bands: &'a Bands,
+    /// Samples of the combined picture, with the id of their sampling.
+    picture_samples: Option<(u64, &'a [f32])>,
+    chains: &'a mut output_stretch::ResolvedChains,
+}
+
+/// What the canvas draws for a Finish step, or `None`, with the reason in
+/// `omitted` when there is one. `stretches` holds the output stretches
+/// resolved for the picture; `before` are the steps drawn before this one.
+fn finish_kind(
+    step: &StepRecord,
+    stretches: &mut HashMap<Uuid, Result<seiza_stretch::StretchPlan, output_stretch::NotDrawn>>,
+    context: StepContext,
+    before: &[FinishStep],
+    omitted: &mut Vec<String>,
+) -> Option<FinishKind> {
+    if output_stretch_config(step).is_some() {
+        return match stretches.remove(&step.id)? {
+            Ok(plan) => Some(FinishKind::Stretch(plan)),
+            Err(why) => {
+                omitted.push(match why {
+                    output_stretch::NotDrawn::NeedsSamples => {
+                        "an output stretch, until the picture has been sampled".to_string()
+                    }
+                    output_stretch::NotDrawn::Refused(reason) => {
+                        format!("an output stretch Seiza could not resolve: {reason}")
+                    }
+                    output_stretch::NotDrawn::NeedsImage => {
+                        "an output stretch that needs the engine".to_string()
+                    }
+                });
+                None
+            }
+        };
+    }
+    Some(match &step.kind {
+        StepKind::Operation {
+            operation,
+            settings,
+            ..
+        } if operation == tone_step::OPERATION => {
+            let mut tone = tone_step::from_settings(settings);
+            // Texture leaves the picture's noise alone: measured from the
+            // samples, as the steps before this one leave them.
+            if tone.texture != 0.0
+                && let Some((id, samples)) = context.picture_samples
+            {
+                tone.noise = context.chains.noise(id, before, || {
+                    crate::canvas::picture_noise(before, samples, super::PICTURE_PATCHES)
+                });
+            }
+            FinishKind::Tone(tone)
+        }
+        StepKind::Heal { offset, shift, .. } => FinishKind::Heal {
+            offset: *offset,
+            shift: std::array::from_fn(|channel| shift.get(channel).copied().unwrap_or(0.0)),
+        },
+        StepKind::Operation { operation, .. } if operation == "Saturation" => {
+            FinishKind::Saturation(amount(step))
+        }
+        StepKind::Operation { .. } => FinishKind::Curves(amount(step).clamp(-1.0, 1.0)),
+    })
+}
+
+/// The lists of a scene that an adjustment layer adds to.
+struct StackParts<'a> {
+    layers: &'a mut Vec<Layer>,
+    layer_bands: &'a mut Vec<usize>,
+    layer_stretches: &'a mut Vec<Vec<StretchModel>>,
+    heals: &'a mut Vec<LayerHeal>,
+    steps: &'a mut Vec<FinishKind>,
+    step_names: &'a mut Vec<String>,
+    stacked: &'a mut Vec<FinishStep>,
+}
+
+/// What an adjustment layer added to the scene.
+enum Pushed {
+    Nothing,
+    /// One entry, at the end of the layers.
+    Layer,
+    /// The image a tool made, in place of every layer beneath it.
+    Replaced,
+}
+
+/// Adds an adjustment layer that holds a Finish step or a tool: the step
+/// changes the layers beneath it. A tool's layer is drawn from the image
+/// the tool made of them, once it has run.
+fn push_step_layer(
+    parts: &mut StackParts,
+    omitted: &mut Vec<String>,
+    mask_for: &mut impl FnMut(Vec<Segment>) -> Result<Option<usize>, ()>,
+    stretches: &mut HashMap<Uuid, Result<seiza_stretch::StretchPlan, output_stretch::NotDrawn>>,
+    context: StepContext,
+    layer: &LayerRecord,
+    step: &StepRecord,
+) -> Pushed {
+    let bands = context.bands;
+    if crate::studio_model::is_tool_step(step) {
+        if layer.group.is_some() {
+            omitted.push(format!(
+                "{}, a tool inside a group, which runs only outside one",
+                layer.name
+            ));
+            return Pushed::Nothing;
+        }
+        if tool_plane(bands, step.id, 0, false).is_none() {
+            omitted.push(not_run(step, "the layers beneath it"));
+            return Pushed::Nothing;
+        }
+        let Ok(mask) = mask_for(mask_strokes(&layer.mask)) else {
+            omitted.push(layer.name.clone());
+            return Pushed::Nothing;
+        };
+        // In full, the tool's image covers every layer beneath it.
+        let covers = layer.opacity >= 1.0 && layer.mask.is_none();
+        if covers {
+            parts.layers.clear();
+            parts.layer_bands.clear();
+            parts.layer_stretches.clear();
+            parts.heals.clear();
+            parts.steps.clear();
+            parts.step_names.clear();
+            parts.stacked.clear();
+            push_tool_image(
+                parts.layers,
+                parts.layer_bands,
+                parts.layer_stretches,
+                bands,
+                step.id,
+                false,
+            );
+            return Pushed::Replaced;
+        }
+        if parts.layers.len() + 5 > MAX_LAYERS {
+            omitted.push(layer.name.clone());
+            return Pushed::Nothing;
+        }
+        parts.layers.push(Layer {
+            mark: Mark::GroupBegin,
+            ..plain_layer()
+        });
+        push_tool_image(
+            parts.layers,
+            parts.layer_bands,
+            parts.layer_stretches,
+            bands,
+            step.id,
+            false,
+        );
+        parts.layers.push(Layer {
+            mark: Mark::GroupEnd,
+            opacity: layer.opacity,
+            mask,
+            ..plain_layer()
+        });
+        return Pushed::Layer;
+    }
+    if !is_drawn(StageKind::Finish, step, bands) {
+        return Pushed::Nothing;
+    }
+    if !matches!(
+        layer.mask,
+        None | Some(MaskRecord::Painted(_)) | Some(MaskRecord::Shared { .. })
+    ) {
+        omitted.push(format!(
+            "{}, whose {} the canvas does not draw",
+            layer.name,
+            mask_kind(&layer.mask)
+        ));
+        return Pushed::Nothing;
+    }
+    let before = parts.stacked.clone();
+    let Some(kind) = finish_kind(step, stretches, context, &before, omitted) else {
+        return Pushed::Nothing;
+    };
+    // A heal is limited to its stroke, and then to the layer's mask.
+    let heal = matches!(step.kind, StepKind::Heal { .. });
+    let masks = if heal {
+        mask_for(step_strokes(step))
+            .and_then(|stroke| Ok((stroke, mask_for(mask_strokes(&layer.mask))?)))
+    } else {
+        mask_for(mask_strokes(&layer.mask)).map(|mask| (mask, None))
+    };
+    let Ok((mask, clip)) = masks else {
+        omitted.push(layer.name.clone());
+        return Pushed::Nothing;
+    };
+    // A heal with no stroke heals nothing.
+    if heal && mask.is_none() {
+        return Pushed::Nothing;
+    }
+    parts.stacked.push(FinishStep {
+        kind: kind.clone(),
+        opacity: layer.opacity,
+        mask: None,
+    });
+    parts.layers.push(Layer {
+        mark: Mark::Step(parts.steps.len()),
+        opacity: layer.opacity,
+        mask,
+        clip,
+        ..plain_layer()
+    });
+    parts.steps.push(kind);
+    parts.step_names.push(layer.name.clone());
+    Pushed::Layer
+}
+
+/// Adds the image a tool made, channel by channel over black in the
+/// working space: three channels in their primaries, or one in white.
+/// Stars are screened over what is beneath them.
+fn push_tool_image(
+    layers: &mut Vec<Layer>,
+    layer_bands: &mut Vec<usize>,
+    layer_stretches: &mut Vec<Vec<StretchModel>>,
+    bands: &Bands,
+    step: Uuid,
+    stars: bool,
+) {
+    let primaries = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+    let channels: Vec<usize> = (0..3)
+        .map_while(|channel| tool_plane(bands, step, channel, stars))
+        .collect();
+    for (index, channel) in channels.iter().enumerate() {
+        let color = if channels.len() == 3 {
+            primaries[index]
+        } else {
+            [1.0; 3]
+        };
+        layers.push(Layer {
+            band: *channel,
+            color,
+            working: true,
+            blend: match (stars, index) {
+                (true, _) => Blend::Screen,
+                (false, 0) => Blend::Normal,
+                (false, _) => Blend::Add,
+            },
+            ..plain_layer()
+        });
+        layer_bands.push(DISPLAY_ROW);
+        layer_stretches.push(Vec::new());
+    }
 }
 
 /// Whether the canvas draws a step's mask: none, or a painted one. A
@@ -840,7 +1100,19 @@ pub(super) fn pane_caption(wanted: &Place, drawn: Option<Place>) -> (Place, Opti
 /// resolved from the picture's statistics, or Texture, which measures the
 /// picture's noise.
 pub(super) fn needs_picture(document: &Document) -> bool {
-    document.stage(StageKind::Finish).steps.iter().any(|step| {
+    let shown = document
+        .layers()
+        .iter()
+        .filter(|layer| layer.visible)
+        .filter_map(|layer| layer.source.adjustment_step())
+        .chain(
+            document
+                .stage(StageKind::Finish)
+                .steps
+                .iter()
+                .filter(|step| step.enabled),
+        );
+    shown.into_iter().any(|step| {
         let StepKind::Operation {
             operation,
             settings,
@@ -855,7 +1127,7 @@ pub(super) fn needs_picture(document: &Document) -> bool {
             });
         let texture =
             operation == tone_step::OPERATION && tone_step::from_settings(settings).texture != 0.0;
-        step.enabled && (stretch || texture)
+        stretch || texture
     })
 }
 
@@ -873,10 +1145,11 @@ impl Scene {
         std::hash::Hash::hash(&source_generation, &mut hasher);
         std::hash::Hash::hash(
             &format!(
-                "{:?}{:?}{:?}{:?}{:?}{:?}{:?}{:?}{:?}",
+                "{:?}{:?}{:?}{:?}{:?}{:?}{:?}{:?}{:?}{:?}",
                 self.headroom,
                 self.knee,
                 self.layers,
+                self.steps,
                 self.layer_bands,
                 self.layer_stretches,
                 self.computed,
@@ -964,6 +1237,62 @@ pub(super) fn scene(
     } else {
         planned.stack.clone()
     };
+    // The Finish stage's steps the canvas draws: those after its last tool
+    // step whose result the canvas has, which holds the ones before.
+    let finish_steps = &document.stage(StageKind::Finish).steps;
+    let mut baked_finish: Option<usize> = None;
+    for (at, step) in finish_steps.iter().enumerate() {
+        if !crate::studio_model::is_tool_step(step) || !planned.finish.contains(&step.id) {
+            continue;
+        }
+        if tool_plane(bands, step.id, 0, false).is_some() {
+            baked_finish = Some(at);
+        } else {
+            omitted.push(not_run(step, "the picture"));
+        }
+    }
+    let drawn_finish: Vec<&StepRecord> = finish_steps
+        .iter()
+        .enumerate()
+        .filter(|(at, _)| baked_finish.is_none_or(|baked| *at > baked))
+        .map(|(_, step)| step)
+        .filter(|step| {
+            !crate::studio_model::is_tool_step(step)
+                && planned.finish.contains(&step.id)
+                && is_drawn(StageKind::Finish, step, bands)
+        })
+        .collect();
+    // The output stretches drawn, resolved in the order the picture is
+    // made, each from what the ones before it left: those of adjustment
+    // layers, beneath the Finish stage, first.
+    let stretch_steps: Vec<&StepRecord> = entries
+        .iter()
+        .filter_map(|entry| match entry {
+            StackEntry::Adjustment { layer } => find(layer)
+                .filter(|layer| layer.visible)
+                .and_then(|layer| layer.source.adjustment_step()),
+            _ => None,
+        })
+        .chain(drawn_finish.iter().copied())
+        .filter(|step| {
+            is_drawn(StageKind::Finish, step, bands) && output_stretch_config(step).is_some()
+        })
+        .collect();
+    let configs: Vec<_> = stretch_steps
+        .iter()
+        .filter_map(|step| output_stretch_config(step))
+        .collect();
+    let mut stretches: HashMap<Uuid, Result<_, output_stretch::NotDrawn>> = stretch_steps
+        .iter()
+        .map(|step| step.id)
+        .zip(chains.resolve(&configs, picture_samples))
+        .collect();
+    // What each layer marked as a step does, and its name for messages.
+    let mut steps: Vec<FinishKind> = Vec::new();
+    let mut step_names: Vec<String> = Vec::new();
+    // The steps in the stack so far, for Texture, which measures the
+    // picture's noise as the steps before it leave it.
+    let mut stacked: Vec<FinishStep> = Vec::new();
     for entry in entries {
         let name = |layer: Option<&LayerRecord>| {
             layer.map_or("a layer".to_string(), |layer| layer.name.clone())
@@ -972,6 +1301,7 @@ pub(super) fn scene(
             let left_out = match entry {
                 StackEntry::Band { layer, .. }
                 | StackEntry::Adjustment { layer }
+                | StackEntry::Made { layer, .. }
                 | StackEntry::GroupEnd { group: layer } => name(find(&layer)),
                 StackEntry::GroupBegin { .. } => continue,
             };
@@ -1026,6 +1356,45 @@ pub(super) fn scene(
                 }
                 continue;
             }
+            StackEntry::Made { layer, .. } => {
+                // The stars a star removal took out, screened back.
+                let Some(made) = find(&layer) else { continue };
+                let LayerSource::Step { step, .. } = &made.source else {
+                    continue;
+                };
+                if !made.visible || tool_plane(bands, *step, 0, true).is_none() {
+                    continue;
+                }
+                let Ok(mask) = mask_for(mask_strokes(&made.mask)) else {
+                    omitted.push(made.name.clone());
+                    continue;
+                };
+                if layers.len() + 5 > MAX_LAYERS {
+                    omitted.push(made.name.clone());
+                    continue;
+                }
+                layers.push(Layer {
+                    mark: Mark::GroupBegin,
+                    ..plain_layer()
+                });
+                push_tool_image(
+                    &mut layers,
+                    &mut layer_bands,
+                    &mut layer_stretches,
+                    bands,
+                    *step,
+                    true,
+                );
+                layers.push(Layer {
+                    mark: Mark::GroupEnd,
+                    opacity: made.opacity,
+                    blend: blend_of(made.blend),
+                    mask,
+                    ..plain_layer()
+                });
+                masked.push((layers.len() - 1, made));
+                continue;
+            }
             StackEntry::Adjustment { layer } => (None, find(&layer), None),
             StackEntry::Band {
                 layer,
@@ -1036,12 +1405,56 @@ pub(super) fn scene(
         let Some(channel) = at.and_then(|at| planned.channels.get(at)) else {
             // An adjustment of the layers beneath it.
             let Some(layer) = layer else { continue };
-            let LayerSource::Adjustment {
-                operation,
-                settings,
-            } = &layer.source
-            else {
-                continue;
+            let (operation, settings) = match &layer.source {
+                LayerSource::Adjustment {
+                    operation,
+                    settings,
+                } => (operation, settings),
+                LayerSource::Adjust {
+                    step:
+                        StepRecord {
+                            kind:
+                                StepKind::Operation {
+                                    operation,
+                                    settings,
+                                    ..
+                                },
+                            ..
+                        },
+                } if adjustment_kind(operation).is_some() => (operation, settings),
+                LayerSource::Adjust { step } => {
+                    if layer.visible {
+                        let mut parts = StackParts {
+                            layers: &mut layers,
+                            layer_bands: &mut layer_bands,
+                            layer_stretches: &mut layer_stretches,
+                            heals: &mut heals,
+                            steps: &mut steps,
+                            step_names: &mut step_names,
+                            stacked: &mut stacked,
+                        };
+                        let pushed = push_step_layer(
+                            &mut parts,
+                            &mut omitted,
+                            &mut mask_for,
+                            &mut stretches,
+                            StepContext {
+                                bands,
+                                picture_samples,
+                                chains,
+                            },
+                            layer,
+                            step,
+                        );
+                        match pushed {
+                            Pushed::Layer => masked.push((layers.len() - 1, layer)),
+                            Pushed::Replaced => masked.clear(),
+                            Pushed::Nothing => {}
+                        }
+                    }
+                    continue;
+                }
+                _ => continue,
             };
             let Some(kind) = adjustment_kind(operation) else {
                 continue;
@@ -1311,18 +1724,6 @@ pub(super) fn scene(
     // A Finish tool step whose result the canvas has: the picture after it
     // is that result, which holds every layer and Finish step before it,
     // with the stars a star removal took out screened back over it.
-    let finish_steps = &document.stage(StageKind::Finish).steps;
-    let mut baked_finish: Option<usize> = None;
-    for (at, step) in finish_steps.iter().enumerate() {
-        if !crate::studio_model::is_tool_step(step) || !planned.finish.contains(&step.id) {
-            continue;
-        }
-        if tool_plane(bands, step.id, 0, false).is_some() {
-            baked_finish = Some(at);
-        } else {
-            omitted.push(not_run(step, "the picture"));
-        }
-    }
     if let Some(at) = baked_finish {
         let step = &finish_steps[at];
         layers.clear();
@@ -1330,87 +1731,41 @@ pub(super) fn scene(
         layer_stretches.clear();
         heals.clear();
         masked.clear();
-        let primaries = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
-        let mut add_image = |stars: bool, layers: &mut Vec<Layer>| {
-            let channels: Vec<usize> = (0..3)
-                .map_while(|channel| tool_plane(bands, step.id, channel, stars))
-                .collect();
-            for (index, channel) in channels.iter().enumerate() {
-                let color = if channels.len() == 3 {
-                    primaries[index]
-                } else {
-                    [1.0; 3]
-                };
-                layers.push(Layer {
-                    band: *channel,
-                    color,
-                    working: true,
-                    blend: match (stars, layers.is_empty()) {
-                        (true, _) => Blend::Screen,
-                        (false, true) => Blend::Normal,
-                        (false, false) => Blend::Add,
-                    },
-                    ..plain_layer()
-                });
-                layer_bands.push(DISPLAY_ROW);
-                layer_stretches.push(Vec::new());
-            }
-        };
-        add_image(false, &mut layers);
+        steps.clear();
+        step_names.clear();
+        push_tool_image(
+            &mut layers,
+            &mut layer_bands,
+            &mut layer_stretches,
+            bands,
+            step.id,
+            false,
+        );
         if super::late_tools::stars_shown(step) {
-            add_image(true, &mut layers);
+            push_tool_image(
+                &mut layers,
+                &mut layer_bands,
+                &mut layer_stretches,
+                bands,
+                step.id,
+                true,
+            );
         }
     }
-    // The output stretches drawn, resolved in order: each from what the
-    // ones before it left.
-    let drawn_finish: Vec<&StepRecord> = finish_steps
-        .iter()
-        .enumerate()
-        .filter(|(at, _)| baked_finish.is_none_or(|baked| *at > baked))
-        .map(|(_, step)| step)
-        .filter(|step| {
-            !crate::studio_model::is_tool_step(step)
-                && planned.finish.contains(&step.id)
-                && is_drawn(StageKind::Finish, step, bands)
-        })
-        .collect();
-    let configs: Vec<_> = drawn_finish
-        .iter()
-        .filter_map(|step| match &step.kind {
-            StepKind::Operation {
-                operation,
-                settings,
-                ..
-            } if operation == flow_operations::OUTPUT_STRETCH => {
-                output_stretch::config_of(settings)
-            }
-            _ => None,
-        })
-        .collect();
-    let mut resolved = chains.resolve(&configs, picture_samples).into_iter();
     let mut finish = Vec::new();
     for step in drawn_finish {
-        let stretch = if step.kind.name() == flow_operations::OUTPUT_STRETCH {
-            match resolved.next() {
-                Some(Ok(stretch)) => Some(stretch),
-                Some(Err(why)) => {
-                    omitted.push(match why {
-                        output_stretch::NotDrawn::NeedsSamples => {
-                            "an output stretch, until the picture has been sampled".to_string()
-                        }
-                        output_stretch::NotDrawn::Refused(reason) => {
-                            format!("an output stretch Seiza could not resolve: {reason}")
-                        }
-                        output_stretch::NotDrawn::NeedsImage => {
-                            "an output stretch that needs the engine".to_string()
-                        }
-                    });
-                    continue;
-                }
-                None => continue,
-            }
-        } else {
-            None
+        let Some(kind) = finish_kind(
+            step,
+            &mut stretches,
+            StepContext {
+                bands,
+                picture_samples,
+                chains,
+            },
+            &finish,
+            &mut omitted,
+        ) else {
+            continue;
         };
         if finish.len() == MAX_FINISH_STEPS {
             omitted.push(step.kind.name().to_string());
@@ -1427,34 +1782,6 @@ pub(super) fn scene(
         let Ok(mask) = mask_for(step_strokes(step)) else {
             omitted.push(step.kind.name().to_string());
             continue;
-        };
-        let kind = match &step.kind {
-            _ if let Some(plan) = stretch => FinishKind::Stretch(plan),
-            StepKind::Operation {
-                operation,
-                settings,
-                ..
-            } if operation == tone_step::OPERATION => {
-                let mut tone = tone_step::from_settings(settings);
-                // Texture leaves the picture's noise alone: measured from
-                // the samples, as the steps before this one leave them.
-                if tone.texture != 0.0
-                    && let Some((id, samples)) = picture_samples
-                {
-                    tone.noise = chains.noise(id, &finish, || {
-                        crate::canvas::picture_noise(&finish, samples, super::PICTURE_PATCHES)
-                    });
-                }
-                FinishKind::Tone(tone)
-            }
-            StepKind::Heal { offset, shift, .. } => FinishKind::Heal {
-                offset: *offset,
-                shift: std::array::from_fn(|channel| shift.get(channel).copied().unwrap_or(0.0)),
-            },
-            StepKind::Operation { operation, .. } if operation == "Saturation" => {
-                FinishKind::Saturation(amount(step))
-            }
-            StepKind::Operation { .. } => FinishKind::Curves(amount(step).clamp(-1.0, 1.0)),
         };
         // A heal with no stroke heals nothing.
         if matches!(kind, FinishKind::Heal { .. }) && mask.is_none() {
@@ -1595,12 +1922,45 @@ pub(super) fn scene(
             inverted,
         });
     }
+    // The steps on top of the stack are drawn as Finish steps, which the
+    // GPU draws with the pixels around each one: a heal, or Tone's local
+    // contrast.
+    let mut on_top = Vec::new();
+    while let Some(last) = layers.last()
+        && let Mark::Step(index) = last.mark
+        && last.computed.is_none()
+        && last.clip.is_none()
+        && on_top.len() + finish.len() < MAX_FINISH_STEPS
+    {
+        on_top.push(FinishStep {
+            kind: steps[index].clone(),
+            opacity: last.opacity,
+            mask: last.mask,
+        });
+        layers.pop();
+    }
+    on_top.reverse();
+    on_top.append(&mut finish);
+    let finish = on_top;
+    // A heal beneath other layers is not drawn yet.
+    for layer in &mut layers {
+        if let Mark::Step(index) = layer.mark
+            && matches!(steps[index], FinishKind::Heal { .. })
+        {
+            layer.opacity = 0.0;
+            omitted.push(format!(
+                "{}, a heal beneath other layers, which the canvas draws only on top",
+                step_names[index]
+            ));
+        }
+    }
     let scene = Scene {
         computed,
         layers,
         layer_bands,
         layer_stretches,
         finish,
+        steps,
         heals,
         masks,
         omitted,
@@ -1624,8 +1984,25 @@ impl Studio {
             Row::InputStep { step, .. } | Row::LayerStep { step, .. } | Row::Finish(step) => {
                 Some(*step)
             }
+            // An adjustment layer's step.
+            Row::Layer(layer) => self
+                .layer(*layer)?
+                .source
+                .adjustment_step()
+                .map(|step| step.id),
             _ => None,
         }
+    }
+
+    /// The selected adjustment layer that changes the picture as a Finish
+    /// step does, with its step.
+    pub(super) fn selected_step_layer(&self) -> Option<(&LayerRecord, &StepRecord)> {
+        let Row::Layer(id) = &self.selected else {
+            return None;
+        };
+        let layer = self.layer(*id)?;
+        let step = layer.source.adjustment_step()?;
+        is_step_layer(step).then_some((layer, step))
     }
 
     pub(super) fn layer(&self, id: Uuid) -> Option<&LayerRecord> {
@@ -1808,16 +2185,19 @@ impl Studio {
     /// them. `None` when the selected row is not a Finish step with a mask,
     /// or the samples are not of the current patches.
     fn masked_area(&self, samples: usize) -> Option<Vec<f32>> {
-        let Row::Finish(id) = &self.selected else {
-            return None;
-        };
         // Samples of an earlier sampling stand in while new ones are read;
         // they may be of another crop, so their patches are not these.
         if self.picture_samples.as_ref().map(|(id, _)| *id) != self.picture_wanted {
             return None;
         }
-        let (_, step) = self.document.step(*id)?;
-        let strokes = step_strokes(step);
+        let strokes = match (&self.selected, self.selected_step_layer()) {
+            (_, Some((layer, step))) => match step.kind {
+                StepKind::Heal { .. } => step_strokes(step),
+                StepKind::Operation { .. } => mask_strokes(&layer.mask),
+            },
+            (Row::Finish(id), None) => step_strokes(self.document.step(*id)?.1),
+            _ => return None,
+        };
         if strokes.is_empty() {
             return None;
         }
@@ -1845,9 +2225,10 @@ impl Studio {
     }
 
     /// Whether the inspector shows the histogram of the final picture: for
-    /// the Final picture and for a Finish step.
+    /// the Final picture, a Finish step, and an adjustment layer that
+    /// changes the picture as a Finish step does.
     pub(super) fn histogram_wanted(&self) -> bool {
-        matches!(self.selected, Row::Final | Row::Finish(_))
+        matches!(self.selected, Row::Final | Row::Finish(_)) || self.selected_step_layer().is_some()
     }
 
     /// The histogram of the final picture's samples, once the GPU has read
@@ -2059,11 +2440,9 @@ impl Studio {
                         (shows_pixels && self.document.insert_layer_step(layer, step).is_ok())
                             .then_some(Row::LayerStep { layer, step: id })
                     }
-                    Row::Combined | Row::Finish(_) | Row::Final | Row::Mask(_) => self
-                        .document
-                        .insert_step(StageKind::Finish, usize::MAX, step)
-                        .ok()
-                        .map(|()| Row::Finish(id)),
+                    Row::Combined | Row::Finish(_) | Row::Final | Row::Mask(_) => {
+                        Some(Row::Layer(self.document.add_picture_step(step)))
+                    }
                 };
                 if let Some(row) = row {
                     self.selected = row;
@@ -2179,23 +2558,25 @@ impl Studio {
                 let Some(layer) = self.selected_layer() else {
                     return;
                 };
-                let id = layer.id;
-                let LayerSource::Adjustment {
-                    operation,
-                    settings,
-                } = &layer.source
+                let Some(StepRecord {
+                    id,
+                    kind:
+                        StepKind::Operation {
+                            operation,
+                            settings,
+                            ..
+                        },
+                    ..
+                }) = layer.source.adjustment_step()
                 else {
                     return;
                 };
+                let id = *id;
                 let Some((low, high)) = amount_range(operation) else {
                     return;
                 };
                 let changed = with_amount(operation, settings, low + (high - low) * position);
-                if let Some(layer) = self.document.layer_mut(id)
-                    && let LayerSource::Adjustment { settings, .. } = &mut layer.source
-                {
-                    *settings = changed;
-                }
+                self.document.set_step_settings(id, changed);
             }
             SliderId::Reach => {
                 // The slider covers reaches from a quarter to four, evenly
@@ -2390,7 +2771,7 @@ impl Studio {
             self.layer(*id)
                 .map_or("a layer that is gone".to_string(), |layer| {
                     match &layer.source {
-                        LayerSource::Adjustment { .. } => {
+                        LayerSource::Adjust { .. } | LayerSource::Adjustment { .. } => {
                             format!("the adjustment {}, of every layer beneath it", layer.name)
                         }
                         LayerSource::Group => format!("the group {}", layer.name),
@@ -2968,6 +3349,110 @@ mod tests {
             star_reduction(&document, &own),
             Some((0.25, vec!["red@stars".to_string()]))
         );
+    }
+
+    #[test]
+    fn a_picture_step_on_top_is_a_finish_step_and_beneath_a_layer_one() {
+        use super::{flow_document, scene, Bands};
+        use crate::canvas::Mark;
+        use crate::studio_model::{Place, StepKind, StepRecord, Stroke, StrokeMode};
+        use seiza_compose::picture::FinishKind;
+        let inputs = ["ha".to_string(), "oiii".to_string()];
+        let mut document = flow_document(&inputs);
+        // Only the input layers, with nothing on the picture.
+        let adjustments: Vec<_> = document
+            .layers()
+            .iter()
+            .filter(|layer| layer.source.is_adjustment())
+            .map(|layer| layer.id)
+            .collect();
+        for id in adjustments {
+            document.remove_layer(id);
+        }
+        let mut bands = Bands::default();
+        bands.names = inputs.to_vec();
+        bands.tile_band = vec![0, 1];
+        bands.steps = vec![Vec::new(), Vec::new()];
+        let draw = |document: &crate::studio_model::Document| {
+            scene(
+                document,
+                &bands,
+                &Place::Final.view(),
+                0,
+                None,
+                &mut crate::output_stretch::ResolvedChains::default(),
+                &[],
+            )
+            .0
+        };
+        let tone = StepRecord::new(StepKind::Operation {
+            operation: crate::tone_step::OPERATION.to_string(),
+            accepts: crate::image_steps::Accepts::Display,
+            settings: crate::tone_step::new_settings(),
+        });
+        let tone_layer = document.add_picture_step(tone);
+        let on_top = draw(&document);
+        assert!(
+            matches!(on_top.finish[..], [ref step] if matches!(step.kind, FinishKind::Tone(_)))
+        );
+        assert!(!on_top
+            .layers
+            .iter()
+            .any(|layer| matches!(layer.mark, Mark::Step(_))));
+
+        // Under a Curves layer, the Tone changes only the layers beneath it.
+        let curves = document.add_picture_step(super::operation(
+            "Curves",
+            crate::image_steps::Accepts::Display,
+        ));
+        let beneath = draw(&document);
+        assert!(beneath.finish.is_empty());
+        let marked: Vec<_> = beneath
+            .layers
+            .iter()
+            .filter_map(|layer| match layer.mark {
+                Mark::Step(index) => Some(&beneath.steps[index]),
+                _ => None,
+            })
+            .collect();
+        assert!(matches!(marked[..], [FinishKind::Tone(_)]));
+
+        // A heal on top is a Finish step; beneath another layer it is
+        // listed as not drawn, never drawn somewhere else.
+        let heal = StepRecord::new(StepKind::Heal {
+            stroke: Stroke {
+                points: vec![[10.0, 10.0]],
+                radius: 4.0,
+                hardness: 0.5,
+                mode: StrokeMode::Add,
+            },
+            offset: [8, 0],
+            shift: vec![0.0; 3],
+        });
+        let heal_layer = document.add_picture_step(heal);
+        let healed = draw(&document);
+        assert!(
+            matches!(healed.finish[..], [ref step] if matches!(step.kind, FinishKind::Heal { .. }))
+        );
+        let at = document
+            .layers()
+            .iter()
+            .position(|layer| layer.id == curves)
+            .unwrap();
+        document.place_layer(heal_layer, at, None);
+        let under = draw(&document);
+        assert!(under.finish.is_empty());
+        assert!(under
+            .omitted
+            .iter()
+            .any(|words| words.contains("a heal beneath other layers")));
+        // The hidden layer's step is drawn nowhere.
+        document.layer_mut(tone_layer).unwrap().visible = false;
+        let hidden = draw(&document);
+        assert!(!hidden
+            .steps
+            .iter()
+            .any(|kind| matches!(kind, FinishKind::Tone(_))));
     }
 
     #[test]

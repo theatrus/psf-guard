@@ -90,7 +90,7 @@ fn tools() -> Value {
         },
         {
             "name": "studio_state",
-            "description": "What a Studio window shows: the rows to select (inputs with their steps, layers top first, Finish steps) with their ids and settings, the selection, each pane's label (the place wanted and the place drawn), the status line, the inputs whose tools changed since the store was prepared, the histogram's clipping, and what it is still busy with.",
+            "description": "What a Studio window shows: the rows to select (inputs with their steps, layers top first with adjustment layers among them, Finish steps of an older document) with their ids and settings, the selection, each pane's label (the place wanted and the place drawn), the status line, the inputs whose tools changed since the store was prepared, the histogram's clipping, and what it is still busy with.",
             "inputSchema": object(json!({
                 "instance": instance,
                 "settings": { "type": "boolean", "description": "Include every step's settings (default true)." }
@@ -157,7 +157,7 @@ fn tools() -> Value {
         },
         {
             "name": "studio_add_step",
-            "description": "Adds a step at the end of a stage, as the inspector's Add step does. `stage` is sources, linear, stretch, combine, finish or export; `operation` the step's name, such as \"Tone and color\", \"Curves\" or \"Stretch\"; `band` the input it is for, when it is one input's; `layer` the layer's id for a layer's own step (stage combine); `settings` its settings (for a tool, {\"provider\": \"nxt\", \"parameters\": {}}: a tool step in the combine or finish stage runs on that layer or on the picture when the tools run); `mask` a mask as the document stores it, such as {\"kind\": \"range\", \"low\": 0.5, \"high\": 1.0, \"feather\": 0.1}. Returns the step's id.",
+            "description": "Adds a step at the end of a stage, as the inspector's Add step does. `stage` is sources, linear, stretch, combine, finish or export; `operation` the step's name, such as \"Tone and color\", \"Curves\" or \"Stretch\"; `band` the input it is for, when it is one input's; `layer` the layer's id for a layer's own step (stage combine); `settings` its settings (for a tool, {\"provider\": \"nxt\", \"parameters\": {}}: a tool step runs on that layer, or on the layers beneath it, when the tools run); `mask` a mask as the document stores it, such as {\"kind\": \"range\", \"low\": 0.5, \"high\": 1.0, \"feather\": 0.1}. A finish step is added as an adjustment layer on top of every layer, which can then be moved anywhere in the stack; a star removal also adds a layer of the stars it took out. Returns the step's id and, for a finish step, its layer's id.",
             "inputSchema": object(json!({
                 "instance": instance,
                 "stage": { "type": "string" },

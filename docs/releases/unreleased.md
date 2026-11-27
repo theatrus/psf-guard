@@ -82,7 +82,14 @@
   changes. A sharpening step's **Second pass, shifted** runs
   BlurXTerminator again on the image moved by half a tile and averages the
   two, which takes most of the faint grid of tile seams out of a dark sky.
-  A tool can also run on one layer (**Run a tool on this**) or on the
-  picture (**Finish › Add tool**), on the image as the steps before it
-  leave it; the stars a star removal takes out there are listed under the
-  step and screened back right after it, with a switch to leave them out.
+  A tool can also run on one layer (**Run a tool on this**), on the image
+  as that layer's steps before it leave it.
+- In PSF Studio the steps on the whole picture are adjustment layers: an
+  output stretch, Tone and color, Curves, a heal or a tool. **Add step**
+  and **Add tool** put one on top of every layer, and you can drag it
+  anywhere in the stack to change only the layers beneath it. Its
+  visibility, opacity and mask work as for any layer. A star removal adds
+  a layer above it, “Stars it took out”, screened over the picture, which
+  you can hide, fade or move. Documents with Finish steps open with those
+  steps as layers on top, in the same order, so the picture is unchanged.
+  A heal beneath other layers is not drawn yet.

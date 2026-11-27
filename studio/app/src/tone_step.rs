@@ -57,11 +57,9 @@ pub fn new_settings() -> serde_json::Value {
 /// when HDR was a switch of the step becomes an HDR picture with that
 /// step's headroom, and its steps lose the switch.
 pub fn adopt_headroom(document: &mut crate::studio_model::Document) {
-    use crate::studio_model::{StageKind, StepKind};
+    use crate::studio_model::StepKind;
     let steps: Vec<(uuid::Uuid, serde_json::Value)> = document
-        .stage(StageKind::Finish)
-        .steps
-        .iter()
+        .picture_steps()
         .filter_map(|step| match &step.kind {
             StepKind::Operation {
                 operation,

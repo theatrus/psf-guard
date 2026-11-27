@@ -67,7 +67,7 @@ pub fn processing_from_document(document: &Document) -> Result<StackColorProcess
 mod tests {
     use super::*;
     use crate::processing_setups::DEFAULT_COLOR_SETTINGS;
-    use crate::studio::{flow_operations as op, StageKind};
+    use crate::studio::flow_operations as op;
     use serde_json::{json, Value};
 
     const SHO: [StackColorRole; 3] = [
@@ -124,7 +124,14 @@ mod tests {
             .filter(|step| step.kind.name() == op::OTHER)
             .count();
         assert_eq!(other, 0);
-        assert_eq!(document.stage(StageKind::Finish).steps.len(), 1);
+        assert_eq!(
+            document
+                .layers()
+                .iter()
+                .filter(|layer| layer.source.is_adjustment())
+                .count(),
+            1
+        );
         let back = processing_from_document(&document).unwrap();
         assert_eq!(as_json(&back), as_json(&processing));
     }

@@ -52,6 +52,9 @@ pub enum Mark {
     /// A layer of one color everywhere, with no band: what a mask is drawn
     /// with, so the mask itself shows.
     Solid,
+    /// A Finish step that changes the layers beneath it, as an index into
+    /// the scene's steps.
+    Step(usize),
 }
 
 /// What an adjustment layer does. Its amount is the layer's.
@@ -139,6 +142,8 @@ pub struct SceneParts<'a> {
     pub masks: &'a [Vec<Segment>],
     pub heals: &'a [LayerHeal],
     pub finish: &'a [FinishStep],
+    /// What the layers marked as steps do.
+    pub steps: &'a [picture::FinishKind],
 }
 
 /// The scene as a Seiza picture, with `stretches` as its stretches in
@@ -162,6 +167,11 @@ pub fn picture(parts: &SceneParts, stretches: &[Transfer]) -> Picture {
                 (Mark::Solid, _) => LayerKind::Solid {
                     color: working_color(layer.color),
                 },
+                // A step the list does not have changes nothing.
+                (Mark::Step(index), _) => parts.steps.get(index).map_or(
+                    LayerKind::Adjustment(SeizaAdjustment::Exposure(0.0)),
+                    |kind| LayerKind::Step(kind.clone()),
+                ),
                 (Mark::Layer, Some((kind, amount))) => LayerKind::Adjustment(match kind {
                     Adjustment::Exposure => SeizaAdjustment::Exposure(amount),
                     Adjustment::Curves => SeizaAdjustment::Curves(amount.clamp(-1.0, 1.0)),
@@ -406,6 +416,7 @@ mod tests {
             masks: &[],
             heals: &[],
             finish: &[],
+            steps: &[],
         };
         let picture = picture(&parts, &stretches);
         let LayerKind::Input { read, .. } = &picture.layers[0].kind else {

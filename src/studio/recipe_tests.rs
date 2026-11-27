@@ -61,9 +61,12 @@ fn a_recipe_makes_its_parts_and_keeps_adjustment_layers_above_them() {
     let mut document = document(&["ha", "oiii", "red", "green", "blue"]);
     let curves = LayerRecord::new(
         "Curves",
-        LayerSource::Adjustment {
-            operation: "Curves".to_string(),
-            settings: serde_json::json!({ "amount": 0.5 }),
+        LayerSource::Adjust {
+            step: StepRecord::new(StepKind::Operation {
+                operation: "Curves".to_string(),
+                accepts: crate::image_steps::Accepts::Display,
+                settings: serde_json::json!({ "amount": 0.5 }),
+            }),
         },
     );
     let curves_id = curves.id;

@@ -52,7 +52,7 @@ impl Studio {
         layers[..at]
             .iter()
             .rev()
-            .find(|other| !matches!(other.source, LayerSource::Adjustment { .. }))
+            .find(|other| !other.source.is_adjustment())
             .map(|other| other.id)
     }
 
@@ -62,13 +62,7 @@ impl Studio {
         let above = layer
             .and_then(|id| layers.iter().position(|other| other.id == id))
             .map_or(layers.len(), |at| at + 1);
-        let adjustment = LayerRecord::new(
-            name,
-            LayerSource::Adjustment {
-                operation: name.to_string(),
-                settings: serde_json::Value::Null,
-            },
-        );
+        let adjustment = crate::studio_model::adjustment_layer(operation(name, Accepts::Display));
         let id = adjustment.id;
         if self.document.insert_layer(above, adjustment).is_ok() {
             self.selected = Row::Layer(id);
@@ -95,7 +89,8 @@ impl Studio {
         self.menu(id, label, picks, cx)
     }
 
-    /// The menu that adds a step to the Finish stage.
+    /// The menus that add a step or a tool on top of every layer, as an
+    /// adjustment layer of its own.
     fn finish_menu(&self, cx: &mut Context<Self>) -> gpui::Div {
         let picks = FINISH_STEPS
             .iter()
@@ -114,33 +109,19 @@ impl Studio {
                     } else {
                         operation(name, accepts)
                     };
-                    let id = step.id;
-                    if this
-                        .document
-                        .insert_step(StageKind::Finish, usize::MAX, step)
-                        .is_ok()
-                    {
-                        this.selected = Row::Finish(id);
-                    }
+                    this.selected = Row::Layer(this.document.add_picture_step(step));
                 })
             })
             .collect();
         column()
             .child(Self::field(
-                "Finish",
+                "On top",
                 self.menu("add-finish", "Add step", picks, cx),
             ))
             .child(Self::field(
                 "",
                 self.tool_menu("add-finish-tool", "Add tool", cx, |this, step| {
-                    let id = step.id;
-                    if this
-                        .document
-                        .insert_step(StageKind::Finish, usize::MAX, step)
-                        .is_ok()
-                    {
-                        this.selected = Row::Finish(id);
-                    }
+                    this.selected = Row::Layer(this.document.add_picture_step(step));
                 }),
             ))
     }
@@ -1352,10 +1333,15 @@ impl Studio {
 
     fn inspect_adjustment_layer(&self, layer: &LayerRecord, cx: &mut Context<Self>) -> AnyElement {
         let id = layer.id;
-        let LayerSource::Adjustment {
-            operation,
-            settings,
-        } = &layer.source
+        let Some(StepRecord {
+            kind:
+                StepKind::Operation {
+                    operation,
+                    settings,
+                    ..
+                },
+            ..
+        }) = layer.source.adjustment_step()
         else {
             return div().into_any_element();
         };
@@ -1418,6 +1404,49 @@ impl Studio {
             .into_any_element()
     }
 
+    /// An adjustment layer that changes the layers beneath it as a Finish
+    /// step changes the picture: a stretch, Tone, a heal or a tool.
+    fn inspect_step_layer(&self, layer: &LayerRecord, cx: &mut Context<Self>) -> AnyElement {
+        let Some(step) = layer.source.adjustment_step() else {
+            return div().into_any_element();
+        };
+        let id = layer.id;
+        let tool = crate::studio_model::is_tool_step(step);
+        // The step applies while the layer is shown, at the layer's
+        // opacity: what a step's own switch and opacity do elsewhere.
+        let mut shown = step.clone();
+        shown.enabled = layer.visible;
+        shown.opacity = layer.opacity;
+        // The layer's mask has a block of its own.
+        shown.mask = None;
+        let heal = matches!(step.kind, StepKind::Heal { .. });
+        column()
+            .child(Self::title(
+                layer.name.clone(),
+                if tool {
+                    "A tool run on the picture as the layers beneath it make it. Its result covers them."
+                } else {
+                    "A step on the picture as the layers beneath it make it."
+                },
+            ))
+            .child(self.histogram_block())
+            .child(self.step_controls(StageKind::Finish, &shown, cx))
+            .when(tool, |pane| {
+                pane.child(self.late_tool_block(step, "the layers beneath it", cx))
+            })
+            .when(!heal, |pane| {
+                pane.child(self.mask_block(layer, cx))
+                    .child(self.shared_mask_block(layer, cx))
+            })
+            .child(Self::act("Remove", "layer-remove", false, cx, move |this| {
+                this.document.remove_layer(id);
+                this.selected = Row::Combined;
+            }))
+            .child(self.order_block(id, cx))
+            .child(self.finish_menu(cx))
+            .into_any_element()
+    }
+
     fn inspect_layer_step(&self, layer: Uuid, id: Uuid, cx: &mut Context<Self>) -> AnyElement {
         let (Some(owner), Some((stage, step))) = (self.layer(layer), self.document.step(id)) else {
             return Self::note("This edit is gone.").into_any_element();
@@ -1471,7 +1500,7 @@ impl Studio {
         column()
             .child(Self::title(
                 "Combined",
-                "Every layer, blended bottom to top, before the Finish steps.",
+                "Every layer, blended bottom to top.",
             ))
             .child(self.palette_block(None, cx))
             .child(self.section("tones", "Tones", false, cx, |this, cx| this.tones_block(cx)))
@@ -1985,7 +2014,10 @@ impl Studio {
             Row::Input(channel) => self.inspect_input(&channel, cx),
             Row::InputStep { channel, step } => self.inspect_input_step(&channel, step, cx),
             Row::Layer(id) => match self.layer(id) {
-                Some(layer) if matches!(layer.source, LayerSource::Adjustment { .. }) => {
+                Some(layer) if self.selected_step_layer().is_some() => {
+                    self.inspect_step_layer(layer, cx)
+                }
+                Some(layer) if layer.source.is_adjustment() => {
                     self.inspect_adjustment_layer(layer, cx)
                 }
                 Some(layer) if layer.source == LayerSource::Group => self.inspect_group(layer, cx),

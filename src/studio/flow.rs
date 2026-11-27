@@ -110,6 +110,26 @@ pub const SHIFTED_PASS_KEY: &str = "shifted_pass";
 /// of their own instead.
 pub const STARS_SHOWN_KEY: &str = "stars_shown";
 
+/// A layer of the stars the star removal step `step` takes out, screened
+/// over what is beneath it, as a stars layer of an input is.
+pub fn stars_layer(step: uuid::Uuid) -> LayerRecord {
+    let mut layer = LayerRecord::new(
+        "Stars it took out",
+        LayerSource::Step {
+            step,
+            frozen: false,
+        },
+    );
+    layer.blend = super::BlendMode::Screen;
+    layer
+}
+
+/// An adjustment layer that does what `step` does.
+pub fn adjustment_layer(step: StepRecord) -> LayerRecord {
+    let name = step.kind.name().to_string();
+    LayerRecord::new(&name, LayerSource::Adjust { step })
+}
+
 /// Whether a step runs one processing tool.
 pub fn is_tool_step(step: &StepRecord) -> bool {
     op::TOOLS.contains(&step.kind.name())
@@ -593,19 +613,13 @@ pub fn document_from_color_setup(
         )?;
     }
 
-    // The Finish stage: stretches of the composed image.
-    match settings.get("output_stretches") {
-        None | Some(Value::Null) => {}
-        Some(Value::Array(list)) => {
-            for stretch in list {
-                add(
-                    StageKind::Finish,
-                    operation(op::OUTPUT_STRETCH, Accepts::Display, stretch),
-                )?;
-            }
-        }
+    // Stretches of the composed image, added as adjustment layers on top
+    // of the stack once its layers are there.
+    let output_stretches: Vec<Value> = match settings.get("output_stretches") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::Array(list)) => list.clone(),
         Some(_) => return Err(refuse("output_stretches is a list")),
-    }
+    };
 
     // Settings from a newer PSF Guard are kept, so opening and saving a
     // document here does not drop them.
@@ -637,6 +651,10 @@ pub fn document_from_color_setup(
     let names: Vec<String> = channels.iter().map(|channel| channel.to_string()).collect();
     if let Some(palette) = super::default_palette(&names) {
         document.apply_palette(palette);
+    }
+    for stretch in &output_stretches {
+        let layer = adjustment_layer(operation(op::OUTPUT_STRETCH, Accepts::Display, stretch));
+        document.insert_layer(usize::MAX, layer)?;
     }
     Ok(document)
 }
@@ -755,6 +773,20 @@ pub fn color_setup_from_document(document: &Document) -> Result<Value, StudioErr
                 }
             }
             _ => {}
+        }
+    }
+
+    // The output stretches: the shown output stretch layers of the stack,
+    // bottom first, as PSF Guard runs them on the composed image.
+    for layer in document.layers() {
+        if let (true, None, Some(step)) =
+            (layer.visible, layer.group, layer.source.adjustment_step())
+            && step.kind.name() == op::OUTPUT_STRETCH
+            && let StepKind::Operation {
+                settings: value, ..
+            } = &step.kind
+        {
+            output_stretches.push(value.clone());
         }
     }
 

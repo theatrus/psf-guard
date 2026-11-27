@@ -270,6 +270,7 @@ impl Place {
     /// A short label for the pane: what it shows, up to where, and whether
     /// the stretch is the document's or a preview.
     pub fn label(&self, document: &Document) -> String {
+        let finish = &document.stage(StageKind::Finish).steps;
         let step_name = |id: &Uuid| {
             document
                 .step(*id)
@@ -328,6 +329,9 @@ impl Place {
                     .mask(*mask)
                     .map_or("a mask that is gone", |mask| mask.name.as_str())
             ),
+            // Steps on the picture are layers; a document from before them
+            // may still have Finish steps.
+            Place::Combined if finish.is_empty() => "Combined".to_string(),
             Place::Combined => "Combined · before Finish".to_string(),
             Place::Finish(step) => format!("Combined · after {}", step_name(step)),
             Place::Final => "Final picture".to_string(),

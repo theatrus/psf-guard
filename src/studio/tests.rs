@@ -485,12 +485,28 @@ fn a_document_has_every_stage_in_order_and_survives_a_round_trip() {
         "Heal"
     );
 
-    let loaded = Document::from_json(&document.to_json()).unwrap();
-    assert_eq!(loaded, document);
-
     let heal = document.stage(StageKind::Finish).steps[0].id;
+    // Opened again, the Finish steps are adjustment layers on top of the
+    // stack, in order, the heal lowest; opened once more, nothing changes.
+    let loaded = Document::from_json(&document.to_json()).unwrap();
+    assert!(loaded.stage(StageKind::Finish).steps.is_empty());
+    let names: Vec<&str> = loaded
+        .layers()
+        .iter()
+        .map(|layer| layer.name.as_str())
+        .collect();
+    assert_eq!(names, ["Heal", "Curves"]);
+    assert!(matches!(
+        loaded.layers()[1].mask,
+        Some(MaskRecord::Painted(_))
+    ));
+    assert_eq!(Document::from_json(&loaded.to_json()).unwrap(), loaded);
+    // An adjustment layer's step is found as any step, and goes with its
+    // layer.
+    let mut document = loaded;
+    assert!(document.step(heal).is_some());
     assert!(document.remove_step(heal).is_some());
-    assert_eq!(document.stage(StageKind::Finish).steps.len(), 1);
+    assert_eq!(document.layers().len(), 1);
     assert!(document.remove_step(heal).is_none());
 }
 

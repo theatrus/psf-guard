@@ -367,6 +367,9 @@ pub struct Scene {
     /// The stretches, in the same order. None is the view stretch.
     layer_stretches: Vec<Vec<seiza_stretch::StretchModel>>,
     finish: Vec<FinishStep>,
+    /// What each layer marked as a step does: a Finish step that changes
+    /// only the layers beneath it.
+    steps: Vec<seiza_compose::picture::FinishKind>,
     /// Heals of single layers and inputs.
     heals: Vec<LayerHeal>,
     /// The masks computed from inputs that the layers refer to.
@@ -458,6 +461,7 @@ impl Scene {
                     masks: &self.masks,
                     heals: &self.heals,
                     finish: &self.finish,
+                    steps: &self.steps,
                 },
                 &self.transfers(nudges),
             )

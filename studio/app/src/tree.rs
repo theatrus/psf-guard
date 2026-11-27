@@ -231,16 +231,21 @@ impl Studio {
             return;
         }
         let source = |studio: &Self, id: Uuid| studio.layer(id).map(|layer| layer.source.clone());
-        let is_adjustment = matches!(source(self, dragged), Some(LayerSource::Adjustment { .. }));
+        let is_adjustment = source(self, dragged).is_some_and(|source| source.is_adjustment());
         let target_source = source(self, target);
-        let onto_adjustment = matches!(target_source, Some(LayerSource::Adjustment { .. }));
-        if is_adjustment && !onto_adjustment {
-            if let Ok(step) = self.document.attach_adjustment(dragged, target) {
-                self.selected = Row::LayerStep {
-                    layer: target,
-                    step,
-                };
-            }
+        let onto_adjustment = target_source
+            .as_ref()
+            .is_some_and(LayerSource::is_adjustment);
+        // An adjustment a layer can have as its own becomes that layer's;
+        // any other moves like a layer.
+        if is_adjustment
+            && !onto_adjustment
+            && let Ok(step) = self.document.attach_adjustment(dragged, target)
+        {
+            self.selected = Row::LayerStep {
+                layer: target,
+                step,
+            };
             return;
         }
         let layers = self.document.layers();
@@ -274,7 +279,7 @@ impl Studio {
     fn drop_step_on(&mut self, step: Uuid, target: Uuid) {
         let takes_edits = self
             .layer(target)
-            .is_some_and(|layer| !matches!(layer.source, LayerSource::Adjustment { .. }));
+            .is_some_and(|layer| !layer.source.is_adjustment());
         if !takes_edits || self.document.layer_of_step(step) == Some(target) {
             return;
         }
@@ -352,13 +357,13 @@ impl Studio {
             .iter()
             .rev()
             .filter(|other| other.group == layer.group)
-            .find(|other| !other.clipped && !matches!(other.source, LayerSource::Adjustment { .. }))
+            .find(|other| !other.clipped && !other.source.is_adjustment())
     }
 
     fn layer_row(&self, index: usize, layer: &LayerRecord, cx: &mut Context<Self>) -> AnyElement {
         let id = layer.id;
         let visible = layer.visible;
-        let is_adjustment = matches!(layer.source, LayerSource::Adjustment { .. });
+        let is_adjustment = layer.source.is_adjustment();
         let is_group = layer.source == LayerSource::Group;
         let in_group = layer.group.is_some();
         let mut words = Vec::new();
@@ -671,10 +676,20 @@ impl Studio {
             .children(self.mask_rows(cx))
             .child(
                 self.tree_row("combined", Row::Combined, 0.0, cx)
-                    .child(Self::named("Combined", "every layer, before Finish")),
+                    .child(Self::named(
+                        "Combined",
+                        if finish.is_empty() {
+                            "every layer"
+                        } else {
+                            "every layer, before Finish"
+                        },
+                    )),
             )
-            .child(Self::heading("Finish"))
-            .children(finish)
+            // Steps on the picture are adjustment layers; a document from
+            // before them may still have Finish steps.
+            .when(!finish.is_empty(), |tree| {
+                tree.child(Self::heading("Finish")).children(finish)
+            })
             .child(
                 self.tree_row("final", Row::Final, 0.0, cx)
                     .child(Self::named("Final picture", "every step")),

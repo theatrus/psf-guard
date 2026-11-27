@@ -401,9 +401,16 @@ pub enum LayerSource {
         /// A layer that is not frozen follows later changes to that step.
         frozen: bool,
     },
-    /// No pixels of its own: an adjustment of the layers beneath it, such
-    /// as exposure or curves. The layer's mask and opacity limit where and
-    /// how strongly it applies.
+    /// No pixels of its own: a change to the layers beneath it, in its group
+    /// or in the whole stack. Its step holds what it does and its settings:
+    /// exposure, curves or saturation, an output stretch, Tone and color, a
+    /// heal, or a processing tool that runs on the picture beneath it. The
+    /// layer's visibility, opacity and mask say where and how strongly it
+    /// applies, so a step's own are not used. What the Finish stage held is
+    /// such layers at the top of the stack.
+    Adjust { step: StepRecord },
+    /// How documents written before [`Self::Adjust`] kept an adjustment.
+    /// Opening one makes it an [`Self::Adjust`] layer.
     Adjustment {
         /// The adjustment's name, as a person reads it.
         operation: String,
@@ -423,6 +430,39 @@ impl LayerSource {
     pub fn shows_pixels(&self) -> bool {
         matches!(self, LayerSource::Band { .. } | LayerSource::Step { .. })
     }
+
+    /// Whether the layer adjusts what is beneath it.
+    pub fn is_adjustment(&self) -> bool {
+        matches!(
+            self,
+            LayerSource::Adjust { .. } | LayerSource::Adjustment { .. }
+        )
+    }
+
+    /// An adjustment layer's step.
+    pub fn adjustment_step(&self) -> Option<&StepRecord> {
+        match self {
+            LayerSource::Adjust { step } => Some(step),
+            _ => None,
+        }
+    }
+
+    fn adjustment_step_mut(&mut self) -> Option<&mut StepRecord> {
+        match self {
+            LayerSource::Adjust { step } => Some(step),
+            _ => None,
+        }
+    }
+}
+
+/// An id made from `from`, the same each time a document is opened: for a
+/// layer made from a step, or a step made from a layer, as documents are
+/// brought up to date.
+fn derived_id(from: Uuid, salt: u8) -> Uuid {
+    let mut bytes = *from.as_bytes();
+    bytes[13] ^= salt;
+    bytes[14] ^= 0x5a;
+    Uuid::from_bytes(bytes)
 }
 
 /// One layer of the Combine stage: a source with its own color, mask and
@@ -1091,6 +1131,12 @@ impl Document {
                 .steps
                 .iter()
                 .chain(stage.layers.iter().flat_map(|layer| &layer.steps))
+                .chain(
+                    stage
+                        .layers
+                        .iter()
+                        .filter_map(|layer| layer.source.adjustment_step()),
+                )
                 .find(|step| step.id == id)?;
             Some((stage.kind, step))
         })
@@ -1102,10 +1148,52 @@ impl Document {
             let step = stage
                 .steps
                 .iter_mut()
-                .chain(stage.layers.iter_mut().flat_map(|layer| &mut layer.steps))
+                .chain(stage.layers.iter_mut().flat_map(|layer| {
+                    let LayerRecord { steps, source, .. } = layer;
+                    steps.iter_mut().chain(source.adjustment_step_mut())
+                }))
                 .find(|step| step.id == id)?;
             Some((kind, step))
         })
+    }
+
+    /// The adjustment layer whose step `step` is.
+    pub fn layer_of_adjustment(&self, step: Uuid) -> Option<Uuid> {
+        self.layers()
+            .iter()
+            .find(|layer| {
+                layer
+                    .source
+                    .adjustment_step()
+                    .is_some_and(|own| own.id == step)
+            })
+            .map(|layer| layer.id)
+    }
+
+    /// Adds `step` on top of every layer, as an adjustment layer of its
+    /// own whose mask is the step's. A star removal also gets a layer of
+    /// the stars it took out, above it. Returns the adjustment layer's id.
+    pub fn add_picture_step(&mut self, mut step: StepRecord) -> Uuid {
+        let stars = (step.kind.name() == super::flow::flow_operations::STAR_REMOVAL)
+            .then(|| super::flow::stars_layer(step.id));
+        let mask = step.mask.take();
+        let mut layer = super::flow::adjustment_layer(step);
+        layer.mask = mask;
+        let id = layer.id;
+        let layers = &mut self.stages[StageKind::Combine as usize].layers;
+        layers.push(layer);
+        layers.extend(stars);
+        id
+    }
+
+    /// The steps that change every layer beneath them, in the order they
+    /// apply: each adjustment layer's, bottom layer first, then the Finish
+    /// stage's.
+    pub fn picture_steps(&self) -> impl Iterator<Item = &StepRecord> {
+        self.layers()
+            .iter()
+            .filter_map(|layer| layer.source.adjustment_step())
+            .chain(self.stage(StageKind::Finish).steps.iter())
     }
 
     /// The layer a step belongs to, when it is one layer's own step.
@@ -1130,28 +1218,42 @@ impl Document {
             .iter()
             .find(|layer| layer.id == to)
             .ok_or_else(|| refuse("the layer is not in the document"))?;
-        if matches!(target.source, LayerSource::Adjustment { .. }) {
+        if target.source.is_adjustment() {
             return Err(refuse("an adjustment has no pixels of its own to adjust"));
         }
-        let is_adjustment = self.layers().iter().any(|layer| {
-            layer.id == adjustment && matches!(layer.source, LayerSource::Adjustment { .. })
+        // A layer's own edits are those that change one pixel at a time and
+        // processing tools; a step that reads the whole picture beneath it,
+        // such as an output stretch, stays a layer of the stack.
+        let own_kind = |step: &StepRecord| {
+            ["Exposure", "Curves", "Saturation"].contains(&step.kind.name())
+                || super::flow::is_tool_step(step)
+        };
+        // A layer kept the older way is brought up to date first.
+        if let Some(layer) = self.layer_mut(adjustment)
+            && let LayerSource::Adjustment {
+                operation,
+                settings,
+            } = &layer.source
+        {
+            let step = StepRecord::new(StepKind::Operation {
+                operation: operation.clone(),
+                accepts: Accepts::Display,
+                settings: settings.clone(),
+            });
+            layer.source = LayerSource::Adjust { step };
+        }
+        let fits = self.layers().iter().any(|layer| {
+            layer.id == adjustment && layer.source.adjustment_step().is_some_and(own_kind)
         });
-        if !is_adjustment {
-            return Err(refuse("only an adjustment layer can be given to one layer"));
+        if !fits {
+            return Err(refuse(
+                "only an exposure, a curve, a saturation or a tool can be given to one layer",
+            ));
         }
         let layer = self.remove_layer(adjustment).expect("the layer was found");
-        let LayerSource::Adjustment {
-            operation,
-            settings,
-        } = layer.source
-        else {
+        let LayerSource::Adjust { mut step } = layer.source else {
             unreachable!("checked above");
         };
-        let mut step = StepRecord::new(StepKind::Operation {
-            operation,
-            accepts: Accepts::Display,
-            settings,
-        });
         step.enabled = layer.visible;
         step.mask = layer.mask;
         step.opacity = layer.opacity;
@@ -1180,25 +1282,15 @@ impl Document {
         if !matches!(layers[at].steps[index].kind, StepKind::Operation { .. }) {
             return Err(refuse("only an adjustment can become a layer"));
         }
-        let own = layers[at].steps.remove(index);
-        let StepKind::Operation {
-            operation,
-            settings,
-            ..
-        } = own.kind
-        else {
-            unreachable!("checked above");
-        };
-        let mut layer = LayerRecord::new(
-            &operation.clone(),
-            LayerSource::Adjustment {
-                operation,
-                settings,
-            },
-        );
-        layer.visible = own.enabled;
-        layer.mask = own.mask;
-        layer.opacity = own.opacity.clamp(0.0, 1.0);
+        let mut own = layers[at].steps.remove(index);
+        let (visible, mask, opacity) = (own.enabled, own.mask.take(), own.opacity.clamp(0.0, 1.0));
+        own.enabled = true;
+        own.opacity = 1.0;
+        let name = own.kind.name().to_string();
+        let mut layer = LayerRecord::new(&name, LayerSource::Adjust { step: own });
+        layer.visible = visible;
+        layer.mask = mask;
+        layer.opacity = opacity;
         // Above its owner, in the owner's group: a group's own step becomes
         // a layer above the group, a member's stays in the member's group.
         layer.group = if layers[at].source == LayerSource::Group {
@@ -1232,6 +1324,13 @@ impl Document {
 
     /// Turns a step on or off. Returns whether the document has the step.
     pub fn set_step_enabled(&mut self, id: Uuid, enabled: bool) -> bool {
+        // An adjustment layer's step is on while its layer is shown.
+        if let Some(layer) = self.layer_of_adjustment(id) {
+            return self
+                .layer_mut(layer)
+                .map(|layer| layer.visible = enabled)
+                .is_some();
+        }
         self.step_mut(id)
             .map(|(_, step)| step.enabled = enabled)
             .is_some()
@@ -1375,6 +1474,13 @@ impl Document {
     /// Sets how strongly a step applies, from 0 to 1. Returns whether the
     /// document has the step.
     pub fn set_step_opacity(&mut self, id: Uuid, opacity: f32) -> bool {
+        // An adjustment layer's step applies at its layer's opacity.
+        if let Some(layer) = self.layer_of_adjustment(id) {
+            return self
+                .layer_mut(layer)
+                .map(|layer| layer.opacity = opacity.clamp(0.0, 1.0))
+                .is_some();
+        }
         self.step_mut(id)
             .map(|(_, step)| step.opacity = opacity.clamp(0.0, 1.0))
             .is_some()
@@ -1383,6 +1489,13 @@ impl Document {
     /// Removes a step's mask, so the step applies everywhere. Returns
     /// whether the document has the step.
     pub fn clear_step_mask(&mut self, id: Uuid) -> bool {
+        // An adjustment layer's step applies within its layer's mask.
+        if let Some(layer) = self.layer_of_adjustment(id) {
+            return self
+                .layer_mut(layer)
+                .map(|layer| layer.mask = None)
+                .is_some();
+        }
         self.step_mut(id)
             .map(|(_, step)| step.mask = None)
             .is_some()
@@ -1418,8 +1531,15 @@ impl Document {
         Ok(())
     }
 
-    /// Takes a step out of the document and returns it.
+    /// Takes a step out of the document and returns it. An adjustment
+    /// layer's step goes with its layer.
     pub fn remove_step(&mut self, id: Uuid) -> Option<StepRecord> {
+        if let Some(layer) = self.layer_of_adjustment(id) {
+            return match self.remove_layer(layer)?.source {
+                LayerSource::Adjust { step } => Some(step),
+                _ => None,
+            };
+        }
         self.stages.iter_mut().find_map(|stage| {
             if let Some(index) = stage.steps.iter().position(|step| step.id == id) {
                 return Some(stage.steps.remove(index));
@@ -1429,6 +1549,62 @@ impl Document {
                 Some(layer.steps.remove(index))
             })
         })
+    }
+
+    /// Brings a document written before adjustment layers held steps up to
+    /// date: each older adjustment layer holds its operation as a step, and
+    /// each Finish step becomes an adjustment layer at the top of the stack,
+    /// in order, with the step's mask and opacity, shown when it was on. A
+    /// star removal there gets a layer of the stars it takes out right above
+    /// it, screened, shown when its stars were. The ids made are the same
+    /// each time the document opens.
+    pub fn adopt_adjustment_layers(&mut self) {
+        for layer in &mut self.stages[StageKind::Combine as usize].layers {
+            if let LayerSource::Adjustment {
+                operation,
+                settings,
+            } = &layer.source
+            {
+                let mut step = StepRecord::new(StepKind::Operation {
+                    operation: operation.clone(),
+                    accepts: Accepts::Display,
+                    settings: settings.clone(),
+                });
+                step.id = derived_id(layer.id, 1);
+                layer.source = LayerSource::Adjust { step };
+            }
+        }
+        let finish = std::mem::take(&mut self.stages[StageKind::Finish as usize].steps);
+        for step in finish {
+            let (visible, opacity, mask) = (
+                step.enabled,
+                step.opacity.clamp(0.0, 1.0),
+                step.mask.clone(),
+            );
+            let stars =
+                (step.kind.name() == super::flow::flow_operations::STAR_REMOVAL).then(|| {
+                    let shown = super::flow::tool_of(&step)
+                        .and_then(|tool| tool[super::flow::STARS_SHOWN_KEY].as_bool())
+                        .unwrap_or(true);
+                    let mut stars = super::flow::stars_layer(step.id);
+                    stars.id = derived_id(step.id, 3);
+                    stars.visible = shown;
+                    stars
+                });
+            let name = step.kind.name().to_string();
+            let mut own = step;
+            own.enabled = true;
+            own.opacity = 1.0;
+            own.mask = None;
+            let mut layer = LayerRecord::new(&name, LayerSource::Adjust { step: own });
+            layer.id = derived_id(layer.source.adjustment_step().expect("an adjustment").id, 2);
+            layer.visible = visible;
+            layer.opacity = opacity;
+            layer.mask = mask;
+            let layers = &mut self.stages[StageKind::Combine as usize].layers;
+            layers.push(layer);
+            layers.extend(stars);
+        }
     }
 
     /// The document as JSON.
@@ -1455,6 +1631,8 @@ impl Document {
         }
         // A document from before each tool was a step of its own.
         super::flow::split_tool_chains(&mut document);
+        // And from before the Finish stage was adjustment layers.
+        document.adopt_adjustment_layers();
         Ok(document)
     }
 }

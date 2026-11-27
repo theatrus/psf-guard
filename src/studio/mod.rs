@@ -53,10 +53,11 @@ pub use document::{
 };
 pub use error::StudioError;
 pub use flow::{
-    changes_input, color_group_of, color_setup_from_document, document_from_color_setup,
-    flow_operations, input_program, is_tool_step, move_linear_step, new_tool_step_index,
-    split_tool_chains, stars_channel, step_channel, stretched_channel, tool_of, tool_operation,
-    tool_step, COLOR_GROUPS, SHIFTED_PASS_KEY, STARS_SHOWN_KEY, TOOL_PROVIDERS,
+    adjustment_layer, changes_input, color_group_of, color_setup_from_document,
+    document_from_color_setup, flow_operations, input_program, is_tool_step, move_linear_step,
+    new_tool_step_index, split_tool_chains, stars_channel, stars_layer, step_channel,
+    stretched_channel, tool_of, tool_operation, tool_step, COLOR_GROUPS, SHIFTED_PASS_KEY,
+    STARS_SHOWN_KEY, TOOL_PROVIDERS,
 };
 pub use junction::{open_in_editor_command, FileStamp, Junction, JunctionState, JunctionStatus};
 pub use palette::{

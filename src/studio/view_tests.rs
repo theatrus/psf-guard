@@ -250,9 +250,12 @@ fn a_channels_own_step_stays_out_of_psf_guards_settings() {
 fn adjustment(name: &str) -> LayerRecord {
     LayerRecord::new(
         name,
-        LayerSource::Adjustment {
-            operation: name.to_string(),
-            settings: serde_json::json!({ "amount": 0.5 }),
+        LayerSource::Adjust {
+            step: StepRecord::new(StepKind::Operation {
+                operation: name.to_string(),
+                accepts: crate::image_steps::Accepts::Display,
+                settings: serde_json::json!({ "amount": 0.5 }),
+            }),
         },
     )
 }

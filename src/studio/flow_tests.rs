@@ -180,10 +180,15 @@ fn every_kind_of_setting_survives_the_round_trip() {
         names(&document, StageKind::Stretch).last().unwrap(),
         op::NARROWBAND
     );
-    assert_eq!(
-        names(&document, StageKind::Finish),
-        [op::OUTPUT_STRETCH, op::OUTPUT_STRETCH]
-    );
+    // The output stretches are adjustment layers on top of the stack.
+    let top: Vec<&str> = document
+        .layers()
+        .iter()
+        .rev()
+        .take(2)
+        .map(|layer| layer.name.as_str())
+        .collect();
+    assert_eq!(top, [op::OUTPUT_STRETCH, op::OUTPUT_STRETCH]);
 
     let back = color_setup_from_document(&document).unwrap();
     assert!(same_settings(&back, &settings), "{back:#}");

@@ -2345,10 +2345,55 @@ Such a step runs on what Studio draws there:
   results read before a deferred store opened were dropped and not read
   again.
 
-Still open: adding the stars back at the end of the Finish stage rather
-than right after the step, which needs layers after the Finish steps in
-Seiza's picture; and a layer's result follows changes to that layer's
-opacity and blend, which do not change what the tool ran on.
+Still open: a layer's result follows changes to that layer's opacity and
+blend, which do not change what the tool ran on.
+
+#### Steps on the picture are adjustment layers (2026-11-27)
+
+A Finish step was a step on the whole picture after every layer. It is now
+an adjustment layer like Exposure or Curves, which changes the layers
+beneath it and can be dragged anywhere in the stack:
+
+- **The model.** `LayerSource::Adjust { step }` is an adjustment layer
+  that holds one step: Exposure, Curves and Saturation as before, and also
+  an output stretch, Tone and color, a heal or a tool. The layer's
+  visibility, opacity and mask are the step's switch, opacity and mask;
+  `set_step_enabled`, `set_step_opacity` and `clear_step_mask` change the
+  layer for such a step. `Document::add_picture_step` adds one on top, and
+  a star removal also gets a layer above it, “Stars it took out”
+  (`LayerSource::Step`), with the screen blend. The old adjustment layer,
+  which held an operation's name and settings, is still read.
+- **Documents from before.** On open, each Finish step becomes an
+  adjustment layer on top, in order, with its switch, opacity and mask; a
+  star removal's “stars shown” becomes its stars layer's visibility. The
+  ids are derived from the step's, so opening a document twice gives the
+  same layers. A new document's output stretches, Curves and Saturation
+  are layers too, so the Finish stage is empty; the tree shows it only
+  for a document that still has Finish steps.
+- **Drawing.** Seiza's picture has `LayerKind::Step`, a Finish step in the
+  stack. The CPU render blends the layers up to each such step and
+  applies it over the area it reads; steps on top of the stack draw
+  exactly as Finish steps. The canvas gives Seiza the steps on top of the
+  stack as Finish steps, and the others as step layers. The GPU applies a
+  step layer one pixel at a time inside the layer pass. A heal beneath
+  other layers is listed as not drawn, and Tone's local contrast beneath
+  other layers is drawn one pixel at a time on the GPU; both need a
+  staged pass that renders the layers beneath to a texture first.
+- **Output stretches.** The stretches are resolved in the order the
+  picture is made, from samples of the combined picture without the
+  stretches that read them. A stretch beneath other layers is resolved
+  from the same samples, which include the layers above it.
+- **Tools.** A tool layer runs on the stack beneath it, rendered at full
+  resolution (`LateOn::Beneath`); its result's name follows those layers
+  only. At full opacity with no mask the result covers every layer
+  beneath; otherwise it is blended over them as a group with the layer's
+  opacity and mask. A tool in a group is listed as not drawn.
+- **Editing.** Selecting such a layer shows the step's controls, the
+  histogram of the final picture (of the masked area when the layer has a
+  painted mask), the layer's mask, and **Add step** and **Add tool**,
+  which add another layer on top. Dragging Exposure, Curves, Saturation
+  or a tool onto a layer makes it that layer's own; any other step layer
+  moves like a layer.
 
 ### Stars
 
@@ -3014,8 +3059,10 @@ Gaps to fix, roughly in the order they got in the way:
   row it is dropped on, or below it when dropped on the row's lower half
   (tried in the window on the Iris's RGB stars), so it no longer needs the
   thin gap between two rows.
-- [ ] **One way to adjust.** Finish steps and adjustment layers are two;
-  exposure, curves and saturation are Studio's shader code, not Seiza's.
+- [x] **One way to adjust.** Done 2026-11-27: steps on the picture are
+  adjustment layers (“Steps on the picture are adjustment layers”), drawn
+  by Seiza's compositor. Left: a heal and Tone's local contrast beneath
+  other layers need a staged GPU pass.
 - [ ] **History panel.** Asked for on 2026-11-27: a panel like
   Lightroom's History that lists the document's edits in order, so a
   person sees what changed in the stack and can step back to any of them.

@@ -131,6 +131,9 @@ pub enum StackEntry {
     /// A layer that adjusts the layers beneath it. Inside a group, those
     /// are the group's members beneath it.
     Adjustment { layer: Uuid },
+    /// A layer of what a step made, such as the stars a star removal took
+    /// out, and the layer it is clipped to, if any.
+    Made { layer: Uuid, clip: Option<Uuid> },
     /// The start of a group's members. The entries up to the group's end
     /// blend together on their own, starting from nothing.
     GroupBegin { group: Uuid },
@@ -314,9 +317,7 @@ pub fn plan(document: &Document, view: &View) -> ViewPlan {
         Subject::LayersUpTo(id) => place(id).map_or(&[], |at| &layers[..=at]),
         Subject::Layer(id) => match place(id) {
             // An adjustment has nothing to show alone.
-            Some(at) if matches!(layers[at].source, LayerSource::Adjustment { .. }) => {
-                &layers[..=at]
-            }
+            Some(at) if layers[at].source.is_adjustment() => &layers[..=at],
             // A group alone is its members and itself.
             Some(at) if layers[at].source == LayerSource::Group => {
                 let low = layers[..at]
@@ -343,7 +344,7 @@ pub fn plan(document: &Document, view: &View) -> ViewPlan {
             .iter()
             .rev()
             .filter(|other| other.group == layer.group)
-            .find(|other| !other.clipped && !matches!(other.source, LayerSource::Adjustment { .. }))
+            .find(|other| !other.clipped && !other.source.is_adjustment())
             .map(|other| other.id)
     };
     let combined = !matches!(view.subject, Subject::Channel(_));
@@ -378,15 +379,19 @@ pub fn plan(document: &Document, view: &View) -> ViewPlan {
                 });
                 channels.push(channel_plan(band));
             }
-            LayerSource::Adjustment { .. } => {
+            LayerSource::Adjust { .. } | LayerSource::Adjustment { .. } => {
                 stack.push(StackEntry::Adjustment { layer: layer.id })
             }
             LayerSource::Group => {
                 stack.push(StackEntry::GroupEnd { group: layer.id });
                 open = None;
             }
-            // A layer made from a step's result needs the engine.
-            LayerSource::Step { .. } => {}
+            // A layer of what a step made, such as the stars a star
+            // removal took out.
+            LayerSource::Step { .. } => stack.push(StackEntry::Made {
+                layer: layer.id,
+                clip: layer.clipped.then(|| clip_of(layer)).flatten(),
+            }),
         }
     }
     // A view that stops inside a group shows the group as far as it goes.
@@ -441,7 +446,7 @@ pub fn plan(document: &Document, view: &View) -> ViewPlan {
         ),
         Subject::Combined => "The combined image".to_string(),
         Subject::Layer(id) => match place(id) {
-            Some(at) if matches!(layers[at].source, LayerSource::Adjustment { .. }) => {
+            Some(at) if layers[at].source.is_adjustment() => {
                 format!("{} over the layers beneath it", layer_name(id))
             }
             _ if gray => format!("The layer {} on its own, in gray", layer_name(id)),
