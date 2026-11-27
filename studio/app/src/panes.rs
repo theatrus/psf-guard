@@ -3782,7 +3782,6 @@ mod tests {
             "{:?}",
             drawn.omitted
         );
-        let _ = layer;
     }
 
     #[test]
