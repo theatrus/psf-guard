@@ -179,6 +179,29 @@ impl BandStretch {
         Some(maps)
     }
 
+    /// The tail that takes `curve` into an HDR picture's `headroom`: from a
+    /// knee at three quarters of SDR white to the peak at the band's
+    /// brightest, measured over the whole band at a quarter of its
+    /// resolution. `None` without that copy, or when the curve has no room
+    /// for a tail.
+    fn hdr_tail(&self, curve: ResolvedCurve, headroom: f64) -> Option<seiza_stretch::HdrTail> {
+        let (samples, _, _) = self.quarter.as_deref()?;
+        let white = samples
+            .iter()
+            .copied()
+            .filter(|sample| sample.is_finite())
+            .fold(0.0_f32, f32::max)
+            .min(1.0);
+        seiza_stretch::HdrTail::resolve(
+            curve,
+            seiza_stretch::HdrTailParams {
+                headroom,
+                white: f64::from(white),
+                ..Default::default()
+            },
+        )
+    }
+
     /// Gives the band its quarter-resolution copy, `width` by `height`
     /// samples as they are in the image.
     fn set_quarter(&mut self, samples: &[f32], width: usize, height: usize) {
@@ -244,6 +267,18 @@ impl BandStretch {
                     let mut params = *params;
                     params.hdr.headroom = headroom;
                     StretchModel::LayeredHdr(params)
+                }
+                // In an HDR picture the plain layered stretch reaches into
+                // the headroom too, without compressing the core.
+                StretchModel::Layered(params) if headroom > 0.0 => {
+                    StretchModel::LayeredHdr(seiza_stretch::LayeredHdrParams {
+                        layered: *params,
+                        hdr: seiza_stretch::LayeredHdr {
+                            headroom,
+                            core_compression: 0.0,
+                            ..Default::default()
+                        },
+                    })
                 }
                 other => other.clone(),
             };
@@ -311,6 +346,20 @@ impl BandStretch {
                 peak = stage.peak();
                 transfer.extend([
                     TransferStage::Layered(stage),
+                    TransferStage::Clamp {
+                        low: 0.0,
+                        high: peak,
+                    },
+                ]);
+            } else if let Some(tail) = (at == 0 && headroom > 0.0)
+                .then(|| self.hdr_tail(curve, headroom))
+                .flatten()
+            {
+                // In an HDR picture any stretch continues into the headroom
+                // above its knee, up to the band's brightest.
+                peak = tail.peak();
+                transfer.extend([
+                    TransferStage::TailedCurve { curve, tail },
                     TransferStage::Clamp {
                         low: 0.0,
                         high: peak,
@@ -1313,6 +1362,48 @@ mod tests {
             chained.stages.last(),
             Some(TransferStage::Clamp { high, .. }) if *high > 1.5
         ));
+        // In an HDR picture any stretch reaches into the headroom: a
+        // midtones stretch takes a tail up to the band's brightest, and
+        // the plain layered stretch becomes the HDR one.
+        let alone = band.transfer(
+            std::slice::from_ref(&midtones),
+            0.0,
+            2.0,
+            &|_| None,
+            &mut Vec::new(),
+        );
+        assert!(alone
+            .stages
+            .iter()
+            .any(|stage| matches!(stage, TransferStage::TailedCurve { .. })));
+        let mut brightest = [*full.iter().max_by(|a, b| a.total_cmp(b)).unwrap()];
+        alone.apply(&mut brightest);
+        assert!(brightest[0] > 1.5, "{brightest:?}");
+        let sdr_alone = band.transfer(
+            std::slice::from_ref(&midtones),
+            0.0,
+            0.0,
+            &|_| None,
+            &mut Vec::new(),
+        );
+        assert!(!sdr_alone
+            .stages
+            .iter()
+            .any(|stage| matches!(stage, TransferStage::TailedCurve { .. })));
+        let layered: StretchModel =
+            serde_json::from_value(serde_json::json!({ "type": "layered" })).unwrap();
+        let hdr_layered = band.transfer(
+            std::slice::from_ref(&layered),
+            0.0,
+            2.0,
+            &|_| None,
+            &mut Vec::new(),
+        );
+        let reach = hdr_layered.stages.iter().find_map(|stage| match stage {
+            TransferStage::Layered(stage) => Some(stage.peak()),
+            _ => None,
+        });
+        assert!(reach.is_some_and(|peak| peak > 1.5), "{reach:?}");
         // After an SDR stretch, a second one clips at white as before.
         let plain = band.transfer(
             &[midtones.clone(), midtones],
