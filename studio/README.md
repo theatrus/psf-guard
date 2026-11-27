@@ -186,11 +186,13 @@ cargo run --release -p psf-studio-color -- results/color.json display-0.icc
 ```
 
 Run the canvas on a wide-gamut surface. `--output` is `srgb8`, `p3-8`,
-`p3-float` or `p3-extended`. `--working` is the ICC profile of the document's
-working space; the canvas converts from it to the surface's color space.
+`p3-float` or `p3-extended`. Studio composes in Rec. 2020 on the sRGB
+curve, and the canvas maps the picture into the surface's primaries: sRGB
+for `srgb8`, Display P3 for the others. `p3-extended` also shows an HDR
+picture's highlights brighter than white.
 
 ```bash
-cargo run --release -p psf-studio -- --output p3-extended --working "/System/Library/ColorSync/Profiles/AdobeRGB1998.icc"
+cargo run --release -p psf-studio -- --output p3-extended
 ```
 
 The panel's **Layer** line shows the pixel format and color space that the

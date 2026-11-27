@@ -33,9 +33,6 @@ pub struct Options {
     /// The surface to present to: `srgb8` (the default), `p3-8`, `p3-float`
     /// or `p3-extended`.
     pub output: String,
-    /// The ICC profile of the document's working space. With one, the canvas
-    /// converts from it to the surface's color space.
-    pub working_profile: Option<PathBuf>,
     /// A tile store to open in place of the synthetic document.
     pub open: Option<PathBuf>,
     /// A PSF-Studio document to open with the store, in place of PSF
@@ -62,7 +59,6 @@ impl Default for Options {
             document: None,
             psf_guard: None,
             output: String::new(),
-            working_profile: None,
             parity_report: None,
         }
     }
@@ -726,9 +722,6 @@ pub struct Studio {
     tiff_float: bool,
     /// Where to write the parity report, until it is written.
     parity_report: Option<PathBuf>,
-    /// The ICC profile of the document's working space, which an export
-    /// embeds, when Studio was given one.
-    working_profile: Option<PathBuf>,
     /// The levels in the document's pyramid.
     levels: u8,
     /// The processing tools: which this computer has, and the run in hand.
@@ -738,7 +731,6 @@ pub struct Studio {
 impl Studio {
     fn new(options: Options, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let parity_report = options.parity_report.clone();
-        let working_profile = options.working_profile.clone();
         // SAFETY: `NSView` is an AppKit class, windows are opened on the main
         // thread, and the new view is in no other view hierarchy.
         let (native_view, ns_view) = unsafe {
@@ -910,7 +902,6 @@ impl Studio {
                 export_line: String::new(),
                 tiff_float: false,
                 parity_report,
-                working_profile,
                 levels,
                 tools,
             };
@@ -1244,34 +1235,28 @@ unsafe fn layer_description(view: &AnyObject) -> Option<String> {
 
 /// The surface and display transform the options ask for.
 fn output(options: &Options) -> Result<Output, String> {
+    use psf_studio_render::WorkingSpace;
     use wgpu::{SurfaceColorSpace, TextureFormat};
-    let (format, color_space, target) = match options.output.as_str() {
-        "" | "srgb8" => (None, SurfaceColorSpace::Auto, "sRGB Profile.icc"),
-        "p3-8" => (None, SurfaceColorSpace::DisplayP3, "Display P3.icc"),
+    let (format, color_space, display) = match options.output.as_str() {
+        "" | "srgb8" => (None, SurfaceColorSpace::Auto, WorkingSpace::Srgb),
+        "p3-8" => (None, SurfaceColorSpace::DisplayP3, WorkingSpace::DisplayP3),
         "p3-float" => (
             Some(TextureFormat::Rgba16Float),
             SurfaceColorSpace::DisplayP3,
-            "Display P3.icc",
+            WorkingSpace::DisplayP3,
         ),
         "p3-extended" => (
             Some(TextureFormat::Rgba16Float),
             SurfaceColorSpace::ExtendedDisplayP3,
-            "Display P3.icc",
+            WorkingSpace::DisplayP3,
         ),
         other => return Err(format!("unknown output: {other}")),
     };
-    let curves = options
-        .working_profile
-        .as_ref()
-        .map(|working| {
-            let target = std::path::Path::new(psf_studio_color::SYSTEM_PROFILES).join(target);
-            psf_studio_color::curves_between(working, &target)
-        })
-        .transpose()?;
     Ok(Output {
         format,
         color_space,
-        curves,
+        working: crate::canvas::WORKING_SPACE,
+        display,
         vsync: options.vsync,
     })
 }

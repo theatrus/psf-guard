@@ -7,13 +7,15 @@
 //! presents the finished picture, and samples it for the stretches resolved
 //! from it.
 
-use crate::display::{DisplayCurves, TableFormat};
 use crate::synth::{TileKey, TILE};
 use crate::tiles::{TileCache, TileProducer};
 use crate::{Pyramid, TileSource};
 use bytemuck::{Pod, Zeroable};
-use seiza_compose::gpu::{DrawArea, GpuCompositor, GpuScene, GpuTargets, GpuView, TileDraw};
+use seiza_compose::gpu::{
+    DisplayMapping, DrawArea, GpuCompositor, GpuScene, GpuTargets, GpuView, TileDraw,
+};
 use seiza_compose::picture::Segment;
+pub use seiza_compose::space::WorkingSpace;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -128,8 +130,11 @@ pub struct Output {
     pub format: Option<wgpu::TextureFormat>,
     /// The color space to set on the surface when the surface offers it.
     pub color_space: wgpu::SurfaceColorSpace,
-    /// The display transform. `None` presents the working space unchanged.
-    pub curves: Option<DisplayCurves>,
+    /// The working space the picture is composed in.
+    pub working: WorkingSpace,
+    /// The primaries of the surface's color space: the display transform
+    /// maps the picture into them.
+    pub display: WorkingSpace,
     /// Whether presenting waits for the display's refresh.
     pub vsync: bool,
 }
@@ -139,7 +144,8 @@ impl Default for Output {
         Self {
             format: None,
             color_space: wgpu::SurfaceColorSpace::Auto,
-            curves: None,
+            working: WorkingSpace::Srgb,
+            display: WorkingSpace::Srgb,
             vsync: true,
         }
     }
@@ -151,8 +157,8 @@ impl Default for Output {
 struct PresentUniform {
     /// Linear working-space RGB to linear target RGB, as a std140
     /// `mat3x3f`.
-    to_target: [f32; 12],
-    /// x: samples per display curve, or 0 for no display transform.
+    to_display: DisplayMapping,
+    /// x: unused.
     /// y: 1 when the surface takes values above SDR white (EDR).
     /// z: how many of `panes` are in use. w: the peak outside them.
     display: [f32; 4],
@@ -197,7 +203,6 @@ pub struct Renderer {
     /// The present uniform's display transform; each frame adds its panes.
     present_base: PresentUniform,
     sampler: wgpu::Sampler,
-    display_curves: wgpu::TextureView,
     /// The finished picture, the uniform and the display curves, for the
     /// present pass. Made again with the targets.
     present_inputs: wgpu::BindGroup,
@@ -355,7 +360,6 @@ impl Renderer {
                     count: None,
                 },
                 texture_entry(2),
-                texture_entry(3),
             ],
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -397,28 +401,6 @@ impl Renderer {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
-        // With no transform the shader skips the lookup, and this table is
-        // only there to fill the binding.
-        let identity = DisplayCurves {
-            width: 2,
-            decode: vec![[0.0; 3], [1.0; 3]],
-            encode: vec![[0.0; 3], [1.0; 3]],
-            to_target: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
-        };
-        let table_format = if device
-            .features()
-            .contains(wgpu::Features::FLOAT32_FILTERABLE)
-        {
-            TableFormat::Full
-        } else {
-            TableFormat::Half
-        };
-        let display_curves =
-            output
-                .curves
-                .as_ref()
-                .unwrap_or(&identity)
-                .upload(&device, &queue, table_format);
         // An extended surface takes values above SDR white (EDR).
         let extended = if matches!(
             color_space,
@@ -429,16 +411,8 @@ impl Renderer {
             0.0
         };
         let uniform = PresentUniform {
-            to_target: output.curves.as_ref().unwrap_or(&identity).matrix_uniform(),
-            display: [
-                output
-                    .curves
-                    .as_ref()
-                    .map_or(0.0, |curves| curves.width as f32),
-                extended,
-                0.0,
-                1.0,
-            ],
+            to_display: DisplayMapping::new(output.working, output.display),
+            display: [0.0, extended, 0.0, 1.0],
             ..PresentUniform::zeroed()
         };
         let present_uniform = device.create_buffer(&wgpu::BufferDescriptor {
@@ -454,7 +428,6 @@ impl Renderer {
             &present_uniform,
             &sampler,
             targets.finished_view(),
-            &display_curves,
         );
 
         let pyramid = source.pyramid();
@@ -480,7 +453,6 @@ impl Renderer {
             present_uniform,
             present_base: uniform,
             sampler,
-            display_curves,
             present_inputs,
             surface_offers,
             cache,
@@ -553,7 +525,6 @@ impl Renderer {
             &self.present_uniform,
             &self.sampler,
             self.targets.finished_view(),
-            &self.display_curves,
         );
     }
 
@@ -1139,7 +1110,6 @@ fn present_bind_group(
     uniform: &wgpu::Buffer,
     sampler: &wgpu::Sampler,
     finished: &wgpu::TextureView,
-    display_curves: &wgpu::TextureView,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("present"),
@@ -1157,19 +1127,16 @@ fn present_bind_group(
                 binding: 2,
                 resource: wgpu::BindingResource::TextureView(finished),
             },
-            wgpu::BindGroupEntry {
-                binding: 3,
-                resource: wgpu::BindingResource::TextureView(display_curves),
-            },
         ],
     })
 }
 
-/// The present shader's whole source: the display transform, then the pass.
+/// The present shader's whole source: Seiza's display mapping, then the
+/// pass.
 fn present_source() -> String {
     format!(
         "{}\n{}",
-        crate::display::SHADER,
+        seiza_compose::gpu::DISPLAY_SHADER,
         include_str!("present.wgsl")
     )
 }

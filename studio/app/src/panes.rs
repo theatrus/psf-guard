@@ -1634,6 +1634,7 @@ impl Studio {
             // An HDR picture is clipped at its peak, as the canvas shows it.
             let peak = seiza_compose::picture::Picture {
                 finish: scene.finish.clone(),
+                space: crate::canvas::WORKING_SPACE,
                 ..Default::default()
             }
             .peak();

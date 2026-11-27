@@ -74,7 +74,6 @@ fn main() {
                 return;
             }
             "--output" => options.output = arguments.next().unwrap_or_default(),
-            "--working" => options.working_profile = arguments.next().map(Into::into),
             "--capture" => options.capture_prefix = arguments.next().map(Into::into),
             "--parity-report" => options.parity_report = arguments.next().map(Into::into),
             "--frames" => {

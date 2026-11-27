@@ -708,7 +708,9 @@ a cold disk was not measured.
 
 The code is the `color` crate and the `--output` and `--working` options of
 the app in
-[`studio`](../../studio/README.md).
+[`studio`](../../studio/README.md). Studio has since fixed its working space
+to Rec. 2020 and dropped `--working`; see **Working space** under the
+Finish stage.
 
 **Result so far: the canvas can present a wide-gamut, floating-point,
 color-managed surface on macOS at no cost in frame rate, and a shader step
@@ -2007,7 +2009,7 @@ Stretch step over the whole picture brings it back to 1. The canvas, the
 histogram and every export clip values at the peak, so an SDR picture
 never shows above white, whatever its blends or Saturation give. On an EDR
 surface (`--output p3-extended`, as on a Pro Display XDR) the canvas shows
-values above 1 brighter than white, with or without a working profile.
+values above 1 brighter than white.
 Export to a name ending `.avif` writes an HDR AVIF: the picture in linear
 Rec. 2020 through the working space's ICC profile, PQ, 10 bits, with its
 content light levels. A 32-bit float TIFF keeps the values above 1 as
@@ -2017,12 +2019,26 @@ from the C925: with Exposure +1.5 and a 2-stop headroom, the AVIF's
 brightest light is 808 cd/m², within the 812 cd/m² the headroom allows,
 and the float TIFF's brightest value is 1.825.
 
+**Working space.** Studio composes every picture in Rec. 2020's primaries
+on the sRGB curve (Seiza's `WorkingSpace::Rec2020`), so no color a display
+can show is lost before the picture reaches it: Saturation, Vibrance and
+narrowband hues may go past sRGB and Display P3. A layer's color is given
+in Display P3, the gamut of the displays Studio is used on, and converted
+into the working space by the matrix alone: a layer's color multiplies its
+band's stretched values and the layers add, so layers whose colors add up
+to white still do, and a calibrated picture keeps its balance. The canvas maps the picture into the surface's
+primaries with Seiza's `DISPLAY_SHADER`: sRGB for `--output srgb8`, Display
+P3 for the others. A color the display cannot show is desaturated toward
+the gray of its own luminance until it fits, so it keeps its luminance and
+hue. A TIFF keeps the working space and embeds its ICC profile, which
+Studio makes with Little CMS; a PNG is mapped to Display P3 the same way
+and embeds that profile; an AVIF is Rec. 2020 already.
+
 **Texture and noise.** Studio measures the picture's noise from its
 samples, as the Finish steps before Tone leave them, and gives it to Tone,
 so Texture leaves noise alone and raises detail above it. On the Sh2-157
 stack, Texture +0.4 raises the sky's noise by 7%. A Finish step with a
-mask shows the histogram of its area. With a working space's profile, a
-TIFF or PNG export embeds it.
+mask shows the histogram of its area.
 
 **Histogram.** The inspector of the Final picture, of a Tone step and of an
 output stretch shows the histogram of the final picture: red, green, blue
@@ -2032,9 +2048,11 @@ that output stretches already use, with the Finish steps applied by Seiza's
 CPU render. Masks and heals are left out of the histogram.
 
 **Export.** **Export** in the Final picture's inspector writes the whole
-picture, cropped, at full resolution: TIFF or PNG at 16 bits per channel,
-or FITS or XISF as 32-bit floats, through Seiza's `seiza_image_io::save_f32`,
-which replaces the destination only once the file is complete.
+picture, cropped, at full resolution: TIFF at 16 bits per channel or as
+32-bit floats in the working space, PNG at 16 bits in Display P3, AVIF as
+HDR, or FITS or XISF as 32-bit floats in the working space, through Seiza's
+`seiza_image_io`, which replaces the destination only once the file is
+complete.
 
 The canvas cannot make that file. Its tiles hold half floats, about three
 significant digits, and so do its stretch tables. An export is rendered by

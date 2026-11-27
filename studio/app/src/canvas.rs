@@ -13,8 +13,28 @@ use seiza_compose::picture::{
     Picture, Segment, Transfer,
 };
 use seiza_compose::render::{RenderOptions, Sink, Source};
+use seiza_compose::space::WorkingSpace;
 use seiza_compose::{Error, ReferenceRegion};
 use std::sync::Mutex;
+
+/// The space Studio composes a picture in: Rec. 2020's primaries on the
+/// sRGB curve. It is wide enough that no color a display can show is lost
+/// before the canvas or an export maps the picture to its destination.
+pub const WORKING_SPACE: WorkingSpace = WorkingSpace::Rec2020;
+
+/// The space a document's colors are in: Display P3, what Apple's
+/// wide-gamut displays show, so any hue a layer is given is one the screen
+/// can show.
+pub const DOCUMENT_COLORS: WorkingSpace = WorkingSpace::DisplayP3;
+
+/// A document color in the working space. A layer's color multiplies its
+/// band's stretched values, and the layers add, so the color is converted
+/// by the matrix alone: layers whose colors add up to white in Display P3
+/// still add up to white, and a calibrated picture keeps its balance.
+pub fn working_color(color: [f32; 3]) -> [f32; 3] {
+    let matrix = DOCUMENT_COLORS.matrix_to(WORKING_SPACE);
+    matrix.map(|row| (row[0] * color[0] + row[1] * color[1] + row[2] * color[2]).max(0.0))
+}
 
 /// What an entry in a scene's list of layers is.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -136,7 +156,9 @@ pub fn picture(parts: &SceneParts, stretches: &[Transfer]) -> Picture {
             let kind = match (layer.mark, layer.adjustment) {
                 (Mark::GroupBegin, _) => LayerKind::GroupBegin,
                 (Mark::GroupEnd, _) => LayerKind::GroupEnd,
-                (Mark::Solid, _) => LayerKind::Solid { color: layer.color },
+                (Mark::Solid, _) => LayerKind::Solid {
+                    color: working_color(layer.color),
+                },
                 (Mark::Layer, Some((kind, amount))) => LayerKind::Adjustment(match kind {
                     Adjustment::Exposure => SeizaAdjustment::Exposure(amount),
                     Adjustment::Curves => SeizaAdjustment::Curves(amount.clamp(-1.0, 1.0)),
@@ -153,7 +175,7 @@ pub fn picture(parts: &SceneParts, stretches: &[Transfer]) -> Picture {
                                 .map(|(band, share)| (band, share.clamp(0.0, 1.0))),
                             transfer,
                         },
-                        color: layer.color,
+                        color: working_color(layer.color),
                         curve: layer.curve.clamp(-1.0, 1.0),
                     }
                 }
@@ -199,6 +221,7 @@ pub fn picture(parts: &SceneParts, stretches: &[Transfer]) -> Picture {
         masks: parts.masks.to_vec(),
         heals: parts.heals.to_vec(),
         finish: parts.finish.to_vec(),
+        space: WORKING_SPACE,
     }
 }
 
@@ -231,6 +254,7 @@ pub fn finished_samples(finish: &[FinishStep], rgb: &[f32]) -> Vec<f32> {
     let picture = Picture {
         layers,
         finish: steps,
+        space: WORKING_SPACE,
         ..Picture::default()
     };
     let source = InterleavedSource { rgb, pixels };
@@ -270,7 +294,7 @@ pub fn picture_noise(before: &[FinishStep], samples: &[f32], patches: usize) -> 
     let finished = finished_samples(before, &chosen);
     let mut measured: Vec<f32> = finished
         .chunks_exact(size * size * 3)
-        .map(|patch| seiza_compose::tone::luminance_noise(patch, size, size))
+        .map(|patch| seiza_compose::tone::luminance_noise(patch, size, size, WORKING_SPACE))
         .filter(|noise| noise.is_finite() && *noise > 0.0)
         .collect();
     if measured.is_empty() {
