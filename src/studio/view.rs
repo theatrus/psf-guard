@@ -252,18 +252,27 @@ pub fn plan(document: &Document, view: &View) -> ViewPlan {
     let steps = applied(document, view.up_to);
     let channel_plan = |channel: &str| {
         // The stars a tool took out of an input are stretched as that
-        // input is, so the two go back together.
-        // A line with its continuum subtracted is stretched as its channel.
-        let stretched_as = channel
-            .strip_suffix("@stars")
-            .or_else(|| channel.strip_suffix("@line"))
-            .unwrap_or(channel);
-        let stretches: Vec<Uuid> = steps
-            .iter()
-            .filter(|(_, step)| step.enabled && step.kind.name() == op::STRETCH)
-            .filter(|(_, step)| step.band.as_deref() == Some(stretched_as))
-            .map(|(_, step)| step.id)
-            .collect();
+        // input is, so the two go back together, unless they have a
+        // stretch of their own. A line with its continuum subtracted is
+        // stretched as its channel.
+        let stretches_of = |band: &str| -> Vec<Uuid> {
+            steps
+                .iter()
+                .filter(|(_, step)| step.enabled && step.kind.name() == op::STRETCH)
+                .filter(|(_, step)| step.band.as_deref() == Some(band))
+                .map(|(_, step)| step.id)
+                .collect()
+        };
+        let own = stretches_of(channel);
+        let stretches = if own.is_empty() {
+            let stretched_as = channel
+                .strip_suffix("@stars")
+                .or_else(|| channel.strip_suffix("@line"))
+                .unwrap_or(channel);
+            stretches_of(stretched_as)
+        } else {
+            own
+        };
         ChannelPlan {
             channel: channel.to_string(),
             background: step_for(&steps, op::BACKGROUND, channel).map(|step| step.id),

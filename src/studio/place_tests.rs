@@ -657,6 +657,34 @@ fn the_stars_of_an_input_are_stretched_as_the_input_is() {
     };
     assert!(matches!(stretch("ha"), PlannedStretch::Document(_)));
     assert_eq!(stretch("ha@stars"), stretch("ha"));
+    // Stars with a stretch of their own take it in place of their input's.
+    let mut own = document.clone();
+    let ha_stretch = own
+        .stage(StageKind::Stretch)
+        .steps
+        .iter()
+        .find(|step| step.band.as_deref() == Some("ha"))
+        .unwrap()
+        .clone();
+    let mut stars_stretch = StepRecord::new(ha_stretch.kind.clone());
+    stars_stretch.band = Some("ha@stars".to_string());
+    let stars_id = stars_stretch.id;
+    own.insert_step(StageKind::Stretch, usize::MAX, stars_stretch)
+        .unwrap();
+    let planned = |document: &Document, channel: &str| {
+        let view = View {
+            subject: Subject::Channel(channel.to_string()),
+            up_to: UpTo::Final,
+            stretch: DisplayStretch::Document,
+            own_until: None,
+        };
+        plan(document, &view).channels[0].stretch.clone()
+    };
+    assert_eq!(
+        planned(&own, "ha@stars"),
+        PlannedStretch::Document(vec![stars_id])
+    );
+    assert_eq!(planned(&own, "ha"), planned(&document, "ha"));
     assert_eq!(channel_label("ha@stars"), "Ha stars");
     // A palette leaves the stars layer where it is.
     let mut layered = document.clone();

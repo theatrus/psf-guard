@@ -427,10 +427,80 @@ impl Studio {
                 "The stack as PSF Guard made it, before any step.",
             ))
             .child(self.routes_block(channel, cx))
+            .children(self.stars_stretch_block(channel, cx))
             .children(self.continuum_block(channel, cx))
             .child(self.tools_block(channel, cx))
             .child(self.zoom_notes(channel))
             .into_any_element()
+    }
+
+    /// For the stars a tool took out of an input: whether they follow the
+    /// input's stretch or have one of their own, and a button for each.
+    fn stars_stretch_block(&self, channel: &str, cx: &mut Context<Self>) -> Option<gpui::Div> {
+        let input = channel.strip_suffix("@stars")?.to_string();
+        let own: Option<Uuid> = self
+            .document
+            .stage(StageKind::Stretch)
+            .steps
+            .iter()
+            .find(|step| {
+                step.band.as_deref() == Some(channel)
+                    && step.kind.name() == flow_operations::STRETCH
+            })
+            .map(|step| step.id);
+        let channel = channel.to_string();
+        let words = match own {
+            Some(_) => "Their own".to_string(),
+            None => format!("Follows {}'s", channel_label(&input)),
+        };
+        Some(
+            column()
+                .child(Self::field("Stretch", Self::note(words)))
+                .child(match own {
+                    None => Self::act("Stretch on their own", "stars-own-stretch", false, cx, move |this| {
+                        this.give_stars_a_stretch(&channel, &input)
+                    }),
+                    Some(id) => Self::act("Follow the input's stretch", "stars-follow", false, cx, move |this| {
+                        this.document.remove_step(id);
+                    }),
+                })
+                .children(Self::help(
+                    "Stars follow their input's stretch, so they go back as they were taken out. Stretched on their own, they start from a copy of it, a Stretch step of the stars that changes without changing the nebula; select it to set it.",
+                )),
+        )
+    }
+
+    /// Gives the stars `channel` a Stretch step of their own, a copy of
+    /// their input's, and selects it.
+    fn give_stars_a_stretch(&mut self, channel: &str, input: &str) {
+        let source = self
+            .document
+            .stage(StageKind::Stretch)
+            .steps
+            .iter()
+            .rposition(|step| {
+                step.band.as_deref() == Some(input) && step.kind.name() == flow_operations::STRETCH
+            });
+        let Some(at) = source else {
+            return;
+        };
+        let mut step = StepRecord::new(
+            self.document.stage(StageKind::Stretch).steps[at]
+                .kind
+                .clone(),
+        );
+        step.band = Some(channel.to_string());
+        let id = step.id;
+        if self
+            .document
+            .insert_step(StageKind::Stretch, at + 1, step)
+            .is_ok()
+        {
+            self.selected = Row::InputStep {
+                channel: channel.to_string(),
+                step: id,
+            };
+        }
     }
 
     /// For an emission line: whether the continuum under it is subtracted,
