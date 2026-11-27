@@ -578,6 +578,7 @@ impl Studio {
                     || (step.kind.name() == flow_operations::RC_ASTRO_COLOR && step.band.is_some()),
                 |pane| pane.child(self.tools_block(&channel, cx)),
             )
+            .children(self.tools_order_block(step.kind.name(), cx))
             .when(step.kind.name() == flow_operations::BACKGROUND, |pane| {
                 pane.child(self.protect_block(id, cx))
             })
@@ -805,6 +806,51 @@ impl Studio {
                     })),
             ))
             .children(Self::help(only_help))
+    }
+
+    /// Whether the processing tools run before the background is
+    /// corrected or after it, for the Background extraction step and the
+    /// tools steps of a document that has both.
+    fn tools_order_block(&self, operation: &str, cx: &mut Context<Self>) -> Option<gpui::Div> {
+        let order_steps = [
+            flow_operations::BACKGROUND,
+            flow_operations::RC_ASTRO_INPUT,
+            flow_operations::RC_ASTRO_COLOR,
+            flow_operations::DECONVOLUTION,
+        ];
+        if !order_steps.contains(&operation) {
+            return None;
+        }
+        let steps = &self.document.stage(StageKind::Linear).steps;
+        let has = |name: &str| steps.iter().any(|step| step.kind.name() == name);
+        let has_tools = order_steps[1..].iter().any(|name| has(name));
+        if !has(flow_operations::BACKGROUND) || !has_tools {
+            return None;
+        }
+        let first = crate::studio_model::background_before_tools(&self.document);
+        let mut choice = |label: &'static str, key: &'static str, before: bool| {
+            Self::act(label, key, first == before, cx, move |this| {
+                crate::studio_model::set_background_before_tools(&mut this.document, before);
+            })
+        };
+        let (tools_first, background_first) = (
+            choice("Tools, then background", "order-tools-first", false),
+            choice("Background, then tools", "order-background-first", true),
+        );
+        Some(
+            column()
+                .child(Self::field(
+                    "Order",
+                    div()
+                        .flex()
+                        .gap_1()
+                        .child(tools_first)
+                        .child(background_first),
+                ))
+                .children(Self::help(
+                    "Tools, then background: the tools run on each stack as it came, and the background is fitted on their results. Background, then tools: the background is corrected first, at the step's strength, and the tools, such as BlurXTerminator, run on the corrected stacks. The order applies to every input, because the backgrounds are fitted with one model. A change takes effect when the tools run again; the toolbar names the inputs.",
+                )),
+        )
     }
 
     /// The Star reduction slider, for a layer that shows stars a tool took

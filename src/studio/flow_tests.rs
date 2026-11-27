@@ -296,3 +296,87 @@ fn studio_starts_from_the_layered_stretch_and_keeps_a_chosen_one() {
     // PSF Guard's settings take the layered stretch as any other.
     assert!(color_setup_from_document(&document).is_ok());
 }
+
+#[test]
+fn the_background_moves_before_or_after_every_tools_step() {
+    use crate::image_steps::Accepts;
+    let operation = |name: &str, accepts: Accepts, settings: &Value| {
+        StepRecord::new(StepKind::Operation {
+            operation: name.to_string(),
+            accepts,
+            settings: settings.clone(),
+        })
+    };
+    let mut document = Document::new("Order");
+    let linear = |document: &Document| -> Vec<String> {
+        document
+            .stage(StageKind::Linear)
+            .steps
+            .iter()
+            .map(|step| match &step.band {
+                Some(band) => format!("{} {band}", step.kind.name()),
+                None => step.kind.name().to_string(),
+            })
+            .collect()
+    };
+    for (name, band) in [
+        (op::RC_ASTRO_INPUT, Some("ha")),
+        (op::RC_ASTRO_INPUT, Some("oiii")),
+        (op::RC_ASTRO_COLOR, Some("lines")),
+        (op::BACKGROUND, None),
+        (op::COLOR_CALIBRATION, None),
+    ] {
+        let mut step = operation(name, Accepts::Linear, &json!({}));
+        if let Some(band) = band {
+            step = step.for_band(band);
+        }
+        document
+            .insert_step(StageKind::Linear, usize::MAX, step)
+            .unwrap();
+    }
+    // As made, the tools run on the stacks and the background is fitted on
+    // their results.
+    assert!(!background_before_tools(&document));
+    assert_eq!(new_tools_step_index(&document), 3);
+
+    assert!(set_background_before_tools(&mut document, true));
+    assert!(background_before_tools(&document));
+    assert_eq!(
+        linear(&document),
+        [
+            "Background extraction",
+            "Processing tools ha",
+            "Processing tools oiii",
+            "Processing tools on color lines",
+            "Color calibration",
+        ]
+    );
+    // A new tools step goes after the ones already there, so the order
+    // keeps.
+    assert_eq!(new_tools_step_index(&document), 4);
+    assert!(!set_background_before_tools(&mut document, true));
+
+    assert!(set_background_before_tools(&mut document, false));
+    assert_eq!(
+        linear(&document),
+        [
+            "Processing tools ha",
+            "Processing tools oiii",
+            "Processing tools on color lines",
+            "Background extraction",
+            "Color calibration",
+        ]
+    );
+
+    // With no tools step there is no order to choose.
+    let mut plain = Document::new("Plain");
+    plain
+        .insert_step(
+            StageKind::Linear,
+            0,
+            operation(op::BACKGROUND, Accepts::Linear, &json!({})),
+        )
+        .unwrap();
+    assert!(!background_before_tools(&plain));
+    assert!(!set_background_before_tools(&mut plain, true));
+}

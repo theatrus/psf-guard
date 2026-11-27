@@ -727,6 +727,21 @@ impl Document {
         Ok(())
     }
 
+    /// Moves a step to `index` in its own stage, counted among the stage's
+    /// other steps; past the end puts it last. Returns whether the step was
+    /// found in a stage. A layer's own steps are not moved.
+    pub fn move_step(&mut self, id: Uuid, index: usize) -> bool {
+        for stage in &mut self.stages {
+            if let Some(at) = stage.steps.iter().position(|step| step.id == id) {
+                let step = stage.steps.remove(at);
+                let index = index.min(stage.steps.len());
+                stage.steps.insert(index, step);
+                return true;
+            }
+        }
+        false
+    }
+
     /// The Combine stage's layers, bottom first.
     pub fn layers(&self) -> &[LayerRecord] {
         &self.stages[StageKind::Combine as usize].layers

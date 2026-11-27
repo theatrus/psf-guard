@@ -53,9 +53,9 @@ pub use document::{
 };
 pub use error::StudioError;
 pub use flow::{
-    background_corrected_channel, color_group_of, color_setup_from_document,
-    document_from_color_setup, flow_operations, stars_channel, stretched_channel, tools_channel,
-    COLOR_GROUPS,
+    background_before_tools, background_corrected_channel, color_group_of,
+    color_setup_from_document, document_from_color_setup, flow_operations, new_tools_step_index,
+    set_background_before_tools, stars_channel, stretched_channel, tools_channel, COLOR_GROUPS,
 };
 pub use junction::{open_in_editor_command, FileStamp, Junction, JunctionState, JunctionStatus};
 pub use palette::{

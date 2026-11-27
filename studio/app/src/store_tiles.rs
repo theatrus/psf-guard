@@ -412,6 +412,12 @@ impl BandStretch {
     }
 }
 
+/// A band's states as the store holds them, in the order its samples and
+/// quarter-resolution copies list them.
+const STACKED: usize = 0;
+const TOOLS: usize = 1;
+const CORRECTED: usize = 2;
+
 /// What one band is drawn from at a place in the document's steps.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct BandState {
@@ -461,6 +467,10 @@ pub struct Bands {
     /// The bands the store holds already stretched for display, such as
     /// stars after the star stretch. They are drawn as they are.
     display: Vec<usize>,
+    /// Whether the store corrected the background before the tools ran:
+    /// then the corrected channel is the stack corrected, and the tools'
+    /// result already holds the correction.
+    background_first: bool,
     /// The largest rectangle every input covers, as x, y, width and height,
     /// which the store records when it is prepared.
     pub automatic_crop: Option<[u32; 4]>,
@@ -510,6 +520,7 @@ impl Bands {
         else {
             return;
         };
+        self.background_first = record["background_first"].as_bool().unwrap_or(false);
         self.automatic_crop = record["crop"].as_array().and_then(|values| {
             let value = |at: usize| Some(values.get(at)?.as_u64()? as u32);
             Some([value(0)?, value(1)?, value(2)?, value(3)?])
@@ -652,24 +663,59 @@ impl Bands {
     /// result where a band has tools, so a view before the tools has no
     /// corrected channel to blend.
     pub fn planes(&self, band: usize, state: BandState) -> (usize, Option<usize>) {
-        let tools = self.tools[band].filter(|_| state.tools);
-        let matches = tools.is_some() == self.tools[band].is_some();
+        let (base, blended) = self.states_drawn(band, state);
+        let channel = |state: usize| match state {
+            TOOLS => self.tools[band],
+            CORRECTED => self.corrected[band],
+            _ => Some(self.tile_band[band]),
+        };
         (
-            tools.unwrap_or(self.tile_band[band]),
-            self.corrected[band].filter(|_| matches),
+            channel(base).unwrap_or(self.tile_band[band]),
+            blended.and_then(channel),
+        )
+    }
+
+    /// Whether the band's tools' result in `state` already holds its
+    /// background correction: the store corrected it before the tools ran.
+    pub fn correction_in_tools(&self, band: usize, state: BandState) -> bool {
+        self.background_first && state.tools && self.has_tools(band)
+    }
+
+    /// Which of a band's stored states a view in `state` draws, as
+    /// [`STACKED`], [`TOOLS`] or [`CORRECTED`], and the state blended into
+    /// it by the background's strength, if the store has one to blend.
+    ///
+    /// When the tools ran first, the corrected state is the tools' result
+    /// corrected, so it blends only into a view that has the tools as the
+    /// store does. When the background was corrected first, it is the
+    /// stack corrected: it blends into a view before the tools, and the
+    /// tools' result already holds the correction.
+    fn states_drawn(&self, band: usize, state: BandState) -> (usize, Option<usize>) {
+        let has_tools = self.tools.get(band).is_some_and(Option::is_some);
+        let has_corrected = self.corrected.get(band).is_some_and(Option::is_some);
+        let tools = state.tools && has_tools;
+        if self.background_first {
+            return if tools {
+                (TOOLS, None)
+            } else {
+                (STACKED, has_corrected.then_some(CORRECTED))
+            };
+        }
+        (
+            if tools { TOOLS } else { STACKED },
+            (has_corrected && state.tools == has_tools).then_some(CORRECTED),
         )
     }
 
     /// The whole band at a quarter of the resolution in the state given
     /// for it, as the samples of its stretch analysis are.
     fn quarter_in(&self, band: usize, states: &[BandState]) -> Option<Vec<f32>> {
-        let [stacked, tools, corrected] = self.quarter.get(band)?;
+        let copies = self.quarter.get(band)?;
         let state = states.get(band).copied().unwrap_or_default();
-        let stacked = stacked.as_ref()?;
-        let base = tools.as_ref().filter(|_| state.tools).unwrap_or(stacked);
-        let matches = state.tools == tools.is_some();
-        Some(match corrected {
-            Some(after) if state.background > 0.0 && matches => base
+        let (base, blended) = self.states_drawn(band, state);
+        let base = copies[base].as_ref().or(copies[STACKED].as_ref())?;
+        Some(match blended.and_then(|at| copies[at].as_ref()) {
+            Some(after) if state.background > 0.0 => base
                 .iter()
                 .zip(after.iter())
                 .map(|(a, b)| a + (b - a) * state.background)
@@ -689,13 +735,15 @@ impl Bands {
             .samples
             .iter()
             .enumerate()
-            .map(|(band, [stacked, tools, corrected])| {
+            .map(|(band, copies)| {
                 let state = states.get(band).copied().unwrap_or_default();
-                let stacked = stacked.as_deref().unwrap_or(&[]);
-                let base = tools.as_deref().filter(|_| state.tools).unwrap_or(stacked);
-                let matches = state.tools == tools.is_some();
-                match corrected {
-                    Some(after) if state.background > 0.0 && matches => base
+                let (base, blended) = self.states_drawn(band, state);
+                let base = copies[base]
+                    .as_deref()
+                    .or(copies[STACKED].as_deref())
+                    .unwrap_or(&[]);
+                match blended.and_then(|at| copies[at].as_ref()) {
+                    Some(after) if state.background > 0.0 => base
                         .iter()
                         .zip(after)
                         .map(|(a, b)| a + (b - a) * state.background)
@@ -1321,6 +1369,40 @@ pub fn source(open: Option<&Path>) -> Result<(Arc<dyn TileSource>, Bands), Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_band_draws_its_planes_in_the_order_the_store_was_prepared_in() {
+        // One band: stacked in channel 0, its tools' result in 1, and its
+        // corrected state in 2.
+        let mut bands = Bands {
+            tile_band: vec![0],
+            tools: vec![Some(1)],
+            corrected: vec![Some(2)],
+            ..Bands::default()
+        };
+        let before_tools = BandState {
+            tools: false,
+            background: 0.5,
+        };
+        let after_tools = BandState {
+            tools: true,
+            background: 0.5,
+        };
+        // Tools first: the corrected plane is the tools' result corrected,
+        // so it blends only into the view after the tools.
+        assert_eq!(bands.planes(0, before_tools), (0, None));
+        assert_eq!(bands.planes(0, after_tools), (1, Some(2)));
+        assert!(!bands.correction_in_tools(0, after_tools));
+        // Background first: the corrected plane is the stack corrected, and
+        // the tools' result already holds the correction.
+        bands.background_first = true;
+        assert_eq!(bands.planes(0, before_tools), (0, Some(2)));
+        assert_eq!(bands.planes(0, after_tools), (1, None));
+        assert!(bands.correction_in_tools(0, after_tools));
+        // A band with no tools blends its correction either way.
+        bands.tools = vec![None];
+        assert_eq!(bands.planes(0, after_tools), (0, Some(2)));
+    }
 
     #[test]
     fn a_layered_stretch_reads_maps_of_the_whole_band_and_the_picture_s_headroom() {

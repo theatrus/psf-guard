@@ -255,6 +255,22 @@ impl Studio {
                 }
                 None => Err("`path` is needed".to_string()),
             },
+            // Whether the background is corrected before the tools run.
+            "set_tools_order" => match params["background_first"].as_bool() {
+                Some(before) => {
+                    let changed = crate::studio_model::set_background_before_tools(
+                        &mut self.document,
+                        before,
+                    );
+                    self.refresh_canvas();
+                    Ok(json!({
+                        "background_first":
+                            crate::studio_model::background_before_tools(&self.document),
+                        "changed": changed,
+                    }))
+                }
+                None => Err("`background_first` is needed".to_string()),
+            },
             "set_headroom" => {
                 // A number of stops makes the picture HDR; null makes it SDR.
                 let stops = params["stops"]
@@ -435,6 +451,7 @@ impl Studio {
             "selected": self.selected,
             "split": self.split,
             "headroom": document.headroom,
+            "background_first": crate::studio_model::background_before_tools(document),
             "panes": panes,
             "inputs": inputs,
             "layers": layers,

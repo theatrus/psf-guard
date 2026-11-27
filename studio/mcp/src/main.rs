@@ -126,6 +126,11 @@ fn tools() -> Value {
             }), &["layer", "patch"]),
         },
         {
+            "name": "studio_set_tools_order",
+            "description": "Sets whether the background is corrected before the processing tools run (true: the tools, such as BlurXTerminator, run on the corrected stacks) or after them (false), as the Order choice on the Background extraction step does. It applies to every input, and takes effect when the tools run again (studio_run_tools).",
+            "inputSchema": object(json!({ "instance": instance, "background_first": { "type": "boolean" } }), &["background_first"]),
+        },
+        {
             "name": "studio_set_headroom",
             "description": "Makes the picture HDR with this many stops of headroom above SDR white (0 to 4), or SDR with 0, as the Final picture's HDR setting does. `knee`, from 0.3 to 0.95, sets where every stretch but the HDR layered one continues into the headroom, as the stretch's output (0.75 when never set).",
             "inputSchema": object(json!({ "instance": instance, "stops": { "type": "number" }, "knee": { "type": "number" } }), &["stops"]),
@@ -251,6 +256,11 @@ impl Server {
             "studio_set_layer" => {
                 forward(self.instance(arguments)?, "set_layer", arguments.clone())
             }
+            "studio_set_tools_order" => forward(
+                self.instance(arguments)?,
+                "set_tools_order",
+                json!({ "background_first": arguments["background_first"] }),
+            ),
             "studio_set_headroom" => forward(
                 self.instance(arguments)?,
                 "set_headroom",

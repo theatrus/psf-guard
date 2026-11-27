@@ -223,8 +223,10 @@ pub struct ChannelRegistration {
 /// processing tools, the tools' result ([`tools_channel`]) and the stars a
 /// star removal took out ([`stars_channel`]); and, with background
 /// correction, every channel corrected in full
-/// ([`background_corrected_channel`]). The corrected plane is the tools'
-/// result corrected, where a channel has tools. A strength
+/// ([`background_corrected_channel`]). When the tools run first, the
+/// corrected plane is the tools' result corrected, where a channel has
+/// tools; when the background is corrected first, it is the stack
+/// corrected, and the tools ran on it. A strength
 /// between is a blend of the two, because Seiza's correction changes each
 /// sample in proportion to the strength and resampling keeps proportions.
 /// So a person can move the strength and see the result at once, with no
@@ -247,6 +249,10 @@ pub struct RegisteredChannels {
     /// What continuum subtraction did for each emission line it was asked
     /// for, in words.
     pub continuum: Vec<(StackColorRole, String)>,
+    /// Whether the background was corrected before the tools ran. Then
+    /// [`background_corrected_channel`] is the stack corrected, and
+    /// [`tools_channel`] is the tools' result on the corrected stack.
+    pub background_first: bool,
 }
 
 /// Continuum subtraction: its settings, and where each channel's stack
@@ -270,8 +276,11 @@ impl RegisteredChannels {
     ///
     /// The steps and their order are the ones PSF Guard's color previews
     /// run: the code in `color_steps`. Registration is measured on the
-    /// stacks as they came. The tools run on a stack as it came. Each
-    /// background is fitted and corrected on the tools' result, in the
+    /// stacks as they came. The tools run on a stack as it came, and each
+    /// background is fitted and corrected on the tools' result. When
+    /// `tools` asks for the background first, each background is fitted
+    /// and corrected on the stack as it came, and the tools run on it at
+    /// the step's strength. Either way the background is fitted in the
     /// channel's own frame, before resampling, so the empty border a
     /// resample leaves is never fitted.
     ///
@@ -345,15 +354,55 @@ impl RegisteredChannels {
             planes.push(place(channel, frame.image.clone())?);
         }
 
-        // The tools run on each stack as it came, in the channel's own
-        // frame. What follows them, the background step included, works on
-        // their result.
+        // The background first, when the tools are to run on the corrected
+        // stacks: each stack is corrected in its own frame, in full for
+        // the canvas to blend, and the tools take it at the step's
+        // strength.
+        let background_first =
+            background.is_some() && tools.is_some_and(|tools| tools.after_background);
+        let mut backgrounds = Vec::new();
         let mut processed: Vec<LinearImage> =
             frames.iter().map(|frame| frame.image.clone()).collect();
+        let strength = background.map_or(1.0, |extraction| extraction.strength as f32);
+        if let (true, Some(extraction)) = (background_first, background) {
+            let full = StackBackgroundExtraction {
+                strength: 1.0,
+                ..extraction.clone()
+            };
+            let mut corrected = processed.clone();
+            let mut channels: Vec<(StackColorRole, &mut LinearImage)> =
+                roles.iter().copied().zip(corrected.iter_mut()).collect();
+            correct_channel_backgrounds(
+                &mut channels,
+                &full,
+                |_| Vec::new(),
+                |role, event| {
+                    if let BackgroundEvent::Corrected { fit, .. } = event {
+                        backgrounds.push((role, fit.clone()));
+                    }
+                    Ok(())
+                },
+            )
+            .map_err(anyhow::Error::msg)?;
+            for (channel, corrected) in corrected.into_iter().enumerate() {
+                processed[channel] = blend(&processed[channel], &corrected, strength)?;
+                names.push(background_corrected_channel(&channel_names[channel]));
+                planes.push(place(channel, corrected)?);
+            }
+        }
+
+        // The tools run on each stack in its own frame: as it came, or
+        // with its background corrected when that comes first. What
+        // follows them works on their result.
         let mut tool_runs = Vec::new();
         if let Some(tools) = tools {
             for (channel, (role, frame)) in roles.iter().zip(&frames).enumerate() {
                 let label = channel_names[channel].clone();
+                // The stack as the tools take it.
+                let frame = &seiza_stacking::FitsFrame {
+                    image: processed[channel].clone(),
+                    ..frame.clone()
+                };
                 // A deconvolution runs first, and the chain runs on its
                 // result. The two together are the channel's tools state.
                 let mut source = std::borrow::Cow::Borrowed(frame);
@@ -420,14 +469,23 @@ impl RegisteredChannels {
                 if members.len() < 2 {
                     continue;
                 }
-                // Each member in its state after its own tools, or as stacked.
+                // Each member in its state after its own tools, or as the
+                // tools take it: as stacked, or corrected at the step's
+                // strength when the background comes first.
                 let latest = |channel: usize| -> Result<LinearImage> {
-                    let wanted = tools_channel(&channel_names[channel]);
-                    let at = names
-                        .iter()
-                        .position(|other| *other == wanted)
-                        .unwrap_or(channel);
-                    Ok(LinearImage::new(width, height, 1, planes[at].clone())?)
+                    let at = |name: String| names.iter().position(|other| *other == name);
+                    let label = &channel_names[channel];
+                    let stacked = LinearImage::new(width, height, 1, planes[channel].clone())?;
+                    if let Some(at) = at(tools_channel(label)) {
+                        return Ok(LinearImage::new(width, height, 1, planes[at].clone())?);
+                    }
+                    match at(background_corrected_channel(label)).filter(|_| background_first) {
+                        Some(at) => {
+                            let corrected = LinearImage::new(width, height, 1, planes[at].clone())?;
+                            blend(&stacked, &corrected, strength)
+                        }
+                        None => Ok(stacked),
+                    }
                 };
                 let mut images = members
                     .iter()
@@ -485,8 +543,7 @@ impl RegisteredChannels {
             }
         }
 
-        let mut backgrounds = Vec::new();
-        if let Some(extraction) = background {
+        if let (false, Some(extraction)) = (background_first, background) {
             // Corrected in full: the strength is applied when the two
             // planes are blended.
             let full = StackBackgroundExtraction {
@@ -646,10 +703,15 @@ impl RegisteredChannels {
                     }
                 };
                 // Each input in its last linear state: with its background
-                // corrected, else after its tools, else as stacked.
+                // corrected, else after its tools, else as stacked. When the
+                // background comes first, the tools' result is the last.
                 let last_state = |input: usize| -> Option<LinearImage> {
                     let name = &channel_names[input];
-                    [background_corrected_channel(name), tools_channel(name)]
+                    let mut order = [background_corrected_channel(name), tools_channel(name)];
+                    if background_first {
+                        order.reverse();
+                    }
+                    order
                         .iter()
                         .find_map(|wanted| names.iter().position(|other| other == wanted))
                         .and_then(|at| image(planes[at].clone()).ok())
@@ -697,6 +759,7 @@ impl RegisteredChannels {
             backgrounds,
             tools: tool_runs,
             continuum: continuum_results,
+            background_first,
         })
     }
 }
@@ -853,6 +916,30 @@ pub struct ChannelTools<'a> {
     /// Hears the channel, the tool running on it, and how far the channel's
     /// chain has got, from 0 to 1.
     pub progress: &'a dyn Fn(&str, &str, f32),
+    /// Whether the tools run on the stacks with their background corrected,
+    /// at the step's strength, rather than the background being fitted on
+    /// the tools' results.
+    pub after_background: bool,
+}
+
+/// `stacked` blended toward `corrected` by `strength`: Seiza's background
+/// correction at that strength, which changes each sample in proportion.
+fn blend(stacked: &LinearImage, corrected: &LinearImage, strength: f32) -> Result<LinearImage> {
+    if strength >= 1.0 {
+        return Ok(corrected.clone());
+    }
+    let data = stacked
+        .data
+        .iter()
+        .zip(&corrected.data)
+        .map(|(a, b)| a + (b - a) * strength)
+        .collect();
+    Ok(LinearImage::new(
+        stacked.width,
+        stacked.height,
+        stacked.channels,
+        data,
+    )?)
 }
 
 /// A chain that runs on a group of channels together.
@@ -928,6 +1015,7 @@ mod tests {
             backgrounds: Vec::new(),
             tools: Vec::new(),
             continuum: Vec::new(),
+            background_first: false,
         }
     }
 

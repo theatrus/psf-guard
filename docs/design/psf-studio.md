@@ -2247,6 +2247,46 @@ In the app, started with `--psf-guard <path>`:
 A tool that ran with the same settings before is not run again: each
 step's result is kept beside the stacks.
 
+#### Tools before or after the background (2026-11-27)
+
+The tools can run on the stacks as they came, with the background fitted
+on their results, or on the stacks with the background corrected first.
+The second is the usual order in PixInsight, gradient removal before
+BlurXTerminator. The document's step order decides: the Background
+extraction step before every tools step (an input's Processing tools, its
+Deconvolution, or a color group's tools) puts the background first. The
+Background extraction step and each tools step have an **Order** choice,
+**Tools, then background** or **Background, then tools**, which moves the
+Background extraction step before or after all of them; a tools step added
+later goes on the side the order puts it. The order is the document's,
+not each input's, because Seiza fits every input's background with one
+model.
+
+- When the background comes first, `studio-prepare` fits and corrects each
+  stack in its own frame, and the tools run on it at the step's strength.
+  The store keeps the stack corrected in full as `<input>@background`, and
+  the tools' result as `<input>@tools`. Its record says
+  `"background_first": true`.
+- The canvas draws an input before its tools as the stack blended toward
+  its correction by the strength, and after its tools as the tools'
+  result, which holds the correction. When the tools run first, as
+  before, the corrected plane is the tools' result corrected.
+- With the background first, the tools depend on the background's settings
+  and strength, so a change to either, or to the order, flags the inputs
+  with tools as tools not run. The tool cache keys their results on the
+  background's settings too.
+- PSF Guard's color setup has no order, so a setup exported from such a
+  document runs the tools first.
+
+Tried on a copy of the Iris store (LRGB with BlurXTerminator,
+NoiseXTerminator and StarXTerminator) through `psf-studio-mcp`: choosing
+**Background, then tools** moved the step and flagged luminance, red,
+green and blue; **Run tools** took 156 seconds and cleared the flag; the
+luminance input showed the corrected stack with its stars at its
+Background extraction step, and the tools' starless result at its
+Processing tools step. That sky has little gradient, so the final picture
+changed little: its median in a sky square rose from about 0.095 to 0.107.
+
 ### Stars
 
 When a star removal keeps the stars it took out (StarXTerminator's
@@ -2872,6 +2912,9 @@ Gaps to fix, roughly in the order they got in the way:
 - [x] **Inputs whose stars a layer shows.** An input was listed as not used
   when only its stars were in the picture; it now shows where its stars go,
   such as “→ RGB stars (stars)”.
+- [x] **Tools after the background.** The Order choice runs the tools on the
+  stacks with their background corrected (see “Tools before or after the
+  background”). The order is the whole document's.
 - [ ] **Undo history.** Only Undo stroke exists.
 - [ ] **Tool runs.** A run cannot be queued behind another; tools on the
   combined color image (`color_rc_astro`) and the narrowband star steps

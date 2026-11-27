@@ -614,7 +614,10 @@ fn band_source(
     };
     let (plane, corrected) = bands.planes(band, state);
     if corrected.is_none() {
-        if strength > 0.0 && bands.corrected[band].is_some() {
+        if strength > 0.0
+            && bands.corrected[band].is_some()
+            && !bands.correction_in_tools(band, state)
+        {
             omitted.push(format!("the background of {label} without its tools"));
         }
         state.background = 0.0;

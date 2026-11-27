@@ -433,6 +433,20 @@ fn prepare_store(
     };
     let processing = processing_from_document(&document)?;
     let background = processing.background_extraction;
+    // When the document corrects the background before the tools, the
+    // tools run on the corrected stacks, so their results are kept under
+    // the background's settings too.
+    let after_background =
+        background.is_some() && crate::studio::background_before_tools(&document);
+    let corrected_by = match (&background, after_background) {
+        (Some(extraction), true) => {
+            use sha2::{Digest, Sha256};
+            let digest = Sha256::digest(serde_json::to_string(extraction)?);
+            let digest: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+            format!(":background:{}", &digest[..16])
+        }
+        _ => String::new(),
+    };
 
     // Each channel's processing tools, resolved against the tools this
     // machine has. A tool's result is kept beside the downloaded stacks.
@@ -441,7 +455,7 @@ fn prepare_store(
     let mut deconvolutions = BTreeMap::new();
     for stack in stacks {
         let source = format!("mono:{}:{}", stack.job_id, stack.group_index);
-        let revision = stack.artifact_revision.to_string();
+        let revision = format!("{}{corrected_by}", stack.artifact_revision);
         let deconvolution = processing
             .input_deconvolutions
             .get(&stack.role)
@@ -533,6 +547,7 @@ fn prepare_store(
             })
             .collect::<Vec<_>>()
             .join("+");
+        let revision = format!("{revision}{corrected_by}");
         let chain = ToolChain::resolve(&workers, &config, "studio", &source, &revision, None)
             .map_err(|error| anyhow!("the tools of {group}: {error}"))?;
         groups.push(crate::studio_sources::GroupTools {
@@ -560,6 +575,7 @@ fn prepare_store(
         deconvolutions,
         groups,
         progress: &report,
+        after_background,
     };
 
     let started = Instant::now();
@@ -667,6 +683,7 @@ fn prepare_store(
     let backgrounds = folder.join("backgrounds.json");
     write_atomically(&backgrounds, serde_json::to_string(&prepared.backgrounds)?)?;
     println!("Prepared in {:.1} s", started.elapsed().as_secs_f64());
+    let background_first = prepared.background_first;
     let registered = prepared;
 
     // The key changes when any channel's stack is rebuilt.
@@ -749,6 +766,7 @@ fn prepare_store(
         "display": display,
         "star_stretch": star_stretch,
         "crop": crop,
+        "background_first": background_first,
     });
     write_atomically(&record, serde_json::to_string(&prepared_record)?)?;
     if let Some(path) = document_out {

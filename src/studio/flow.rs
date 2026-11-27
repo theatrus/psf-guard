@@ -69,6 +69,84 @@ pub fn tools_channel(channel: &str) -> String {
     format!("{channel}@tools")
 }
 
+/// Whether a Linear step is a processing tool: an input's tools, its
+/// deconvolution, or a color group's tools.
+fn is_tools_step(step: &super::StepRecord) -> bool {
+    [op::RC_ASTRO_INPUT, op::DECONVOLUTION, op::RC_ASTRO_COLOR].contains(&step.kind.name())
+}
+
+/// Whether the background is corrected before the processing tools run, so
+/// every input's tools work on its stack with the background corrected:
+/// the document's first Background extraction step comes before its first
+/// tools step in the Linear stage. With no tools step, or no Background
+/// extraction step, the answer is no.
+///
+/// Seiza fits every input's background with one model, so the order is the
+/// document's, not each input's.
+pub fn background_before_tools(document: &super::Document) -> bool {
+    let steps = &document.stage(super::StageKind::Linear).steps;
+    let background = steps
+        .iter()
+        .position(|step| step.kind.name() == op::BACKGROUND);
+    let tools = steps.iter().position(is_tools_step);
+    matches!((background, tools), (Some(background), Some(tools)) if background < tools)
+}
+
+/// Puts the document's first Background extraction step before every tools
+/// step, or after every one, so the tools run on the corrected stacks or the
+/// background is fitted on the tools' results. Returns whether the
+/// document changed.
+pub fn set_background_before_tools(document: &mut super::Document, before: bool) -> bool {
+    if background_before_tools(document) == before {
+        return false;
+    }
+    let steps = &document.stage(super::StageKind::Linear).steps;
+    let Some(background) = steps
+        .iter()
+        .find(|step| step.kind.name() == op::BACKGROUND)
+        .map(|step| step.id)
+    else {
+        return false;
+    };
+    // The places are counted without the Background extraction step.
+    let others: Vec<&super::StepRecord> =
+        steps.iter().filter(|step| step.id != background).collect();
+    let index = if before {
+        others.iter().position(|step| is_tools_step(step))
+    } else {
+        others
+            .iter()
+            .rposition(|step| is_tools_step(step))
+            .map(|at| at + 1)
+    };
+    let Some(index) = index else {
+        return false;
+    };
+    document.move_step(background, index)
+}
+
+/// Where a new tools step goes in the Linear stage, so it keeps the
+/// document's order: before the Background extraction step when the tools
+/// run first, else after it and after the tools already there.
+pub fn new_tools_step_index(document: &super::Document) -> usize {
+    let steps = &document.stage(super::StageKind::Linear).steps;
+    let background = steps
+        .iter()
+        .position(|step| step.kind.name() == op::BACKGROUND);
+    match background {
+        None => steps.len(),
+        Some(background) if !background_before_tools(document) => background,
+        Some(background) => {
+            steps
+                .iter()
+                .rposition(is_tools_step)
+                .filter(|last| *last > background)
+                .unwrap_or(background)
+                + 1
+        }
+    }
+}
+
 /// The groups whose inputs' tools can run together, as one color image:
 /// the band of the group's tools step and its inputs in the order the
 /// color image holds them. PSF Guard removes stars on each channel stack

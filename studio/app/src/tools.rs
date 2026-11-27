@@ -210,6 +210,24 @@ impl Studio {
         }
     }
 
+    /// Whether an input has processing tools the store is prepared with:
+    /// its own, its deconvolution, or its color group's.
+    fn has_tools(&self, channel: &str) -> bool {
+        let deconvolution = self
+            .document
+            .stage(StageKind::Linear)
+            .steps
+            .iter()
+            .any(|step| {
+                step.enabled
+                    && step.kind.name() == flow_operations::DECONVOLUTION
+                    && step.band.as_deref() == Some(channel)
+            });
+        let group = crate::studio_model::color_group_of(channel)
+            .is_some_and(|(group, _)| !self.group_chain(group).is_empty());
+        !self.chain(channel).is_empty() || deconvolution || group
+    }
+
     fn provider_of(step: &serde_json::Value) -> &str {
         step["provider"]
             .as_str()
@@ -253,7 +271,11 @@ impl Studio {
             }
         }
         // Each input's background extraction is prepared with the store as
-        // well, but for its strength, which the canvas applies.
+        // well, but for its strength, which the canvas applies. When the
+        // background is corrected before the tools, the tools ran on it at
+        // its strength, so an input with tools records the strength and
+        // the order too.
+        let before_tools = crate::studio_model::background_before_tools(&self.document);
         for channel in self.document.channels() {
             let background = crate::studio_model::input_steps(&self.document, &channel)
                 .into_iter()
@@ -261,8 +283,13 @@ impl Studio {
                 .rfind(|step| step.enabled && step.kind.name() == flow_operations::BACKGROUND);
             if let Some(StepKind::Operation { settings, .. }) = background.map(|step| &step.kind) {
                 let mut settings = settings.clone();
+                let tools_follow = before_tools && self.has_tools(&channel);
                 if let Some(settings) = settings.as_object_mut() {
-                    settings.remove("strength");
+                    if tools_follow {
+                        settings.insert("before_tools".to_string(), true.into());
+                    } else {
+                        settings.remove("strength");
+                    }
                 }
                 chains.insert(format!("{channel}:background"), settings);
             }
@@ -391,12 +418,9 @@ impl Studio {
                 self.document.set_step_settings(id, settings);
             }
             None => {
-                // Tools run before the background is fitted.
-                let steps = &self.document.stage(StageKind::Linear).steps;
-                let before = steps
-                    .iter()
-                    .position(|step| step.kind.name() == flow_operations::BACKGROUND)
-                    .unwrap_or(steps.len());
+                // In the document's order: before the background is fitted,
+                // or after it when the tools run on the corrected stacks.
+                let before = crate::studio_model::new_tools_step_index(&self.document);
                 let mut step =
                     operation(flow_operations::RC_ASTRO_INPUT, Accepts::Linear).for_band(channel);
                 if let StepKind::Operation { settings: own, .. } = &mut step.kind {
@@ -590,13 +614,9 @@ impl Studio {
                 self.document.set_step_settings(id, settings);
             }
             None => {
-                // A group's tools run after its inputs' own and before the
-                // background is fitted.
-                let steps = &self.document.stage(StageKind::Linear).steps;
-                let before = steps
-                    .iter()
-                    .position(|step| step.kind.name() == flow_operations::BACKGROUND)
-                    .unwrap_or(steps.len());
+                // A group's tools run after its inputs' own, on the side of
+                // the background the document's order puts the tools.
+                let before = crate::studio_model::new_tools_step_index(&self.document);
                 let mut step =
                     operation(flow_operations::RC_ASTRO_COLOR, Accepts::Linear).for_band(band);
                 if let StepKind::Operation { settings: own, .. } = &mut step.kind {
