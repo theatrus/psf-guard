@@ -251,6 +251,31 @@ pub(super) const STRETCHES: [(&str, &str); 11] = [
     ("layered-hdr", "Layered, HDR"),
 ];
 
+/// The step setting that holds the sky floor of a stretch with none of its
+/// own: beside the stretch's model, which Seiza reads, and which PSF Guard's
+/// settings leave out.
+pub(super) const SKY_FLOOR: &str = "sky_floor";
+
+/// The highest sky floor, as the layered stretches' own goes.
+pub(super) const MAX_SKY_FLOOR: f64 = 0.5;
+
+/// The stage that takes a stretched sky up to `floor` to black and stretches
+/// the range above it to reach white again: PixInsight's histogram
+/// transformation with its shadows at the floor and midtones at the middle,
+/// which is the layered stretches' sky floor in an SDR picture. After an HDR
+/// stretch it shapes the range up to white, so the headroom keeps.
+pub(super) fn sky_floor_stage(floor: f64) -> Option<StretchModel> {
+    (floor > 0.0).then(|| {
+        serde_json::from_value(serde_json::json!({
+            "type": "ht",
+            "shadows": floor.min(MAX_SKY_FLOOR),
+            "midtone": 0.5,
+            "highlights": 1.0,
+        }))
+        .ok()
+    })?
+}
+
 /// The settings of one of Seiza's stretches that a slider sets: Seiza's
 /// name for the setting, a label, and the range the slider covers.
 pub(super) fn stretch_settings(kind: &str) -> &'static [(&'static str, &'static str, f64, f64)] {
@@ -631,12 +656,22 @@ fn band_source(
         PlannedStretch::Document(steps) => steps
             .iter()
             .filter_map(|id| document.step(*id))
-            .filter_map(|(_, step)| match stretch_model(step) {
+            .flat_map(|(_, step)| match stretch_model(step) {
                 None => {
                     omitted.push(format!("a stretch of {label} the canvas does not know"));
-                    None
+                    Vec::new()
                 }
-                Some(model) => Some(model),
+                // A stretch with no sky floor of its own takes one after it.
+                Some(model) => {
+                    let floor = match (&model, &step.kind) {
+                        (StretchModel::Layered(_) | StretchModel::LayeredHdr(_), _) => None,
+                        (_, StepKind::Operation { settings, .. }) => {
+                            settings[SKY_FLOOR].as_f64().and_then(sky_floor_stage)
+                        }
+                        _ => None,
+                    };
+                    std::iter::once(model).chain(floor).collect()
+                }
             })
             .collect(),
     };
@@ -1871,6 +1906,26 @@ impl Studio {
                 let (_, _, low, high) = tone_step::HDR_KNEE;
                 self.document.hdr_knee = Some(low + (high - low) * position);
             }
+            SliderId::SkyFloor => {
+                let Some(id) = self.selected_step() else {
+                    return;
+                };
+                let Some((
+                    _,
+                    StepRecord {
+                        kind: StepKind::Operation { settings, .. },
+                        ..
+                    },
+                )) = self.document.step(id)
+                else {
+                    return;
+                };
+                let mut settings = settings.clone();
+                // Two decimals, as the layered stretches' own.
+                let floor = (MAX_SKY_FLOOR * f64::from(position) * 100.0).round() / 100.0;
+                settings[SKY_FLOOR] = floor.into();
+                self.document.set_step_settings(id, settings);
+            }
             SliderId::FinishParam(index) => {
                 let Some(id) = self.selected_step() else {
                     return;
@@ -2424,6 +2479,35 @@ impl Studio {
                     this.stop_run()
                 }))
             })
+            // Steps changed while the tools run: one more run can follow.
+            .when(self.is_running() && self.run_is_queued(), |bar| {
+                bar.child(
+                    div()
+                        .pr_2()
+                        .text_xs()
+                        .whitespace_nowrap()
+                        .child("Runs again when this run ends"),
+                )
+            })
+            .when(
+                self.is_running() && !self.run_is_queued() && self.changed_during_run(),
+                |bar| {
+                    bar.child(
+                        div()
+                            .pr_2()
+                            .text_xs()
+                            .whitespace_nowrap()
+                            .child("Changed since this run started"),
+                    )
+                    .child(Self::act(
+                        "Run again after",
+                        "run-again-bar",
+                        false,
+                        cx,
+                        |this| this.run_tools(),
+                    ))
+                },
+            )
             // Tools changed since the store was prepared: the picture shows
             // the store's tools until they run.
             .when_some(
@@ -2627,6 +2711,27 @@ impl Render for Studio {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_sky_floor_takes_the_sky_to_black_and_keeps_white() {
+        use seiza_stretch::{StretchAnalysis, StretchConfig};
+        assert!(super::sky_floor_stage(0.0).is_none());
+        let model = super::sky_floor_stage(0.1).unwrap();
+        let samples: Vec<f32> = (0..1000).map(|at| at as f32 / 999.0).collect();
+        let analysis = StretchAnalysis::analyze(&samples, 1, samples.len()).unwrap();
+        let plan = StretchConfig {
+            model,
+            color_strategy: Default::default(),
+            max_analysis_samples: samples.len(),
+        }
+        .resolve(&analysis)
+        .unwrap();
+        let curve = plan.curves()[0];
+        assert_eq!(curve.map(0.05), 0.0);
+        assert_eq!(curve.map(0.1), 0.0);
+        assert!((curve.map(0.55) - 0.5).abs() < 1e-5);
+        assert!((curve.map(1.0) - 1.0).abs() < 1e-6);
+    }
+
     #[test]
     fn a_groups_stars_are_reduced_together_unless_a_layer_has_its_own_amount() {
         use super::{flow_document, star_reduction};

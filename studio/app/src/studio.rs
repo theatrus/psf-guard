@@ -113,6 +113,9 @@ enum SliderId {
     Headroom,
     /// Where an HDR picture's stretches continue into the headroom.
     HdrKnee,
+    /// The selected stretch step's sky floor, for a stretch with none of
+    /// its own.
+    SkyFloor,
     /// One setting of the view stretch, by its place in the list of that
     /// stretch's settings.
     ViewStretchParam(usize),
@@ -133,9 +136,10 @@ enum SliderId {
 }
 
 impl SliderId {
-    const ALL: [SliderId; 12] = [
+    const ALL: [SliderId; 13] = [
         SliderId::Headroom,
         SliderId::HdrKnee,
+        SliderId::SkyFloor,
         SliderId::Opacity,
         SliderId::Hue,
         SliderId::Saturation,

@@ -76,4 +76,7 @@
   input or for every input. Documents saved before open with their tools
   split into these steps, and Studio reuses the tool results it already
   has. **Undo** and **Redo**, in the toolbar and the Edit menu (⌘Z and
-  ⇧⌘Z), go back through the document's edits.
+  ⇧⌘Z), go back through the document's edits. Every input stretch has a
+  **Sky floor**, which takes what background extraction leaves to black,
+  and **Run tools** during a run queues one more run with your later
+  changes.

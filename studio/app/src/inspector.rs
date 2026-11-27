@@ -6,7 +6,8 @@
 
 use super::panes::{
     amount, amount_in, amount_range, is_drawn, mask_words, new_stretch, operation,
-    output_stretch_step, stretch_settings, ADJUSTMENTS, CONTROL, PANE, QUIET, STRETCHES,
+    output_stretch_step, stretch_settings, ADJUSTMENTS, CONTROL, MAX_SKY_FLOOR, PANE, QUIET,
+    SKY_FLOOR, STRETCHES,
 };
 use super::{SliderId, Studio, Tool, PANEL_WIDTH};
 use crate::image_steps::Accepts;
@@ -278,6 +279,20 @@ impl Studio {
                 ((value - low) / (high - low)) as f32,
                 cx,
             ));
+        }
+        // A stretch with no sky floor of its own takes one after it.
+        if !output && !kind.starts_with("layered") {
+            let floor = settings[SKY_FLOOR].as_f64().unwrap_or(0.0);
+            block = block
+                .child(self.labelled_slider(
+                    format!("Sky floor {floor:.2}"),
+                    SliderId::SkyFloor,
+                    (floor / MAX_SKY_FLOOR) as f32,
+                    cx,
+                ))
+                .children(Self::help(
+                    "Takes the stretched sky up to this level to black, and stretches the range above it so white stays white, as the layered stretches' Sky floor does. Use it for what background extraction leaves. 0 leaves the stretch as it is.",
+                ));
         }
         // In an HDR picture every stretch continues into the headroom; the
         // knee is the picture's, shown here where the core is worked on.

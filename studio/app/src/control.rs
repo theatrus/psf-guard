@@ -393,8 +393,9 @@ impl Studio {
                 if let Some(why) = self.cannot_run() {
                     Err(why.to_string())
                 } else {
+                    let running = self.is_running();
                     self.run_tools();
-                    Ok(json!({ "started": true }))
+                    Ok(json!({ "started": !running, "queued": self.run_is_queued() }))
                 }
             }
             "capture" => return self.start_capture(params, reply.clone()),
@@ -560,6 +561,12 @@ impl Studio {
         }
         if let Some((what, _, _)) = self.run_progress() {
             busy.push(what);
+        }
+        if self.run_is_queued() {
+            busy.push("a run of the tools to start".to_string());
+        }
+        if self.store_opening.is_some() {
+            busy.push("opening the store".to_string());
         }
         for task in &self.derive_tasks {
             busy.push(task.describe().to_string());

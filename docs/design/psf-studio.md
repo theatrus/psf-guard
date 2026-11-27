@@ -2902,8 +2902,14 @@ Gaps to fix, roughly in the order they got in the way:
   background extraction remove the rest. An overlap of 0.5 did not remove
   it. To try: run BlurXTerminator on a copy shifted by half a tile and
   average, or keep the background model from following it.
-- [ ] **Sky floor on every stretch kind.** Only the layered stretches have
-  one.
+- [x] **Sky floor on every stretch kind.** An input's stretch of any other
+  kind has a **Sky floor** too, kept beside its model as `sky_floor` and
+  drawn as PixInsight's histogram transformation after it, with shadows at
+  the floor and midtones at the middle: `(x − floor) / (1 − floor)`, the
+  layered stretches' floor in an SDR picture. After an HDR stretch it
+  shapes the range below white and keeps the headroom. On the Iris's
+  luminance under the automatic midtones stretch, a floor of 0.15 took
+  the sky's median from 0.16 to 0.01. PSF Guard's settings leave it out.
 - [x] **A knee for every stretch in HDR mode.** The picture's Knee moves
   where every stretch continues into the headroom, and the tail reaches the
   peak at the band's brightest sample, so no core is left flat at the peak.
@@ -2931,9 +2937,13 @@ Gaps to fix, roughly in the order they got in the way:
   less than 0.7 seconds apart, such as one slider drag, are one edit.
   Opening another picture starts the history again. A run of the tools is
   not undone: undoing its edits flags the inputs to run again.
-- [ ] **Tool runs.** A run cannot be queued behind another; tools on the
-  combined color image (`color_rc_astro`) and the narrowband star steps
-  are not run.
+- [x] **Tool runs.** **Run tools** during a run queues one more run, which
+  starts with the document as it is once the store the first run prepared
+  is open; the toolbar says “Changed since this run started” and offers
+  **Run again after**. A stopped or failed run drops the queued one. PSF
+  Guard's color tools (`color_rc_astro`) run as a color group's tool
+  steps. Still open: the narrowband star steps, which run after the
+  channels are normalized together.
 - [ ] **Layers.** No groups in groups or pass-through groups; a group cannot
   be clipped or healed; a shared mask cannot go on a layer's own
   adjustment; a layer cannot have a painted and a shared mask, or clip to

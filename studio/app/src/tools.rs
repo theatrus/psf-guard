@@ -131,6 +131,10 @@ pub(super) struct Tools {
     /// Each input's tools as they were when the store was prepared, to say
     /// when the document has moved on.
     prepared: Option<serde_json::Value>,
+    /// Whether Run tools was asked for while a run was under way: one more
+    /// run starts with the document as it is then, once the store the run
+    /// prepared is open.
+    queued: bool,
 }
 
 impl Tools {
@@ -180,6 +184,7 @@ impl Tools {
             status: String::new(),
             saved: String::new(),
             prepared: None,
+            queued: false,
         }
     }
 }
@@ -737,6 +742,7 @@ impl Studio {
             return;
         };
         if self.tools.run.is_some() {
+            self.tools.queued = true;
             return;
         }
         if let Err(error) = std::fs::write(&document, self.document.to_json()) {
@@ -801,6 +807,26 @@ impl Studio {
 
     pub(super) fn store_path(&self) -> Option<&std::path::Path> {
         self.tools.store.as_deref()
+    }
+
+    /// Whether one more run is to start when the run under way ends.
+    pub(super) fn run_is_queued(&self) -> bool {
+        self.tools.queued
+    }
+
+    /// Whether the document's steps changed since the run under way
+    /// started, so its result will not show them.
+    pub(super) fn changed_during_run(&self) -> bool {
+        self.tools.run.as_ref().is_some_and(|run| {
+            run.lock()
+                .expect("tool run")
+                .chains
+                .as_ref()
+                .is_some_and(|chains| {
+                    !changed_inputs(chains, &self.all_chains(), &self.document.channels())
+                        .is_empty()
+                })
+        })
     }
 
     /// Shows a message in the top bar.
@@ -1078,6 +1104,12 @@ impl Studio {
             }
         }
         let Some(run) = self.tools.run.clone() else {
+            // A run asked for during the last one starts once the store
+            // that run prepared is open.
+            if self.tools.queued && self.store_opening.is_none() {
+                self.tools.queued = false;
+                self.run_tools();
+            }
             return;
         };
         let (line, done, opens, chains) = {
@@ -1107,6 +1139,7 @@ impl Studio {
             }
             Some(Err(error)) => {
                 self.tools.run = None;
+                self.tools.queued = false;
                 // A stopped run leaves the store it was writing behind.
                 if error == "stopped" {
                     let store = opens
@@ -1408,24 +1441,23 @@ impl Studio {
         }
         // Running them.
         let running = self.tools.run.is_some();
-        let changed = self
-            .tools
-            .prepared
-            .as_ref()
-            .is_some_and(|prepared| *prepared != self.all_chains());
+        let changed = !self.inputs_to_run().is_empty();
         if self.cannot_run().is_none() {
+            let label = match (running, self.tools.queued) {
+                (false, _) => "Run tools",
+                (true, false) => "Run again after this run",
+                (true, true) => "Runs again after this run",
+            };
             block = block
-                .child(
-                    Self::act(
-                        if running { "Running…" } else { "Run tools" },
-                        "tools-run",
-                        running,
-                        cx,
-                        |this| this.run_tools(),
-                    ),
-                )
+                .child(Self::act(
+                    label,
+                    "tools-run",
+                    running && self.tools.queued,
+                    cx,
+                    |this| this.run_tools(),
+                ))
                 .children(Self::help(
-                    "Runs every input's tools and prepares the store again. A tool that ran with these settings before is not run again.",
+                    "Runs every input's tools and prepares the store again. A tool that ran with these settings before is not run again. During a run, it runs once more when the run ends, with the steps as they are then.",
                 ));
             if changed && !running {
                 block = block.child(div().text_xs().child(
