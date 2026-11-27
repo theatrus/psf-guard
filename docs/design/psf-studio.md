@@ -260,7 +260,165 @@ opens a dialog with two actions: **Open in PSF-Studio**, and
 its file association. The dialog also links to the Studio download.
 
 From Studio, a person can sign in to a PSF Guard server, browse its projects
-and stacks, and open one without a link.
+and stacks, and open one without a link. “Connecting Studio to a PSF Guard
+server” proposes how.
+
+#### Connecting Studio to a PSF Guard server (proposed 2026-11-27)
+
+**Today.** Studio reaches a server only through the `psf-studio://` link or
+`psf-guard studio --server … --token`. The link carries no credential, so
+PSF Guard shows **Open in PSF-Studio** only on servers without sign-in. On a
+server with sign-in, a person has to create an API token in Settings and
+pass it on the command line, where every user of the computer can read it
+in `ps`.
+
+**Goal.** A person adds a server in Studio once and signs in once. After
+that, Studio lists the server's databases, projects, targets and stacks,
+and opens one. **Open in PSF-Studio** works on every server and uses the
+same connection.
+
+##### What a person does
+
+1. In Studio, choose **File › Connect to PSF Guard…** and enter the server's
+   address. The start page has the same action.
+2. Studio checks the server's sign-in status.
+   - On a server without sign-in, Studio connects at once.
+   - On a server with sign-in, Studio shows a short code such as `KQ7-M4P`
+     and opens the server's **Connect PSF Studio** page in the default
+     browser.
+3. In the browser, the person signs in if they are not already, checks that
+   the page shows the same code, and clicks **Allow**. The page then says the
+   browser tab can be closed.
+4. Studio stores its token in the system keychain and lists the server's
+   databases.
+
+**Sign out** in Studio revokes the token on the server and deletes it from
+the keychain. Settings › **API tokens** in PSF Guard lists each connection as
+“PSF Studio on <computer>”, with when it was last used. **Revoke** there
+signs that Studio out; Studio then shows the server as signed out and offers
+**Connect again**.
+
+##### Why approval in the browser
+
+| Option | For | Against |
+|---|---|---|
+| Approve in the browser with a code (proposed) | Studio never handles a password. It keeps working if the server adds another sign-in method. The person approves on the server's own page. | A new page and three endpoints. |
+| Username and password in Studio | No browser step. | Studio handles passwords, then has to mint a token from the session. |
+| Paste an API token | Works today. | Secrets copied by hand. An editor's token is easy to paste where a read-only one would do. |
+
+Pasting a token stays as an advanced option in the connect window, for
+servers whose browser page cannot be reached from the Studio computer.
+
+Studio's credential is a user's API token, not a paired client (`psfrc_`).
+A paired client belongs to one catalog and may call only the sync API.
+Studio needs what the signed-in person can see, in every database, with
+that person's role.
+
+##### What PSF Guard adds
+
+- `POST /api/auth/studio/connect`, open without sign-in and rate-limited
+  like `/api/auth/login`. Studio sends its computer name. The server returns
+  a secret connect id, a short user code, the approval page's address, an
+  expiry ten minutes away and a polling interval. The server keeps pending
+  connects in memory, as it keeps pairing codes.
+- The **Connect PSF Studio** page at `/studio/connect?code=…`, in the React
+  app. It needs a signed-in session. It shows the computer name, the code
+  and what Studio may do, and has **Allow** and **Deny**. **Allow** posts the
+  code to `POST /api/auth/studio/approve` over the session.
+- `POST /api/auth/studio/token`, which Studio polls with the connect id. It
+  answers pending, denied or expired, or returns the token once with the
+  approving person's username and role. The connect id stops working after
+  that answer.
+- The token is an ordinary `psfg_` API token owned by the approving person,
+  labeled “PSF Studio on <computer>” and marked as Studio's so **API tokens**
+  can show it as a Studio connection. It is read-only until Studio can save
+  documents back (see “Follow-up: PSF Guard records Studio documents”);
+  then the page asks for edit access.
+- `psf-guard studio` reads the token from `PSF_GUARD_TOKEN` before
+  `--token`, as `psf-guard sync` reads `PSF_GUARD_SYNC_TOKEN`.
+
+##### What Studio adds
+
+- **A server list** in Studio's settings file: address, display name,
+  username, role and when it last connected. The file holds no secrets.
+- **The token in the system keychain**: the macOS Keychain, Windows
+  Credential Manager, or the Secret Service on Linux, through the `keyring`
+  crate, one entry per server address. Where no keychain is available,
+  Studio keeps the token for the session only and asks again at the next
+  launch.
+- **An Open from server window**: server, then database, project and
+  target, then the target's stacks by channel, with the date, the frame
+  count and whether the stack is ready. It reads `GET /api/databases`,
+  `GET /api/db/{db}/projects`, `GET /api/db/{db}/projects/{id}/targets`,
+  and the color stack list that `psf-guard studio` already reads. A target
+  without built stacks explains that and opens its stack page in PSF Guard.
+- **Opening** runs `psf-guard studio --server --db --project --target
+  --folder --name --no-open` as **Open in PSF-Studio** does now, with the
+  token in `PSF_GUARD_TOKEN` rather than on the command line.
+- **Recent targets** from servers on the start page.
+
+##### The link on servers with sign-in
+
+- When Studio already has a connection to the link's server, it opens the
+  target with that connection. The link needs nothing more.
+- Otherwise the link carries a ticket. PSF Guard mints it over the session
+  when the person clicks the button: one use, about a minute. Studio trades
+  the ticket at `/api/auth/studio/token` for a token, as if the person had
+  approved a code.
+- Before Studio stores a token from a link, it asks “Connect to <server> as
+  <username>?”. A link can come from anywhere, and a ticket from someone
+  else's server would otherwise connect Studio to that server without the
+  person choosing it.
+
+##### When something goes wrong
+
+- **The server answers 401**: the token was revoked or has expired. Studio
+  shows the server as signed out, keeps open documents open, and offers
+  **Connect again**.
+- **The server answers 403**: Studio explains which action needs edit
+  access.
+- **The server cannot be reached**: the server list keeps the last listing
+  and offers **Try again**.
+- **The code expires** before approval: Studio offers a new code.
+- **The wrong account approved**: Studio shows the username it connected
+  as, so the person can sign out and connect again.
+
+##### Security
+
+- No long-lived secret appears in a URL or on a command line. The connect
+  id never leaves Studio, and the user code alone cannot collect the token.
+- Approval needs a signed-in session and a same-origin request, like other
+  session requests.
+- A user code has about 40 bits and lasts ten minutes. The server limits
+  wrong codes per session and new connects per address.
+- PSF Guard records each connect, approval, denial and revocation in the
+  remote audit log.
+- For an `http://` address other than this computer, Studio warns that the
+  token travels unencrypted.
+
+##### Order of work
+
+1. PSF Guard: the connect endpoints, the approval page, and Studio
+   connections in **API tokens**. Tests cover approval, denial, expiry,
+   single use, rate limits and revocation.
+2. `psf-guard studio` reads `PSF_GUARD_TOKEN`.
+3. Studio: the connect window, the keychain, the server list and the
+   signed-out state.
+4. Studio: the Open from server window and opening a target.
+5. Tickets in the link, and the button on servers with sign-in.
+6. With “Follow-up: PSF Guard records Studio documents”: saving back, which
+   asks for edit access.
+
+##### Open questions
+
+- Should a Studio connection stay read-only until saving back exists?
+  Proposed: yes.
+- How long should a Studio token last: a fixed 90 days, or renewed while it
+  is used?
+- Should Studio start a stack build for a target that has none, or only open
+  PSF Guard's stack page? Proposed: only open the page at first.
+- Does the desktop app's bundled Studio need a connection? Proposed: no; the
+  desktop app passes cache files on disk, as it does now.
 
 #### Follow-up: PSF Guard records Studio documents (asked for 2026-11-25)
 
