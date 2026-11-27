@@ -53,6 +53,9 @@ impl ToolChain {
     /// the identity of a deconvolution that runs before the chain, if one
     /// does, so the chain's results follow its settings.
     ///
+    /// A star removal always saves the stars it removes, linear, so a
+    /// picture can add them back as a layer of their own.
+    ///
     /// Refuses a chain with a tool no worker offers.
     pub fn resolve(
         workers: &Workers,
@@ -63,7 +66,15 @@ impl ToolChain {
         deconvolution: Option<&str>,
     ) -> Result<Self, String> {
         let schemas = rc_astro::schemas_for(workers, config)?;
-        let config = rc_astro::normalize_against_schemas(config, &schemas)?;
+        let mut config = config.clone();
+        for step in &mut config.steps {
+            if step.category() == Some(crate::remote_work::steps::Category::StarRemoval)
+                && let Some((_, schema)) = schemas.iter().find(|(tool, _)| *tool == step.provider)
+            {
+                rc_astro::keep_linear_stars(step, schema)?;
+            }
+        }
+        let config = rc_astro::normalize_against_schemas(&config, &schemas)?;
         let ids =
             rc_astro::rc_astro_chain_ids(scope, source, revision, &config, &schemas, deconvolution)
                 .map_err(|error| format!("{error:?}"))?;

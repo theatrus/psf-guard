@@ -1253,37 +1253,10 @@ impl Studio {
         self.refresh_canvas();
     }
 
-    /// Gives the document an input and a layer for each input the store
-    /// has that the document lacks: the stars a star removal took out.
-    /// The stars go on top with the screen blend, which puts stars back
-    /// onto a starless picture, and are stretched as their input is.
+    /// Gives the document the inputs the store has that it lacks; see
+    /// [`take_in_inputs`].
     pub(super) fn take_in_new_inputs(&mut self) {
-        let known = self.document.channels();
-        let new: Vec<String> = self
-            .band_info
-            .names
-            .iter()
-            .filter(|name| !known.contains(name))
-            .cloned()
-            .collect();
-        for name in new {
-            let source = operation(flow_operations::CHANNEL_STACK, Accepts::Linear).for_band(&name);
-            let _ = self
-                .document
-                .insert_step(StageKind::Sources, usize::MAX, source);
-            // A line with its continuum subtracted is an input to add to a
-            // part; stars go back on top at once.
-            if name.ends_with("@line") {
-                continue;
-            }
-            let mut layer = LayerRecord::new(
-                &channel_label(&name),
-                LayerSource::Band { band: name.clone() },
-            );
-            layer.blend = BlendMode::Screen;
-            layer.color = Some([1.0; 3]);
-            let _ = self.document.insert_layer(usize::MAX, layer);
-        }
+        take_in_inputs(&mut self.document, &self.band_info.names);
     }
 
     // ---- the controls ---------------------------------------------------
@@ -1522,6 +1495,101 @@ impl StoreOpening {
             document,
             done,
             started: std::time::Instant::now(),
+        }
+    }
+}
+
+/// Gives `document` an input for each of `names` it lacks, such as the
+/// stars a star removal took out, and a layer for new stars to show them.
+/// The stars go on top with the screen blend, which puts stars back onto a
+/// starless picture, and are stretched as their input is.
+///
+/// A channel a layer already reads gets no other layer. Nor do new stars
+/// when the picture already has a stars layer: its parts, such as RGB
+/// stars, say which stars it shows, and more would add the stars twice. A
+/// line with its continuum subtracted is an input to add to a part, with no
+/// layer of its own.
+fn take_in_inputs(document: &mut crate::studio_model::Document, names: &[String]) {
+    let known = document.channels();
+    let read: Vec<String> = document
+        .layers()
+        .iter()
+        .filter_map(|layer| match &layer.source {
+            LayerSource::Band { band } => Some(band.clone()),
+            _ => None,
+        })
+        .collect();
+    let shows_stars = read.iter().any(|band| band.ends_with("@stars"));
+    for name in names.iter().filter(|name| !known.contains(name)) {
+        let source = operation(flow_operations::CHANNEL_STACK, Accepts::Linear).for_band(name);
+        let _ = document.insert_step(StageKind::Sources, usize::MAX, source);
+        let stars = name.ends_with("@stars");
+        if name.ends_with("@line") || read.contains(name) || (stars && shows_stars) {
+            continue;
+        }
+        let mut layer = LayerRecord::new(
+            &channel_label(name),
+            LayerSource::Band { band: name.clone() },
+        );
+        layer.blend = BlendMode::Screen;
+        layer.color = Some([1.0; 3]);
+        let _ = document.insert_layer(usize::MAX, layer);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn names(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| name.to_string()).collect()
+    }
+
+    fn layer_bands(document: &crate::studio_model::Document) -> Vec<String> {
+        document
+            .layers()
+            .iter()
+            .filter_map(|layer| match &layer.source {
+                LayerSource::Band { band } => Some(band.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn new_stars_get_a_layer_only_when_the_picture_shows_none() {
+        let inputs = names(&["ha", "oiii", "red", "green", "blue"]);
+        let mut plain = super::super::panes::flow_document(&inputs);
+        let before = layer_bands(&plain);
+        take_in_inputs(&mut plain, &names(&["ha", "oiii", "ha@stars"]));
+        assert!(plain.channels().contains(&"ha@stars".to_string()));
+        assert_eq!(layer_bands(&plain).len(), before.len() + 1);
+        assert!(layer_bands(&plain).contains(&"ha@stars".to_string()));
+
+        // A picture whose RGB stars layers read red, green and blue stars
+        // takes the new stars in as inputs, with no layer added.
+        let mut with_stars = super::super::panes::flow_document(&inputs);
+        for band in ["red@stars", "green@stars", "blue@stars"] {
+            let layer = LayerRecord::new(
+                &channel_label(band),
+                LayerSource::Band {
+                    band: band.to_string(),
+                },
+            );
+            let _ = with_stars.insert_layer(usize::MAX, layer);
+        }
+        let before = layer_bands(&with_stars);
+        let stars = names(&[
+            "red@stars",
+            "green@stars",
+            "blue@stars",
+            "ha@stars",
+            "oiii@stars",
+        ]);
+        take_in_inputs(&mut with_stars, &stars);
+        assert_eq!(layer_bands(&with_stars), before);
+        for name in &stars {
+            assert!(with_stars.channels().contains(name), "{name} is an input");
         }
     }
 }

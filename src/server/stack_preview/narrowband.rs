@@ -443,34 +443,13 @@ fn separation_config(
         }],
     });
     validate_separation(&config)?;
+    super::super::rc_astro::keep_linear_stars(&mut config.steps[0], schema)
+        .map_err(|_| "StarXTerminator cannot save its linear stars output".to_string())?;
     let star_parameter = schema
         .parameters
         .iter()
         .find(|p| matches!(p.name.as_str(), "stars" | "difference") && p.flag.is_some())
-        .ok_or("StarXTerminator cannot save its linear stars output")?;
-    let parameters = &mut config.steps[0].parameters;
-    parameters.retain(|name, _| name != "stars" && name != "difference");
-    parameters.insert(
-        star_parameter.name.clone(),
-        seiza_stacking::ExternalParameterValue::Bool(true),
-    );
-    if let Some(unscreen) = schema
-        .parameters
-        .iter()
-        .find(|p| p.name == "unscreen" && p.flag.is_some())
-    {
-        match unscreen.kind {
-            seiza_stacking::ExternalParameterKind::Bool { default: false } => {
-                parameters.remove("unscreen");
-            }
-            _ => {
-                parameters.insert(
-                    "unscreen".into(),
-                    seiza_stacking::ExternalParameterValue::Bool(false),
-                );
-            }
-        }
-    }
+        .expect("a star parameter, checked above");
     let mut config = super::super::rc_astro::normalize_against_schemas(&config, schemas)?;
     config.steps[0].parameters.retain(|name, value| {
         if name == &star_parameter.name {
