@@ -27,6 +27,11 @@ pub enum DerivedKind {
     /// The fine blur of one band, or of the luminance of three, for
     /// star-core compression.
     Fine,
+    /// The stars of one of the bands, `bands[n]`, made smaller: scaled by
+    /// how much a one-pixel cross erosion lowers the brightest of the
+    /// bands at each pixel, as Seiza's RGB star reduction does, so the
+    /// bands' colors keep. A layer blends toward it by its reduction.
+    ReducedStars(usize),
 }
 
 /// Which plane: what it holds, of which bands in which states, as the
@@ -175,6 +180,7 @@ impl DeriveTask {
         match self.key.kind {
             DerivedKind::Luminance => "Measuring the luminance of red, green and blue",
             DerivedKind::Fine => "Measuring star cores",
+            DerivedKind::ReducedStars(_) => "Reducing stars",
         }
     }
 
@@ -202,6 +208,18 @@ fn work_out(
     let span = (white - black).max(f32::MIN_POSITIVE);
     let unit = |value: f32| (value - black) / span;
     let mut values = vec![f32::NAN; width * height];
+    // For reduced stars: the brightest of the bands at each pixel, which
+    // the erosion is measured on, while `values` holds the one reduced.
+    let reduced = match key.kind {
+        DerivedKind::ReducedStars(pick) if pick < reads.len() => Some(pick),
+        DerivedKind::ReducedStars(_) => return Err("no such band to reduce".to_string()),
+        _ => None,
+    };
+    let mut brightest = if reduced.is_some() {
+        vec![f32::NAN; width * height]
+    } else {
+        Vec::new()
+    };
     let strip = 256.min(height.max(1));
     let mut y = 0;
     while y < height {
@@ -221,6 +239,15 @@ fn work_out(
             unit(value)
         };
         for pixel in 0..width * rows {
+            if let Some(pick) = reduced {
+                // Stars are bright on black: a value below black is none.
+                values[y * width + pixel] = band(&reads[pick], pixel).max(0.0);
+                brightest[y * width + pixel] = reads
+                    .iter()
+                    .map(|read| band(read, pixel).max(0.0))
+                    .fold(f32::NEG_INFINITY, f32::max);
+                continue;
+            }
             values[y * width + pixel] = match reads {
                 [red, green, blue] => seiza_stretch::rgb_luminance(
                     band(red, pixel),
@@ -237,6 +264,9 @@ fn work_out(
     }
     if key.kind == DerivedKind::Fine {
         values = seiza_stretch::fine_luminance(&values, width, height);
+    }
+    if reduced.is_some() {
+        reduce_stars(&mut values, &brightest, width, height);
     }
     progress.store(900, Ordering::Relaxed);
     let scale = values
@@ -255,6 +285,20 @@ fn work_out(
         levels,
         scale,
     })
+}
+
+/// One band's stars, `stars`, made smaller: each sample scaled by how much
+/// Seiza's one-pixel cross erosion lowers `brightest`, the brightest of the
+/// bands reduced together, at that pixel.
+fn reduce_stars(stars: &mut [f32], brightest: &[f32], width: usize, height: usize) {
+    let eroded = seiza_compose::cross_erosion(brightest, width, height);
+    for ((value, before), after) in stars.iter_mut().zip(brightest).zip(&eroded) {
+        *value = if *before > 0.0 {
+            *value * after / before
+        } else {
+            0.0
+        };
+    }
 }
 
 /// A level of half the width and height: each sample the mean of the
@@ -286,6 +330,47 @@ fn halve(samples: &[f32], width: usize, height: usize) -> (usize, usize, Vec<f32
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reduced_stars_shrink_and_keep_their_colors() {
+        // A star three pixels wide in red, half as bright in green.
+        let red = [
+            0.0, 0.0, 0.0, 0.0, 0.0, //
+            0.0, 0.4, 0.8, 0.4, 0.0, //
+            0.0, 0.0, 0.0, 0.0, 0.0,
+        ];
+        let green: Vec<f32> = red.iter().map(|value| value / 2.0).collect();
+        let brightest = red;
+        let mut reduced_red = red;
+        let mut reduced_green = green.clone();
+        reduce_stars(&mut reduced_red, &brightest, 5, 3);
+        reduce_stars(&mut reduced_green, &brightest, 5, 3);
+        // Inside, every sample takes its darkest neighbour's level: the
+        // black above and below.
+        assert_eq!(reduced_red[6], 0.0);
+        assert_eq!(reduced_red[7], 0.0);
+        // The colours keep: green stays half of red wherever red is lit.
+        for at in 0..red.len() {
+            assert!((reduced_green[at] - reduced_red[at] / 2.0).abs() < 1e-6);
+        }
+        // A wide star: a three by three core of 1 in a ring of 0.5. Its
+        // centre keeps its level, and the core's edge falls to the ring's.
+        let mut wide = vec![0.0_f32; 49];
+        for y in 1..6 {
+            for x in 1..6 {
+                wide[y * 7 + x] = if (2..5).contains(&x) && (2..5).contains(&y) {
+                    1.0
+                } else {
+                    0.5
+                };
+            }
+        }
+        let mut stars = wide.clone();
+        reduce_stars(&mut stars, &wide, 7, 7);
+        assert_eq!(stars[3 * 7 + 3], 1.0);
+        assert_eq!(stars[3 * 7 + 2], 0.5);
+        assert_eq!(stars[7 + 3], 0.0);
+    }
 
     #[test]
     fn a_level_is_the_mean_of_the_two_by_two_beneath() {

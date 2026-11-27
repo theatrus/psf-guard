@@ -2251,6 +2251,33 @@ picture.
 - PSF Guard's settings have no place for a stars input, so it stays out
   of them.
 
+#### A stretch of their own, and star reduction (2026-11-27)
+
+A stars input can have a stretch of its own: in the stars input's
+inspector, **Stretch on their own** copies its input's Stretch step for
+`<input>@stars`, and **Follow the input's stretch** removes it again.
+
+**Star reduction** on a stars layer, or on a group of stars layers such as
+RGB stars, makes the stars smaller. Each star is blended toward a one-pixel
+cross erosion of itself, Seiza's `cross_erosion`, which its RGB star
+reduction also uses. A group's stars are reduced together: the erosion is
+measured on the brightest of its stars inputs at each pixel, and every
+input is scaled by the same amount, so the stars keep their colors. A
+layer's own amount, above 0%, is used in place of its group's.
+
+The reduced stars are planes worked out from the whole image, as the
+luminance of a layered stretch is: the first change works them out, one
+plane per stars input, and the canvas draws the stars as they are until
+then. The amount only blends between the two, so moving the slider draws
+at once. The planes are made before the stretch; for stars the store
+keeps stretched for display, that matches Seiza's reduction, and for
+linear stars it matches it at 0% and 100%. A stars layer whose background
+correction is blended in cannot be reduced too, and its pane says so.
+
+On the Cat's Eye, full reduction left 85 of 148 star pixels above a
+display value of 96 in a 400-pixel square of sky, and took a quarter of
+the square's star light.
+
 #### Star removal on a color group (2026-11-25)
 
 Star removal runs on each input alone, or on a color group together:
@@ -2299,8 +2326,6 @@ On the Sh2-157 stacks on this Mac:
   star steps. Both run after the channels are resampled and normalized
   together, which Studio's preparation does not do yet.
 - A run cannot be stopped from the app, and a second cannot be queued.
-- The stars follow their input's stretch and have no stretch of their
-  own.
 - The app saves the document only when the tools are run.
 
 ## Setup and workspace: one flow for every kind of picture (2026-11-25)
@@ -2766,7 +2791,8 @@ it on the UI thread, within a few frames, as it does a click.
 standard input and output that forwards its tools to these sockets.
 
 - **State.** The rows a person can select, with their ids and settings;
-  the selection; each pane's label, the place wanted and the place drawn;
+  the selection; each pane's label, the place wanted, the place drawn and
+  what the pane leaves out;
   the status line; the inputs whose tools changed since the store was
   prepared; the histogram's clipping; and what Studio is still busy with.
 - **Edits.** Select a row, divide the canvas, merge settings into a step
@@ -2821,9 +2847,11 @@ Gaps to fix, roughly in the order they got in the way:
   sit at the peak (a quarter to two fifths of the Iris's core with
   automatic midtones). More HDR stretches, or core compression as a stage
   any stretch can take, would answer it.
-- [ ] **Stars' own stretch and star reduction.** Stars follow their input's
-  stretch; the star stretch exists only for RGB stars; PSF Guard's star
-  reduction is not carried over.
+- [x] **Stars' own stretch and star reduction.** A stars input can take a
+  stretch of its own, and a stars layer or group a Star reduction (see
+  “A stretch of their own, and star reduction”). Still open: the star
+  stretch of RGB stars is applied when the store is prepared, not on the
+  canvas.
 - [ ] **Frame limits.** A frame draws at most 12 layers and 7 masks, and at
   most 4 layered stretches; past that a layer is left out or drawn with its
   curve alone, and the pane says so.

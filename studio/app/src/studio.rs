@@ -99,6 +99,8 @@ enum SliderId {
     Amount,
     /// The selected adjustment layer's amount.
     LayerAmount,
+    /// How much the selected layer's or group's stars are reduced.
+    StarReduction,
     /// One setting of one processing tool of the selected input, by its
     /// place in the list of the input's tool settings.
     ToolParam(usize),
@@ -127,13 +129,14 @@ enum SliderId {
 }
 
 impl SliderId {
-    const ALL: [SliderId; 10] = [
+    const ALL: [SliderId; 11] = [
         SliderId::Headroom,
         SliderId::Opacity,
         SliderId::Hue,
         SliderId::Saturation,
         SliderId::Amount,
         SliderId::LayerAmount,
+        SliderId::StarReduction,
         SliderId::Reach,
         SliderId::Smoothing,
         SliderId::BrushSize,
@@ -371,6 +374,10 @@ pub struct Scene {
     headroom: f32,
     /// The planes worked out from the store, and their tile channels.
     planes: Arc<Vec<(crate::derived::DerivedKey, usize)>>,
+    /// Planes worked out from the whole image that the layers read, such as
+    /// reduced stars, that are not done yet. The layers draw without them
+    /// until they are.
+    wanted_planes: Vec<crate::derived::DerivedKey>,
     /// The pane's place the scene was built for, so its label says what
     /// the pane draws while a newer scene is built.
     place: Option<crate::studio_model::Place>,
@@ -387,7 +394,7 @@ impl Scene {
     /// The planes worked out from the whole image that the scene's
     /// stretches read and that are not done yet.
     pub(super) fn missing_planes(&self) -> Vec<crate::derived::DerivedKey> {
-        let mut missing = Vec::new();
+        let mut missing = self.wanted_planes.clone();
         self.transfers_missing(&[], &mut missing);
         missing
     }

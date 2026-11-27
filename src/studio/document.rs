@@ -467,6 +467,16 @@ pub struct LayerRecord {
     /// input each of its slots shows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub palette: Option<PaletteUse>,
+    /// How much the stars a layer shows are made smaller, from 0 to 1: each
+    /// star blended toward a one-pixel erosion of itself. On a group, the
+    /// stars of its layers are reduced together, so their colors keep. A
+    /// layer's own amount, when above 0, is used in place of its group's.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub star_reduction: f32,
+}
+
+fn is_zero(value: &f32) -> bool {
+    *value == 0.0
 }
 
 impl LayerRecord {
@@ -486,6 +496,7 @@ impl LayerRecord {
             clipped: false,
             slot: None,
             palette: None,
+            star_reduction: 0.0,
         }
     }
 }

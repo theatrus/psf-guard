@@ -24,18 +24,18 @@ bytemuck = { version = "1", features = ["derive"] }
 # The compositor the canvas and an export draw with: Seiza's, on the CPU and
 # on the GPU. Pinned to the Seiza pull request that adds it until a release
 # has it.
-seiza-compose = { git = "https://github.com/theatrus/seiza", rev = "31f9dd071bd209e76c8e1c016e918c91dfcee9f8" }
+seiza-compose = { git = "https://github.com/theatrus/seiza", rev = "6e5fb62fe0031ada51b5b0d53a613d959c2d2993" }
 
 # The Seiza crates PSF Guard's source and the app use from crates.io, taken
 # from the same commit as seiza-compose so the two agree on their types.
 [patch.crates-io]
-seiza-core = { git = "https://github.com/theatrus/seiza", rev = "31f9dd071bd209e76c8e1c016e918c91dfcee9f8" }
-seiza-fits = { git = "https://github.com/theatrus/seiza", rev = "31f9dd071bd209e76c8e1c016e918c91dfcee9f8" }
-seiza-image-io = { git = "https://github.com/theatrus/seiza", rev = "31f9dd071bd209e76c8e1c016e918c91dfcee9f8" }
-seiza-imgproc = { git = "https://github.com/theatrus/seiza", rev = "31f9dd071bd209e76c8e1c016e918c91dfcee9f8" }
-seiza-stats = { git = "https://github.com/theatrus/seiza", rev = "31f9dd071bd209e76c8e1c016e918c91dfcee9f8" }
-seiza-stretch = { git = "https://github.com/theatrus/seiza", rev = "31f9dd071bd209e76c8e1c016e918c91dfcee9f8" }
-seiza-xisf = { git = "https://github.com/theatrus/seiza", rev = "31f9dd071bd209e76c8e1c016e918c91dfcee9f8" }
+seiza-core = { git = "https://github.com/theatrus/seiza", rev = "6e5fb62fe0031ada51b5b0d53a613d959c2d2993" }
+seiza-fits = { git = "https://github.com/theatrus/seiza", rev = "6e5fb62fe0031ada51b5b0d53a613d959c2d2993" }
+seiza-image-io = { git = "https://github.com/theatrus/seiza", rev = "6e5fb62fe0031ada51b5b0d53a613d959c2d2993" }
+seiza-imgproc = { git = "https://github.com/theatrus/seiza", rev = "6e5fb62fe0031ada51b5b0d53a613d959c2d2993" }
+seiza-stats = { git = "https://github.com/theatrus/seiza", rev = "6e5fb62fe0031ada51b5b0d53a613d959c2d2993" }
+seiza-stretch = { git = "https://github.com/theatrus/seiza", rev = "6e5fb62fe0031ada51b5b0d53a613d959c2d2993" }
+seiza-xisf = { git = "https://github.com/theatrus/seiza", rev = "6e5fb62fe0031ada51b5b0d53a613d959c2d2993" }
 
 [profile.release]
 debug = 1

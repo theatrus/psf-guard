@@ -14,6 +14,7 @@
 
 use super::{picture_patches, Bands, Drag, Scene, SliderId, Studio, Tool};
 use crate::canvas::{Adjustment, ComputedMask, Layer, Mark, MaskBand};
+use crate::derived::{DerivedKey, DerivedKind};
 use crate::image_steps::Accepts;
 use crate::output_stretch::needs_image;
 use crate::store_tiles::{BandState, BandStretch};
@@ -653,6 +654,35 @@ fn band_source(
     )
 }
 
+/// How much a band layer's stars are reduced, and the inputs reduced
+/// together with them: the layer's own amount with its own input, or else
+/// its group's with the stars of every layer in the group, so their colors
+/// keep. Only stars a tool took out of an input are reduced.
+fn star_reduction(document: &Document, layer: &LayerRecord) -> Option<(f32, Vec<String>)> {
+    let is_stars = |layer: &LayerRecord| match &layer.source {
+        LayerSource::Band { band } if band.ends_with("@stars") => Some(band.clone()),
+        _ => None,
+    };
+    let own = is_stars(layer)?;
+    if layer.star_reduction > 0.0 {
+        return Some((layer.star_reduction.min(1.0), vec![own]));
+    }
+    let group = document
+        .layers()
+        .iter()
+        .find(|group| Some(group.id) == layer.group)?;
+    if group.star_reduction <= 0.0 {
+        return None;
+    }
+    let inputs = document
+        .layers()
+        .iter()
+        .filter(|member| member.group == Some(group.id))
+        .filter_map(is_stars)
+        .collect();
+    Some((group.star_reduction.min(1.0), inputs))
+}
+
 /// The input whose stretch a band is drawn with: its own, or, for the
 /// stars a tool took out of an input, that input's.
 fn stretch_source<'a>(
@@ -811,6 +841,9 @@ pub(super) fn scene(
     let mut masks: Vec<Vec<Segment>> = Vec::new();
     let mut heals: Vec<LayerHeal> = Vec::new();
     let mut omitted: Vec<String> = Vec::new();
+    // Planes worked out from the whole image that layers read and that are
+    // not done yet.
+    let mut wanted_planes: Vec<DerivedKey> = Vec::new();
     // Strokes as a place in `masks`. `Err` when the masks are full: what the
     // mask limits is then left out, so it is never drawn over the whole
     // image by mistake.
@@ -943,6 +976,71 @@ pub(super) fn scene(
         let (state, plane, blended, own_stages, display) =
             band_source(document, bands, band, channel, view_stretch, &mut omitted);
         states[band] = state;
+        // Stars a layer reduces are read blended toward the plane of them
+        // reduced, which is worked out from the whole image.
+        // A background correction blended in by nothing leaves the slot free.
+        let blended = blended.filter(|(_, amount)| *amount > 0.0);
+        let blended = match (
+            blended,
+            layer.and_then(|layer| star_reduction(document, layer)),
+        ) {
+            (blended, None) => blended,
+            (Some(blended), Some(_)) => {
+                omitted.push(format!(
+                    "the star reduction of {} with its background corrected",
+                    channel_label(&channel.channel)
+                ));
+                Some(blended)
+            }
+            (None, Some((amount, inputs))) => {
+                let linked: Vec<(usize, BandState)> = inputs
+                    .iter()
+                    .filter_map(|input| {
+                        let other = bands.band_of(input)?;
+                        let state = if other == band {
+                            state
+                        } else {
+                            planned
+                                .channels
+                                .iter()
+                                .find(|plan| &plan.channel == input)
+                                .map_or_else(BandState::default, |plan| {
+                                    band_source(
+                                        document,
+                                        bands,
+                                        other,
+                                        plan,
+                                        view_stretch,
+                                        &mut Vec::new(),
+                                    )
+                                    .0
+                                })
+                        };
+                        Some((other, state))
+                    })
+                    .collect();
+                linked
+                    .iter()
+                    .position(|(other, _)| *other == band)
+                    .and_then(|pick| {
+                        let key = DerivedKey {
+                            kind: DerivedKind::ReducedStars(pick),
+                            bands: linked.iter().map(|(band, _)| *band).collect(),
+                            states: linked.iter().map(|(_, state)| *state).collect(),
+                            range: (0.0, 1.0),
+                        };
+                        let found = bands
+                            .derived_planes()
+                            .into_iter()
+                            .find(|(known, _)| *known == key)
+                            .map(|(_, plane)| (plane, amount));
+                        if found.is_none() {
+                            wanted_planes.push(key);
+                        }
+                        found
+                    })
+            }
+        };
         // The stars a tool took out of an input are stretched as that
         // input is, so the two go back together.
         let (stretched_as, like) = stretch_source(bands, &planned.inputs, band, channel);
@@ -1292,6 +1390,7 @@ pub(super) fn scene(
         version,
         headroom: document.headroom.unwrap_or(0.0),
         planes: Arc::new(bands.derived_planes()),
+        wanted_planes,
         place: None,
     };
     (scene, states)
@@ -1879,6 +1978,13 @@ impl Studio {
                     && let Some(mask) = self.document.mask_mut(*id)
                 {
                     mask.smoothing = position * 32.0;
+                }
+            }
+            SliderId::StarReduction => {
+                if let Row::Layer(id) = &self.selected
+                    && let Some(layer) = self.document.layer_mut(*id)
+                {
+                    layer.star_reduction = position;
                 }
             }
             SliderId::Opacity | SliderId::Hue | SliderId::Saturation => {
@@ -2469,6 +2575,51 @@ impl Render for Studio {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_groups_stars_are_reduced_together_unless_a_layer_has_its_own_amount() {
+        use super::{flow_document, star_reduction};
+        use crate::studio_model::{LayerRecord, LayerSource};
+        let mut document = flow_document(&["red".into(), "green".into()]);
+        let mut group = LayerRecord::new("RGB stars", LayerSource::Group);
+        let band = |name: &str, band: &str| {
+            let mut layer = LayerRecord::new(
+                name,
+                LayerSource::Band {
+                    band: band.to_string(),
+                },
+            );
+            layer.group = Some(group.id);
+            layer
+        };
+        let red = band("R stars", "red@stars");
+        let green = band("G stars", "green@stars");
+        let nebula = band("Red", "red");
+        group.star_reduction = 0.75;
+        // The group goes in first: a layer whose group is not in the stack
+        // is a member of none.
+        for (at, layer) in [group, nebula.clone(), red.clone(), green.clone()]
+            .into_iter()
+            .enumerate()
+        {
+            document.insert_layer(at, layer).expect("a layer");
+        }
+        let stars = vec!["red@stars".to_string(), "green@stars".to_string()];
+        // The group's amount, with every stars input of the group.
+        assert_eq!(star_reduction(&document, &red), Some((0.75, stars.clone())));
+        assert_eq!(star_reduction(&document, &green), Some((0.75, stars)));
+        // Only stars a tool took out of an input are reduced.
+        assert_eq!(star_reduction(&document, &nebula), None);
+        // A layer's own amount is used alone, with its own input.
+        let own = LayerRecord {
+            star_reduction: 0.25,
+            ..red
+        };
+        assert_eq!(
+            star_reduction(&document, &own),
+            Some((0.25, vec!["red@stars".to_string()]))
+        );
+    }
+
     #[test]
     fn a_pane_label_names_what_the_pane_draws() {
         use super::pane_caption;

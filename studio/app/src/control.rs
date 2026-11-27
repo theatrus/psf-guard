@@ -381,13 +381,13 @@ impl Studio {
                 })
             })
             .collect();
-        let drawn: Vec<Option<Place>> = self.canvas.read(|shared| {
+        let (drawn, omitted): (Vec<Option<Place>>, Vec<Vec<String>>) = self.canvas.read(|shared| {
             shared
                 .canvas
                 .scenes
                 .iter()
-                .map(|scene| scene.place.clone())
-                .collect()
+                .map(|scene| (scene.place.clone(), scene.omitted.clone()))
+                .unzip()
         });
         let panes: Vec<Value> = self
             .places
@@ -399,6 +399,7 @@ impl Studio {
                     "pane": index,
                     "wanted": wanted.label(document),
                     "drawn": drawn.as_ref().map(|place| place.label(document)),
+                    "left_out": omitted.get(index).cloned().unwrap_or_default(),
                 })
             })
             .collect();
@@ -470,6 +471,22 @@ impl Studio {
         }
         if let Some((what, _, _)) = self.run_progress() {
             busy.push(what);
+        }
+        for task in &self.derive_tasks {
+            busy.push(task.describe().to_string());
+        }
+        // A plane a scene reads that no task has started yet.
+        let waiting = self.canvas.read(|shared| {
+            shared
+                .canvas
+                .scenes
+                .iter()
+                .flat_map(|scene| scene.missing_planes())
+                .filter(|key| self.derived.iter().all(|plane| plane.key != *key))
+                .count()
+        });
+        if self.derive_tasks.is_empty() && waiting > 0 {
+            busy.push(format!("{waiting} planes to work out"));
         }
         if self.export.is_some() {
             busy.push(self.export_line.clone());

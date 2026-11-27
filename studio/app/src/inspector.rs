@@ -654,6 +654,7 @@ impl Studio {
                 layer.opacity,
                 cx,
             ))
+            .children(self.star_reduction_block(layer, cx))
             .child(self.blend_block(layer, cx))
             .child(self.mask_block(layer, cx))
             .child(self.shared_mask_block(layer, cx))
@@ -796,6 +797,59 @@ impl Studio {
             .children(Self::help(only_help))
     }
 
+    /// The Star reduction slider, for a layer that shows stars a tool took
+    /// out of an input, or a group with such layers.
+    fn star_reduction_block(
+        &self,
+        layer: &LayerRecord,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::Div> {
+        let is_stars = |layer: &LayerRecord| matches!(&layer.source, LayerSource::Band { band } if band.ends_with("@stars"));
+        let group = matches!(layer.source, LayerSource::Group);
+        let shows_stars = if group {
+            self.document.group_members(layer.id).any(is_stars)
+        } else {
+            is_stars(layer)
+        };
+        if !shows_stars {
+            return None;
+        }
+        let from_group = (!group && layer.star_reduction == 0.0)
+            .then(|| {
+                self.document
+                    .layers()
+                    .iter()
+                    .find(|other| Some(other.id) == layer.group)
+                    .map(|group| group.star_reduction)
+            })
+            .flatten()
+            .filter(|amount| *amount > 0.0);
+        let help = if group {
+            "Makes the group's stars smaller: each is blended toward a one-pixel erosion of itself. The stars of its layers are reduced together, so their colors keep. The first change works out the reduced stars from the whole image, which takes a moment."
+        } else {
+            "Makes this layer's stars smaller: each is blended toward a one-pixel erosion of itself. Above 0%, this layer's amount is used in place of its group's. The first change works out the reduced stars from the whole image, which takes a moment."
+        };
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(self.labelled_slider(
+                    format!("Star reduction {:.0}%", layer.star_reduction * 100.0),
+                    SliderId::StarReduction,
+                    layer.star_reduction,
+                    cx,
+                ))
+                .children(from_group.map(|amount| {
+                    Self::note(format!(
+                        "Reduced {:.0}% with the group's other stars.",
+                        amount * 100.0
+                    ))
+                }))
+                .children(Self::help(help)),
+        )
+    }
+
     fn inspect_group(&self, layer: &LayerRecord, cx: &mut Context<Self>) -> AnyElement {
         let id = layer.id;
         let members = self.document.group_members(id).count();
@@ -820,6 +874,7 @@ impl Studio {
                 layer.opacity,
                 cx,
             ))
+            .children(self.star_reduction_block(layer, cx))
             .child(self.blend_block(layer, cx))
             .child(self.palette_block(Some(id), cx))
             .child(Self::field("Layers", self.add_layer_menu(Some(id), cx)))
