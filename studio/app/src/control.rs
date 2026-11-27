@@ -336,6 +336,10 @@ impl Studio {
                         if let Some(band) = params["band"].as_str() {
                             step = step.for_band(band);
                         }
+                        // A layer's own step, given the layer.
+                        let layer = params["layer"]
+                            .as_str()
+                            .and_then(|id| id.parse::<uuid::Uuid>().ok());
                         let mask = params
                             .get("mask")
                             .filter(|mask| !mask.is_null())
@@ -345,7 +349,11 @@ impl Studio {
                             mask => {
                                 step.mask = mask.and_then(Result::ok);
                                 let id = step.id;
-                                match self.document.insert_step(stage, usize::MAX, step) {
+                                let inserted = match layer {
+                                    Some(layer) => self.document.insert_layer_step(layer, step),
+                                    None => self.document.insert_step(stage, usize::MAX, step),
+                                };
+                                match inserted {
                                     Ok(()) => {
                                         self.refresh_canvas();
                                         Ok(json!({ "step": id.to_string() }))
@@ -570,6 +578,11 @@ impl Studio {
                 "what": what, "share": share, "seconds": elapsed.as_secs_f32(),
             })),
             "tools_not_run": self.inputs_to_run(),
+            "tool_steps_not_run": self
+                .late_to_run()
+                .into_iter()
+                .map(|step| step.words)
+                .collect::<Vec<_>>(),
             "histogram": histogram,
             "busy": self.busy(),
         })

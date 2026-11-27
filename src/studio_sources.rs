@@ -414,10 +414,10 @@ impl Track {
 /// between its tiles (350 to 415 pixels apart on the Cat's Eye).
 pub const SHIFTED_PASS: usize = 192;
 
-/// `image`, one channel, moved `by` pixels down and right on a canvas that
-/// much larger, with the edges it uncovers filled by mirroring the image.
-fn shift_mirrored(image: &LinearImage, by: usize) -> Result<LinearImage> {
-    let (width, height) = (image.width, image.height);
+/// `image` moved `by` pixels down and right on a canvas that much larger,
+/// with the edges it uncovers filled by mirroring the image.
+pub(crate) fn shift_mirrored(image: &LinearImage, by: usize) -> Result<LinearImage> {
+    let (width, height, channels) = (image.width, image.height, image.channels);
     let mirror = |at: isize, size: usize| -> usize {
         let size = size as isize;
         let mut at = at;
@@ -430,19 +430,25 @@ fn shift_mirrored(image: &LinearImage, by: usize) -> Result<LinearImage> {
         at.clamp(0, size - 1) as usize
     };
     let (out_width, out_height) = (width + by, height + by);
-    let mut data = Vec::with_capacity(out_width * out_height);
+    let mut data = Vec::with_capacity(out_width * out_height * channels);
     for y in 0..out_height {
         let row = mirror(y as isize - by as isize, height);
         for x in 0..out_width {
-            data.push(image.data[row * width + mirror(x as isize - by as isize, width)]);
+            let at = (row * width + mirror(x as isize - by as isize, width)) * channels;
+            data.extend_from_slice(&image.data[at..at + channels]);
         }
     }
-    Ok(LinearImage::new(out_width, out_height, 1, data)?)
+    Ok(LinearImage::new(out_width, out_height, channels, data)?)
 }
 
 /// The part of `image` that [`shift_mirrored`] moved: `width` by `height`
 /// from `by` pixels in, in each channel.
-fn unshift(image: &LinearImage, by: usize, width: usize, height: usize) -> Result<LinearImage> {
+pub(crate) fn unshift(
+    image: &LinearImage,
+    by: usize,
+    width: usize,
+    height: usize,
+) -> Result<LinearImage> {
     let channels = image.channels;
     if image.width < width + by || image.height < height + by {
         bail!("a shifted pass came back smaller than it went");
@@ -456,7 +462,7 @@ fn unshift(image: &LinearImage, by: usize, width: usize, height: usize) -> Resul
 }
 
 /// The mean of two images of one size.
-fn average(a: &LinearImage, b: &LinearImage) -> Result<LinearImage> {
+pub(crate) fn average(a: &LinearImage, b: &LinearImage) -> Result<LinearImage> {
     if a.data.len() != b.data.len() {
         bail!("the two passes are of different sizes");
     }

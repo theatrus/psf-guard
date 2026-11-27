@@ -2296,6 +2296,47 @@ setup, which has that shape. That fixed order is gone.
   document's order; PSF Guard runs them before the background. A color
   group's star removal stays Studio's.
 
+#### Tools on a layer or the picture (2026-11-27)
+
+A tool step can go anywhere, not only in the Linear stage. **Run a tool on
+this** on a layer adds one among the layer's own steps, and **Add tool** in
+the Finish stage adds one to the picture; `studio_add_step` does either.
+Such a step runs on what Studio draws there:
+
+- **What it runs on.** A layer's tool runs on the layer alone, in gray, as
+  its stretch and its own steps before the tool leave it. A Finish tool
+  runs on the picture as the layers and the Finish steps before it leave
+  it, in the working space.
+- **Running.** **Run tools** prepares the store first when an input's steps
+  changed, then runs these steps in order, each layer's first, then the
+  Finish steps: it renders the step's image at full resolution with
+  Seiza's CPU render, as an export does, and has `psf-guard studio-tool`
+  run the tool on it (with the shifted second pass when asked). The
+  results are kept in `<store>.late/`, named by a digest of the store's
+  version, the document up to the step and the tool, so an edit after the
+  step keeps the result and an edit before it asks for a new one. A
+  later step's image is rendered with the earlier steps' results.
+- **Drawing.** A layer whose tool has run is drawn from the result, which
+  holds its stretch and its own steps before the tool; its steps after
+  the tool apply on it. A Finish tool that has run replaces the picture
+  before it: the canvas draws the result, a channel at a time in the
+  working space, and the Finish steps after it. A step that has not run
+  for the document as it is, is left out and listed in the pane, and the
+  toolbar lists it under “Tools to run”.
+- **New images.** A star removal's stars are a new image. In the Linear
+  stage they become an input, “Ha stars”, with a layer of their own. On a
+  layer or the picture they are kept beside the result and screened back
+  right after the step: the tree shows them as “Stars it took out” under
+  the step, with a switch that leaves them out, so the steps after it work
+  on a starless picture.
+- **Memory.** Each result is held whole, with its pyramid: about 0.3 GB a
+  channel for the Iris.
+
+Still open: adding the stars back at the end of the Finish stage rather
+than right after the step, which needs layers after the Finish steps in
+Seiza's picture; and a layer's result follows changes to that layer's
+opacity and blend, which do not change what the tool ran on.
+
 ### Stars
 
 When a star removal keeps the stars it took out (StarXTerminator's
@@ -2962,6 +3003,13 @@ Gaps to fix, roughly in the order they got in the way:
   thin gap between two rows.
 - [ ] **One way to adjust.** Finish steps and adjustment layers are two;
   exposure, curves and saturation are Studio's shader code, not Seiza's.
+- [ ] **History panel.** Asked for on 2026-11-27: a panel like
+  Lightroom's History that lists the document's edits in order, so a
+  person sees what changed in the stack and can step back to any of them.
+  Undo and Redo keep the edits already (up to 200); the panel needs each
+  edit's description (which step or layer, which setting, from and to)
+  and a way to show the picture at an earlier edit without losing the
+  later ones.
 - [ ] **Setup and hand-off.** No Setup page or recipe record in the
   document, no server target or sign-in in Studio, no table of every
   input's tools, no round trip to another editor.

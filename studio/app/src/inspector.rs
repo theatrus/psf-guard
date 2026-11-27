@@ -125,7 +125,19 @@ impl Studio {
                 })
             })
             .collect();
-        Self::field("Finish", self.menu("add-finish", "Add step", picks, cx))
+        Self::field("Finish", self.menu("add-finish", "Add step", picks, cx)).child(Self::field(
+            "",
+            self.tool_menu("add-finish-tool", "Add tool", cx, |this, step| {
+                let id = step.id;
+                if this
+                    .document
+                    .insert_step(StageKind::Finish, usize::MAX, step)
+                    .is_ok()
+                {
+                    this.selected = Row::Finish(id);
+                }
+            }),
+        ))
     }
 
     /// What every step's controls share: on or off, its amount, whether the
@@ -195,11 +207,15 @@ impl Studio {
                     && !self.band_info.calibration.is_empty(),
                 |pane| pane.child(Self::note(self.band_info.calibration.clone())),
             )
-            .when(!is_drawn(stage, step, &self.band_info), |pane| {
-                pane.children(Self::help(
-                    "The document records this step. The canvas does not draw it yet.",
-                ))
-            })
+            .when(
+                !is_drawn(stage, step, &self.band_info)
+                    && !(crate::studio_model::is_tool_step(step) && stage != StageKind::Linear),
+                |pane| {
+                    pane.children(Self::help(
+                        "The document records this step. The canvas does not draw it yet.",
+                    ))
+                },
+            )
             .when_some(mask_words(&self.document, &step.mask), |pane, words| {
                 pane.child(Self::heading("Mask"))
                     .child(div().text_xs().child(words))
@@ -718,6 +734,21 @@ impl Studio {
                 cx,
                 move |this, name| this.add_adjustment_above(Some(id), name),
             )))
+            .child(Self::field(
+                "Tools",
+                self.tool_menu("layer-tool", "Run a tool on this", cx, move |this, step| {
+                    let step_id = step.id;
+                    if this.document.insert_layer_step(id, step).is_ok() {
+                        this.selected = Row::LayerStep {
+                            layer: id,
+                            step: step_id,
+                        };
+                    }
+                }),
+            ))
+            .children(Self::help(
+                "A tool here runs on this layer alone, as its stretch and its edits before the tool leave it, when the tools run. The stars a star removal takes out go back right after it.",
+            ))
             .child(Self::heading("Layer"))
             .child(
                 wrap()
@@ -1393,31 +1424,37 @@ impl Studio {
                 format!("An edit of {} only.", owner.name),
             ))
             .child(self.step_controls(stage, step, cx))
-            .when(is_adjustment, |pane| {
-                pane.child(Self::heading("Applies to"))
-                    .child(
-                        wrap()
-                            .child(Self::button(
-                                format!("{} only", owner.name),
-                                "scope-own",
-                                true,
-                            ))
-                            .child(Self::act(
-                                "Beneath",
-                                "scope-stack",
-                                false,
-                                cx,
-                                move |this| {
-                                    if let Ok(new) = this.document.detach_adjustment(id) {
-                                        this.selected = Row::Layer(new);
-                                    }
-                                },
-                            )),
-                    )
-                    .children(Self::help(
-                        "Paint with the mask brush to limit where this adjustment applies.",
-                    ))
+            .when(crate::studio_model::is_tool_step(step), |pane| {
+                pane.child(self.late_tool_block(step, &format!("{} alone", owner.name), cx))
             })
+            .when(
+                is_adjustment && !crate::studio_model::is_tool_step(step),
+                |pane| {
+                    pane.child(Self::heading("Applies to"))
+                        .child(
+                            wrap()
+                                .child(Self::button(
+                                    format!("{} only", owner.name),
+                                    "scope-own",
+                                    true,
+                                ))
+                                .child(Self::act(
+                                    "Beneath",
+                                    "scope-stack",
+                                    false,
+                                    cx,
+                                    move |this| {
+                                        if let Ok(new) = this.document.detach_adjustment(id) {
+                                            this.selected = Row::Layer(new);
+                                        }
+                                    },
+                                )),
+                        )
+                        .children(Self::help(
+                            "Paint with the mask brush to limit where this adjustment applies.",
+                        ))
+                },
+            )
             .child(Self::act("Remove", "step-remove", false, cx, move |this| {
                 this.document.remove_step(id);
                 this.selected = Row::Layer(layer);
@@ -1467,9 +1504,14 @@ impl Studio {
             ))
             .child(self.histogram_block())
             .child(self.step_controls(stage, step, cx))
-            .children(Self::help(
-                "Paint with the mask brush to limit where this step applies.",
-            ))
+            .when(crate::studio_model::is_tool_step(step), |pane| {
+                pane.child(self.late_tool_block(step, "the picture", cx))
+            })
+            .when(!crate::studio_model::is_tool_step(step), |pane| {
+                pane.children(Self::help(
+                    "Paint with the mask brush to limit where this step applies.",
+                ))
+            })
             .child(Self::act("Remove", "step-remove", false, cx, move |this| {
                 this.document.remove_step(id);
                 this.selected = Row::Combined;

@@ -1518,6 +1518,25 @@ pub fn main() -> Result<()> {
         Commands::StudioTools => {
             crate::commands::studio_sources::studio_tools()?;
         }
+        Commands::StudioTool {
+            input,
+            tool,
+            output,
+            stars,
+            cache,
+            shifted,
+        } => {
+            crate::commands::studio_sources::studio_tool(
+                crate::commands::studio_sources::StudioToolOptions {
+                    input: input.into(),
+                    tool,
+                    output: output.into(),
+                    stars: stars.map(Into::into),
+                    cache: cache.into(),
+                    shifted,
+                },
+            )?;
+        }
         Commands::StudioStore {
             input,
             output,

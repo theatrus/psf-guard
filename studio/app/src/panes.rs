@@ -415,6 +415,12 @@ fn adjustment_kind(operation: &str) -> Option<Adjustment> {
 /// Whether the canvas draws a step, or only keeps it in the document.
 pub(super) fn is_drawn(stage: StageKind, step: &StepRecord, bands: &Bands) -> bool {
     match (&step.kind, stage) {
+        // A tool on a layer or the picture is drawn once it has run.
+        (StepKind::Operation { .. }, StageKind::Combine | StageKind::Finish)
+            if crate::studio_model::is_tool_step(step) =>
+        {
+            tool_plane(bands, step.id, 0, false).is_some()
+        }
         (StepKind::Operation { operation, .. }, StageKind::Linear) => {
             let background = operation == flow_operations::BACKGROUND;
             // The store's red, green and blue hold the calibration.
@@ -483,6 +489,31 @@ fn segments(stroke: &Stroke) -> Vec<Segment> {
             .map(|pair| segment(pair[0], pair[1]))
             .collect(),
     }
+}
+
+/// The tile channel of one channel of what a late tool step made, when the
+/// canvas has it: its result, or the stars it took out.
+fn tool_plane(bands: &Bands, step: Uuid, channel: u8, stars: bool) -> Option<usize> {
+    bands
+        .derived_planes()
+        .into_iter()
+        .find(|(key, _)| {
+            key.kind
+                == DerivedKind::Tool {
+                    step,
+                    channel,
+                    stars,
+                }
+        })
+        .map(|(_, plane)| plane)
+}
+
+/// The words for a tool step whose result the canvas does not have.
+fn not_run(step: &StepRecord, on: &str) -> String {
+    format!(
+        "{} on {on}, which has not run for these edits",
+        step.kind.name()
+    )
 }
 
 /// Whether the canvas draws a step's mask: none, or a painted one. A
@@ -557,6 +588,7 @@ fn plain_layer() -> Layer {
         mask: None,
         adjustment: None,
         own: false,
+        working: false,
     }
 }
 
@@ -1118,16 +1150,57 @@ pub(super) fn scene(
         // A plane the store stretched has a table row of its own, which
         // leaves its samples as they are.
         let stretched_as = if display { DISPLAY_ROW } else { stretched_as };
-        let shown = Layer {
-            band: plane,
-            blended,
-            ..plain_layer()
+        // A layer's own tool step whose result the canvas has: the layer is
+        // drawn from that result, which holds its stretch and every own step
+        // before the tool.
+        let mut baked: Option<(usize, Uuid)> = None;
+        if let Some(owner) = layer {
+            for (at, step) in owner.steps.iter().enumerate() {
+                if !crate::studio_model::is_tool_step(step) || !planned.own_steps.contains(&step.id)
+                {
+                    continue;
+                }
+                if tool_plane(bands, step.id, 0, false).is_some() {
+                    baked = Some((at, step.id));
+                } else {
+                    omitted.push(not_run(step, &owner.name));
+                }
+            }
+        }
+        let (shown, stretched_as, stages) = match baked {
+            Some((_, step)) => (
+                Layer {
+                    band: tool_plane(bands, step, 0, false).expect("a result just found"),
+                    ..plain_layer()
+                },
+                DISPLAY_ROW,
+                Vec::new(),
+            ),
+            None => (
+                Layer {
+                    band: plane,
+                    blended,
+                    ..plain_layer()
+                },
+                stretched_as,
+                stages,
+            ),
+        };
+        // The own steps after the tool's: those before it are in its result.
+        let after_baked: Vec<Uuid> = match (baked, layer) {
+            (Some((at, _)), Some(owner)) => owner.steps[at + 1..]
+                .iter()
+                .map(|step| step.id)
+                .filter(|id| planned.own_steps.contains(id))
+                .collect(),
+            _ => planned.own_steps.clone(),
         };
         // The heals of the input alone change its samples before the
         // stretch, wherever the input is shown.
         let input_heals: Vec<&StepRecord> = channel
             .heals
             .iter()
+            .filter(|_| baked.is_none())
             .filter_map(|id| document.step(*id))
             .map(|(_, step)| step)
             .collect();
@@ -1196,7 +1269,7 @@ pub(super) fn scene(
         // The layer's own edits change it before it is blended. Its heals
         // change the stretched layer; its adjustments follow.
         let own_heals = layer.steps.iter().filter(|step| {
-            planned.own_steps.contains(&step.id) && matches!(step.kind, StepKind::Heal { .. })
+            after_baked.contains(&step.id) && matches!(step.kind, StepKind::Heal { .. })
         });
         for step in own_heals {
             let mask = mask_for(step_strokes(step));
@@ -1207,18 +1280,98 @@ pub(super) fn scene(
             &mut omitted,
             &mut mask_for,
             layer,
-            &planned.own_steps,
+            &after_baked,
         );
+        // The stars the layer's star removal took out go back right after
+        // it, screened over the stack in the layer's color.
+        let stars = baked.and_then(|(at, step)| {
+            let record = &layer.steps[at];
+            (super::late_tools::stars_shown(record) && !gray)
+                .then(|| tool_plane(bands, step, 0, true))
+                .flatten()
+        });
+        if let Some(stars) = stars
+            && layers.len() < MAX_LAYERS
+        {
+            let shown = &layers[shown_at];
+            layers.push(Layer {
+                band: stars,
+                blend: Blend::Screen,
+                color: shown.color,
+                opacity: shown.opacity,
+                mask: shown.mask,
+                clip: shown.clip,
+                ..plain_layer()
+            });
+            layer_bands.push(DISPLAY_ROW);
+            layer_stretches.push(Vec::new());
+        }
     }
 
+    // A Finish tool step whose result the canvas has: the picture after it
+    // is that result, which holds every layer and Finish step before it,
+    // with the stars a star removal took out screened back over it.
+    let finish_steps = &document.stage(StageKind::Finish).steps;
+    let mut baked_finish: Option<usize> = None;
+    for (at, step) in finish_steps.iter().enumerate() {
+        if !crate::studio_model::is_tool_step(step) || !planned.finish.contains(&step.id) {
+            continue;
+        }
+        if tool_plane(bands, step.id, 0, false).is_some() {
+            baked_finish = Some(at);
+        } else {
+            omitted.push(not_run(step, "the picture"));
+        }
+    }
+    if let Some(at) = baked_finish {
+        let step = &finish_steps[at];
+        layers.clear();
+        layer_bands.clear();
+        layer_stretches.clear();
+        heals.clear();
+        masked.clear();
+        let primaries = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+        let mut add_image = |stars: bool, layers: &mut Vec<Layer>| {
+            let channels: Vec<usize> = (0..3)
+                .map_while(|channel| tool_plane(bands, step.id, channel, stars))
+                .collect();
+            for (index, channel) in channels.iter().enumerate() {
+                let color = if channels.len() == 3 {
+                    primaries[index]
+                } else {
+                    [1.0; 3]
+                };
+                layers.push(Layer {
+                    band: *channel,
+                    color,
+                    working: true,
+                    blend: match (stars, layers.is_empty()) {
+                        (true, _) => Blend::Screen,
+                        (false, true) => Blend::Normal,
+                        (false, false) => Blend::Add,
+                    },
+                    ..plain_layer()
+                });
+                layer_bands.push(DISPLAY_ROW);
+                layer_stretches.push(Vec::new());
+            }
+        };
+        add_image(false, &mut layers);
+        if super::late_tools::stars_shown(step) {
+            add_image(true, &mut layers);
+        }
+    }
     // The output stretches drawn, resolved in order: each from what the
     // ones before it left.
-    let drawn_finish: Vec<&StepRecord> = document
-        .stage(StageKind::Finish)
-        .steps
+    let drawn_finish: Vec<&StepRecord> = finish_steps
         .iter()
+        .enumerate()
+        .filter(|(at, _)| baked_finish.is_none_or(|baked| *at > baked))
+        .map(|(_, step)| step)
         .filter(|step| {
-            planned.finish.contains(&step.id) && is_drawn(StageKind::Finish, step, bands)
+            !crate::studio_model::is_tool_step(step)
+                && planned.finish.contains(&step.id)
+                && is_drawn(StageKind::Finish, step, bands)
         })
         .collect();
     let configs: Vec<_> = drawn_finish
@@ -2545,17 +2698,23 @@ impl Studio {
             // the store's tools until they run.
             .when_some(
                 (!self.is_running() && self.cannot_run().is_none())
-                    .then(|| self.inputs_to_run())
-                    .filter(|inputs| !inputs.is_empty()),
-                |bar, inputs| {
-                    let names: Vec<String> =
-                        inputs.iter().map(|input| channel_label(input)).collect();
+                    .then(|| {
+                        let mut names: Vec<String> = self
+                            .inputs_to_run()
+                            .iter()
+                            .map(|input| channel_label(input))
+                            .collect();
+                        names.extend(self.late_to_run().into_iter().map(|step| step.words));
+                        names
+                    })
+                    .filter(|names| !names.is_empty()),
+                |bar, names| {
                     bar.child(
                         div()
                             .pr_2()
                             .text_xs()
                             .whitespace_nowrap()
-                            .child(format!("Tools changed for {}", names.join(", "))),
+                            .child(format!("Tools to run: {}", names.join(", "))),
                     )
                     .child(Self::act(
                         "Run tools",

@@ -961,6 +961,8 @@ pub struct Studio {
     /// The window's own focus, so Undo, Redo and other keys reach it when
     /// no control has the keyboard.
     focus: gpui::FocusHandle,
+    /// The results of tool steps on layers and the picture the canvas has.
+    late: late_tools::Late,
 }
 
 impl Studio {
@@ -1120,6 +1122,7 @@ impl Studio {
                 this.follow_export();
                 this.follow_derived();
                 this.follow_store_opening();
+                this.follow_late();
                 // Every change is kept: the document is saved as soon as it
                 // differs from the file.
                 this.save_document();
@@ -1208,6 +1211,7 @@ impl Studio {
                 history: history::History::default(),
                 drop_lower: None,
                 focus: cx.focus_handle(),
+                late: late_tools::Late::default(),
             };
         // The patches read as the store opened stand in until every band
         // is sampled over the whole image.
@@ -1690,6 +1694,8 @@ mod export;
 mod history;
 #[path = "inspector.rs"]
 mod inspector;
+#[path = "late_tools.rs"]
+mod late_tools;
 #[path = "open.rs"]
 mod open;
 #[path = "panes.rs"]

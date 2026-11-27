@@ -157,12 +157,13 @@ fn tools() -> Value {
         },
         {
             "name": "studio_add_step",
-            "description": "Adds a step at the end of a stage, as the inspector's Add step does. `stage` is sources, linear, stretch, combine, finish or export; `operation` the step's name, such as \"Tone and color\", \"Curves\" or \"Stretch\"; `band` the input it is for, when it is one input's; `settings` its settings; `mask` a mask as the document stores it, such as {\"kind\": \"range\", \"low\": 0.5, \"high\": 1.0, \"feather\": 0.1}. Returns the step's id.",
+            "description": "Adds a step at the end of a stage, as the inspector's Add step does. `stage` is sources, linear, stretch, combine, finish or export; `operation` the step's name, such as \"Tone and color\", \"Curves\" or \"Stretch\"; `band` the input it is for, when it is one input's; `layer` the layer's id for a layer's own step (stage combine); `settings` its settings (for a tool, {\"provider\": \"nxt\", \"parameters\": {}}: a tool step in the combine or finish stage runs on that layer or on the picture when the tools run); `mask` a mask as the document stores it, such as {\"kind\": \"range\", \"low\": 0.5, \"high\": 1.0, \"feather\": 0.1}. Returns the step's id.",
             "inputSchema": object(json!({
                 "instance": instance,
                 "stage": { "type": "string" },
                 "operation": { "type": "string" },
                 "band": { "type": "string" },
+                "layer": { "type": "string" },
                 "settings": {},
                 "mask": {}
             }), &["stage", "operation"]),
@@ -325,6 +326,7 @@ impl Server {
                     "stage": arguments["stage"],
                     "operation": arguments["operation"],
                     "band": arguments["band"],
+                    "layer": arguments["layer"],
                     "settings": arguments.get("settings").cloned().unwrap_or(Value::Null),
                     "mask": arguments.get("mask").cloned().unwrap_or(Value::Null),
                 }),

@@ -95,6 +95,9 @@ pub struct Layer {
     pub adjustment: Option<(Adjustment, f32)>,
     /// For an adjustment: whether it changes only the entry before it.
     pub own: bool,
+    /// Whether `color` is in the working space already: a channel of an
+    /// image a tool made from the picture, which goes back as it came.
+    pub working: bool,
 }
 
 /// One band a computed mask reads, stretched.
@@ -175,7 +178,11 @@ pub fn picture(parts: &SceneParts, stretches: &[Transfer]) -> Picture {
                                 .map(|(band, share)| (band, share.clamp(0.0, 1.0))),
                             transfer,
                         },
-                        color: working_color(layer.color),
+                        color: if layer.working {
+                            layer.color
+                        } else {
+                            working_color(layer.color)
+                        },
                         curve: layer.curve.clamp(-1.0, 1.0),
                     }
                 }
@@ -363,6 +370,7 @@ mod tests {
             mask: None,
             adjustment: None,
             own: false,
+            working: false,
         }
     }
 

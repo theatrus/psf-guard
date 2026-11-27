@@ -759,6 +759,130 @@ fn linear_steps(document: &Document, stacks: &[StackColorSource]) -> Result<Vec<
     Ok(steps)
 }
 
+/// What `psf-guard studio-tool` runs: one processing tool on one image.
+pub struct StudioToolOptions {
+    /// The image, a FITS file of one channel or three.
+    pub input: PathBuf,
+    /// The tool, as one step of a tool chain: `{"provider": ..., "parameters": {...}}`.
+    pub tool: String,
+    /// Where the tool's result is written, as a 32-bit FITS file.
+    pub output: PathBuf,
+    /// Where the stars a star removal took out are written, if it kept any.
+    pub stars: Option<PathBuf>,
+    /// Where each run's result is kept, so a repeat run is fast.
+    pub cache: PathBuf,
+    /// Whether the tool runs a second time on the image shifted by half a
+    /// tile, and the two results are averaged.
+    pub shifted: bool,
+}
+
+/// Runs one processing tool on an image PSF Studio rendered, such as one
+/// layer or the picture at a Finish step, and writes its result. The result
+/// is kept by the image's content and the tool's settings, so the same
+/// image and tool run once.
+pub fn studio_tool(options: StudioToolOptions) -> Result<()> {
+    use crate::server::stack_preview::rc_astro::{ProcessingChain, ProcessingStep};
+    use crate::server::workers::rc_astro::RcAstroRunner;
+    use sha2::{Digest, Sha256};
+    let bytes = std::fs::read(&options.input)
+        .with_context(|| format!("reading {}", options.input.display()))?;
+    let digest: String = Sha256::digest(&bytes)
+        .iter()
+        .take(16)
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    drop(bytes);
+    let frame = crate::image_io::open_linear_frame(&options.input)
+        .with_context(|| format!("reading {}", options.input.display()))?;
+    let tool: ProcessingStep =
+        serde_json::from_str(&options.tool).context("the tool is not a step of a tool chain")?;
+    let workers = Workers::default();
+    let chain = ProcessingChain { steps: vec![tool] };
+    std::fs::create_dir_all(&options.cache)?;
+    let reported = std::cell::RefCell::new((String::new(), u32::MAX));
+    let report = |tool: &str, fraction: f32| {
+        let percent = (fraction.clamp(0.0, 1.0) * 100.0) as u32;
+        let line = format!("picture: {tool}");
+        let mut last = reported.borrow_mut();
+        if *last != (line.clone(), percent) {
+            println!("  {line} ({percent}%)");
+            *last = (line, percent);
+        }
+    };
+    let run = |image: &seiza_stacking::LinearImage, revision: &str, label: &str| {
+        let resolved = crate::color_steps::ToolChain::resolve(
+            &workers, &chain, "studio", "picture", revision, None,
+        )
+        .map_err(anyhow::Error::msg)?;
+        crate::color_steps::run_tool_chain(
+            RcAstroRunner {
+                workers: &workers,
+                person: true,
+            },
+            &options.cache,
+            &resolved,
+            image,
+            &frame.headers,
+            None,
+            |crate::color_steps::ToolEvent::Running {
+                 label: tool,
+                 fraction,
+             }| { report(&format!("{tool}{label}"), fraction) },
+            &mut || Ok(()),
+        )
+        .map_err(anyhow::Error::msg)
+    };
+    let started = Instant::now();
+    let mut outcome = run(&frame.image, &digest, "")?;
+    if options.shifted {
+        use crate::studio_sources::{average, shift_mirrored, unshift, SHIFTED_PASS};
+        let moved = shift_mirrored(&frame.image, SHIFTED_PASS)?;
+        let second = run(
+            &moved,
+            &format!("{digest}:shifted:{SHIFTED_PASS}"),
+            ", shifted",
+        )?;
+        let (width, height) = (frame.image.width, frame.image.height);
+        outcome.image = average(
+            &outcome.image,
+            &unshift(&second.image, SHIFTED_PASS, width, height)?,
+        )?;
+        outcome.stars = match (outcome.stars, second.stars) {
+            (Some(first), Some(stars)) => Some(average(
+                &first,
+                &unshift(&stars, SHIFTED_PASS, width, height)?,
+            )?),
+            (first, _) => first,
+        };
+    }
+    let write = |path: &Path, image: &seiza_stacking::LinearImage| -> Result<()> {
+        let data = match image.channels {
+            1 => seiza_fits::F32ImageData::Mono(&image.data),
+            3 => seiza_fits::F32ImageData::RgbInterleaved(&image.data),
+            other => bail!("a tool gave {other} channels"),
+        };
+        let partial = path.with_extension("partial.fits");
+        seiza_fits::write_f32_image(&partial, image.width, image.height, data, &[])
+            .map_err(|error| anyhow!("writing {}: {error}", path.display()))?;
+        std::fs::rename(&partial, path)?;
+        Ok(())
+    };
+    write(&options.output, &outcome.image)?;
+    if let (Some(path), Some(stars)) = (&options.stars, &outcome.stars) {
+        write(path, stars)?;
+    }
+    println!(
+        "Ran the tool in {:.1} s{}",
+        started.elapsed().as_secs_f64(),
+        if outcome.stars.is_some() {
+            ", with stars"
+        } else {
+            ""
+        }
+    );
+    Ok(())
+}
+
 /// Prints the processing tools this computer can run, with each tool's
 /// settings, as JSON: what PSF-Studio offers a person to choose from.
 pub fn studio_tools() -> Result<()> {

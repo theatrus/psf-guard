@@ -104,6 +104,12 @@ pub fn tool_operation(provider: &str) -> &'static str {
 /// settings read past it.
 pub const SHIFTED_PASS_KEY: &str = "shifted_pass";
 
+/// The key of a star removal step's setting that adds the stars it took
+/// out back right after the step, as a layer screened over its result. On
+/// unless set to false. A Linear star removal keeps its stars as an input
+/// of their own instead.
+pub const STARS_SHOWN_KEY: &str = "stars_shown";
+
 /// Whether a step runs one processing tool.
 pub fn is_tool_step(step: &StepRecord) -> bool {
     op::TOOLS.contains(&step.kind.name())
@@ -121,7 +127,11 @@ pub fn tool_of(step: &StepRecord) -> Option<&Value> {
 }
 
 /// A step that runs `tool`, one step of PSF Guard's tool chains. A tool
-/// with no settings gets an empty set, so every tool step reads alike.
+/// with no settings gets an empty set, so every tool step reads alike. A
+/// tool step can go in any stage: in the Linear stage it runs on its
+/// input when the store is prepared; as a layer's own step or a Finish
+/// step it runs on that layer, or on the picture up to it, as Studio
+/// renders them.
 pub fn tool_step(mut tool: Value) -> StepRecord {
     // Chains written by older builds name the provider `tool`.
     if tool.get("provider").is_none()
@@ -135,7 +145,7 @@ pub fn tool_step(mut tool: Value) -> StepRecord {
             .or_insert_with(|| Value::Object(Map::new()));
     }
     let provider = tool["provider"].as_str().unwrap_or_default().to_string();
-    operation(tool_operation(&provider), Accepts::Linear, &tool)
+    operation(tool_operation(&provider), Accepts::Either, &tool)
 }
 
 /// Whether a Linear step changes the samples of `channel` when a store is

@@ -441,6 +441,56 @@ impl Studio {
             .into_any_element()
     }
 
+    /// For a star removal on a layer or the picture, a row under it for the
+    /// stars it takes out, which go back right after it: what a person sees
+    /// of the new image a tool makes, with a switch that leaves them out.
+    fn stars_row(
+        &self,
+        step: &StepRecord,
+        indent: f32,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        if step.kind.name() != crate::studio_model::flow_operations::STAR_REMOVAL {
+            return None;
+        }
+        let id = step.id;
+        let shown = super::late_tools::stars_shown(step);
+        let words = match (shown, self.late.has(id)) {
+            (_, false) => "made when the tools run",
+            (true, true) => "screened back after it",
+            (false, true) => "left out",
+        };
+        Some(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .px_2()
+                .py_1()
+                .ml(px(indent))
+                .child(Self::child_mark())
+                .child(Self::named("Stars it took out", words))
+                .child(Self::switch(
+                    ("stars-shown", index),
+                    shown,
+                    ("shown", "hidden"),
+                    cx,
+                    move |this| {
+                        let Some((_, step)) = this.document.step(id) else {
+                            return;
+                        };
+                        let mut tool = crate::studio_model::tool_of(step)
+                            .cloned()
+                            .unwrap_or_default();
+                        tool[crate::studio_model::STARS_SHOWN_KEY] = (!shown).into();
+                        this.document.set_step_settings(id, tool);
+                    },
+                ))
+                .into_any_element(),
+        )
+    }
+
     /// A row for an edit that belongs to one layer, indented under it.
     fn layer_step_row(
         &self,
@@ -494,6 +544,12 @@ impl Studio {
             rows.push(self.layer_row(index, layer, cx));
             for (at, step) in layer.steps.iter().enumerate() {
                 rows.push(self.layer_step_row(index * 64 + at, layer, step, cx));
+                let indent = if layer.group.is_some() {
+                    3.0 * CHILD_INDENT
+                } else {
+                    2.0 * CHILD_INDENT
+                };
+                rows.extend(self.stars_row(step, indent, 1000 + index * 64 + at, cx));
             }
             let is_group = layer.source == LayerSource::Group;
             // The group this row is in, or is.
@@ -560,10 +616,11 @@ impl Studio {
             .steps
             .iter()
             .enumerate()
-            .map(|(index, step)| {
+            .flat_map(|(index, step)| {
                 let id = step.id;
                 let enabled = step.enabled;
-                self.tree_row(("finish", index), Row::Finish(id), 0.0, cx)
+                let row = self
+                    .tree_row(("finish", index), Row::Finish(id), 0.0, cx)
                     .child(Self::named(
                         step.kind.name().to_string(),
                         self.step_words(StageKind::Finish, step, "the whole picture".to_string()),
@@ -577,7 +634,8 @@ impl Studio {
                             this.document.set_step_enabled(id, !enabled);
                         },
                     ))
-                    .into_any_element()
+                    .into_any_element();
+                std::iter::once(row).chain(self.stars_row(step, CHILD_INDENT, index, cx))
             })
             .collect::<Vec<_>>();
         div()

@@ -1336,6 +1336,35 @@ pub enum Commands {
     /// settings, as JSON
     StudioTools,
 
+    /// Run one processing tool on an image PSF-Studio rendered, such as a
+    /// layer or the picture at a Finish step, and write its result
+    StudioTool {
+        /// The image: a FITS file of one channel or three
+        #[arg(long)]
+        input: String,
+
+        /// The tool, as JSON: {"provider": "nxt", "parameters": {...}}
+        #[arg(long)]
+        tool: String,
+
+        /// Where the result is written, as a 32-bit FITS file
+        #[arg(long)]
+        output: String,
+
+        /// Where the stars a star removal took out are written
+        #[arg(long)]
+        stars: Option<String>,
+
+        /// The folder each run's result is kept in
+        #[arg(long)]
+        cache: String,
+
+        /// Run the tool a second time on the image shifted by half a tile
+        /// and average the two
+        #[arg(long)]
+        shifted: bool,
+    },
+
     /// Write a PSF-Studio tile store from a FITS or XISF frame
     StudioStore {
         /// Path to the FITS or XISF frame

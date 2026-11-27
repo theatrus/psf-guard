@@ -91,7 +91,7 @@ type Listed = Option<Result<Vec<ToolInfo>, String>>;
 
 /// A run of `psf-guard studio-prepare`, as the thread that reads it
 /// reports it.
-struct Run {
+pub(super) struct Run {
     /// The last line the program printed.
     line: String,
     /// How it ended, once it has.
@@ -107,6 +107,9 @@ struct Run {
     started: std::time::Instant,
     /// Whether a person stopped the run.
     stopped: bool,
+    /// Whether the run is of tool steps on a layer or the picture, which
+    /// leaves the store as it is.
+    late: bool,
 }
 
 /// The processing tools of the app.
@@ -135,6 +138,9 @@ pub(super) struct Tools {
     /// run starts with the document as it is then, once the store the run
     /// prepared is open.
     queued: bool,
+    /// Whether the tool steps on layers and the picture run once the store
+    /// a run prepares is open.
+    late_after: bool,
 }
 
 impl Tools {
@@ -185,6 +191,7 @@ impl Tools {
             saved: String::new(),
             prepared: None,
             queued: false,
+            late_after: false,
         }
     }
 }
@@ -675,13 +682,26 @@ impl Studio {
     }
 
     fn tool_settings(&self, channel: &str) -> Vec<(String, Setting, serde_json::Value)> {
-        let mut listed = Vec::new();
         let kind = self.selected_tool_kind();
-        for step in self.shown_chain(channel) {
-            let provider = Self::provider_of(&step).to_string();
-            if kind.is_some_and(|kind| !self.is_of(&provider, kind)) {
-                continue;
-            }
+        let mut listed: Vec<_> = self
+            .shown_chain(channel)
+            .iter()
+            .filter(|step| kind.is_none_or(|kind| self.is_of(Self::provider_of(step), kind)))
+            .flat_map(|step| self.settings_of_tool(step))
+            .collect();
+        listed.truncate(MAX_TOOL_SETTINGS);
+        listed
+    }
+
+    /// The settings of one tool, as a tool step keeps it, that a person can
+    /// set: the tool, the setting, and its value now.
+    fn settings_of_tool(
+        &self,
+        step: &serde_json::Value,
+    ) -> Vec<(String, Setting, serde_json::Value)> {
+        let mut listed = Vec::new();
+        {
+            let provider = Self::provider_of(step).to_string();
             let Some(schema) = self
                 .tools
                 .tools
@@ -689,7 +709,7 @@ impl Studio {
                 .find(|tool| tool.key == provider)
                 .and_then(|tool| tool.schema.as_ref())
             else {
-                continue;
+                return listed;
             };
             // A star removal always keeps its stars, linear, for the stars
             // layers; `psf-guard` sets those two settings itself.
@@ -714,8 +734,18 @@ impl Studio {
                 listed.push((provider.clone(), setting.clone(), value));
             }
         }
-        listed.truncate(MAX_TOOL_SETTINGS);
         listed
+    }
+
+    /// The selected step and its tool, when it is a tool step on a layer or
+    /// the picture.
+    fn selected_late_tool(&self) -> Option<(uuid::Uuid, serde_json::Value)> {
+        let id = self.selected_step()?;
+        let (stage, step) = self.document.step(id)?;
+        if stage == StageKind::Linear {
+            return None;
+        }
+        Some((id, crate::studio_model::tool_of(step)?.clone()))
     }
 
     /// The input the selected row belongs to.
@@ -728,6 +758,21 @@ impl Studio {
 
     /// Applies a tool setting's slider, from 0 to 1.
     pub(super) fn tool_slider_moved(&mut self, index: usize, position: f32) {
+        // A tool step on a layer or the picture keeps its own settings.
+        if let Some((id, mut tool)) = self.selected_late_tool() {
+            let Some((_, setting, _)) = self.settings_of_tool(&tool).into_iter().nth(index) else {
+                return;
+            };
+            let Some(value) = slider_value(&setting, position) else {
+                return;
+            };
+            if !tool["parameters"].is_object() {
+                tool["parameters"] = serde_json::json!({});
+            }
+            tool["parameters"][setting.name.as_str()] = value;
+            self.document.set_step_settings(id, tool);
+            return;
+        }
         let Some(channel) = self.selected_input() else {
             return;
         };
@@ -735,17 +780,8 @@ impl Studio {
         else {
             return;
         };
-        let value: serde_json::Value = match setting.kind {
-            SettingKind::Float { min, max, .. } => {
-                // Two decimals are as fine as the tools' own sliders.
-                let value = min + (max - min) * f64::from(position);
-                ((value * 100.0).round() / 100.0).into()
-            }
-            SettingKind::Int { min, max, .. } => {
-                ((min as f64 + (max as f64 - min as f64) * f64::from(position)).round() as i64)
-                    .into()
-            }
-            SettingKind::Bool { .. } | SettingKind::Other => return,
+        let Some(value) = slider_value(&setting, position) else {
+            return;
         };
         self.set_tool_value(&channel, &provider, &setting.name, value);
     }
@@ -778,6 +814,14 @@ impl Studio {
             self.tools.queued = true;
             return;
         }
+        // With the store prepared for the document, only the tool steps on
+        // layers and the picture are left to run.
+        if self.inputs_to_run().is_empty() && !self.late_to_run().is_empty() {
+            self.save_document();
+            self.run_late_tools();
+            return;
+        }
+        self.tools.late_after = true;
         if let Err(error) = std::fs::write(&document, self.document.to_json()) {
             self.tools.status = format!("The document could not be saved: {error}");
             return;
@@ -976,6 +1020,12 @@ impl Studio {
 
     /// Draws the store with the planes worked out from it, which load again
     /// tile by tile.
+    pub(super) fn show_derived_planes(&mut self) {
+        self.show_derived();
+    }
+
+    /// Draws the store with the planes worked out from it, which load again
+    /// tile by tile.
     fn show_derived(&mut self) {
         let Some(store) = self.base_bands.store.clone() else {
             return;
@@ -1052,7 +1102,7 @@ impl Studio {
     /// Starts a run of `psf-guard` and follows what it prints. With
     /// `opens`, the run prepares a picture, and its store and document are
     /// opened when it ends.
-    pub(super) fn start_run(&mut self, mut command: Command, opens: Option<(PathBuf, PathBuf)>) {
+    pub(super) fn start_run(&mut self, command: Command, opens: Option<(PathBuf, PathBuf)>) {
         if self.tools.run.is_some() {
             return;
         }
@@ -1064,68 +1114,44 @@ impl Studio {
             process: None,
             stopped: false,
             started: std::time::Instant::now(),
+            late: false,
         }));
         self.tools.run = Some(run.clone());
         std::thread::spawn(move || {
-            let program = command.get_program().to_string_lossy().into_owned();
-            // A group of its own, so a stop reaches the tools it starts.
-            #[cfg(unix)]
-            {
-                use std::os::unix::process::CommandExt;
-                command.process_group(0);
-            }
-            let child = command
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn();
-            let outcome = match child {
-                Err(error) => Err(format!("{program} did not start: {error}")),
-                Ok(mut child) => {
-                    {
-                        let mut state = run.lock().expect("tool run");
-                        state.process = Some(child.id());
-                        // A stop asked for before the program started.
-                        if state.stopped {
-                            let _ = Command::new("kill")
-                                .arg("-TERM")
-                                .arg(format!("-{}", child.id()))
-                                .status();
-                        }
-                    }
-                    // Both pipes are read at once: a program that fills one
-                    // while the other is read would wait forever.
-                    let errors = child.stderr.take().map(|stderr| {
-                        std::thread::spawn(move || {
-                            BufReader::new(stderr)
-                                .lines()
-                                .map_while(Result::ok)
-                                .filter(|line| !line.trim().is_empty())
-                                .last()
-                        })
-                    });
-                    if let Some(stdout) = child.stdout.take() {
-                        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                            run.lock().expect("tool run").line = line.trim().to_string();
-                        }
-                    }
-                    let last_error = errors.and_then(|reader| reader.join().ok()).flatten();
-                    let waited = child.wait();
-                    // The process is gone, so a later stop must not reach a
-                    // group that has taken its number.
-                    let stopped = {
-                        let mut state = run.lock().expect("tool run");
-                        state.process = None;
-                        state.stopped
-                    };
-                    match waited {
-                        _ if stopped => Err("stopped".to_string()),
-                        Ok(status) if status.success() => Ok(()),
-                        Ok(_) => Err(last_error.unwrap_or_else(|| "it failed".to_string())),
-                        Err(error) => Err(error.to_string()),
-                    }
-                }
-            };
+            let outcome = run_program(&run, command);
             run.lock().expect("tool run").done = Some(outcome);
+        });
+    }
+
+    /// Starts `job` on a thread of its own as the run in hand: it shows on
+    /// the progress line, and Stop stops the program it is running. The
+    /// store is not opened again when it ends.
+    pub(super) fn start_job(
+        &mut self,
+        job: impl FnOnce(&Arc<Mutex<Run>>) -> Result<(), String> + Send + 'static,
+    ) {
+        if self.tools.run.is_some() {
+            return;
+        }
+        let run = Arc::new(Mutex::new(Run {
+            line: "Starting…".to_string(),
+            done: None,
+            opens: None,
+            chains: None,
+            process: None,
+            stopped: false,
+            started: std::time::Instant::now(),
+            late: true,
+        }));
+        self.tools.run = Some(run.clone());
+        std::thread::spawn(move || {
+            let outcome = job(&run);
+            let stopped = run.lock().expect("tool run").stopped;
+            run.lock().expect("tool run").done = Some(if stopped {
+                Err("stopped".to_string())
+            } else {
+                outcome
+            });
         });
     }
 
@@ -1138,25 +1164,37 @@ impl Studio {
         }
         let Some(run) = self.tools.run.clone() else {
             // A run asked for during the last one starts once the store
-            // that run prepared is open.
+            // that run prepared is open; then the tool steps on layers and
+            // the picture run on it.
             if self.tools.queued && self.store_opening.is_none() {
                 self.tools.queued = false;
                 self.run_tools();
+            } else if self.tools.late_after && self.store_opening.is_none() {
+                self.tools.late_after = false;
+                self.run_late_tools();
             }
             return;
         };
-        let (line, done, opens, chains) = {
+        let (line, done, opens, chains, late) = {
             let mut run = run.lock().expect("tool run");
             (
                 run.line.clone(),
                 run.done.take(),
                 run.opens.clone(),
                 run.chains.clone(),
+                run.late,
             )
         };
         self.tools.status = line;
         match done {
             None => {}
+            // Tool steps on a layer or the picture leave the store as it
+            // is: their results are read as they are found.
+            Some(Ok(())) if late => {
+                self.tools.run = None;
+                self.tools.status = "The tools ran. The canvas shows their result.".to_string();
+                self.follow_late();
+            }
             Some(Ok(())) => {
                 self.tools.run = None;
                 match opens {
@@ -1173,8 +1211,9 @@ impl Studio {
             Some(Err(error)) => {
                 self.tools.run = None;
                 self.tools.queued = false;
+                self.tools.late_after = false;
                 // A stopped run leaves the store it was writing behind.
-                if error == "stopped" {
+                if error == "stopped" && !late {
                     let store = opens
                         .as_ref()
                         .map(|(store, _)| store.clone())
@@ -1526,6 +1565,331 @@ impl Studio {
         }
         if !self.tools.status.is_empty() {
             block = block.child(div().text_xs().child(self.tools.status.clone()));
+        }
+        block
+    }
+}
+
+/// A tool setting's value at a slider's position, from 0 to 1. A switch
+/// has none.
+fn slider_value(setting: &Setting, position: f32) -> Option<serde_json::Value> {
+    Some(match setting.kind {
+        SettingKind::Float { min, max, .. } => {
+            // Two decimals are as fine as the tools' own sliders.
+            let value = min + (max - min) * f64::from(position);
+            ((value * 100.0).round() / 100.0).into()
+        }
+        SettingKind::Int { min, max, .. } => {
+            ((min as f64 + (max as f64 - min as f64) * f64::from(position)).round() as i64).into()
+        }
+        SettingKind::Bool { .. } | SettingKind::Other => return None,
+    })
+}
+
+/// Sets the line a run shows.
+pub(super) fn set_line(run: &Arc<Mutex<Run>>, line: &str) {
+    run.lock().expect("tool run").line = line.to_string();
+}
+
+/// Runs `command` for `run`, in a process group of its own so a stop
+/// reaches the tools it starts, with each line it prints as the run's
+/// line. A run stopped before is not started.
+pub(super) fn run_program(run: &Arc<Mutex<Run>>, mut command: Command) -> Result<(), String> {
+    if run.lock().expect("tool run").stopped {
+        return Err("stopped".to_string());
+    }
+    let program = command.get_program().to_string_lossy().into_owned();
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn();
+    match child {
+        Err(error) => Err(format!("{program} did not start: {error}")),
+        Ok(mut child) => {
+            {
+                let mut state = run.lock().expect("tool run");
+                state.process = Some(child.id());
+                // A stop asked for before the program started.
+                if state.stopped {
+                    let _ = Command::new("kill")
+                        .arg("-TERM")
+                        .arg(format!("-{}", child.id()))
+                        .status();
+                }
+            }
+            // Both pipes are read at once: a program that fills one while
+            // the other is read would wait forever.
+            let errors = child.stderr.take().map(|stderr| {
+                std::thread::spawn(move || {
+                    BufReader::new(stderr)
+                        .lines()
+                        .map_while(Result::ok)
+                        .filter(|line| !line.trim().is_empty())
+                        .last()
+                })
+            });
+            if let Some(stdout) = child.stdout.take() {
+                for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                    run.lock().expect("tool run").line = line.trim().to_string();
+                }
+            }
+            let last_error = errors.and_then(|reader| reader.join().ok()).flatten();
+            let waited = child.wait();
+            // The process is gone, so a later stop must not reach a group
+            // that has taken its number.
+            let stopped = {
+                let mut state = run.lock().expect("tool run");
+                state.process = None;
+                state.stopped
+            };
+            match waited {
+                _ if stopped => Err("stopped".to_string()),
+                Ok(status) if status.success() => Ok(()),
+                Ok(_) => Err(last_error.unwrap_or_else(|| "it failed".to_string())),
+                Err(error) => Err(error.to_string()),
+            }
+        }
+    }
+}
+
+impl Studio {
+    /// A new tool step of one kind, with the first tool of that kind this
+    /// computer has.
+    pub(super) fn new_tool_step(&self, operation: &str) -> StepRecord {
+        let category = match operation {
+            flow_operations::SHARPENING => "sharpen",
+            flow_operations::NOISE_REDUCTION => "denoise",
+            _ => STARS,
+        };
+        let fallback = match category {
+            "sharpen" => "bxt",
+            "denoise" => "nxt",
+            _ => "sxt",
+        };
+        let provider = self
+            .tools
+            .tools
+            .iter()
+            .find(|tool| tool.category == category && tool.unavailable.is_none())
+            .map_or(fallback.to_string(), |tool| tool.key.clone());
+        crate::studio_model::tool_step(serde_json::json!({ "provider": provider }))
+    }
+
+    /// A menu of the three kinds of tool, which adds one with `add`.
+    pub(super) fn tool_menu(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        cx: &mut Context<Self>,
+        add: impl Fn(&mut Self, StepRecord) + Clone + 'static,
+    ) -> gpui::Div {
+        let picks = [
+            flow_operations::SHARPENING,
+            flow_operations::NOISE_REDUCTION,
+            flow_operations::STAR_REMOVAL,
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, operation)| {
+            let add = add.clone();
+            Self::pick(operation, (id, index), false, cx, move |this| {
+                let step = this.new_tool_step(operation);
+                add(this, step);
+            })
+        })
+        .collect();
+        self.menu(id, label, picks, cx)
+    }
+
+    /// The controls of a tool step on a layer or the picture: its tool and
+    /// settings, whether it has run for the document as it is, and for a
+    /// star removal whether its stars go back right after it. `on` is what
+    /// it runs on, in words.
+    pub(super) fn late_tool_block(
+        &self,
+        step: &StepRecord,
+        on: &str,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let id = step.id;
+        let tool = crate::studio_model::tool_of(step)
+            .cloned()
+            .unwrap_or_default();
+        let provider = Self::provider_of(&tool).to_string();
+        let operation = step.kind.name();
+        let category = match operation {
+            flow_operations::SHARPENING => "sharpen",
+            flow_operations::NOISE_REDUCTION => "denoise",
+            flow_operations::STAR_REMOVAL => STARS,
+            _ => "",
+        };
+        let mut block = div().flex().flex_col().gap_1().child(Self::heading("Tool"));
+        if let Some(why) = self.cannot_run() {
+            block = block.child(Self::note(why));
+        }
+        // The tool: any of this kind this computer has.
+        let picks: Vec<_> = self
+            .tools
+            .tools
+            .iter()
+            .filter(|offered| offered.category == category && offered.unavailable.is_none())
+            .enumerate()
+            .map(|(index, offered)| {
+                let key = offered.key.clone();
+                Self::pick(
+                    offered.name.clone(),
+                    ("late-tool", index),
+                    offered.key == provider,
+                    cx,
+                    move |this| {
+                        let Some((_, step)) = this.document.step(id) else {
+                            return;
+                        };
+                        let mut tool = crate::studio_model::tool_of(step)
+                            .cloned()
+                            .unwrap_or_default();
+                        if tool["provider"] != key.as_str() {
+                            tool["provider"] = key.clone().into();
+                            tool["parameters"] = serde_json::json!({});
+                            this.document.set_step_settings(id, tool);
+                        }
+                    },
+                )
+            })
+            .collect();
+        let shown_name = self
+            .tools
+            .tools
+            .iter()
+            .find(|offered| offered.key == provider)
+            .map_or(provider.clone(), |offered| offered.name.clone());
+        block = block.child(Self::field(
+            operation.to_string(),
+            self.menu(format!("late-tool-{id}"), &shown_name, picks, cx),
+        ));
+        block = block.child(Self::note(if self.late.has(id) {
+            format!("Drawn from its result: the tool ran on {on} as the steps before it leave it.")
+        } else {
+            format!(
+                "Not run for these edits. Run tools renders {on} at full resolution as the steps before it leave it, runs the tool on it, and draws the result here."
+            )
+        }));
+        // Its settings.
+        let toggle = |name: String, now: bool| {
+            move |this: &mut Self| {
+                let Some((_, step)) = this.document.step(id) else {
+                    return;
+                };
+                let mut tool = crate::studio_model::tool_of(step)
+                    .cloned()
+                    .unwrap_or_default();
+                if !tool["parameters"].is_object() {
+                    tool["parameters"] = serde_json::json!({});
+                }
+                tool["parameters"][name.as_str()] = (!now).into();
+                this.document.set_step_settings(id, tool);
+            }
+        };
+        for (index, (_, setting, value)) in self
+            .settings_of_tool(&tool)
+            .into_iter()
+            .take(MAX_TOOL_SETTINGS)
+            .enumerate()
+        {
+            block = match setting.kind {
+                SettingKind::Float { min, max, .. } => {
+                    let now = value.as_f64().unwrap_or(min);
+                    block.child(self.labelled_slider(
+                        format!("{} {now:.2}", setting.label),
+                        SliderId::ToolParam(index),
+                        ((now - min) / (max - min).max(f64::EPSILON)) as f32,
+                        cx,
+                    ))
+                }
+                SettingKind::Int { min, max, .. } => {
+                    let now = value.as_i64().unwrap_or(min);
+                    block.child(self.labelled_slider(
+                        format!("{} {now}", setting.label),
+                        SliderId::ToolParam(index),
+                        (now as f64 - min as f64) as f32
+                            / (max as f64 - min as f64).max(1.0) as f32,
+                        cx,
+                    ))
+                }
+                SettingKind::Bool { .. } => {
+                    let now = value.as_bool().unwrap_or(false);
+                    block.child(Self::act(
+                        format!("{}: {}", setting.label, if now { "on" } else { "off" }),
+                        ("late-switch", index),
+                        now,
+                        cx,
+                        toggle(setting.name.clone(), now),
+                    ))
+                }
+                SettingKind::Other => block,
+            };
+        }
+        let flag = |key: &'static str, now: bool| {
+            move |this: &mut Self| {
+                let Some((_, step)) = this.document.step(id) else {
+                    return;
+                };
+                let mut tool = crate::studio_model::tool_of(step)
+                    .cloned()
+                    .unwrap_or_default();
+                tool[key] = (!now).into();
+                this.document.set_step_settings(id, tool);
+            }
+        };
+        if category == "sharpen" {
+            let on = tool[crate::studio_model::SHIFTED_PASS_KEY]
+                .as_bool()
+                .unwrap_or(false);
+            block = block
+                .child(Self::act(
+                    format!("Second pass, shifted: {}", if on { "on" } else { "off" }),
+                    "late-shifted",
+                    on,
+                    cx,
+                    flag(crate::studio_model::SHIFTED_PASS_KEY, on),
+                ))
+                .children(Self::help(
+                    "Runs the tool a second time on the image moved by half a tile, and averages the two, so the seams between BlurXTerminator's tiles fall in different places.",
+                ));
+        }
+        if category == STARS {
+            let shown = super::late_tools::stars_shown(step);
+            block = block
+                .child(Self::heading("Stars"))
+                .child(Self::act(
+                    if shown {
+                        "Added back after this step"
+                    } else {
+                        "Left out"
+                    },
+                    "late-stars",
+                    shown,
+                    cx,
+                    flag(crate::studio_model::STARS_SHOWN_KEY, shown),
+                ))
+                .children(Self::help(
+                    "The stars it takes out are kept beside its result, and screened back over it right after this step, so the steps after it work on the picture with its stars. Left out, the picture stays starless from here on.",
+                ));
+        }
+        if self.cannot_run().is_none() {
+            let running = self.is_running();
+            block = block.child(Self::act(
+                if running { "Running…" } else { "Run tools" },
+                "late-run",
+                running,
+                cx,
+                |this| this.run_tools(),
+            ));
         }
         block
     }

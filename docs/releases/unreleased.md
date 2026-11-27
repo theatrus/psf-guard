@@ -82,3 +82,7 @@
   changes. A sharpening step's **Second pass, shifted** runs
   BlurXTerminator again on the image moved by half a tile and averages the
   two, which takes most of the faint grid of tile seams out of a dark sky.
+  A tool can also run on one layer (**Run a tool on this**) or on the
+  picture (**Finish › Add tool**), on the image as the steps before it
+  leave it; the stars a star removal takes out there are listed under the
+  step and screened back right after it, with a switch to leave them out.

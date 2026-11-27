@@ -32,6 +32,14 @@ pub enum DerivedKind {
     /// bands at each pixel, as Seiza's RGB star reduction does, so the
     /// bands' colors keep. A layer blends toward it by its reduction.
     ReducedStars(usize),
+    /// One channel of what a processing tool step in the Combine or Finish
+    /// stage made, read from the file it wrote: its result, or the stars a
+    /// star removal took out.
+    Tool {
+        step: uuid::Uuid,
+        channel: u8,
+        stars: bool,
+    },
 }
 
 /// Which plane: what it holds, of which bands in which states, as the
@@ -181,6 +189,7 @@ impl DeriveTask {
             DerivedKind::Luminance => "Measuring the luminance of red, green and blue",
             DerivedKind::Fine => "Measuring star cores",
             DerivedKind::ReducedStars(_) => "Reducing stars",
+            DerivedKind::Tool { .. } => "Reading a tool's result",
         }
     }
 
@@ -213,6 +222,7 @@ fn work_out(
     let reduced = match key.kind {
         DerivedKind::ReducedStars(pick) if pick < reads.len() => Some(pick),
         DerivedKind::ReducedStars(_) => return Err("no such band to reduce".to_string()),
+        DerivedKind::Tool { .. } => return Err("a tool's result is read from its file".to_string()),
         _ => None,
     };
     let mut brightest = if reduced.is_some() {
@@ -285,6 +295,34 @@ fn work_out(
         levels,
         scale,
     })
+}
+
+impl DerivedPlane {
+    /// A plane of `samples`, `width` by `height`, with `levels` levels of
+    /// means.
+    pub fn of_samples(
+        key: DerivedKey,
+        width: usize,
+        height: usize,
+        samples: Vec<f32>,
+        levels: usize,
+    ) -> Self {
+        let scale = samples
+            .iter()
+            .copied()
+            .filter(|value| value.is_finite())
+            .fold(f32::MIN_POSITIVE, f32::max);
+        let mut pyramid = vec![(width, height, samples)];
+        while pyramid.len() < levels.max(1) {
+            let (w, h, last) = pyramid.last().expect("a level");
+            pyramid.push(halve(last, *w, *h));
+        }
+        Self {
+            key,
+            levels: pyramid,
+            scale,
+        }
+    }
 }
 
 /// One band's stars, `stars`, made smaller: each sample scaled by how much
