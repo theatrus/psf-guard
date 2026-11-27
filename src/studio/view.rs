@@ -34,6 +34,10 @@ pub enum Subject {
     Layer(Uuid),
     /// The layers from the bottom up to and including this one, blended.
     LayersUpTo(Uuid),
+    /// The members of this layer's group from its bottom up to and
+    /// including this one, blended on their own: what a tool in the group
+    /// above them runs on.
+    MembersUpTo(Uuid),
     /// One of the document's shared masks, drawn in gray: white where a
     /// layer behind it shows.
     Mask(Uuid),
@@ -315,6 +319,14 @@ pub fn plan(document: &Document, view: &View) -> ViewPlan {
         Subject::Channel(_) | Subject::Mask(_) => &[],
         Subject::Combined => layers,
         Subject::LayersUpTo(id) => place(id).map_or(&[], |at| &layers[..=at]),
+        Subject::MembersUpTo(id) => place(id).map_or(&[], |at| {
+            let group = layers[at].group;
+            let low = layers[..at]
+                .iter()
+                .rposition(|layer| layer.group != group)
+                .map_or(0, |other| other + 1);
+            &layers[low..=at]
+        }),
         Subject::Layer(id) => match place(id) {
             // An adjustment has nothing to show alone.
             Some(at) if layers[at].source.is_adjustment() => &layers[..=at],
@@ -330,8 +342,10 @@ pub fn plan(document: &Document, view: &View) -> ViewPlan {
             None => &[],
         },
     };
-    // One member alone is shown as it is, not as its group blends it.
-    let within_groups = drawn.len() != 1 || drawn[0].group.is_none();
+    // One member alone, or members up to one, are shown as they are, not as
+    // their group blends them.
+    let within_groups = (drawn.len() != 1 || drawn[0].group.is_none())
+        && !matches!(view.subject, Subject::MembersUpTo(_));
     let gray = matches!(view.subject, Subject::Layer(_))
         && drawn.len() == 1
         && matches!(drawn[0].source, LayerSource::Band { .. });
@@ -453,6 +467,12 @@ pub fn plan(document: &Document, view: &View) -> ViewPlan {
             _ => format!("The layer {} on its own", layer_name(id)),
         },
         Subject::LayersUpTo(id) => format!("The layers up to {}", layer_name(id)),
+        Subject::MembersUpTo(id) => {
+            format!(
+                "The members of its group up to {}, on their own",
+                layer_name(id)
+            )
+        }
     };
     let reached = match view.up_to {
         UpTo::Final => "with every step".to_string(),

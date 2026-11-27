@@ -610,6 +610,9 @@ enum Pushed {
     Nothing,
     /// One entry, at the end of the layers.
     Layer,
+    /// This many entries, at the end of the layers, each limited by the
+    /// adjustment layer's shared mask.
+    Channels(usize),
     /// The image a tool made, in place of every layer beneath it.
     Replaced,
 }
@@ -628,13 +631,6 @@ fn push_step_layer(
 ) -> Pushed {
     let bands = context.bands;
     if crate::studio_model::is_tool_step(step) {
-        if layer.group.is_some() {
-            omitted.push(format!(
-                "{}, a tool inside a group, which runs only outside one",
-                layer.name
-            ));
-            return Pushed::Nothing;
-        }
         if tool_plane(bands, step.id, 0, false).is_none() {
             omitted.push(not_run(step, "the layers beneath it"));
             return Pushed::Nothing;
@@ -643,8 +639,9 @@ fn push_step_layer(
             omitted.push(layer.name.clone());
             return Pushed::Nothing;
         };
-        // In full, the tool's image covers every layer beneath it.
-        let covers = layer.opacity >= 1.0 && layer.mask.is_none();
+        // In full, at the top, the tool's image covers every layer beneath
+        // it.
+        let covers = layer.opacity >= 1.0 && layer.mask.is_none() && layer.group.is_none();
         if covers {
             parts.layers.clear();
             parts.layer_bands.clear();
@@ -662,14 +659,15 @@ fn push_step_layer(
             );
             return Pushed::Replaced;
         }
-        if parts.layers.len() + 5 > MAX_LAYERS {
+        // Otherwise, its first channel replaces what is beneath and the
+        // others add to it, each at the layer's opacity within its mask:
+        // the image blended over what is beneath, in a group over its
+        // members beneath.
+        if parts.layers.len() + 3 > MAX_LAYERS {
             omitted.push(layer.name.clone());
             return Pushed::Nothing;
         }
-        parts.layers.push(Layer {
-            mark: Mark::GroupBegin,
-            ..plain_layer()
-        });
+        let first = parts.layers.len();
         push_tool_image(
             parts.layers,
             parts.layer_bands,
@@ -678,13 +676,11 @@ fn push_step_layer(
             step.id,
             false,
         );
-        parts.layers.push(Layer {
-            mark: Mark::GroupEnd,
-            opacity: layer.opacity,
-            mask,
-            ..plain_layer()
-        });
-        return Pushed::Layer;
+        for channel in &mut parts.layers[first..] {
+            channel.opacity = layer.opacity;
+            channel.mask = mask;
+        }
+        return Pushed::Channels(parts.layers.len() - first);
     }
     if !is_drawn(StageKind::Finish, step, bands) {
         return Pushed::Nothing;
@@ -1475,6 +1471,8 @@ pub(super) fn scene(
                         );
                         match pushed {
                             Pushed::Layer => masked.push((layers.len() - 1, layer)),
+                            Pushed::Channels(count) => masked
+                                .extend((layers.len() - count..layers.len()).map(|at| (at, layer))),
                             Pushed::Replaced => masked.clear(),
                             Pushed::Nothing => {}
                         }

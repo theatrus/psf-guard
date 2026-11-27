@@ -1453,7 +1453,15 @@ impl Studio {
             .child(self.histogram_block())
             .child(self.step_controls(StageKind::Finish, &shown, cx))
             .when(tool, |pane| {
-                pane.child(self.late_tool_block(step, "the layers beneath it", cx))
+                pane.child(self.late_tool_block(
+                    step,
+                    if layer.group.is_some() {
+                        "its group's members beneath it"
+                    } else {
+                        "the layers beneath it"
+                    },
+                    cx,
+                ))
             })
             .when(!heal, |pane| {
                 pane.child(self.mask_block(layer, cx))

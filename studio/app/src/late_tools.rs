@@ -137,7 +137,12 @@ fn upstream(document: &Document, step: &StepRecord, on: LateOn) -> Value {
                         .iter()
                         .position(|other| other["id"] == layer.to_string())
                         .unwrap_or(layers.len());
+                    // In a group, the tool reads its group's members only.
+                    let group = layers.get(at).map(|own| own["group"].clone());
                     layers.truncate(at);
+                    if let Some(group) = group.filter(|group| !group.is_null()) {
+                        layers.retain(|other| other["group"] == group);
+                    }
                 }
             }
             LateOn::Layer(layer) => {
@@ -213,13 +218,16 @@ pub(super) fn late_steps(document: &Document, store: &Path) -> Vec<LateStep> {
             let words = format!("{} on {}", step.kind.name(), layer.name);
             steps.extend(make(step, LateOn::Layer(layer.id), words));
         }
-        // A tool in a group would run on part of the stack; the canvas
-        // draws a tool only outside one.
+        // A tool layer runs on the layers beneath it, in a group on its
+        // group's members beneath it.
         if let Some(step) = layer.source.adjustment_step()
             && is_tool_step(step)
-            && layer.group.is_none()
         {
-            let words = format!("{} on the layers beneath it", step.kind.name());
+            let words = if layer.group.is_some() {
+                format!("{} on the members beneath it", step.kind.name())
+            } else {
+                format!("{} on the layers beneath it", step.kind.name())
+            };
             let mut late = make(step, LateOn::Beneath(layer.id), words);
             if let Some(late) = &mut late {
                 late.enabled = layer.visible;
@@ -490,7 +498,6 @@ fn render_input(
     store: &Path,
     step: &LateStep,
 ) -> Result<seiza_stacking_image::Image, String> {
-    let bands = base.with_derived(planes);
     let place = match step.on {
         LateOn::Beneath(layer) => {
             let layers = document.layers();
@@ -498,12 +505,34 @@ fn render_input(
                 .iter()
                 .position(|other| other.id == layer)
                 .ok_or("its layer is gone")?;
+            // The layer right beneath, in the same group or at the top.
             let beneath = at
                 .checked_sub(1)
+                .filter(|beneath| layers[*beneath].group == layers[at].group)
                 .ok_or("there is no layer beneath it to run on")?;
-            Place::Layer {
-                layer: layers[beneath].id,
-                alone: false,
+            match layers[at].group {
+                // In a group: its members beneath, on their own.
+                Some(_) => {
+                    let view = crate::studio_model::View {
+                        subject: crate::studio_model::Subject::MembersUpTo(layers[beneath].id),
+                        up_to: crate::studio_model::UpTo::EndOf(StageKind::Combine),
+                        stretch: crate::studio_model::DisplayStretch::Document,
+                        own_until: None,
+                    };
+                    return render_view(
+                        document,
+                        base,
+                        planes,
+                        picture_samples,
+                        store,
+                        step,
+                        &view,
+                    );
+                }
+                None => Place::Layer {
+                    layer: layers[beneath].id,
+                    alone: false,
+                },
             }
         }
         LateOn::Layer(layer) => {
@@ -529,10 +558,33 @@ fn render_input(
             }
         }
     };
+    render_view(
+        document,
+        base,
+        planes,
+        picture_samples,
+        store,
+        step,
+        &place.view(),
+    )
+}
+
+/// The image a late step's tool takes, of `view`, rendered at full
+/// resolution, as [`render_input`] describes.
+fn render_view(
+    document: &Document,
+    base: &Arc<crate::store_tiles::Bands>,
+    planes: &[Arc<DerivedPlane>],
+    picture_samples: &Option<(u64, Arc<Vec<f32>>)>,
+    store: &Path,
+    step: &LateStep,
+    view: &crate::studio_model::View,
+) -> Result<seiza_stacking_image::Image, String> {
+    let bands = base.with_derived(planes);
     let (mut scene, states) = super::panes::scene(
         document,
         &bands,
-        &place.view(),
+        view,
         0,
         picture_samples
             .as_ref()
@@ -722,6 +774,55 @@ mod tests {
         assert_eq!(identity(&document, tool_id), first);
         // A layer beneath it does.
         document.layer_mut(bottom).unwrap().opacity = 0.5;
+        assert_ne!(identity(&document, tool_id), first);
+    }
+
+    #[test]
+    fn a_tool_in_a_group_runs_on_its_members_beneath_it() {
+        use crate::studio_model::{LayerRecord, LayerSource};
+        let inputs = ["ha".to_string(), "oiii".to_string()];
+        let mut document = super::super::panes::flow_document(&inputs);
+        let bands: Vec<Uuid> = document
+            .layers()
+            .iter()
+            .filter(|layer| matches!(layer.source, LayerSource::Band { .. }))
+            .map(|layer| layer.id)
+            .collect();
+        let (outside, member) = (bands[0], bands[1]);
+        // A group holding the second band layer, at the top.
+        let group = LayerRecord::new("Group", LayerSource::Group);
+        let group_id = group.id;
+        let top = document.layers().len();
+        document.insert_layer(top, group).unwrap();
+        let at = document
+            .layers()
+            .iter()
+            .position(|layer| layer.id == group_id)
+            .unwrap();
+        document.place_layer(member, at, Some(group_id));
+        let tool = tool_step(serde_json::json!({ "provider": "nxt" }));
+        let tool_id = tool.id;
+        let mut layer = crate::studio_model::adjustment_layer(tool);
+        layer.group = Some(group_id);
+        let at = document
+            .layers()
+            .iter()
+            .position(|layer| layer.id == group_id)
+            .unwrap();
+        document.insert_layer(at, layer).unwrap();
+        let late = late_steps(&document, Path::new("/nonexistent/picture.pgtiles"));
+        let found = late.iter().find(|late| late.id == tool_id).unwrap();
+        assert!(
+            found.words.contains("members beneath it"),
+            "{}",
+            found.words
+        );
+        let first = identity(&document, tool_id);
+        // A layer outside the group does not change what it runs on.
+        document.layer_mut(outside).unwrap().opacity = 0.3;
+        assert_eq!(identity(&document, tool_id), first);
+        // Its member beneath it does.
+        document.layer_mut(member).unwrap().opacity = 0.3;
         assert_ne!(identity(&document, tool_id), first);
     }
 }
