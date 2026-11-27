@@ -254,10 +254,11 @@ pub(super) const STRETCHES: [(&str, &str); 11] = [
 /// name for the setting, a label, and the range the slider covers.
 pub(super) fn stretch_settings(kind: &str) -> &'static [(&'static str, &'static str, f64, f64)] {
     match kind {
+        // Star-core compression needs full resolution, which the canvas
+        // does not draw yet, so it has no slider.
         "layered" => &[
             ("target_background", "Background", 0.05, 0.5),
             ("aggressiveness", "Black point", 0.0, 1.0),
-            ("dynamic_range_compression", "Star cores", 0.0, 1.0),
             ("contrast_recovery", "Contrast", 0.0, 1.0),
         ],
         "layered-hdr" => &[
