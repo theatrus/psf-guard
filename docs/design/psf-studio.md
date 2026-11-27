@@ -2016,9 +2016,16 @@ inspector has an HDR switch and a Headroom, 0 to 4 stops (2 to start),
 which the document keeps. With HDR on, every stage may be brighter than
 SDR white up to the headroom: the stretches, the combined picture and every
 Finish step, and every view of the picture shows it so (Seiza's
-`Picture::headroom`). The HDR layered stretch puts the brightest structure
-there, Tone and color keeps it there, and Exposure and Whites put more
-there. A document from when HDR was a switch of the Tone and color step
+`Picture::headroom`). HDR is a mode of the picture, not of one stretch:
+every input's stretch follows it. Layered, HDR puts the brightest structure
+there with its core compression; plain Layered becomes Layered, HDR
+without core compression; any other stretch continues above a knee at
+three quarters of SDR white along Seiza's `HdrTail`, up to the peak at the
+band's brightest, measured over the whole band at a quarter of its
+resolution. A stretch after an HDR one shapes the range up to white and
+keeps what is above it (`TransferStage::BelowWhite`). Tone and color keeps
+the headroom, and Exposure and Whites put more there; the **Clipping**
+toggle in the View toolbar marks what reaches the peak. A document from when HDR was a switch of the Tone and color step
 opens with that step's headroom as the picture's.
 
 Above SDR white a value continues on the extended sRGB curve that macOS's
@@ -2780,6 +2787,64 @@ standard input and output that forwards its tools to these sockets.
 
 The server opens a window on a copy of a document unless asked not to,
 and closes only windows it opened: a window a person works in is theirs.
+
+## Status and gaps (2026-11-27)
+
+What works end to end, on the Cat's Eye (NGC 6543, C925 HOO and RGB) and
+the Iris (NGC 7023, UltraCat 131 LRGB, `studio/experiments/iris-hdr/run.py`):
+
+- HDR as a mode of the picture, through every stretch, Tone and export
+  (AVIF HDR, float TIFF, FITS, XISF), with a Format choice on Export.
+- BlurXTerminator, NoiseXTerminator and StarXTerminator per input or per
+  color group, the removed stars kept as inputs and screened back up to the
+  HDR peak, and a flag in the toolbar when tools changed since the store
+  was prepared.
+- Background extraction with regions drawn on the canvas, and a sky floor
+  on the layered stretches for what it leaves.
+- Seiza's Gaia color calibration, when the Gaia photometry set is
+  installed.
+- Image work off the UI thread, and `psf-studio-mcp` to drive and see a
+  window.
+
+Gaps to fix, roughly in the order they got in the way:
+
+- [ ] **BlurXTerminator's tile grid.** A soft pattern about 350–415 px apart,
+  about 0.004 ADU, appears in BlurXTerminator's output and becomes the
+  strongest structure in a dark narrowband sky once noise reduction and
+  background extraction remove the rest. An overlap of 0.5 did not remove
+  it. To try: run BlurXTerminator on a copy shifted by half a tile and
+  average, or keep the background model from following it.
+- [ ] **Sky floor on every stretch kind.** Only the layered stretches have
+  one.
+- [ ] **A knee for every stretch in HDR mode.** Other stretches take a fixed
+  knee at three quarters of white, and none compresses its core; a core can
+  sit at the peak (a quarter to two fifths of the Iris's core with
+  automatic midtones). More HDR stretches, or core compression as a stage
+  any stretch can take, would answer it.
+- [ ] **Stars' own stretch and star reduction.** Stars follow their input's
+  stretch; the star stretch exists only for RGB stars; PSF Guard's star
+  reduction is not carried over.
+- [ ] **Frame limits.** A frame draws at most 12 layers and 7 masks, and at
+  most 4 layered stretches; past that a layer is left out or drawn with its
+  curve alone, and the pane says so.
+- [ ] **Undo history.** Only Undo stroke exists.
+- [ ] **Tool runs.** A run cannot be queued behind another; tools on the
+  combined color image (`color_rc_astro`) and the narrowband star steps
+  are not run.
+- [ ] **Layers.** No groups in groups or pass-through groups; a group cannot
+  be clipped or healed; a shared mask cannot go on a layer's own
+  adjustment; a layer cannot have a painted and a shared mask, or clip to
+  its shared mask; layers cannot be dragged to reorder.
+- [ ] **One way to adjust.** Finish steps and adjustment layers are two;
+  exposure, curves and saturation are Studio's shader code, not Seiza's.
+- [ ] **Setup and hand-off.** No Setup page or recipe record in the
+  document, no server target or sign-in in Studio, no table of every
+  input's tools, no round trip to another editor.
+- [ ] **UI thread.** The store given at start opens before the window
+  shows (about 260 ms for the Cat's Eye); export and the parity check build
+  their scene on the UI thread.
+- [ ] **Not tried in the app:** the histogram of a masked area, several
+  local Tone steps at once, a second stretch after an HDR one.
 
 ## Suggested order of work
 
