@@ -126,6 +126,20 @@ fn tools() -> Value {
             }), &["layer", "patch"]),
         },
         {
+            "name": "studio_set_headroom",
+            "description": "Makes the picture HDR with this many stops of headroom above SDR white (0 to 4), or SDR with 0, as the Final picture's HDR setting does.",
+            "inputSchema": object(json!({ "instance": instance, "stops": { "type": "number" } }), &["stops"]),
+        },
+        {
+            "name": "studio_export",
+            "description": "Exports the final picture to `path`, as Export… does, in `format` (tif, png, avif, fits or xisf; leave out for the picture's own: AVIF when it is HDR). A path with no extension takes the format's. Follow it with studio_wait_idle, then studio_state's export status.",
+            "inputSchema": object(json!({
+                "instance": instance,
+                "path": { "type": "string" },
+                "format": { "type": "string" }
+            }), &["path"]),
+        },
+        {
             "name": "studio_use_recipe",
             "description": "Makes the picture from a recipe, as the Recipe menu does, such as \"LRGB\" or \"Narrowband with RGB stars\". A recipe that shows stars apart has them separated, which runs the tools.",
             "inputSchema": object(json!({ "instance": instance, "name": { "type": "string" } }), &["name"]),
@@ -227,6 +241,12 @@ impl Server {
             "studio_set_layer" => {
                 forward(self.instance(arguments)?, "set_layer", arguments.clone())
             }
+            "studio_set_headroom" => forward(
+                self.instance(arguments)?,
+                "set_headroom",
+                json!({ "stops": arguments["stops"] }),
+            ),
+            "studio_export" => forward(self.instance(arguments)?, "export", arguments.clone()),
             "studio_use_recipe" => forward(
                 self.instance(arguments)?,
                 "use_recipe",

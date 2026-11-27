@@ -902,6 +902,9 @@ pub struct Studio {
     export_line: String,
     /// Whether a TIFF export holds 32-bit floats, in place of 16 bits.
     tiff_float: bool,
+    /// The export's format, by extension; `None` is AVIF for an HDR picture
+    /// and TIFF otherwise.
+    export_format: Option<&'static str>,
     /// The headroom HDR comes back with when it is turned on again.
     last_headroom: f32,
     /// The view stretch: Seiza's stretch, as its settings, that draws a
@@ -1136,6 +1139,7 @@ impl Studio {
                 export: None,
                 export_line: String::new(),
                 tiff_float: false,
+                export_format: None,
                 last_headroom: crate::tone_step::DEFAULT_HEADROOM,
                 view_stretch: panes::new_stretch("auto-mtf"),
                 view_stretch_open: false,

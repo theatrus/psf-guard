@@ -213,6 +213,32 @@ impl Studio {
                     json!({ "split": split })
                 }),
             "set_step" => self.control_set_step(params),
+            "export" => match params["path"].as_str() {
+                Some(path) => {
+                    let format = params["format"]
+                        .as_str()
+                        .and_then(|format| {
+                            super::export::EXPORT_FORMATS
+                                .iter()
+                                .find(|(known, _)| *known == format)
+                                .map(|(known, _)| *known)
+                        })
+                        .unwrap_or_else(|| self.export_format());
+                    let path = super::export::with_format(PathBuf::from(path), format);
+                    self.start_export(path.clone());
+                    Ok(json!({ "path": path, "status": self.export_line }))
+                }
+                None => Err("`path` is needed".to_string()),
+            },
+            "set_headroom" => {
+                // A number of stops makes the picture HDR; null makes it SDR.
+                let stops = params["stops"]
+                    .as_f64()
+                    .map(|stops| stops.clamp(0.0, 4.0) as f32);
+                self.document.headroom = stops.filter(|stops| *stops > 0.0);
+                self.refresh_canvas();
+                Ok(json!({ "headroom": self.document.headroom }))
+            }
             "use_recipe" => {
                 let name = params["name"].as_str().unwrap_or_default();
                 match crate::studio_model::recipes_for(&self.inputs())
@@ -379,6 +405,11 @@ impl Studio {
             "layers": layers,
             "finish": finish,
             "status": self.run_status(),
+            "export": {
+                "running": self.export.is_some(),
+                "status": self.export_line,
+                "format": self.export_format(),
+            },
             "progress": self.run_progress().map(|(what, share, elapsed)| json!({
                 "what": what, "share": share, "seconds": elapsed.as_secs_f32(),
             })),
@@ -424,6 +455,9 @@ impl Studio {
         }
         if let Some((what, _, _)) = self.run_progress() {
             busy.push(what);
+        }
+        if self.export.is_some() {
+            busy.push(self.export_line.clone());
         }
         if self.picture_wanted.is_some()
             && self.picture_samples.as_ref().map(|(id, _)| *id) != self.picture_wanted

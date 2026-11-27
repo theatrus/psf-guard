@@ -1386,21 +1386,41 @@ impl Studio {
                 },
             ))
             .child(Self::field(
-                "TIFF",
-                gpui::div()
-                    .flex()
-                    .child(Self::act("16-bit", "tiff-16", !self.tiff_float, cx, |this| {
-                        this.tiff_float = false
-                    }))
-                    .child(Self::act("32-bit float", "tiff-32", self.tiff_float, cx, |this| {
-                        this.tiff_float = true
-                    })),
+                "Format",
+                gpui::div().flex().flex_wrap().children(
+                    super::export::EXPORT_FORMATS
+                        .iter()
+                        .enumerate()
+                        .map(|(index, (extension, label))| {
+                            let extension: &'static str = extension;
+                            Self::act(
+                                *label,
+                                ("export-format", index),
+                                self.export_format() == extension,
+                                cx,
+                                move |this| this.export_format = Some(extension),
+                            )
+                        }),
+                ),
             ))
+            .when(self.export_format() == "tif", |block| {
+                block.child(Self::field(
+                    "TIFF",
+                    gpui::div()
+                        .flex()
+                        .child(Self::act("16-bit", "tiff-16", !self.tiff_float, cx, |this| {
+                            this.tiff_float = false
+                        }))
+                        .child(Self::act("32-bit float", "tiff-32", self.tiff_float, cx, |this| {
+                            this.tiff_float = true
+                        })),
+                ))
+            })
             .when(!self.export_line.is_empty(), |block| {
                 block.child(Self::note(self.export_line.clone()))
             })
             .children(Self::help(
-                "Saves the picture as the canvas shows it, cropped, at full resolution: TIFF at 16 bits per channel or as 32-bit floats (TIFF above), PNG at 16 bits, FITS or XISF as 32-bit floats, or AVIF as HDR (PQ, Rec. 2020), which keeps an HDR picture's brightest areas above SDR white. A 32-bit float TIFF keeps an HDR picture's values above SDR white as they are. Name the file with the extension you want. When Studio was started with a working space's ICC profile, a TIFF or PNG carries it.",
+                "Saves the picture as the canvas shows it, cropped, at full resolution: TIFF at 16 bits per channel or as 32-bit floats, PNG at 16 bits, FITS or XISF as 32-bit floats, or AVIF as HDR (PQ, Rec. 2020), which keeps an HDR picture's brightest areas above SDR white. Format sets the file's extension; an HDR picture starts as AVIF. A 32-bit float TIFF also keeps values above SDR white as they are. An extension typed in the name wins. When Studio was started with a working space's ICC profile, a TIFF or PNG carries it.",
             ))
     }
 

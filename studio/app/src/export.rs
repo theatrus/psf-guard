@@ -52,18 +52,31 @@ impl Studio {
             .as_deref()
             .and_then(Path::parent)
             .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
-        let name = format!("{}.tif", self.document.name);
+        let format = self.export_format();
+        let name = format!("{}.{format}", self.document.name);
         let picked = cx.prompt_for_new_path(&directory, Some(&name));
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(path))) = picked.await else {
                 return;
             };
+            let path = with_format(path, format);
             let _ = this.update(cx, |this, cx| {
                 this.start_export(path);
                 cx.notify();
             });
         })
         .detach();
+    }
+
+    /// The format the export writes, by extension: the one chosen, or AVIF
+    /// for an HDR picture and TIFF for another.
+    pub(super) fn export_format(&self) -> &'static str {
+        self.export_format
+            .unwrap_or(if self.document.headroom.is_some() {
+                "avif"
+            } else {
+                "tif"
+            })
     }
 
     /// Why the final picture cannot be exported now, if it cannot.
@@ -89,7 +102,7 @@ impl Studio {
 
     /// Renders the final picture on the CPU and saves it to `path`, on a
     /// thread of its own.
-    fn start_export(&mut self, path: PathBuf) {
+    pub(super) fn start_export(&mut self, path: PathBuf) {
         if let Err(reason) = self.export_ready() {
             self.tell_export(&reason);
             return;
@@ -159,6 +172,55 @@ impl Studio {
                 self.export = None;
                 self.tell_export(&format!("{name} was not exported: {reason}"));
             }
+        }
+    }
+}
+
+/// The formats an export writes, by extension, with their names.
+pub(super) const EXPORT_FORMATS: [(&str, &str); 5] = [
+    ("tif", "TIFF"),
+    ("png", "PNG"),
+    ("avif", "AVIF, HDR"),
+    ("fits", "FITS"),
+    ("xisf", "XISF"),
+];
+
+/// `path` written in `format`: a name the save panel returned with no
+/// format's extension takes `format`'s, and one the panel gave a second
+/// extension, such as `Iris.avif.tif`, keeps the one chosen.
+pub(super) fn with_format(mut path: PathBuf, format: &str) -> PathBuf {
+    let known = |extension: &str| {
+        EXPORT_FORMATS
+            .iter()
+            .any(|(known, _)| known.eq_ignore_ascii_case(extension))
+            || extension.eq_ignore_ascii_case("tiff")
+    };
+    let extension = path
+        .extension()
+        .map(|extension| extension.to_string_lossy().into_owned());
+    let inner = path
+        .file_stem()
+        .map(Path::new)
+        .and_then(Path::extension)
+        .map(|inner| inner.to_string_lossy().into_owned());
+    match (extension, inner) {
+        (Some(outer), Some(inner))
+            if known(&outer)
+                && inner.eq_ignore_ascii_case(format)
+                && !outer.eq_ignore_ascii_case(format) =>
+        {
+            path.set_extension("");
+            path
+        }
+        (Some(extension), _) if known(&extension) => path,
+        _ => {
+            let mut name = path
+                .file_name()
+                .map(|name| name.to_os_string())
+                .unwrap_or_default();
+            name.push(format!(".{format}"));
+            path.set_file_name(name);
+            path
         }
     }
 }
@@ -418,6 +480,23 @@ fn parity(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_export_name_keeps_the_chosen_format() {
+        let path = |name: &str| PathBuf::from(format!("/pictures/{name}"));
+        assert_eq!(with_format(path("Iris.avif"), "avif"), path("Iris.avif"));
+        // A name typed without an extension takes the chosen format's.
+        assert_eq!(with_format(path("Iris"), "avif"), path("Iris.avif"));
+        assert_eq!(with_format(path("Iris v2"), "tif"), path("Iris v2.tif"));
+        // A second extension the save panel added goes.
+        assert_eq!(
+            with_format(path("Iris.avif.tif"), "avif"),
+            path("Iris.avif")
+        );
+        // An extension a person typed wins over the chosen format.
+        assert_eq!(with_format(path("Iris.png"), "avif"), path("Iris.png"));
+        assert_eq!(with_format(path("Iris.tiff"), "tif"), path("Iris.tiff"));
+    }
 
     #[test]
     fn a_tiff_keeps_sixteen_bits() {
