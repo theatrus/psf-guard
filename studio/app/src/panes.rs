@@ -15,6 +15,7 @@
 use super::{picture_patches, Bands, Drag, PictureRequest, Scene, SliderId, Studio, Tool};
 use crate::canvas::{Adjustment, ComputedMask, Layer, Mark, MaskBand};
 use crate::image_steps::Accepts;
+use crate::output_stretch::needs_image;
 use crate::store_tiles::{BandState, BandStretch};
 use crate::studio_model::{
     band_layer, channel_label, color_from_hue, document_from_color_setup, flow_operations, hue_of,
@@ -235,7 +236,7 @@ fn with_amount(operation: &str, settings: &serde_json::Value, amount: f32) -> se
 /// The stretches Seiza has that work on samples alone, as a person
 /// chooses between them: Seiza's name for the stretch, and a label. The
 /// layered stretch is not here: it needs the image, so the engine draws it.
-pub(super) const STRETCHES: [(&str, &str); 10] = [
+pub(super) const STRETCHES: [(&str, &str); 11] = [
     ("auto-mtf", "Automatic midtones"),
     ("median-anchor", "Median anchor"),
     ("ghs", "Generalized hyperbolic"),
@@ -246,6 +247,7 @@ pub(super) const STRETCHES: [(&str, &str); 10] = [
     ("ht", "Histogram transformation"),
     ("identity", "None"),
     ("layered", "Layered"),
+    ("layered-hdr", "Layered, HDR"),
 ];
 
 /// The settings of one of Seiza's stretches that a slider sets: Seiza's
@@ -257,6 +259,21 @@ pub(super) fn stretch_settings(kind: &str) -> &'static [(&'static str, &'static 
             ("aggressiveness", "Black point", 0.0, 1.0),
             ("dynamic_range_compression", "Star cores", 0.0, 1.0),
             ("contrast_recovery", "Contrast", 0.0, 1.0),
+        ],
+        "layered-hdr" => &[
+            ("target_background", "Background", 0.05, 0.5),
+            ("aggressiveness", "Black point", 0.0, 1.0),
+            ("contrast_recovery", "Contrast", 0.0, 1.0),
+            ("headroom", "Headroom, stops", 0.0, 4.0),
+            ("knee", "Lift above white starts at", 0.5, 0.95),
+            ("core_compression", "Core compression", 0.0, 1.0),
+            (
+                "core_threshold",
+                "Compression starts at, sigmas",
+                10.0,
+                500.0,
+            ),
+            ("core_scale", "Compressed structure, pixels", 2.0, 64.0),
         ],
         "auto-mtf" => &[
             ("target_median", "Background", 0.05, 0.5),
@@ -330,6 +347,11 @@ pub(super) fn new_stretch(kind: &str) -> serde_json::Value {
             "type": kind, "target_background": 0.15, "aggressiveness": 0.5,
             "dynamic_range_compression": 0.0, "contrast_recovery": 0.0,
         }),
+        "layered-hdr" => json!({
+            "type": kind, "target_background": 0.15, "aggressiveness": 0.5,
+            "contrast_recovery": 0.0, "headroom": 2.0, "knee": 0.75,
+            "core_compression": 0.7, "core_threshold": 100.0, "core_scale": 12.0,
+        }),
         _ => json!({ "type": "identity" }),
     }
 }
@@ -393,7 +415,7 @@ pub(super) fn is_drawn(stage: StageKind, step: &StepRecord, bands: &Bands) -> bo
         (StepKind::Operation { .. }, StageKind::Stretch) if stretch_model(step).is_some() => {
             // The layered stretch is drawn when the store stretched the
             // step's input over the whole image.
-            !matches!(stretch_model(step), Some(StretchModel::Layered(_)))
+            !stretch_model(step).is_some_and(|model| needs_image(&model))
                 || step
                     .band
                     .as_deref()
@@ -424,7 +446,7 @@ pub(super) fn is_drawn(stage: StageKind, step: &StepRecord, bands: &Bands) -> bo
                 // The layered stretch needs the whole image.
                 || (operation == flow_operations::OUTPUT_STRETCH
                     && output_stretch::config_of(settings)
-                        .is_some_and(|config| !matches!(config.model, StretchModel::Layered(_))))
+                        .is_some_and(|config| !needs_image(&config.model)))
         }
         _ => false,
     }
@@ -610,7 +632,7 @@ fn band_source(
         let layered = steps
             .iter()
             .filter_map(|id| document.step(*id))
-            .any(|(_, step)| matches!(stretch_model(step), Some(StretchModel::Layered(_))));
+            .any(|(_, step)| stretch_model(step).is_some_and(|model| needs_image(&model)));
         if layered {
             return (state, stretched, None, Vec::new(), true);
         }
@@ -631,7 +653,11 @@ fn band_source(
             .iter()
             .filter_map(|id| document.step(*id))
             .filter_map(|(_, step)| match stretch_model(step) {
-                Some(StretchModel::Layered(_)) | None => {
+                Some(model) if needs_image(&model) => {
+                    omitted.push(format!("a stretch of {label} that needs the engine"));
+                    None
+                }
+                None => {
                     omitted.push(format!("a stretch of {label} that needs the engine"));
                     None
                 }
@@ -1388,8 +1414,7 @@ impl Studio {
                 // samples of the picture.
                 let stretch = operation == flow_operations::OUTPUT_STRETCH
                     && output_stretch::config_of(settings).is_some_and(|config| {
-                        output_stretch::needs_samples(&config)
-                            && !matches!(config.model, StretchModel::Layered(_))
+                        output_stretch::needs_samples(&config) && !needs_image(&config.model)
                     });
                 let texture = operation == tone_step::OPERATION
                     && tone_step::from_settings(settings).texture != 0.0;

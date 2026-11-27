@@ -150,8 +150,17 @@ impl ResolvedChains {
     }
 }
 
+/// Whether a stretch needs the whole image, as the layered stretches do:
+/// the store stretches the plane, and the canvas draws it as it is.
+pub(crate) fn needs_image(model: &StretchModel) -> bool {
+    matches!(
+        model,
+        StretchModel::Layered(_) | StretchModel::LayeredHdr(_)
+    )
+}
+
 fn resolve(config: &StretchConfig, samples: Option<&[f32]>) -> Result<StretchPlan, NotDrawn> {
-    if matches!(config.model, StretchModel::Layered(_)) {
+    if needs_image(&config.model) {
         return Err(NotDrawn::NeedsImage);
     }
     if !needs_samples(config) {
@@ -169,6 +178,20 @@ fn resolve(config: &StretchConfig, samples: Option<&[f32]>) -> Result<StretchPla
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn both_layered_stretches_need_the_whole_image() {
+        for settings in [
+            json!({ "type": "layered" }),
+            json!({ "type": "layered-hdr", "headroom": 3 }),
+        ] {
+            let model: StretchModel = serde_json::from_value(settings.clone()).unwrap();
+            assert!(needs_image(&model), "{settings}");
+        }
+        let model: StretchModel =
+            serde_json::from_value(json!({ "type": "median-anchor" })).unwrap();
+        assert!(!needs_image(&model));
+    }
 
     fn config(settings: serde_json::Value) -> StretchConfig {
         config_of(&settings).expect("a stretch Seiza knows")

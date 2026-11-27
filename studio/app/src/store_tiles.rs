@@ -45,6 +45,13 @@ pub struct BandStretch {
     display: bool,
 }
 
+/// What a plane stretched for display is divided by on the way to the
+/// canvas: the brightest value an HDR stretch gives, at the most headroom.
+/// An SDR plane runs from 0 to 1 within it.
+fn display_scale() -> f32 {
+    seiza_compose::tone::extended_srgb_encode(seiza_compose::tone::MAX_HEADROOM.exp2())
+}
+
 /// The samples Seiza analyses per band, at most.
 const ANALYSIS_SAMPLES: usize = 300_000;
 
@@ -467,12 +474,13 @@ impl StoreTiles {
                 .and_then(|name| name.strip_suffix("@stars"))
                 .and_then(|input| bands.names.iter().position(|other| other == input))
                 .map_or(scale, |input| bands.scales[input]);
-            // A plane stretched for display runs from 0 to 1 as it is.
+            // A plane stretched for display is drawn as it is, up to the
+            // brightest an HDR stretch can make it.
             let scale = if name
                 .as_ref()
                 .is_some_and(|name| self.display.contains(name))
             {
-                1.0
+                display_scale()
             } else {
                 scale
             };
@@ -504,7 +512,9 @@ impl StoreTiles {
                 .names
                 .get(channel)
                 .is_some_and(|name| self.display.contains(name));
-            if !is_band(channel) && self.scales[channel] == 1.0 && !display {
+            if display {
+                self.scales[channel] = display_scale();
+            } else if !is_band(channel) && self.scales[channel] == 1.0 {
                 self.scales[channel] = largest(&channels[channel]);
             }
         }

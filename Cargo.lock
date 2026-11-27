@@ -5540,7 +5540,7 @@ dependencies = [
  "seiza-core",
  "seiza-fits",
  "seiza-image-io",
- "seiza-stats",
+ "seiza-stats 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde",
  "serde_json",
  "sha2 0.11.1",
@@ -5555,7 +5555,7 @@ checksum = "7ecc4433c7dedfaa803fa31d63e8c469c0573a671dd872c25dfe93041e758960"
 dependencies = [
  "multiversion",
  "rayon",
- "seiza-stats",
+ "seiza-stats 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde",
  "thiserror 2.0.21",
 ]
@@ -5570,7 +5570,7 @@ dependencies = [
  "nalgebra",
  "rayon",
  "seiza-imgproc",
- "seiza-stats",
+ "seiza-stats 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde",
  "serde_json",
  "sha2 0.11.1",
@@ -5721,7 +5721,7 @@ dependencies = [
  "seiza-fits",
  "seiza-image-io",
  "seiza-imgproc",
- "seiza-stats",
+ "seiza-stats 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "seiza-stretch",
  "seiza-xisf",
  "serde",
@@ -5758,13 +5758,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "seiza-stats"
+version = "0.1.2"
+source = "git+https://github.com/theatrus/seiza?rev=476a65b28a31d8669a75fe399ecf7ccaca43699f#476a65b28a31d8669a75fe399ecf7ccaca43699f"
+dependencies = [
+ "bytemuck",
+]
+
+[[package]]
 name = "seiza-stretch"
 version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eed6c138b940b80b86ce13bb79ad3455bdd8745e66a9f31495bed17203ad91be"
+source = "git+https://github.com/theatrus/seiza?rev=476a65b28a31d8669a75fe399ecf7ccaca43699f#476a65b28a31d8669a75fe399ecf7ccaca43699f"
 dependencies = [
  "rayon",
- "seiza-stats",
+ "seiza-stats 0.1.2 (git+https://github.com/theatrus/seiza?rev=476a65b28a31d8669a75fe399ecf7ccaca43699f)",
  "serde",
  "thiserror 2.0.21",
 ]

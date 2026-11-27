@@ -1054,9 +1054,12 @@ fn stretch_whole_images(
     let layered: Vec<(StackColorRole, String)> = stretches
         .iter()
         .filter(|(_, stages)| {
-            stages
-                .iter()
-                .any(|stage| matches!(stage.model, StretchModel::Layered(_)))
+            stages.iter().any(|stage| {
+                matches!(
+                    stage.model,
+                    StretchModel::Layered(_) | StretchModel::LayeredHdr(_)
+                )
+            })
         })
         .filter_map(|(role, _)| Some((*role, crate::studio_flow::role_name(*role).ok()?)))
         .collect();
