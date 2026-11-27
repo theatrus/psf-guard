@@ -79,4 +79,6 @@
   ⇧⌘Z), go back through the document's edits. Every input stretch has a
   **Sky floor**, which takes what background extraction leaves to black,
   and **Run tools** during a run queues one more run with your later
-  changes.
+  changes. A sharpening step's **Second pass, shifted** runs
+  BlurXTerminator again on the image moved by half a tile and averages the
+  two, which takes most of the faint grid of tile seams out of a dark sky.

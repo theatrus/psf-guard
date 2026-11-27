@@ -750,6 +750,9 @@ fn linear_steps(document: &Document, stacks: &[StackColorSource]) -> Result<Vec<
                 roles,
                 label: band.to_string(),
                 tool,
+                shifted: settings[crate::studio::SHIFTED_PASS_KEY]
+                    .as_bool()
+                    .unwrap_or(false),
             });
         }
     }

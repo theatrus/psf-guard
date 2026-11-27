@@ -290,6 +290,11 @@ pub enum LinearStep {
         /// What progress calls the channels: an input's name or a group's.
         label: String,
         tool: ProcessingStep,
+        /// Whether the tool runs a second time on the channel shifted by
+        /// [`SHIFTED_PASS`] pixels, and the two results are averaged, so
+        /// the seams between the tiles BlurXTerminator works in fall in
+        /// different places and blur out.
+        shifted: bool,
     },
     /// Seiza's deconvolution of one channel.
     Deconvolution {
@@ -402,6 +407,66 @@ impl Track {
     fn group_part(&self) -> String {
         format!("{}:{}", self.revision, self.last.as_deref().unwrap_or(""))
     }
+}
+
+/// How far a tool's shifted second pass moves the channel, down and right,
+/// in pixels: about half the spacing of the seams BlurXTerminator leaves
+/// between its tiles (350 to 415 pixels apart on the Cat's Eye).
+pub const SHIFTED_PASS: usize = 192;
+
+/// `image`, one channel, moved `by` pixels down and right on a canvas that
+/// much larger, with the edges it uncovers filled by mirroring the image.
+fn shift_mirrored(image: &LinearImage, by: usize) -> Result<LinearImage> {
+    let (width, height) = (image.width, image.height);
+    let mirror = |at: isize, size: usize| -> usize {
+        let size = size as isize;
+        let mut at = at;
+        if at < 0 {
+            at = -at - 1;
+        }
+        if at >= size {
+            at = 2 * size - at - 1;
+        }
+        at.clamp(0, size - 1) as usize
+    };
+    let (out_width, out_height) = (width + by, height + by);
+    let mut data = Vec::with_capacity(out_width * out_height);
+    for y in 0..out_height {
+        let row = mirror(y as isize - by as isize, height);
+        for x in 0..out_width {
+            data.push(image.data[row * width + mirror(x as isize - by as isize, width)]);
+        }
+    }
+    Ok(LinearImage::new(out_width, out_height, 1, data)?)
+}
+
+/// The part of `image` that [`shift_mirrored`] moved: `width` by `height`
+/// from `by` pixels in, in each channel.
+fn unshift(image: &LinearImage, by: usize, width: usize, height: usize) -> Result<LinearImage> {
+    let channels = image.channels;
+    if image.width < width + by || image.height < height + by {
+        bail!("a shifted pass came back smaller than it went");
+    }
+    let mut data = Vec::with_capacity(width * height * channels);
+    for y in 0..height {
+        let start = ((y + by) * image.width + by) * channels;
+        data.extend_from_slice(&image.data[start..start + width * channels]);
+    }
+    Ok(LinearImage::new(width, height, channels, data)?)
+}
+
+/// The mean of two images of one size.
+fn average(a: &LinearImage, b: &LinearImage) -> Result<LinearImage> {
+    if a.data.len() != b.data.len() {
+        bail!("the two passes are of different sizes");
+    }
+    let data = a
+        .data
+        .iter()
+        .zip(&b.data)
+        .map(|(a, b)| (a + b) * 0.5)
+        .collect();
+    Ok(LinearImage::new(a.width, a.height, a.channels, data)?)
 }
 
 /// `chain` with `tool` after it, when one chain can run them all: each
@@ -583,10 +648,13 @@ impl RegisteredChannels {
                     roles: wanted,
                     label,
                     tool,
+                    shifted,
                 } if wanted.len() == 1 => {
                     let channel = members[0];
                     let track = &mut tracks[channel];
-                    let chain = match track.chain_with(tool) {
+                    // A tool with a shifted second pass runs alone: its
+                    // result is the average of two runs.
+                    let chain = match track.chain_with(tool).filter(|_| !*shifted) {
                         Some(chain) => chain,
                         None => {
                             track.settle();
@@ -622,9 +690,61 @@ impl RegisteredChannels {
                         &mut || Ok(()),
                     )
                     .map_err(|error| anyhow!("the tools of {label}: {error}"))?;
-                    track.chain = chain;
-                    track.last = resolved.ids.last().cloned();
-                    track.image = outcome.image;
+                    let mut outcome = outcome;
+                    if *shifted {
+                        // The second pass, on the channel shifted down and
+                        // right, mirrored at its edges, kept by its own id.
+                        let revision = format!("{}:shifted:{SHIFTED_PASS}", track.revision);
+                        let second = ToolChain::resolve(
+                            program.workers,
+                            &ProcessingChain {
+                                steps: chain.clone(),
+                            },
+                            "studio",
+                            source,
+                            &revision,
+                            track.deconvolution.as_deref(),
+                        )
+                        .map_err(|error| anyhow!("the tools of {label}: {error}"))?;
+                        let padded = shift_mirrored(&track.start, SHIFTED_PASS)?;
+                        let moved = run_tool_chain(
+                            RcAstroRunner {
+                                workers: program.workers,
+                                person: true,
+                            },
+                            program.cache,
+                            &second,
+                            &padded,
+                            &frames[channel].headers,
+                            None,
+                            |ToolEvent::Running {
+                                 label: running,
+                                 fraction,
+                             }| {
+                                (program.progress)(label, &format!("{running}, shifted"), fraction)
+                            },
+                            &mut || Ok(()),
+                        )
+                        .map_err(|error| anyhow!("the tools of {label}: {error}"))?;
+                        let back = |image: &LinearImage| {
+                            unshift(image, SHIFTED_PASS, track.start.width, track.start.height)
+                        };
+                        outcome.image = average(&outcome.image, &back(&moved.image)?)?;
+                        outcome.stars = match (outcome.stars, moved.stars) {
+                            (Some(first), Some(second)) => Some(average(&first, &back(&second)?)?),
+                            (first, _) => first,
+                        };
+                    }
+                    if *shifted {
+                        // The average is no chain's result: what follows
+                        // starts from it.
+                        let id = resolved.ids.last().cloned().unwrap_or_default();
+                        track.replace(outcome.image, format!("{id}:shifted"));
+                    } else {
+                        track.chain = chain;
+                        track.last = resolved.ids.last().cloned();
+                        track.image = outcome.image;
+                    }
                     let name = &channel_names[channel];
                     let plane = step_channel(name, *id);
                     let samples = if track.on_grid {
@@ -659,6 +779,7 @@ impl RegisteredChannels {
                     roles: wanted,
                     label,
                     tool,
+                    ..
                 } => {
                     if members.len() < 2 {
                         continue;
@@ -1349,6 +1470,22 @@ mod tests {
             provider: provider.to_string(),
             parameters: BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn a_shifted_pass_comes_back_to_where_it_was() {
+        let image = LinearImage::new(5, 4, 1, (0..20).map(|value| value as f32).collect()).unwrap();
+        let moved = shift_mirrored(&image, 2).unwrap();
+        assert_eq!((moved.width, moved.height), (7, 6));
+        // The image sits 2 pixels down and right; the edges uncovered
+        // mirror it.
+        assert_eq!(moved.data[2 * 7 + 2], 0.0);
+        assert_eq!(moved.data[2 * 7], 1.0);
+        assert_eq!(moved.data[0], 6.0);
+        assert_eq!(unshift(&moved, 2, 5, 4).unwrap().data, image.data);
+        let doubled =
+            LinearImage::new(5, 4, 1, image.data.iter().map(|v| v * 3.0).collect()).unwrap();
+        assert_eq!(average(&image, &doubled).unwrap().data[3], 6.0);
     }
 
     #[test]

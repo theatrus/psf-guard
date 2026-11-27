@@ -2896,12 +2896,20 @@ the Iris (NGC 7023, UltraCat 131 LRGB, `studio/experiments/iris-hdr/run.py`):
 
 Gaps to fix, roughly in the order they got in the way:
 
-- [ ] **BlurXTerminator's tile grid.** A soft pattern about 350–415 px apart,
-  about 0.004 ADU, appears in BlurXTerminator's output and becomes the
-  strongest structure in a dark narrowband sky once noise reduction and
-  background extraction remove the rest. An overlap of 0.5 did not remove
-  it. To try: run BlurXTerminator on a copy shifted by half a tile and
-  average, or keep the background model from following it.
+- [x] **BlurXTerminator's tile grid.** A soft pattern of seams between
+  BlurXTerminator's tiles appears in its output and becomes the strongest
+  structure in a dark narrowband sky once noise reduction and background
+  extraction remove the rest. An overlap of 0.5 did not remove it. A
+  sharpening step now has **Second pass, shifted** (`shifted_pass`): the
+  tool runs again on the input moved 192 pixels down and right, its edges
+  mirrored, and the two results are averaged, so the seams fall in
+  different places. On the Cat's Eye's OIII the difference of the two
+  passes showed the seams clearly (7 to 9 times the power around them, at
+  an RMS of 2 × 10⁻⁴), 446 pixels apart across and 348 down, so the
+  average keeps 22% and 16% of their fundamental: about 80% of the pattern
+  goes. It doubles the tool's time, and the second pass is cached on its
+  own. Still open: a shift matched to each image's tile spacing would take
+  the rest.
 - [x] **Sky floor on every stretch kind.** An input's stretch of any other
   kind has a **Sky floor** too, kept beside its model as `sky_floor` and
   drawn as PixInsight's histogram transformation after it, with shadows at

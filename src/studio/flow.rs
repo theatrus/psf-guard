@@ -98,6 +98,12 @@ pub fn tool_operation(provider: &str) -> &'static str {
         .map_or(op::PROCESSING_TOOL, |(_, operation)| operation)
 }
 
+/// The key of a tool step's setting that runs the tool a second time on the
+/// input shifted by half a tile and averages the two, against the seams
+/// BlurXTerminator leaves between its tiles. Studio's own: PSF Guard's
+/// settings read past it.
+pub const SHIFTED_PASS_KEY: &str = "shifted_pass";
+
 /// Whether a step runs one processing tool.
 pub fn is_tool_step(step: &StepRecord) -> bool {
     op::TOOLS.contains(&step.kind.name())

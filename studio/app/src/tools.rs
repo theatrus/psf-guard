@@ -643,6 +643,18 @@ impl Studio {
         }
     }
 
+    /// Turns a tool's shifted second pass on or off, for one input's tool
+    /// or its group's.
+    fn set_shifted_pass(&mut self, channel: &str, provider: &str, on: bool) {
+        let mut chain = self.chain(channel);
+        for step in &mut chain {
+            if Self::provider_of(step) == provider {
+                step[crate::studio_model::SHIFTED_PASS_KEY] = on.into();
+            }
+        }
+        self.set_chain(channel, chain);
+    }
+
     /// The settings of an input's tools that a person can set, in the
     /// order they are listed: the tool, the setting, and its value now.
     fn tool_settings(&self, channel: &str) -> Vec<(String, Setting, serde_json::Value)> {
@@ -1404,6 +1416,27 @@ impl Studio {
                     .is_none_or(|(before, ..)| *before != provider);
             if first {
                 block = block.child(Self::heading(tool));
+                // Sharpening can run twice, the second time on the input
+                // shifted by half a tile, against BlurXTerminator's seams.
+                let own = self.chain(channel);
+                let step = own.iter().find(|step| Self::provider_of(step) == provider);
+                if let Some(step) = step.filter(|_| self.is_of(&provider, "sharpen")) {
+                    let on = step[crate::studio_model::SHIFTED_PASS_KEY]
+                        .as_bool()
+                        .unwrap_or(false);
+                    let (channel, key) = (channel.to_string(), provider.clone());
+                    block = block
+                        .child(Self::act(
+                            format!("Second pass, shifted: {}", if on { "on" } else { "off" }),
+                            ("tool-shifted", index),
+                            on,
+                            cx,
+                            move |this| this.set_shifted_pass(&channel, &key, !on),
+                        ))
+                        .children(Self::help(
+                            "Runs the tool a second time on the input moved by half a tile, and averages the two, so the seams between BlurXTerminator's tiles fall in different places. On the Cat's Eye it took about 80% of the seams' pattern out. It doubles the tool's time.",
+                        ));
+                }
             }
             block = match setting.kind {
                 SettingKind::Float { min, max, .. } => {
