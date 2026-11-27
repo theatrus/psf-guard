@@ -2018,6 +2018,7 @@ export interface StackColorJob {
   artifact_revision: string;
   cache_version: number;
   stacking_version: string;
+  compose_version: string;
   background_version: string;
   deconvolution_version: string;
   linear_input_id: string | null;

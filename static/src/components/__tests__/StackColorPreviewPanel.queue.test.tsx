@@ -23,7 +23,7 @@ function job(overrides: Partial<StackColorJob>): StackColorJob {
     state: 'completed', phase: 'Ready', sources, source_family_key: 'family',
     created_unix_seconds: 1, artifact_revision: 'color-rev', processed_channels: 3, total_channels: 3,
     progress: { completed_units: 3, total_units: 3, active_phase: null, current_role: null, current_stage: null, stage_count: null, phases: [] },
-    cache_version: 12, stacking_version: 'test', background_version: 'test', deconvolution_version: '',
+    cache_version: 12, stacking_version: 'test', compose_version: 'test', background_version: 'test', deconvolution_version: '',
     linear_input_id: null, crop: 'none', crop_report: null, processing: null,
     resolved_input_stretches: {}, resolved_input_deconvolutions: {}, resolved_output_stretches: [],
     resolved_backgrounds: {}, resolved_background_protection: {}, background_protection_fallbacks: {},

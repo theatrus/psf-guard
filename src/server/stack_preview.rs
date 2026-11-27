@@ -112,6 +112,13 @@ pub use method::{StackFinalPass, StackMethod, StackReference, StackWeighting};
 /// output changes, and holds it there with a test.
 pub const SEIZA_STACKING_OUTPUT_VERSION: &str = seiza_stacking::OUTPUT_VERSION;
 
+/// The Seiza release whose color composition this build reproduces:
+/// palettes, LRGB, color calibration, narrowband balance and star layers.
+/// Color previews, the processing-tool runs on a color picture, and a
+/// one-shot-color stack's calibration key on it, as stacks key on
+/// [`SEIZA_STACKING_OUTPUT_VERSION`].
+pub const SEIZA_COMPOSE_OUTPUT_VERSION: &str = seiza_compose::OUTPUT_VERSION;
+
 /// The stretch release every stack id was built with when the card preview
 /// still entered the id. Ids keep it, so a Seiza release that changes only
 /// how previews render builds no stack again: Build renders the previews

@@ -16,7 +16,7 @@ pub struct NarrowbandProcessing {
     #[serde(default)]
     pub shared_stretch: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub balance: Option<seiza_stacking::NarrowbandBalanceOptions>,
+    pub balance: Option<seiza_compose::NarrowbandBalanceOptions>,
     /// Optional sharpening/denoising on linear RGB before calibration and SXT.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rgb_star_processing: Option<super::super::rc_astro::RcAstroProcessing>,
@@ -752,7 +752,7 @@ pub(super) fn separate_stars(
                 .as_ref()
                 .and_then(|p| p.narrowband.as_ref())
                 .and_then(|p| p.rgb_star_stretch)
-                .map(|amount| seiza_stacking::stretch_rgb_stars(&original, &output.image, amount))
+                .map(|amount| seiza_compose::stretch_rgb_stars(&original, &output.image, amount))
                 .transpose()
                 .map_err(|e| e.to_string())?;
             // Resolve once from star-containing calibrated RGB, then apply
@@ -917,7 +917,7 @@ pub(super) fn shared_stretch(
 pub(super) fn balance(
     state: &Arc<AppState>,
     job: &StackColorJob,
-    options: &seiza_stacking::NarrowbandBalanceOptions,
+    options: &seiza_compose::NarrowbandBalanceOptions,
     images: &mut BTreeMap<StackColorRole, LinearImage>,
     progress: &ColorProgressTracker<'_>,
 ) -> Result<(), String> {
@@ -930,11 +930,11 @@ pub(super) fn balance(
     );
     let roles = color_channel_roles(job.kind, job.palette);
     let mut physical = combine(images, roles)?;
-    let options = seiza_stacking::NarrowbandBalanceOptions {
+    let options = seiza_compose::NarrowbandBalanceOptions {
         has_sii: roles[2] == StackColorRole::Sii,
         ..*options
     };
-    let report = seiza_stacking::balance_narrowband(&mut physical, &options)
+    let report = seiza_compose::balance_narrowband(&mut physical, &options)
         .map_err(|error| error.to_string())?;
     put_planes(images, physical, roles)?;
     state.stack_previews.update_color(&job.job_id, |current| {

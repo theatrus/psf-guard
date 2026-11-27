@@ -17,7 +17,8 @@ use super::color_calibration::{
 use super::color_memory;
 use super::{
     LatestStackPreviews, StackJobState, StackPreviewImageQuery, StackPreviewImageSize,
-    StackPreviewManager, MAX_REMEMBERED_JOBS, SEIZA_STACKING_OUTPUT_VERSION,
+    StackPreviewManager, MAX_REMEMBERED_JOBS, SEIZA_COMPOSE_OUTPUT_VERSION,
+    SEIZA_STACKING_OUTPUT_VERSION,
 };
 #[cfg(test)]
 use crate::color_steps::{fit_channel_background, fit_uses_model, refit_channel_background};
@@ -35,11 +36,14 @@ use axum::{
 use seiza_background::{BackgroundConfig, BackgroundFit, CorrectionMode, ProtectedRegion};
 #[cfg(test)]
 use seiza_background::{FittedModel, ModelConfig};
+use seiza_compose::{
+    combine_lrgb, combine_narrowband, combine_rgb, write_color_fits_f32, ColorComposition,
+    ColorCrop, ColorNormalization, ColorOptions, ColorTransfer, CropReport, ForaxxOptions,
+    NarrowbandPalette,
+};
 use seiza_stacking::{
-    combine_lrgb, combine_narrowband, combine_rgb, resample_to_reference_with_gpu,
-    write_color_fits_f32, write_processed_image_fits_f32, ColorComposition, ColorCrop,
-    ColorNormalization, ColorOptions, ColorTransfer, CropReport, FitsFrame, ForaxxOptions,
-    LinearImage, NarrowbandPalette, ReferenceRegion,
+    resample_to_reference_with_gpu, write_processed_image_fits_f32, FitsFrame, LinearImage,
+    ReferenceRegion,
 };
 use seiza_stretch::{ImageShape, StretchStack, StretchStackOutput, StretchStageProgress};
 use serde::{Deserialize, Serialize};
@@ -502,7 +506,7 @@ pub struct StackColorJob {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub narrowband_resolution: Option<narrowband::NarrowbandResolution>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub narrowband_balance: Option<seiza_stacking::NarrowbandBalanceReport>,
+    pub narrowband_balance: Option<seiza_compose::NarrowbandBalanceReport>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub continuum: Vec<emission::ContinuumLineResult>,
     pub schema_version: u32,
@@ -532,6 +536,10 @@ pub struct StackColorJob {
     pub artifact_revision: String,
     pub cache_version: u32,
     pub stacking_version: String,
+    /// The color composition the preview was made with. A preview from
+    /// before PSF Guard recorded it has none, and is out of date.
+    #[serde(default)]
+    pub compose_version: String,
     #[serde(default)]
     pub background_version: String,
     #[serde(default)]
@@ -1301,6 +1309,7 @@ pub(super) fn preparing_color_job(
         artifact_revision: String::new(),
         cache_version: STACK_COLOR_CACHE_VERSION,
         stacking_version: SEIZA_STACKING_OUTPUT_VERSION.into(),
+        compose_version: SEIZA_COMPOSE_OUTPUT_VERSION.into(),
         background_version: SEIZA_BACKGROUND_VERSION.into(),
         deconvolution_version: String::new(),
         linear_input_id: None,
@@ -2028,7 +2037,11 @@ pub(super) fn prepare_color_job(
             let rgb_chain = if calibration.is_some() {
                 super::rc_astro::rc_astro_chain_ids(
                     &ctx.id,
-                    &format!("rgb-stars:{rgb_input}:{calibration_key}"),
+                    // The chain reads the calibrated color picture, which
+                    // Seiza's color composition makes.
+                    &format!(
+                        "rgb-stars:{rgb_input}:{calibration_key}:{SEIZA_COMPOSE_OUTPUT_VERSION}"
+                    ),
                     &rgb_input,
                     &rgb_config,
                     &schemas,
@@ -2155,6 +2168,7 @@ pub(super) fn prepare_color_job(
             artifact_revision: artifact_revision.clone(),
             cache_version: STACK_COLOR_CACHE_VERSION,
             stacking_version: SEIZA_STACKING_OUTPUT_VERSION.into(),
+            compose_version: SEIZA_COMPOSE_OUTPUT_VERSION.into(),
             background_version: SEIZA_BACKGROUND_VERSION.into(),
             deconvolution_version: request
                 .processing
@@ -2297,6 +2311,7 @@ fn color_job_id(identity: &ColorJobIdentity<'_>) -> Result<String, AppError> {
     }
     hasher.update(STACK_COLOR_CACHE_VERSION.to_le_bytes());
     hasher.update(SEIZA_STACKING_OUTPUT_VERSION.as_bytes());
+    hasher.update(SEIZA_COMPOSE_OUTPUT_VERSION.as_bytes());
     hasher.update(SEIZA_BACKGROUND_VERSION.as_bytes());
     if request.automatic_palette || request.stars.is_some() {
         hasher.update(b"narrowband-stars-v1");
@@ -2699,7 +2714,9 @@ fn color_rc_astro_chain_ids(
 ) -> Result<Vec<String>, AppError> {
     super::rc_astro::rc_astro_chain_ids(
         database_id,
-        &format!("color-channels:{input_id}"),
+        // The chain reads the combined color channels, which Seiza's color
+        // composition makes.
+        &format!("color-channels:{input_id}:{SEIZA_COMPOSE_OUTPUT_VERSION}"),
         &roles.map(role_cache_name).join(","),
         config,
         schemas,
@@ -4644,14 +4661,10 @@ fn compose_color(
                     .map_or(0.0, |p| p.star_reduction);
                 if let Some(layer) = stars.layer {
                     let layer = layer.crop(composition.region).map_err(|e| e.to_string())?;
-                    seiza_stacking::screen_rgb_star_layer(
-                        &mut composition.image,
-                        &layer,
-                        reduction,
-                    )
-                    .map_err(|e| e.to_string())?;
+                    seiza_compose::screen_rgb_star_layer(&mut composition.image, &layer, reduction)
+                        .map_err(|e| e.to_string())?;
                 } else {
-                    seiza_stacking::screen_rgb_stars_reduced(
+                    seiza_compose::screen_rgb_stars_reduced(
                         &mut composition.image,
                         &original,
                         &starless,
@@ -5090,7 +5103,7 @@ fn calibrate_and_stretch_composition(
             )
         }
     };
-    let gaia = seiza_stacking::GaiaColors::Catalog(&catalog);
+    let gaia = seiza_compose::GaiaColors::Catalog(&catalog);
     // The map is on the registered grid; the composition is its crop.
     let clipped = clipped.and_then(|clipped| match clipped.crop(crop) {
         Ok(clipped) => Some(clipped),
@@ -5101,12 +5114,8 @@ fn calibrate_and_stretch_composition(
     });
     let Some(stack) = stack else {
         let mut image = image;
-        let outcome = seiza_stacking::calibrate_color_image(
-            &mut image,
-            Some(&wcs),
-            gaia,
-            &settings.options(),
-        );
+        let outcome =
+            seiza_compose::calibrate_color_image(&mut image, Some(&wcs), gaia, &settings.options());
         if outcome.calibration().is_some() {
             color_calibration::neutralize_clipped(&mut image, clipped.as_ref());
         }
@@ -5116,7 +5125,7 @@ fn calibrate_and_stretch_composition(
             plans: Vec::new(),
         });
     };
-    let result = seiza_stacking::calibrate_and_stretch(
+    let result = seiza_compose::calibrate_and_stretch(
         image,
         Some(&wcs),
         gaia,
@@ -6148,6 +6157,7 @@ fn color_job_outdated_reason(
     }
     if job.cache_version != STACK_COLOR_CACHE_VERSION
         || job.stacking_version != SEIZA_STACKING_OUTPUT_VERSION
+        || job.compose_version != SEIZA_COMPOSE_OUTPUT_VERSION
         || job.background_version != SEIZA_BACKGROUND_VERSION
         || (job
             .processing
@@ -6252,6 +6262,7 @@ fn current_latest_colors(mut latest: LatestStackColorPreviews) -> LatestStackCol
     latest.jobs.retain(|job| {
         job.cache_version == STACK_COLOR_CACHE_VERSION
             && job.stacking_version == SEIZA_STACKING_OUTPUT_VERSION
+            && job.compose_version == SEIZA_COMPOSE_OUTPUT_VERSION
     });
     latest
 }
@@ -7564,12 +7575,14 @@ mod tests {
         // The id this build gives. With the bytes above unchanged it is the
         // id the earlier release gave; a change here recomposes every
         // color build that has steps of its own. It also hashes Seiza's
-        // stacking output version and the seiza-background version, so it
-        // was recorded again for Seiza 0.57 (seiza-stacking output 0.62.0,
-        // seiza-background 0.4.0), which recomposes every color build.
+        // stacking and color composition output versions and the
+        // seiza-background version, so it was recorded again for Seiza
+        // 0.57 (seiza-stacking output 0.62.0, seiza-background 0.4.0) and
+        // again when color composition moved to seiza-compose (output
+        // 0.1.0); each recomposes every color build.
         assert_eq!(
             id,
-            "20b204e5a3fd9860af951e20cad8b110f5e49f4a8c1b7447268c360df0ca835a"
+            "5f0a10c9fc28cc8465555da701d7d1116a7f0bb0b333535f1f0cbf0ed91e5d0d"
         );
     }
 
@@ -8105,6 +8118,26 @@ mod tests {
         drop(busy);
     }
 
+    /// A color preview made with another release of Seiza's color
+    /// composition, or before PSF Guard recorded it, is not current.
+    #[test]
+    fn a_preview_from_another_compose_version_is_not_current() {
+        let current = running_color_job("current", StackJobState::Completed);
+        let mut older = running_color_job("older", StackJobState::Completed);
+        older.compose_version = "0.0.0".into();
+        let mut unrecorded = running_color_job("unrecorded", StackJobState::Completed);
+        unrecorded.compose_version = String::new();
+        let latest = current_latest_colors(LatestStackColorPreviews {
+            schema_version: 1,
+            database_id: "db".into(),
+            project_id: 1,
+            updated_unix_seconds: 0,
+            jobs: vec![current, older, unrecorded],
+        });
+        let kept: Vec<&str> = latest.jobs.iter().map(|job| job.job_id.as_str()).collect();
+        assert_eq!(kept, ["current"]);
+    }
+
     pub(super) fn running_color_job(job_id: &str, state: StackJobState) -> StackColorJob {
         let mut progress = color_progress(3, None);
         progress.completed_units = 4;
@@ -8137,6 +8170,7 @@ mod tests {
             artifact_revision: "rev".into(),
             cache_version: STACK_COLOR_CACHE_VERSION,
             stacking_version: SEIZA_STACKING_OUTPUT_VERSION.into(),
+            compose_version: SEIZA_COMPOSE_OUTPUT_VERSION.into(),
             background_version: SEIZA_BACKGROUND_VERSION.into(),
             deconvolution_version: String::new(),
             linear_input_id: None,
@@ -8937,7 +8971,7 @@ mod tests {
                 processing.color_calibration = None;
                 processing.narrowband = Some(narrowband::NarrowbandProcessing {
                     shared_stretch: true,
-                    balance: balanced.then(|| seiza_stacking::NarrowbandBalanceOptions {
+                    balance: balanced.then(|| seiza_compose::NarrowbandBalanceOptions {
                         has_sii: palette.is_some_and(StackNarrowbandPalette::requires_sii),
                         ..Default::default()
                     }),
@@ -9909,6 +9943,7 @@ mod tests {
             mosaic_retry_fingerprint: None,
             reference_image_id: Some(41),
             solution_fingerprint: Some("solve".into()),
+            compose_version: super::SEIZA_COMPOSE_OUTPUT_VERSION.into(),
             catalog: Some(crate::astrometry::AstrometryCatalogFileSignature {
                 name: "gaia_photometry".into(),
                 path: "/catalogs/stars-gaia-photometry.bin".into(),
