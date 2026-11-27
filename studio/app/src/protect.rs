@@ -5,7 +5,8 @@
 //! A region is stored in the Background extraction step's settings as Seiza
 //! takes it, `config.protected_regions`, in fractions of the image's width
 //! and height. The canvas outlines the selected step's regions, and the
-//! Protect tool draws an ellipse: press at its centre and drag to its edge.
+//! Protect tool draws an ellipse: press at its centre and drag out to set its
+//! width and height.
 //! The background is worked out when the store is prepared, so a change is
 //! flagged as tools not run until the tools run again.
 
