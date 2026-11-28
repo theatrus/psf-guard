@@ -806,8 +806,8 @@ impl Studio {
     /// Whether the tools can be run from here, and why not when they
     /// cannot.
     pub(super) fn cannot_run(&self) -> Option<&'static str> {
-        if self.tools.binary.is_none() {
-            Some("The psf-guard program was not found.")
+        if !self.psf_guard_installed() {
+            Some("Processing tools run through PSF Guard, which is not on this computer. Install PSF Guard to run them.")
         } else if self.tools.store.is_none() || self.tools.document.is_none() {
             Some("Tools run on a store of channel stacks. This document has none.")
         } else {
@@ -1168,8 +1168,18 @@ impl Studio {
         }));
         self.tools.run = Some(run.clone());
         std::thread::spawn(move || {
-            let outcome = job(&run);
-            let stopped = run.lock().expect("tool run").stopped;
+            // A job that panics ends with an error, so the run ends and the
+            // next one can start.
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(&run)))
+                .unwrap_or_else(|panic| {
+                    let reason = panic
+                        .downcast_ref::<&str>()
+                        .map(|text| text.to_string())
+                        .or_else(|| panic.downcast_ref::<String>().cloned())
+                        .unwrap_or_else(|| "it stopped unexpectedly".to_string());
+                    Err(format!("it failed: {reason}"))
+                });
+            let stopped = is_stopped(&run);
             run.lock().expect("tool run").done = Some(if stopped {
                 Err("stopped".to_string())
             } else {
@@ -1612,6 +1622,11 @@ fn slider_value(setting: &Setting, position: f32) -> Option<serde_json::Value> {
 }
 
 /// Sets the line a run shows.
+/// Whether a person stopped the run.
+pub(super) fn is_stopped(run: &Arc<Mutex<Run>>) -> bool {
+    run.lock().map_or(true, |run| run.stopped)
+}
+
 pub(super) fn set_line(run: &Arc<Mutex<Run>>, line: &str) {
     run.lock().expect("tool run").line = line.to_string();
 }

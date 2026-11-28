@@ -35,6 +35,9 @@ seiza-image-io = { git = "https://github.com/theatrus/seiza", rev = "a1dbe3d5401
 seiza-imgproc = { git = "https://github.com/theatrus/seiza", rev = "a1dbe3d540140e1d778f5b182ab400b96f88e547" }
 seiza-stats = { git = "https://github.com/theatrus/seiza", rev = "a1dbe3d540140e1d778f5b182ab400b96f88e547" }
 seiza-stacking = { git = "https://github.com/theatrus/seiza", rev = "a1dbe3d540140e1d778f5b182ab400b96f88e547" }
+seiza-background = { git = "https://github.com/theatrus/seiza", rev = "a1dbe3d540140e1d778f5b182ab400b96f88e547" }
+seiza-deconvolution = { git = "https://github.com/theatrus/seiza", rev = "a1dbe3d540140e1d778f5b182ab400b96f88e547" }
+seiza-stars = { git = "https://github.com/theatrus/seiza", rev = "a1dbe3d540140e1d778f5b182ab400b96f88e547" }
 seiza-stretch = { git = "https://github.com/theatrus/seiza", rev = "a1dbe3d540140e1d778f5b182ab400b96f88e547" }
 seiza-xisf = { git = "https://github.com/theatrus/seiza", rev = "a1dbe3d540140e1d778f5b182ab400b96f88e547" }
 

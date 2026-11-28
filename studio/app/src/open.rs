@@ -239,9 +239,13 @@ impl Studio {
         let document = folder.join(format!("{name}.json"));
         let opens = Some((store.clone(), document.clone()));
         self.start_job(opens, move |run| {
-            prepare_files(&files, &store, &document, &|line| {
-                super::tools::set_line(run, line)
-            })
+            prepare_files(
+                &files,
+                &store,
+                &document,
+                &|line| super::tools::set_line(run, line),
+                &|| super::tools::is_stopped(run),
+            )
             .map_err(|error| format!("{error:#}"))
         });
     }
@@ -291,17 +295,20 @@ impl Studio {
 
 /// Prepares a picture from stack files: its store at `store`, and its
 /// document at `document`, which is kept when it is there already. Each
-/// file's channel comes from its FILTER header or its name. `line` hears
-/// what is being done.
+/// file's channel comes from its FILTER header or its name. `line` is
+/// called with what is being done; `stopped` says whether a person stopped
+/// the run. The files are listed in the store's sources folder, so PSF
+/// Guard's Run tools can prepare the picture again once it is installed.
 fn prepare_files(
     files: &[PathBuf],
     store: &std::path::Path,
     document: &std::path::Path,
     line: &dyn Fn(&str),
+    stopped: &dyn Fn() -> bool,
 ) -> anyhow::Result<()> {
     use psf_studio_core::prepare::{
         channel_of_file, picture_document, picture_title, prepare_store, write_atomically,
-        Calibration, NoTools, Prepare, StackFile,
+        write_file_sources, Calibration, NoTools, Prepare, StackFile,
     };
     if let Some(folder) = store.parent() {
         std::fs::create_dir_all(folder)?;
@@ -309,7 +316,11 @@ fn prepare_files(
     line("Reading the stack files");
     let mut stacks: Vec<StackFile> = Vec::new();
     for file in files {
-        let role = channel_of_file(file)?;
+        let role = channel_of_file(file).map_err(|error| {
+            error.context(
+                "Rename the file to end in its filter, such as M42_Ha.fits, or set its FILTER header",
+            )
+        })?;
         if let Some(other) = stacks.iter().find(|stack| stack.role == role) {
             anyhow::bail!(
                 "{} and {} are both {}: open one file per channel",
@@ -329,9 +340,10 @@ fn prepare_files(
     let saved = document.is_file().then_some(document);
     let picture = picture_document(&title, &roles, saved)?;
     // Colors are calibrated against Gaia from a plate solve, which PSF
-    // Guard makes.
+    // Guard makes. A step that is off, or whose settings turn it off, asks
+    // for nothing.
     let wants_calibration = {
-        use crate::studio_model::{flow_operations, StageKind};
+        use crate::studio_model::{flow_operations, StageKind, StepKind};
         let rgb = ["red", "green", "blue"]
             .iter()
             .all(|channel| picture.channels().iter().any(|own| own == channel));
@@ -340,20 +352,29 @@ fn prepare_files(
             .steps
             .iter()
             .find(|step| step.kind.name() == flow_operations::COLOR_CALIBRATION);
-        rgb && step.is_none_or(|step| step.enabled)
+        let on = step.is_none_or(|step| {
+            step.enabled
+                && match &step.kind {
+                    StepKind::Operation { settings, .. } => {
+                        settings["enabled"].as_bool().unwrap_or(true)
+                    }
+                    _ => true,
+                }
+        });
+        rgb && on
     };
     let prepare_stacks: Vec<_> = stacks.iter().map(StackFile::stack).collect();
-    prepare_store(Prepare {
+    let folder = store.with_extension("sources");
+    let shape = prepare_store(Prepare {
         stacks: &prepare_stacks,
         document: &picture,
         tools: None::<&NoTools>,
-        folder: &store.with_extension("sources"),
+        folder: &folder,
         output: store,
         calibrate: &|_| {
             if wants_calibration {
                 Calibration::Skipped {
-                    why: "colors are calibrated against Gaia by PSF Guard, which is not on this \
-                          computer"
+                    why: "Gaia color calibration needs PSF Guard, which is not on this computer"
                         .into(),
                 }
             } else {
@@ -364,7 +385,9 @@ fn prepare_files(
         progress: &|channel, tool, fraction| {
             line(&format!("{channel}: {tool} ({:.0}%)", fraction * 100.0))
         },
+        stopped,
     })?;
+    write_file_sources(&folder, &stacks, (shape.width, shape.height))?;
     if saved.is_none() {
         write_atomically(document, picture.to_json())?;
     }

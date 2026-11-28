@@ -3889,7 +3889,7 @@ impl Studio {
     /// while the selection moves.
     fn pane_labels(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let scale = self.scale_factor.max(1.0);
-        type Drawn = ([u32; 4], Vec<String>, Option<Place>);
+        type Drawn = ([u32; 4], Vec<String>, usize, Option<Place>);
         let drawn: Vec<Drawn> = self.canvas.read(|shared| {
             let canvas = &shared.canvas;
             (0..canvas.scenes.len())
@@ -3898,6 +3898,7 @@ impl Studio {
                     (
                         canvas.pane_rects(index).1,
                         scene.omitted.clone(),
+                        shared.gpu_left_out(index).len(),
                         scene.place.clone(),
                     )
                 })
@@ -3907,13 +3908,32 @@ impl Studio {
             .iter()
             .zip(drawn)
             .enumerate()
-            .map(|(index, (wanted, (rect, omitted, drawn)))| {
+            .map(|(index, (wanted, (rect, omitted, gpu_left_out, drawn)))| {
                 let pinned = self.pins.get(index).is_some_and(Option::is_some);
                 let place = wanted.clone();
                 let (shown, coming) = pane_caption(wanted, drawn);
                 let coming = coming.map(|next| format!("Drawing {}…", next.label(&self.document)));
-                let left_out = (!omitted.is_empty())
-                    .then(|| format!("Not drawn here: {}.", omitted.join(", ")));
+                // Seiza names what the GPU leaves out by its own layer
+                // numbers, which a person does not see; the control socket
+                // lists them.
+                let gpu_note = match gpu_left_out {
+                    0 => None,
+                    1 => Some(
+                        "The canvas leaves out one part of the picture; an export draws it."
+                            .to_string(),
+                    ),
+                    parts => Some(format!(
+                        "The canvas leaves out {parts} parts of the picture; an export draws them."
+                    )),
+                };
+                let left_out = [
+                    (!omitted.is_empty())
+                        .then(|| format!("Not drawn here: {}.", omitted.join(", "))),
+                    gpu_note,
+                ]
+                .into_iter()
+                .flatten()
+                .reduce(|first, second| format!("{first} {second}"));
                 div()
                     .absolute()
                     .left(px(rect[0] as f32 / scale + 6.0))

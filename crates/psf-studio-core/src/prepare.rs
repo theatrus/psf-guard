@@ -38,9 +38,10 @@ pub struct PrepareStack {
     /// What the store is keyed by for this stack: it changes when the
     /// stack is rebuilt.
     pub key: String,
-    /// Where the stack clipped, as its stacker recorded it: what continuum
-    /// subtraction keeps out of its fit.
-    pub clipping: Option<LinearImage>,
+    /// The map of where the stack clipped, as its stacker recorded it:
+    /// what continuum subtraction keeps out of its fit. It is read only
+    /// when the document subtracts the continuum.
+    pub clipping: Option<PathBuf>,
 }
 
 /// What color calibration did, as the record beside a store keeps it.
@@ -81,16 +82,23 @@ pub struct Prepare<'a, R: LinearTools> {
     /// them against Gaia. A caller that cannot returns
     /// [`Calibration::NotAsked`] or [`Calibration::Skipped`].
     pub calibrate: &'a dyn Fn(&mut RegisteredChannels) -> Calibration,
-    /// Hears a line about what was done, for a person to read.
+    /// Called with each line about what was done, for a person to read.
     pub report: &'a dyn Fn(&str),
-    /// Hears the channel, the tool running on it, and how far the tool's
-    /// chain has got, from 0 to 1.
+    /// Called with the channel, the tool running on it, and how far the
+    /// tool's chain has got, from 0 to 1.
     pub progress: &'a dyn Fn(&str, &str, f32),
+    /// Whether a person stopped the run. It is checked between steps and
+    /// before the store is written; a stopped run ends with an error and
+    /// writes no store.
+    pub stopped: &'a dyn Fn() -> bool,
 }
 
 /// Registers the stacks, runs the document's Linear steps on them, fits the
-/// backgrounds and writes the store and its record.
-pub fn prepare_store<R: LinearTools>(prepare: Prepare<'_, R>) -> Result<()>
+/// backgrounds and writes the store and its record. Returns the picture's
+/// size: the first stack's grid, with one channel per plane of the store.
+pub fn prepare_store<R: LinearTools>(
+    prepare: Prepare<'_, R>,
+) -> Result<crate::image_steps::ImageShape>
 where
     R::Tool: DeserializeOwned,
 {
@@ -103,6 +111,7 @@ where
         calibrate,
         report,
         progress,
+        stopped,
     } = prepare;
     if stacks.is_empty() {
         bail!("there are no channel stacks to prepare");
@@ -135,7 +144,16 @@ where
         config,
         clipping: stacks
             .iter()
-            .filter_map(|stack| Some((stack.role, stack.clipping.clone()?)))
+            .filter_map(|stack| {
+                let path = stack.clipping.as_deref()?;
+                match read_clipping_map(path) {
+                    Ok(map) => Some((stack.role, map?)),
+                    Err(error) => {
+                        report(&format!("  Ignoring a clipping map: {error}"));
+                        None
+                    }
+                }
+            })
             .collect(),
     });
     let started = Instant::now();
@@ -147,6 +165,7 @@ where
             .collect(),
         steps,
         progress,
+        stopped,
     };
     let mut prepared = RegisteredChannels::prepare(
         &inputs,
@@ -154,6 +173,9 @@ where
         continuum.as_ref(),
         &seiza_stacking::GpuOptions::cpu(),
     )?;
+    if stopped() {
+        bail!("stopped");
+    }
     let calibration = calibrate(&mut prepared);
     match &calibration {
         Calibration::NotAsked => {}
@@ -232,20 +254,20 @@ where
 
     // The steps that ran for each channel, in order, with their settings:
     // the record PSF Studio compares with the document to tell which steps
-    // are still to run.
-    let programs: serde_json::Map<String, serde_json::Value> = document
+    // are still to run. It is the program of the document with the steps
+    // that did not run turned off, so it reads as that document's would.
+    let ran = {
+        let mut ran = document.clone();
+        for id in &skipped {
+            ran.set_step_enabled(*id, false);
+        }
+        ran
+    };
+    let programs: serde_json::Map<String, serde_json::Value> = ran
         .channels()
         .into_iter()
         .map(|channel| {
-            let program = input_program(document, &channel)
-                .into_iter()
-                .filter(|step| {
-                    !step["step"]
-                        .as_str()
-                        .and_then(|id| id.parse::<uuid::Uuid>().ok())
-                        .is_some_and(|id| skipped.contains(&id))
-                })
-                .collect();
+            let program = input_program(&ran, &channel);
             (channel, serde_json::Value::Array(program))
         })
         .collect();
@@ -280,6 +302,9 @@ where
         ),
         None => key,
     };
+    if stopped() {
+        bail!("stopped");
+    }
     let started = Instant::now();
     let store = TileStore::create(
         output,
@@ -333,7 +358,87 @@ where
         "program": programs,
     });
     write_atomically(&record, serde_json::to_string(&prepared_record)?)?;
-    Ok(())
+    Ok(shape)
+}
+
+/// A stack's clipping map: `Ok(None)` when there is none at `path`, and an
+/// error that explains why one there cannot be used.
+pub fn read_clipping_map(path: &Path) -> std::result::Result<Option<LinearImage>, String> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    // Read as written: the map holds fractions, not samples a stack scales.
+    match seiza_stacking::FitsFrame::open(path) {
+        Ok(frame) if frame.image.channels == 1 => Ok(Some(frame.image)),
+        Ok(frame) => Err(format!(
+            "{} has {} channels, not one",
+            path.display(),
+            frame.image.channels
+        )),
+        Err(error) => Err(format!("{} could not be read: {error}", path.display())),
+    }
+}
+
+/// The file in a sources folder that lists the picture's stacks, which
+/// `psf-guard studio-prepare` reads to prepare the picture again.
+pub const SOURCES_FILE: &str = "sources.json";
+/// The file in a sources folder that says where each stack file is, by its
+/// identity, for stacks read in place rather than downloaded.
+pub const PATHS_FILE: &str = "paths.json";
+
+/// Writes the list of a picture's stack files into its sources folder, as
+/// `psf-guard studio-prepare` reads it, so Run tools can prepare the
+/// picture again with PSF Guard: each file's channel, identity and
+/// revision, and where it is. The first file's grid, `first_size` wide and
+/// high, is the picture's.
+pub fn write_file_sources(
+    folder: &Path,
+    stacks: &[StackFile],
+    first_size: (usize, usize),
+) -> Result<()> {
+    std::fs::create_dir_all(folder).with_context(|| format!("creating {}", folder.display()))?;
+    let listed = stacks
+        .iter()
+        .enumerate()
+        .map(|(at, stack)| {
+            let orientation = (at == 0).then(|| {
+                serde_json::json!({
+                    "convention": "source_frame",
+                    "version": seiza_stacking::SKY_ORIENTATION_VERSION,
+                    "source": "file",
+                    "output_width": first_size.0,
+                    "output_height": first_size.1,
+                    "source_to_output": seiza_stacking::AffineTransform::IDENTITY,
+                })
+            });
+            Ok(serde_json::json!({
+                "role": stack.role,
+                "filter_name": role_name(stack.role)?,
+                "label": stack.label,
+                "exposure_group": null,
+                "job_id": stack.identity,
+                "group_index": 0,
+                "artifact_revision": stack.revision,
+                "accepted_frames": 0,
+                "total_exposure_seconds": null,
+                "reference_image_id": null,
+                "sky_orientation": orientation,
+                "registration_transform": null,
+            }))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let paths: BTreeMap<&str, &Path> = stacks
+        .iter()
+        .map(|stack| (stack.identity.as_str(), stack.path.as_path()))
+        .collect();
+    write_atomically(
+        &folder.join(PATHS_FILE),
+        serde_json::to_string_pretty(&paths)?,
+    )?;
+    write_atomically(
+        &folder.join(SOURCES_FILE),
+        serde_json::to_string_pretty(&listed)?,
+    )
 }
 
 /// One stack file a person has, as a picture's source.
@@ -417,7 +522,7 @@ pub fn channel_of_file(path: &Path) -> Result<StackColorRole> {
     };
     from_header.or_else(from_name).ok_or_else(|| {
         anyhow::anyhow!(
-            "{} does not say which channel it is: its FILTER header and its name name no filter",
+            "neither the FILTER header nor the file name of {} identifies a filter",
             path.display()
         )
     })
@@ -467,7 +572,7 @@ pub fn picture_document(
 
 /// No processing tools: what PSF Studio prepares with when PSF Guard is not
 /// on the computer. Tool and deconvolution steps are left for later, and
-/// the picture's record says they did not run.
+/// the picture's record leaves them out.
 pub struct NoTools;
 
 impl LinearTools for NoTools {
@@ -904,6 +1009,7 @@ mod tests {
             calibrate: &|_| Calibration::NotAsked,
             report: &|line| lines.lock().unwrap().push(line.to_string()),
             progress: &|_, _, _| {},
+            stopped: &|| false,
         })
         .unwrap();
         assert!(output.is_file());

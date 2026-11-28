@@ -102,9 +102,9 @@ to turn the band off.
 ## Open a tile store
 
 The canvas draws the synthetic document unless it is given a tile store, the
-file format of `crates/psf-studio-core/src/studio/store.rs`. Write part of the synthetic
-document to a store, then open it. The default is 12,000 by 8,000 pixels in
-eight bands, which takes 4.1 GB.
+file format of `crates/psf-studio-core/src/studio/store.rs`. Write part of the
+synthetic document to a store, then open it. The default is 12,000 by 8,000
+pixels in eight bands, which takes 4.1 GB.
 
 ```bash
 cargo run --release -p psf-studio -- --make-store /tmp/synthetic.pgtiles

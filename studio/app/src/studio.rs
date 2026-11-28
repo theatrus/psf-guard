@@ -613,6 +613,21 @@ struct Shared {
     preview_image: Option<(u64, PreviewImage)>,
     /// The frame copied for the control socket, with its capture's number.
     control_captured: Option<(u64, psf_studio_render::Captured)>,
+    /// What the GPU could not draw of each pane's scene, as Seiza words it,
+    /// with the scene's version: set by the render thread, read by the UI.
+    gpu_left_out: Vec<(u64, Vec<String>)>,
+}
+
+impl Shared {
+    /// What the GPU could not draw of pane `index`'s scene as it is now.
+    fn gpu_left_out(&self, index: usize) -> Vec<String> {
+        let version = self.canvas.scenes.get(index).map(|scene| scene.version);
+        self.gpu_left_out
+            .get(index)
+            .filter(|(drawn, _)| Some(*drawn) == version)
+            .map(|(_, words)| words.clone())
+            .unwrap_or_default()
+    }
 }
 
 /// The UI thread's side of the canvas.
@@ -725,6 +740,12 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
         if stretched_for != Some(stretch_inputs) {
             let packing = Instant::now();
             gpu_scenes = canvas.gpu_scenes();
+            lock.lock().expect("canvas state").gpu_left_out = canvas
+                .scenes
+                .iter()
+                .zip(&gpu_scenes)
+                .map(|(scene, (packed, _))| (scene.version, packed.left_out.clone()))
+                .collect();
             if timing() {
                 eprintln!(
                     "render: packed scenes in {:.1} ms",
@@ -1140,6 +1161,7 @@ impl Studio {
                 final_picture: None,
                 preview_image: None,
                 control_captured: None,
+                gpu_left_out: Vec::new(),
             }),
             Condvar::new(),
         )));

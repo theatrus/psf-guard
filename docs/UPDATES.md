@@ -139,8 +139,9 @@ A `v*` tag runs `.github/workflows/release.yml`. The job:
 
 On macOS the desktop app includes PSF Studio, at
 `PSF Guard.app/Contents/Helpers/PSF Studio.app`. An update replaces the
-whole `PSF Guard.app`, so PSF Studio updates at the same time and always has
-the desktop app's version number. `scripts/package-macos.sh` builds and
+whole `PSF Guard.app`, so PSF Studio updates at the same time. It has the
+desktop app's version number, without a suffix such as `-dev`, which macOS
+does not accept. `scripts/package-macos.sh` builds and
 signs Studio, then has Tauri copy it into the app before Tauri signs and
 notarizes the app. When the desktop app starts, it registers its PSF Studio
 as the handler of `psf-studio://` links, so **Open in PSF Studio** opens the

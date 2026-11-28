@@ -209,6 +209,9 @@ pub struct LinearProgram<'a, R: LinearTools> {
     /// Hears the channel, the tool running on it, and how far the tool's
     /// chain has got, from 0 to 1.
     pub progress: &'a dyn Fn(&str, &str, f32),
+    /// Whether a person stopped the run: checked before each step, which
+    /// then ends the run with an error.
+    pub stopped: &'a dyn Fn() -> bool,
 }
 
 /// How far one channel has got through a [`LinearProgram`], and what its
@@ -598,6 +601,9 @@ impl RegisteredChannels {
 
         for step in program.map_or(&[][..], |program| program.steps.as_slice()) {
             let program = program.expect("steps come with their program");
+            if (program.stopped)() {
+                bail!("stopped");
+            }
             let members: Vec<usize> = step.roles().iter().filter_map(position).collect();
             if members.is_empty() {
                 continue;

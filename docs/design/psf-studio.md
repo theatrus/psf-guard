@@ -92,8 +92,8 @@ belong in Seiza crates, following the rule in the contributor guide.
 A document is a versioned graph of typed nodes.
 
 - **Sources.** A stack from a PSF Guard catalog, or an imported master (FITS,
-  XISF, TIFF, read through `crates/psf-studio-core/src/image_io.rs`). Imported masters are
-  registered onto one reference grid with Seiza.
+  XISF, TIFF, read through `crates/psf-studio-core/src/image_io.rs`). Imported
+  masters are registered onto one reference grid with Seiza.
 - **Chains.** An ordered list of steps on a source. A person can insert,
   reorder, turn off or remove a step at any position.
 - **Layers.** A layer has a source, a stretch, adjustments, a mask, a blend
@@ -1006,8 +1006,8 @@ the result.
 
 ### 5. Tile format (2026-11-25, first result)
 
-The code is `crates/psf-studio-core/src/studio/store.rs`, with a measurement program in the spike
-(`crop/src/bin/store_bench.rs`).
+The code is `crates/psf-studio-core/src/studio/store.rs`, with a measurement
+program in the spike (`crop/src/bin/store_bench.rs`).
 
 **Result so far: a plain, uncompressed tiled file with a pyramid is fast
 enough and holds almost nothing in memory. Compression and mapping tiles
@@ -1974,13 +1974,13 @@ as [pipeline parity](#what-to-investigate-first) requires.
 ## One tree, palettes and split panes (2026-11-25)
 
 The first panes had five separate choices that each changed the canvas: a
-stage rail, a selected step, and three button groups for what to show, up
-to where and with which stretch. Layers were the inputs themselves, named
-by how many bands a store had, so a narrowband store was labelled R, G, B.
-This section records what replaced that. The rules live in
-`crates/psf-studio-core/src/studio/place.rs` and `crates/psf-studio-core/src/studio/palette.rs`, which know of no
-toolkit, so a web canvas would lay out the same tree and draw the same
-panes.
+stage rail, a selected step, and three button groups for what to show, up to
+where and with which stretch. Layers were the inputs themselves, named by how
+many bands a store had, so a narrowband store was labelled R, G, B. This
+section records what replaced that. The rules live in
+`crates/psf-studio-core/src/studio/place.rs` and
+`crates/psf-studio-core/src/studio/palette.rs`, which know of no toolkit, so a
+web canvas would lay out the same tree and draw the same panes.
 
 Photoshop's and Affinity's layer panels are the guide where they agree:
 the top layer is listed first, each row has its own switch, an edit that
@@ -3074,7 +3074,8 @@ redraws.
 
 ### What is built
 
-In `crates/psf-studio-core/src/studio/recipe.rs` and `crates/psf-studio-core/src/studio/palette.rs`, with tests in
+In `crates/psf-studio-core/src/studio/recipe.rs` and
+`crates/psf-studio-core/src/studio/palette.rs`, with tests in
 `crates/psf-studio-core/src/studio/recipe_tests.rs`:
 
 - parts of seven kinds (Nebula, Color, Luminance, Stars, RGB stars,

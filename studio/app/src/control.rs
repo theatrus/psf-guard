@@ -607,25 +607,35 @@ impl Studio {
                 })
             })
             .collect();
-        let (drawn, omitted): (Vec<Option<Place>>, Vec<Vec<String>>) = self.canvas.read(|shared| {
+        type Drawn = (Option<Place>, Vec<String>, Vec<String>);
+        let drawn: Vec<Drawn> = self.canvas.read(|shared| {
             shared
                 .canvas
                 .scenes
                 .iter()
-                .map(|scene| (scene.place.clone(), scene.omitted.clone()))
-                .unzip()
+                .enumerate()
+                .map(|(index, scene)| {
+                    (
+                        scene.place.clone(),
+                        scene.omitted.clone(),
+                        shared.gpu_left_out(index),
+                    )
+                })
+                .collect()
         });
         let panes: Vec<Value> = self
             .places
             .iter()
             .enumerate()
             .map(|(index, wanted)| {
-                let drawn = drawn.get(index).cloned().flatten();
+                let (place, omitted, gpu_left_out) = drawn.get(index).cloned().unwrap_or_default();
                 json!({
                     "pane": index,
                     "wanted": wanted.label(document),
-                    "drawn": drawn.as_ref().map(|place| place.label(document)),
-                    "left_out": omitted.get(index).cloned().unwrap_or_default(),
+                    "drawn": place.as_ref().map(|place| place.label(document)),
+                    "left_out": omitted,
+                    // What the GPU could not draw, as Seiza words it.
+                    "gpu_left_out": gpu_left_out,
                 })
             })
             .collect();

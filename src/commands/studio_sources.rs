@@ -160,12 +160,9 @@ fn read_solve(
     serde_json::from_value(record["solution"].clone()).ok()
 }
 
-/// The file in a sources folder that lists the downloaded channel stacks.
-const SOURCES_FILE: &str = "sources.json";
-
-/// The file in a sources folder that says where each stack is, for stacks
-/// that were not downloaded but are read where a person keeps them.
-const PATHS_FILE: &str = "paths.json";
+/// The files in a sources folder that list its channel stacks and where
+/// each stack file is, shared with PSF Studio.
+use psf_studio_core::prepare::{PATHS_FILE, SOURCES_FILE};
 
 /// The name of a downloaded channel stack in its sources folder. One stack
 /// job can hold several channels, one per group.
@@ -215,57 +212,39 @@ pub struct StudioFilesOptions {
 /// are read where they are; the sources folder beside the store holds only
 /// a list of them, the plate solve and the tools' results.
 pub fn studio_files(options: StudioFilesOptions) -> Result<()> {
-    let mut stacks = Vec::new();
-    let mut paths = BTreeMap::new();
+    use psf_studio_core::prepare::{write_file_sources, StackFile};
+    let mut files: Vec<StackFile> = Vec::new();
     for entry in &options.channels {
         let Some((name, file)) = entry.split_once('=') else {
             bail!("{entry} is not CHANNEL=FILE, such as ha=Ha.xisf");
         };
         let role: StackColorRole = serde_json::from_value(serde_json::Value::String(name.into()))
             .with_context(|| format!("{name} is not a channel"))?;
-        if stacks
-            .iter()
-            .any(|stack: &StackColorSource| stack.role == role)
-        {
+        if files.iter().any(|stack| stack.role == role) {
             bail!("{name} is given twice");
         }
-        let stack = psf_studio_core::prepare::StackFile::new(role, Path::new(file))?;
-        paths.insert(stack.identity.clone(), stack.path.clone());
-        stacks.push(StackColorSource {
-            role,
-            filter_name: name.to_string(),
-            label: stack.label,
-            exposure_group: None,
-            job_id: stack.identity,
-            group_index: 0,
-            artifact_revision: stack.revision,
-            accepted_frames: 0,
-            wbpp: false,
-            total_exposure_seconds: None,
-            reference_image_id: None,
-            sky_orientation: None,
-            registration_transform: None,
-        });
+        files.push(StackFile::new(role, Path::new(file))?);
     }
+    let Some(first) = files.first().map(|stack| stack.path.clone()) else {
+        bail!("there are no channel stacks to prepare");
+    };
     let folder = options.output.with_extension("sources");
-    std::fs::create_dir_all(&folder).with_context(|| format!("creating {}", folder.display()))?;
 
     // The first file is the grid every channel is registered to. Its own
     // pixels are solved, so color calibration can find Gaia's stars on it.
-    let first = paths[&stacks[0].job_id].clone();
     let frame = crate::image_io::open_linear_frame(&first)
         .with_context(|| format!("reading {}", first.display()))?;
     // The picture is named after what the first file shows, or the file.
     let title = psf_studio_core::prepare::picture_title(&frame.headers, &first);
-    stacks[0].sky_orientation = Some(crate::server::stack_preview::StackSkyOrientation {
-        convention: crate::server::stack_preview::SOURCE_ORIENTATION_NAME.into(),
-        version: seiza_stacking::SKY_ORIENTATION_VERSION,
-        source: "file".into(),
-        output_width: frame.image.width,
-        output_height: frame.image.height,
-        source_to_output: seiza_stacking::AffineTransform::IDENTITY,
-    });
+    write_file_sources(&folder, &files, (frame.image.width, frame.image.height))?;
     drop(frame);
+    // The list as PSF Guard reads it back, as studio-prepare does.
+    let listing = folder.join(SOURCES_FILE);
+    let stacks: Vec<StackColorSource> = serde_json::from_str(
+        &std::fs::read_to_string(&listing)
+            .with_context(|| format!("reading {}", listing.display()))?,
+    )
+    .with_context(|| format!("reading {}", listing.display()))?;
     let solver = crate::astrometry::AstrometryContext::new(Default::default());
     let hint = options
         .pointing
@@ -296,12 +275,6 @@ pub fn studio_files(options: StudioFilesOptions) -> Result<()> {
         Err(error) => println!("No plate solve of {}: {error}", stacks[0].label),
     }
 
-    write_atomically(
-        &folder.join(PATHS_FILE),
-        serde_json::to_string_pretty(&paths)?,
-    )?;
-    let listing = folder.join(SOURCES_FILE);
-    write_atomically(&listing, serde_json::to_string_pretty(&stacks)?)?;
     prepare_store(
         &title,
         &stacks,
@@ -384,7 +357,7 @@ fn prepare_store(
                 "{}:{}:{}",
                 stack.job_id, stack.group_index, stack.artifact_revision
             ),
-            clipping: crate::server::stack_preview::read_clipped(&folder.join(clipped_file(stack))),
+            clipping: Some(folder.join(clipped_file(stack))),
         })
         .collect();
     // One line per tool and per hundredth of its chain, which PSF Studio
@@ -408,6 +381,7 @@ fn prepare_store(
         calibrate: &|prepared| calibrate_colors(prepared, stacks, folder, &document),
         report: &|line| println!("{line}"),
         progress: &progress,
+        stopped: &|| false,
     })?;
     if let Some(path) = document_out {
         write_atomically(path, document.to_json())?;
@@ -853,6 +827,47 @@ pub fn channel_and_file(file: &str) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+    /// The list of stack files PSF Studio writes when it prepares a picture
+    /// itself is the one `studio-prepare` reads, so Run tools can prepare
+    /// the picture again with PSF Guard.
+    #[test]
+    fn a_file_list_studio_writes_reads_as_psf_guard_s() {
+        use crate::server::stack_preview::color::StackColorSource;
+        use psf_studio_core::prepare::{write_file_sources, StackFile, PATHS_FILE, SOURCES_FILE};
+        use seiza_fits::{HeaderValue, WriteHeaderCard};
+        let folder = tempfile::tempdir().unwrap();
+        let file = folder.path().join("M42_Ha.xisf");
+        seiza_xisf::write_f32_image(
+            &file,
+            4,
+            3,
+            seiza_fits::F32ImageData::Mono(&[0.1; 12]),
+            &[WriteHeaderCard::new(
+                "FILTER",
+                HeaderValue::String("Ha".into()),
+            )],
+        )
+        .unwrap();
+        let stack = StackFile::new(StackColorRole::Ha, &file).unwrap();
+        let sources = folder.path().join("picture.sources");
+        write_file_sources(&sources, std::slice::from_ref(&stack), (4, 3)).unwrap();
+        let listed: Vec<StackColorSource> =
+            serde_json::from_str(&std::fs::read_to_string(sources.join(SOURCES_FILE)).unwrap())
+                .unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].role, StackColorRole::Ha);
+        assert_eq!(listed[0].job_id, stack.identity);
+        assert_eq!(listed[0].artifact_revision, stack.revision);
+        let orientation = listed[0].sky_orientation.as_ref().unwrap();
+        assert_eq!(
+            (orientation.output_width, orientation.output_height),
+            (4, 3)
+        );
+        // The stack is read where it is, as a file a person keeps.
+        assert_eq!(super::stack_path(&sources, &listed[0]), stack.path);
+        assert!(sources.join(PATHS_FILE).is_file());
+    }
+
     use crate::server::stack_preview::color::{classify_filter, StackColorRole};
 
     #[test]

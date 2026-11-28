@@ -265,9 +265,11 @@ Design records: [multi-database](docs/design/multi-database.md),
   pointing, cloud, obstruction, or tracking evidence.
 - Cross-frame background and flux comparisons must use physical ADU, not the
   per-frame normalized storage values. A PixInsight XISF frame declaring
-  `bounds="0:1"` has no ADU of its own; `crates/psf-studio-core/src/image_io.rs` (`crate::image_io` in PSF Guard) puts it on a 16-bit
-  scale on the way in, so read every frame through there rather than reaching
-  for `seiza_xisf` or `seiza_stacking::FitsFrame::open` directly.
+  `bounds="0:1"` has no ADU of its own;
+  `crates/psf-studio-core/src/image_io.rs` (`crate::image_io` in PSF Guard)
+  puts it on a 16-bit scale on the way in, so read every frame through there
+  rather than reaching for `seiza_xisf` or `seiza_stacking::FitsFrame::open`
+  directly.
 - N.I.N.A. Fast supplies comparable star count and HFR values for imported
   catalogs. HocusFocus remains available for deeper analysis.
 

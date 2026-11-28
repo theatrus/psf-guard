@@ -41,8 +41,9 @@
 - A project's color stacks have **Open *target* in PSF Studio** for each
   target there that has channel stacks. The link opens PSF Studio, the separate
   editor for color processing, on the target's newest Studio document, or a
-  new one from the target's stacks. PSF Studio must be installed on the
-  computer you browse from, and it is still experimental.
+  new one from the target's stacks. PSF Studio must be on the computer you
+  browse from: on a Mac, the PSF Guard app includes it, and it also comes on
+  its own. It is still experimental.
 - The macOS desktop app now includes PSF Studio, and app updates update PSF
   Studio too. **Open in PSF Studio** opens the copy that came with the app;
   you no longer install PSF Studio separately on that Mac.

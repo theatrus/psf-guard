@@ -3316,28 +3316,10 @@ fn write_clipped(
 /// is none. One that cannot be read is logged and treated as absent: the
 /// stack still calibrates, only without rendering clipped cores neutral.
 pub(crate) fn read_clipped(path: &FsPath) -> Option<seiza_stacking::LinearImage> {
-    if !path.exists() {
-        return None;
-    }
-    // Read as written: the map holds fractions, not samples a stack scales.
-    match seiza_stacking::FitsFrame::open(path) {
-        Ok(frame) if frame.image.channels == 1 => Some(frame.image),
-        Ok(frame) => {
-            tracing::warn!(
-                "Ignoring clipped map {}: it has {} channels, not one",
-                path.display(),
-                frame.image.channels
-            );
-            None
-        }
-        Err(error) => {
-            tracing::warn!(
-                "Ignoring unreadable clipped map {}: {error}",
-                path.display()
-            );
-            None
-        }
-    }
+    psf_studio_core::prepare::read_clipping_map(path).unwrap_or_else(|error| {
+        tracing::warn!("Ignoring a clipped map: {error}");
+        None
+    })
 }
 
 /// The exposure the accumulator has taken so far. Turned-away frames carry no
