@@ -6,10 +6,10 @@
 
 ## Changes
 
-- PSF Studio can open, edit, and export stack files on Windows. It uses
-  Windows keyboard shortcuts and stores PSF Guard sign-ins in Windows
-  Credential Manager. [Build Studio and register it for your account](../../studio/README.md#windows)
-  to open targets from PSF Guard in Studio.
+- The Windows Setup EXE and MSI install PSF Studio with PSF Guard. Open it
+  from the Start menu or use **Open in PSF Studio** from a target's stacks.
+  Studio opens, edits, and exports stack files. It uses Windows keyboard
+  shortcuts and stores PSF Guard sign-ins in Windows Credential Manager.
 
 - PSF Guard now uses Seiza 0.57. Seiza's stacking output changed, so stacks
   and color previews made before this update are stacked again the next

@@ -219,8 +219,8 @@ jobs:
     # a user actually runs afterwards would carry no publisher identity, and
     # enterprise unsigned-binary scans would flag it post-install.
     #
-    # The NSIS PATH hook lives in tauri.bundle-windows.json, applied via
-    # --config so other tauri-feature compiles don't require it.
+    # The Windows overlay builds and stages Studio before the Guard compile.
+    # Both installers then package Studio beside Guard in the signing phase.
     - name: Compile Tauri desktop app (Windows, no bundle yet)
       if: matrix.os == 'windows-latest'
       env:
@@ -418,81 +418,42 @@ jobs:
         extract="$RUNNER_TEMP/nsis-contents"
         rm -rf "$extract"
         7z x -o"$extract" "$installer" > /dev/null
-        for name in psf-guard.exe psf-guard-cli.exe; do
+        for name in psf-guard.exe psf-guard-cli.exe psf-studio.exe; do
           inner=$(find "$extract" -name "$name" -print -quit)
           test -n "$inner" || { echo "FAIL: $name not found inside the installer"; exit 1; }
 
-          # Compare against the file we signed before bundling. This
-          # distinguishes the two ways the check below can fail, which
-          # otherwise look identical:
-          #   hashes equal    -> the bundler shipped our signed bytes, and any
-          #                      verify failure is an artefact of how 7z
-          #                      unpacks NSIS rather than a real problem;
-          #   hashes differ   -> the bundler shipped different bytes, so the
-          #                      signing happened too early to matter and the
-          #                      two-phase build does not do what it claims.
-          # Reported for context only -- a difference here is expected and is
-          # NOT a failure. Under signCommand the build output stays unsigned,
-          # so the packaged copy is normally the same bytes plus a signature
-          # block, and comes out larger. psf-guard.exe therefore differs while
-          # psf-guard-cli.exe is byte-identical, because that one was signed
-          # separately as a standalone asset before bundling. What decides the
-          # outcome is the `verify` below, not this comparison.
-          build_hash=$(sha256sum "target/release/$name" | tr -d '\\' | cut -d' ' -f1)
+          # The build inputs can differ from the signed copies. Report their
+          # sizes and hashes for diagnosis, then verify the packaged file.
+          build_output="target/release/$name"
+          if [ "$name" = "psf-studio.exe" ]; then
+            build_output="studio/target/windows-bundle/psf-studio.exe"
+          fi
+          build_hash=$(sha256sum "$build_output" | tr -d '\\' | cut -d' ' -f1)
           inner_hash=$(sha256sum "$inner" | tr -d '\\' | cut -d' ' -f1)
-          build_size=$(stat -c %s "target/release/$name")
+          build_size=$(stat -c %s "$build_output")
           inner_size=$(stat -c %s "$inner")
           echo "--- (from NSIS) $name"
           echo "    build output : $build_hash  ($build_size bytes)"
           echo "    in installer : $inner_hash  ($inner_size bytes)"
           if [ "$build_hash" = "$inner_hash" ]; then
-            echo "    -> byte-identical (this one was signed before bundling)"
+            echo "    -> byte-identical to the input"
           else
             echo "    -> differs by $((inner_size - build_size)) bytes, consistent"
             echo "       with a signature block added during bundling"
           fi
-          # Fatal again. This was made non-fatal only while diagnosing whether
-          # the mismatch came from the bundler or from 7z; that question is
-          # settled (the bundler rewrote the main binary, which signCommand
-          # now handles), so a failure here is a real defect once more.
           verify "$inner"
         done
 
-        # Cross-check against the MSI. Both installers are built by the same
-        # `tauri bundle` run from the same inputs, so if the MSI's copy of a
-        # binary verifies while the NSIS one does not, the signatures did
-        # survive bundling and the fault is in how 7z unpacks NSIS -- a
-        # limitation of the check, not of the build. If BOTH fail, bundling
-        # really is discarding the signed bytes and the two-phase build is
-        # pointless. MSI is a documented container that 7z handles reliably,
-        # which is what makes it usable as the control here.
-        # Cross-check the MSI as well. Both installers come out of the same
-        # `tauri bundle` run, so agreement between them is good evidence the
-        # signing hook fired everywhere it should.
+        # Administrative extraction uses the installed filenames from the MSI.
+        # Archive tools can expose internal identifiers instead.
         msi_extract="$RUNNER_TEMP/msi-contents"
-        rm -rf "$msi_extract"
-        7z x -o"$msi_extract" "$msi" > /dev/null
-        msi_checked=0
-        for name in psf-guard.exe psf-guard-cli.exe; do
+        MSYS2_ARG_CONV_EXCL='*' pwsh -NoProfile -File scripts/expand-windows-msi.ps1 \
+          -Package "$(cygpath -w "$msi")" -Destination "$(cygpath -w "$msi_extract")"
+        for name in psf-guard.exe psf-guard-cli.exe psf-studio.exe; do
           inner=$(find "$msi_extract" -iname "$name" -print -quit)
-          if [ -z "$inner" ]; then
-            echo "--- (from MSI) $name: not found under that name; skipping"
-            continue
-          fi
-          msi_checked=$((msi_checked + 1))
           echo "--- (from MSI) $name"
           verify "$inner"
         done
-        # An earlier version printed "the MSI's copies verify" even when every
-        # file had been skipped, because nothing had failed. A check that finds
-        # nothing proves nothing, and saying otherwise turned a green run into
-        # misinformation.
-        if [ "$msi_checked" = "0" ]; then
-          echo "note: MSI stores files under mangled names; no MSI-side check performed."
-          echo "      The NSIS checks above are what this run actually verified."
-        else
-          echo "OK: $msi_checked binaries from the MSI verify too"
-        fi
 
         # Ordering: the .sig must be at least as new as the signed installer.
         test -f "$installer.sig" || { echo "no updater .sig"; exit 1; }
@@ -501,7 +462,7 @@ jobs:
           echo "      pre-Authenticode bytes and updates would break."
           exit 1
         fi
-        echo "OK: installer, msi and CLI signed as StackFoundry LLC; .sig is current"
+        echo "OK: the installers, Guard, CLI and Studio signatures verify; .sig is current"
 
     # The keychain is unlocked again here because the CLI build before this
     # step can take most of an hour on a slow runner. The timeout fails a

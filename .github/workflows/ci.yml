@@ -349,14 +349,32 @@ jobs:
         grep -Eq ' (\./)?usr/lib/systemd/system/psf-guard-worker\.service$' <<<"$contents"
         grep -Eq ' (\./)?usr/share/doc/psf-guard/worker\.conf\.example$' <<<"$contents"
 
-    - name: Build Tauri desktop app (Windows, with bundled CLI)
-      # Tauri auto-bundles every cargo bin target, so psf-guard-cli.exe (console
-      # subsystem) ships next to the GUI app with no externalBin/sidecar needed.
-      # tauri.bundle-windows.json adds only the NSIS PATH hook, applied via
-      # --config at bundle time (a name Tauri does NOT auto-merge into every
-      # tauri-feature compile).
+    - name: Build Tauri desktop app (Windows, with Studio)
       if: matrix.os == 'windows-latest'
       run: cargo tauri build --verbose --config tauri.bundle-windows.json
+
+    - name: Verify Studio in both Windows installers
+      if: matrix.os == 'windows-latest'
+      shell: pwsh
+      run: |
+        $setup = Get-ChildItem target/release/bundle/nsis -Filter '*-setup.exe' | Select-Object -First 1
+        $msi = Get-ChildItem target/release/bundle/msi -Filter '*.msi' | Select-Object -First 1
+        if (!$setup -or !$msi) { throw 'Expected both Windows installers.' }
+        $nsisOut = Join-Path $env:RUNNER_TEMP 'studio-nsis-contents'
+        $msiOut = Join-Path $env:RUNNER_TEMP 'studio-msi-contents'
+        7z x "-o$nsisOut" $setup.FullName | Out-Null
+        if ($LASTEXITCODE) { throw 'Could not extract the NSIS installer.' }
+        .\scripts\expand-windows-msi.ps1 -Package $msi.FullName -Destination $msiOut
+        $expected = (Get-FileHash studio/target/windows-bundle/psf-studio.exe).Hash
+        foreach ($folder in $nsisOut, $msiOut) {
+          $studio = Get-ChildItem $folder -Recurse -Filter psf-studio.exe | Select-Object -First 1
+          if (!$studio -or (Get-FileHash -LiteralPath $studio.FullName).Hash -ne $expected) {
+            throw "Expected the staged PSF Studio executable in $folder."
+          }
+          if (!(Test-Path -LiteralPath (Join-Path $studio.DirectoryName 'psf-guard.exe'))) {
+            throw "Expected PSF Studio to install beside PSF Guard in $folder."
+          }
+        }
 
     - name: Build Tauri desktop app (macOS, unsigned PR)
       if: matrix.os == 'macos-latest' && github.event_name == 'pull_request'

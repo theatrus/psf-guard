@@ -40,6 +40,12 @@ color. Regenerate the icons after changing it:
 
 ### Windows
 
+Run the PSF Guard Setup EXE or MSI. Both install PSF Studio with PSF Guard
+and add **PSF Studio** to the Start menu. You can also open a target from
+PSF Guard with **Open in PSF Studio**. Updating PSF Guard updates Studio.
+
+#### Build from source
+
 Install the Visual Studio C++ build tools and a Windows SDK that includes
 FXC. From this directory, build and run PSF Studio in PowerShell.
 

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Fragment>
+    <DirectoryRef Id="INSTALLDIR">
+      <Component Id="StudioProtocol" Guid="*">
+        <RegistryKey Root="HKLM" Key="Software\Classes\psf-studio">
+          <RegistryValue Type="string" Value="URL:PSF Studio" />
+          <RegistryValue Type="string" Name="URL Protocol" Value="" />
+          <RegistryKey Key="shell\open\command">
+            <RegistryValue Type="string" Value="&quot;[INSTALLDIR]psf-studio.exe&quot; --open-link &quot;%1&quot;" KeyPath="yes" />
+          </RegistryKey>
+        </RegistryKey>
+      </Component>
+    </DirectoryRef>
+    <DirectoryRef Id="ApplicationProgramsFolder">
+      <Component Id="StudioStartMenuShortcut" Guid="*">
+        <Shortcut Id="StudioStartMenuEntry" Name="PSF Studio" Target="[INSTALLDIR]psf-studio.exe" WorkingDirectory="INSTALLDIR" />
+        <RemoveFolder Id="StudioStartMenuFolder" On="uninstall" />
+        <RegistryValue Root="HKCU" Key="Software\com.theatrus.psf-guard" Name="StudioStartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+  </Fragment>
+</Wix>

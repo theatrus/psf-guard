@@ -133,6 +133,11 @@ Use Node 24.15 or newer in the 24.x LTS line, as in CI. Parse `.github/workflows
 `.github/workflows/release.yml`, then run `git diff --check`. Build a local
 Tauri bundle when app, updater, packaging, or signing code changed.
 
+For a local Windows installer build, build the frontend and run
+`scripts\build-windows.bat` from the repository root. The Windows bundle
+config builds Studio and packages it beside PSF Guard and its CLI in the
+Setup EXE and MSI.
+
 Read the generated summary as a complete sentence, not just a valid JSON
 string. In 0.14, the sentence parser cut the summary at `N.I.N.A.`. The parser
 now handles that name within a sentence, and the feed tests cover it. Check

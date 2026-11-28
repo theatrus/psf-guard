@@ -81,6 +81,29 @@ test('updater config command writes its output', async (t) => {
   assert.equal(config.bundle.createUpdaterArtifacts, true);
 });
 
+test('signed Windows updater builds carry Studio into both installers', async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'psf-guard-windows-updater-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const outputPath = path.join(directory, 'updater-config.json');
+  const windowsOverlay = fileURLToPath(new URL('../tauri.bundle-windows.json', import.meta.url));
+
+  await writeUpdaterConfig(outputPath, windowsOverlay);
+
+  const config = JSON.parse(await readFile(outputPath, 'utf8'));
+  const stagedStudio = 'studio/target/windows-bundle/psf-studio.exe';
+  assert.equal(config.bundle.createUpdaterArtifacts, true);
+  assert.deepEqual(config.build.beforeBuildCommand, {
+    script: 'node scripts/build-studio-windows.mjs',
+    cwd: '.',
+  });
+  assert.equal(config.bundle.resources[stagedStudio], 'psf-studio.exe');
+  assert.equal(config.bundle.windows.nsis.installerHooks, 'nsis/hooks.nsh');
+  assert.deepEqual(config.bundle.windows.wix.componentRefs, [
+    'StudioProtocol',
+    'StudioStartMenuShortcut',
+  ]);
+});
+
 test('builds signed updater and server notice feeds', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'psf-guard-feeds-'));
   const version = '1.2.3';

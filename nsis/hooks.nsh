@@ -1,9 +1,8 @@
 ; NSIS installer hooks for PSF Guard (Tauri v2 `bundle.windows.nsis.installerHooks`).
 ;
-; The Windows bundle ships `psf-guard-cli.exe` (a console-subsystem CLI) next to
-; the GUI app via `externalBin`. These hooks add the install directory to the
-; per-user PATH on install and remove it on uninstall, so `psf-guard-cli` is
-; runnable from any terminal.
+; The Windows bundle ships `psf-guard-cli.exe` next to the GUI app. These
+; hooks add the install directory to the per-user PATH so `psf-guard-cli`
+; runs from any terminal. They also register Studio's links and shortcut.
 ;
 ; We edit HKCU\Environment (the *user* PATH) because Tauri's default NSIS
 ; installMode is per-user: no elevation needed, the user PATH is short (so the
@@ -41,6 +40,13 @@ ${UnStrRep}
   ${EndIf}
   Pop $1
   Pop $0
+
+  WriteRegStr SHCTX "Software\Classes\psf-studio" "" "URL:PSF Studio"
+  WriteRegStr SHCTX "Software\Classes\psf-studio" "URL Protocol" ""
+  WriteRegStr SHCTX "Software\Classes\psf-studio\shell\open\command" "" '$\"$INSTDIR\psf-studio.exe$\" --open-link $\"%1$\"'
+  SetOutPath "$INSTDIR"
+  CreateDirectory "$SMPROGRAMS\${PRODUCTNAME}"
+  CreateShortCut "$SMPROGRAMS\${PRODUCTNAME}\PSF Studio.lnk" "$INSTDIR\psf-studio.exe"
 !macroend
 
 !macro NSIS_HOOK_POSTUNINSTALL
@@ -53,6 +59,17 @@ ${UnStrRep}
   ${UnStrRep} $1 "$1" "$INSTDIR" ""
   WriteRegExpandStr HKCU "Environment" "Path" "$1"
   SendMessage ${HWND_BROADCAST} ${WM_WININICHANGE} 0 "STR:Environment" /TIMEOUT=5000
+
+  ReadRegStr $0 SHCTX "Software\Classes\psf-studio\shell\open\command" ""
+  ${If} $0 == '$\"$INSTDIR\psf-studio.exe$\" --open-link $\"%1$\"'
+    DeleteRegKey SHCTX "Software\Classes\psf-studio"
+  ${EndIf}
+  !insertmacro IsShortcutTarget "$SMPROGRAMS\${PRODUCTNAME}\PSF Studio.lnk" "$INSTDIR\psf-studio.exe"
+  Pop $0
+  ${If} $0 = 1
+    Delete "$SMPROGRAMS\${PRODUCTNAME}\PSF Studio.lnk"
+    RMDir "$SMPROGRAMS\${PRODUCTNAME}"
+  ${EndIf}
   Pop $1
   Pop $0
 !macroend
