@@ -1708,7 +1708,7 @@ dependencies = [
  "log",
  "presser",
  "thiserror",
- "windows 0.61.3",
+ "windows 0.62.2",
 ]
 
 [[package]]
@@ -2234,7 +2234,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.61.2",
+ "windows-core 0.62.2",
 ]
 
 [[package]]
@@ -3901,10 +3901,15 @@ dependencies = [
 name = "psf-studio-core"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "half",
+ "seiza-background",
+ "seiza-compose",
+ "seiza-deconvolution 0.3.0",
  "seiza-fits",
  "seiza-image-io",
  "seiza-stacking",
+ "seiza-stretch",
  "seiza-xisf",
  "serde",
  "serde_json",
@@ -4569,6 +4574,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "seiza-background"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ecc4433c7dedfaa803fa31d63e8c469c0573a671dd872c25dfe93041e758960"
+dependencies = [
+ "multiversion 0.9.2",
+ "rayon",
+ "seiza-stats",
+ "serde",
+ "thiserror",
+]
+
+[[package]]
 name = "seiza-calibration"
 version = "0.12.2"
 source = "git+https://github.com/theatrus/seiza?rev=a1dbe3d540140e1d778f5b182ab400b96f88e547#a1dbe3d540140e1d778f5b182ab400b96f88e547"
@@ -4617,7 +4635,21 @@ dependencies = [
  "multiversion 0.9.2",
  "rayon",
  "rustfft",
- "seiza-stars",
+ "seiza-stars 0.6.0",
+ "serde",
+ "thiserror",
+]
+
+[[package]]
+name = "seiza-deconvolution"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b4372c74209ab5a0f527d0b58b2bc3584886a13dbf8ca32746294f91befaadf"
+dependencies = [
+ "multiversion 0.9.2",
+ "rayon",
+ "rustfft",
+ "seiza-stars 0.7.0",
  "serde",
  "thiserror",
 ]
@@ -4703,6 +4735,18 @@ name = "seiza-stars"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2e7f6a1fe831590b30cad9bb191f761a1e973e2eb76e1780626b45a18f3671a6"
+dependencies = [
+ "nalgebra",
+ "rayon",
+ "seiza-imgproc",
+ "serde",
+]
+
+[[package]]
+name = "seiza-stars"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "109c75688f128c9d3313d9481b795844d46b66b6c9a845f2c34c9b88fe40868e"
 dependencies = [
  "nalgebra",
  "rayon",
@@ -5154,7 +5198,7 @@ dependencies = [
  "psf-studio-core",
  "psf-studio-render",
  "rayon",
- "seiza-deconvolution",
+ "seiza-deconvolution 0.2.0",
  "serde_json",
  "tempfile",
  "tiny_http",

@@ -9,6 +9,7 @@
 //!
 //! Narrowband palettes are false color and never calibrate.
 
+pub(crate) use psf_studio_core::color::interleave;
 use seiza_compose::{ColorCalibrationOptions, GaiaColors, SOLAR_BP_RP};
 use seiza_stacking::{AffineTransform, LinearImage, ReferenceRegion};
 use serde::{Deserialize, Serialize};
@@ -590,25 +591,6 @@ pub(super) fn mark_stretched_separately(outcome: &mut StackColorCalibrationOutco
 }
 
 /// Interleave three mono channels on one grid into an RGB image.
-pub(crate) fn interleave(
-    red: &LinearImage,
-    green: &LinearImage,
-    blue: &LinearImage,
-) -> Result<LinearImage, String> {
-    let channels = [red, green, blue];
-    if channels
-        .iter()
-        .any(|image| image.channels != 1 || image.width != red.width || image.height != red.height)
-    {
-        return Err("Color calibration needs three mono channels on one grid".into());
-    }
-    let mut data = Vec::with_capacity(red.data.len() * 3);
-    for index in 0..red.data.len() {
-        data.extend(channels.iter().map(|image| image.data[index]));
-    }
-    LinearImage::new(red.width, red.height, 3, data).map_err(|error| error.to_string())
-}
-
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;

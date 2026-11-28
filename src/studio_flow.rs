@@ -8,19 +8,10 @@
 use crate::processing_setups::{ProcessingSetupKind, ProcessingSetupRecord};
 use crate::server::stack_preview::color::{StackColorProcessing, StackColorRole};
 use crate::studio::{color_setup_from_document, document_from_color_setup, Document, StudioError};
+pub use psf_studio_core::color::role_name;
 
 fn refuse(reason: impl std::fmt::Display) -> StudioError {
     StudioError::Document(reason.to_string())
-}
-
-/// The name a role has in saved settings, such as `ha`.
-pub fn role_name(role: StackColorRole) -> Result<String, StudioError> {
-    match serde_json::to_value(role).map_err(refuse)? {
-        serde_json::Value::String(name) => Ok(name),
-        other => Err(refuse(format!(
-            "a channel role is saved as text, not {other}"
-        ))),
-    }
 }
 
 /// A document that applies `processing` to the channels of one color card.

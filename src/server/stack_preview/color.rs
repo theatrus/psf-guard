@@ -6,7 +6,6 @@
 
 #[path = "emission.rs"]
 mod emission;
-pub(crate) use emission::{ContinuumMode, EmissionLineSettings, EmissionProcessing};
 #[path = "narrowband.rs"]
 mod narrowband;
 
@@ -33,7 +32,9 @@ use axum::{
     response::Response,
     Json,
 };
-use seiza_background::{BackgroundConfig, BackgroundFit, CorrectionMode, ProtectedRegion};
+#[cfg(test)]
+use seiza_background::{BackgroundConfig, CorrectionMode};
+use seiza_background::{BackgroundFit, ProtectedRegion};
 #[cfg(test)]
 use seiza_background::{FittedModel, ModelConfig};
 use seiza_compose::{
@@ -56,7 +57,9 @@ use std::sync::Arc;
 use crate::server::api::ApiResponse;
 use crate::server::extract::DbContext;
 use crate::server::handlers::AppError;
+// Shared with PSF Studio.
 use crate::server::state::AppState;
+pub use psf_studio_core::color::{StackBackgroundExtraction, StackColorRole};
 
 const STACK_COLOR_CACHE_VERSION: u32 = 17;
 const COLOR_INPUT_CACHE_VERSION: u32 = 4;
@@ -68,32 +71,6 @@ const COLOR_INPUT_CACHE_VERSION: u32 = 4;
 /// tools keep their ids.
 const COLOR_CHANNEL_TOOLS_VERSION: u32 = 2;
 const SEIZA_BACKGROUND_VERSION: &str = env!("PSF_GUARD_SEIZA_BACKGROUND_VERSION");
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum StackColorRole {
-    Luminance,
-    Red,
-    Green,
-    Blue,
-    Ha,
-    Oiii,
-    Sii,
-}
-
-impl StackColorRole {
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::Luminance => "L",
-            Self::Red => "R",
-            Self::Green => "G",
-            Self::Blue => "B",
-            Self::Ha => "H-alpha",
-            Self::Oiii => "OIII",
-            Self::Sii => "SII",
-        }
-    }
-}
 
 /// How a color preview is trimmed to the sky every channel covers.
 ///
@@ -362,30 +339,8 @@ pub struct StackColorProcessing {
     pub color_calibration: Option<StackColorCalibration>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StackBackgroundExtraction {
-    pub config: BackgroundConfig,
-    #[serde(default)]
-    pub correction_mode: CorrectionMode,
-    /// Fraction of the fitted correction applied to each channel.
-    #[serde(default = "full_background_strength")]
-    pub strength: f64,
-    /// Keep solved catalog emission out of the background samples. Older
-    /// requests retain the protected behavior.
-    #[serde(default = "catalog_background_protection_enabled")]
-    pub protect_catalog_emission: bool,
-}
-
 fn is_zero(value: &u32) -> bool {
     *value == 0
-}
-
-const fn full_background_strength() -> f64 {
-    1.0
-}
-
-const fn catalog_background_protection_enabled() -> bool {
-    true
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -6,9 +6,9 @@ use std::time::Instant;
 use crate::processing_setups::DEFAULT_COLOR_SETTINGS;
 use crate::server::stack_preview::color::{StackColorRole, StackColorSource};
 use crate::server::workers::Workers;
-use crate::studio::{Document, RegionReader, StoreOptions, TileStore};
-use crate::studio_flow::{document_from_processing, processing_from_document};
-use crate::studio_sources::{LinearProgram, LinearStep, RegisteredChannels, Server};
+use crate::studio::Document;
+use crate::studio_flow::document_from_processing;
+use crate::studio_sources::{RegisteredChannels, Server};
 
 pub struct StudioSourcesOptions {
     pub server: String,
@@ -113,16 +113,7 @@ pub async fn studio_sources(options: StudioSourcesOptions) -> Result<()> {
     )
 }
 
-/// Writes a file through a temporary file beside it, renamed over it, so a
-/// crash or a kill never leaves half a file.
-fn write_atomically(path: &Path, contents: impl AsRef<[u8]>) -> Result<()> {
-    let mut temporary = path.as_os_str().to_owned();
-    temporary.push(".writing");
-    let temporary = PathBuf::from(temporary);
-    std::fs::write(&temporary, contents)
-        .with_context(|| format!("writing {}", temporary.display()))?;
-    std::fs::rename(&temporary, path).with_context(|| format!("writing {}", path.display()))
-}
+use psf_studio_core::prepare::{write_atomically, Calibration, Prepare, PrepareStack};
 
 /// The names documents had when they were named after the setup they
 /// started from.
@@ -433,17 +424,31 @@ fn prepare_store(
             document
         }
     };
-    let processing = processing_from_document(&document)?;
-
-    // The Linear steps that change the channels, in the document's order,
-    // resolved against the tools this machine has. A tool's result is kept
-    // beside the downloaded stacks.
+    // A tool's result is kept beside the downloaded stacks.
     let workers = Workers::default();
-    let steps = linear_steps(&document, stacks)?;
+    let tools = crate::studio_sources::WorkerTools {
+        workers: &workers,
+        cache: folder,
+    };
+    let prepare_stacks: Vec<PrepareStack> = stacks
+        .iter()
+        .zip(files)
+        .map(|(stack, (role, path))| PrepareStack {
+            role,
+            path,
+            source: format!("mono:{}:{}", stack.job_id, stack.group_index),
+            revision: stack.artifact_revision.clone(),
+            key: format!(
+                "{}:{}:{}",
+                stack.job_id, stack.group_index, stack.artifact_revision
+            ),
+            clipping: crate::server::stack_preview::read_clipped(&folder.join(clipped_file(stack))),
+        })
+        .collect();
     // One line per tool and per hundredth of its chain, which PSF Studio
     // shows as a progress bar.
     let reported = std::cell::RefCell::new((String::new(), u32::MAX));
-    let report = |channel: &str, tool: &str, fraction: f32| {
+    let progress = |channel: &str, tool: &str, fraction: f32| {
         let percent = (fraction.clamp(0.0, 1.0) * 100.0) as u32;
         let line = format!("{channel}: {tool}");
         let mut last = reported.borrow_mut();
@@ -452,314 +457,21 @@ fn prepare_store(
             *last = (line, percent);
         }
     };
-    let program = LinearProgram {
-        workers: &workers,
-        cache: folder,
-        sources: stacks
-            .iter()
-            .map(|stack| {
-                (
-                    stack.role,
-                    (
-                        format!("mono:{}:{}", stack.job_id, stack.group_index),
-                        stack.artifact_revision.clone(),
-                    ),
-                )
-            })
-            .collect(),
-        steps,
-        progress: &report,
-    };
-
-    let started = Instant::now();
-    let inputs: Vec<_> = files
-        .iter()
-        .map(|(role, path)| (*role, path.as_path()))
-        .collect();
-    // Continuum subtraction, when the document asks for it, with each
-    // stack's clipping map from the sources folder.
-    let continuum =
-        processing
-            .emission
-            .clone()
-            .map(|config| crate::studio_sources::ChannelContinuum {
-                config,
-                clipping: stacks
-                    .iter()
-                    .filter_map(|stack| {
-                        let map = crate::server::stack_preview::read_clipped(
-                            &folder.join(clipped_file(stack)),
-                        )?;
-                        Some((stack.role, map))
-                    })
-                    .collect(),
-            });
-    let mut prepared = RegisteredChannels::prepare(
-        &inputs,
-        Some(&program),
-        continuum.as_ref(),
-        &seiza_stacking::GpuOptions::cpu(),
-    )?;
-    let calibration = calibrate_colors(&mut prepared, stacks, folder, &document);
-    match &calibration {
-        Calibration::NotAsked => {}
-        Calibration::Skipped { why } => println!("  Colors not calibrated: {why}"),
-        Calibration::Done { gains, stars, .. } => println!(
-            "  Colors calibrated against Gaia from {stars} stars: red x{:.3}, blue x{:.3}",
-            gains[0], gains[2]
-        ),
-    }
-    // The stars are stretched before the sky is levelled: the star stretch
-    // needs a channel with and without its stars at one sky level.
-    // The largest rectangle every input covers: what the picture keeps
-    // unless a person crops it otherwise. Registration leaves empty edges
-    // where the inputs do not overlap.
-    let crop = automatic_crop(&prepared);
-    // The stars stay linear: PSF Studio stretches them on the canvas, so
-    // the star stretch's amount redraws without preparing again.
-    let mut display: Vec<String> = Vec::new();
-    let star_stretch: Option<f64> = None;
-    if let Calibration::Done {
-        neutral_sky: true, ..
-    } = calibration
-    {
-        prepared.level_sky(
-            StackColorRole::Green,
-            &[StackColorRole::Red, StackColorRole::Blue],
-        );
-    }
-    let calibrated = matches!(calibration, Calibration::Done { .. });
-    for name in stretch_whole_images(
-        &mut prepared,
-        &processing.input_stretches,
-        calibrated,
-        &display,
-    ) {
-        println!("  {name}: stretched for display");
-        display.push(name);
-    }
-    for (role, chain) in &prepared.tools {
-        let ran: Vec<&str> = chain
-            .steps
-            .iter()
-            .map(|step| step.provider.as_str())
-            .collect();
-        println!("  {role:?} tools: {}", ran.join(", "));
-    }
-    for (role, words) in &prepared.continuum {
-        println!("  {} continuum: {words}", role.label());
-    }
-    for placement in &prepared.placements {
-        match &placement.registration {
-            None => println!("  {:?} is the reference", placement.role),
-            Some(registration) => println!(
-                "  {:?} registered: {:.3} px RMS, {:.1} px drift, {} stars",
-                placement.role,
-                registration.rms_error_pixels,
-                registration.drift_pixels,
-                registration.matched_stars
-            ),
-        }
-    }
-    for (role, fit) in &prepared.backgrounds {
-        let model = match &fit.model {
-            seiza_background::FittedModel::Polynomial { degree, .. } => {
-                format!("polynomial of degree {degree}")
-            }
-            seiza_background::FittedModel::RadialBasis { .. } => "radial basis".to_string(),
-            _ => "another model".to_string(),
-        };
-        println!("  {role:?} background: {model}");
-    }
-    let backgrounds = folder.join("backgrounds.json");
-    write_atomically(&backgrounds, serde_json::to_string(&prepared.backgrounds)?)?;
-    println!("Prepared in {:.1} s", started.elapsed().as_secs_f64());
-    let registered = prepared;
-
-    // The key changes when any channel's stack is rebuilt.
-    let key = stacks
-        .iter()
-        .map(|stack| {
-            format!(
-                "{}:{}:{}",
-                stack.job_id, stack.group_index, stack.artifact_revision
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("|");
-    // It also changes with the Linear steps that ran and their settings.
-    let programs: serde_json::Map<String, serde_json::Value> = document
-        .channels()
-        .into_iter()
-        .map(|channel| {
-            let program = crate::studio::input_program(&document, &channel);
-            (channel, serde_json::Value::Array(program))
-        })
-        .collect();
-    let key = {
-        use sha2::{Digest, Sha256};
-        let digest = Sha256::digest(serde_json::to_string(&programs)?);
-        let digest: String = digest
-            .iter()
-            .take(16)
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
-        format!("{key}|steps:{digest}")
-    };
-    // And with continuum subtraction: its settings, and which stacks had a
-    // clipping map.
-    let key = match &continuum {
-        Some(continuum) => format!(
-            "{key}|continuum:{}:{}",
-            serde_json::to_string(&continuum.config).unwrap_or_default(),
-            continuum
-                .clipping
-                .keys()
-                .map(|role| role.label())
-                .collect::<Vec<_>>()
-                .join(",")
-        ),
-        None => key,
-    };
-    let started = Instant::now();
-    let store = TileStore::create(
+    psf_studio_core::prepare::prepare_store(Prepare {
+        stacks: &prepare_stacks,
+        document: &document,
+        tools: Some(&tools),
+        folder,
         output,
-        &registered,
-        &StoreOptions {
-            channels: registered.names.clone(),
-            ..StoreOptions::new(&format!("channels:{key}"))
-        },
-    )?;
-    let shape = registered.shape();
-    println!(
-        "Wrote {}: {} x {} pixels, {} channel(s), {} levels, in {:.1} s",
-        output.display(),
-        shape.width,
-        shape.height,
-        shape.channels,
-        store.levels(),
-        started.elapsed().as_secs_f64()
-    );
-
-    // Beside the store, so whatever opens it knows whether red, green and
-    // blue are balanced and may share one stretch, and which planes are
-    // already stretched for display.
-    // Written after the store, so it never describes another store.
-    let record = output.with_extension("prepared.json");
-    let prepared_record = serde_json::json!({
-        "calibration": calibration,
-        "display": display,
-        "star_stretch": star_stretch,
-        "crop": crop,
-        // Each channel's states, in the order the steps ran, and the steps
-        // the store was prepared with, so a canvas can draw any step and
-        // tell when the document has moved on.
-        "states": registered
-            .states
-            .iter()
-            .map(|(channel, states)| {
-                let states: Vec<serde_json::Value> = states
-                    .iter()
-                    .map(|state| {
-                        serde_json::json!({
-                            "step": state.step.to_string(),
-                            "plane": state.plane,
-                            "correction": state.correction,
-                        })
-                    })
-                    .collect();
-                (channel.clone(), serde_json::Value::Array(states))
-            })
-            .collect::<serde_json::Map<_, _>>(),
-        "program": programs,
-    });
-    write_atomically(&record, serde_json::to_string(&prepared_record)?)?;
+        calibrate: &|prepared| calibrate_colors(prepared, stacks, folder, &document),
+        report: &|line| println!("{line}"),
+        progress: &progress,
+    })?;
     if let Some(path) = document_out {
         write_atomically(path, document.to_json())?;
         println!("Wrote the document to {}", path.display());
     }
     Ok(())
-}
-
-/// The document's Linear steps that change the stacks' samples, in its
-/// order, as preparing a store runs them: each tool step, deconvolution and
-/// background extraction that is on. A color group's tool runs on the
-/// group's stacks, when the document has two of them or more.
-fn linear_steps(document: &Document, stacks: &[StackColorSource]) -> Result<Vec<LinearStep>> {
-    use crate::studio::{flow_operations as op, StageKind, StepKind};
-    let role_of = |band: &str| {
-        stacks
-            .iter()
-            .find(|stack| crate::studio_flow::role_name(stack.role).ok().as_deref() == Some(band))
-            .map(|stack| stack.role)
-    };
-    let mut steps = Vec::new();
-    for step in &document.stage(StageKind::Linear).steps {
-        let StepKind::Operation { settings, .. } = &step.kind else {
-            continue;
-        };
-        if !step.enabled {
-            continue;
-        }
-        let name = step.kind.name();
-        let what = || match &step.band {
-            Some(band) => format!("{name} ({band})"),
-            None => name.to_string(),
-        };
-        if name == op::BACKGROUND {
-            let roles: Vec<StackColorRole> = match &step.band {
-                None => stacks.iter().map(|stack| stack.role).collect(),
-                Some(band) => role_of(band).into_iter().collect(),
-            };
-            let extraction = serde_json::from_value(settings.clone())
-                .with_context(|| format!("the settings of {}", what()))?;
-            steps.push(LinearStep::Background {
-                step: step.id,
-                roles,
-                extraction,
-            });
-        } else if name == op::DECONVOLUTION {
-            let Some(role) = step.band.as_deref().and_then(role_of) else {
-                continue;
-            };
-            let config = serde_json::from_value(settings.clone())
-                .with_context(|| format!("the settings of {}", what()))?;
-            steps.push(LinearStep::Deconvolution {
-                step: step.id,
-                role,
-                config,
-            });
-        } else if crate::studio::is_tool_step(step) {
-            let Some(band) = step.band.as_deref() else {
-                continue;
-            };
-            let roles: Vec<StackColorRole> = match crate::studio::COLOR_GROUPS
-                .iter()
-                .find(|(group, _)| *group == band)
-            {
-                Some((_, members)) => members
-                    .iter()
-                    .filter_map(|member| role_of(member))
-                    .collect(),
-                None => role_of(band).into_iter().collect(),
-            };
-            if roles.is_empty() {
-                continue;
-            }
-            let tool = serde_json::from_value(settings.clone())
-                .with_context(|| format!("the settings of {}", what()))?;
-            steps.push(LinearStep::Tool {
-                step: step.id,
-                roles,
-                label: band.to_string(),
-                tool,
-                shifted: settings[crate::studio::SHIFTED_PASS_KEY]
-                    .as_bool()
-                    .unwrap_or(false),
-            });
-        }
-    }
-    Ok(steps)
 }
 
 /// What `psf-guard studio-tool` runs: one processing tool on one image.
@@ -932,26 +644,6 @@ pub fn studio_tools() -> Result<()> {
 }
 
 /// What color calibration did while a store was prepared.
-#[derive(serde::Serialize)]
-#[serde(tag = "status", rename_all = "snake_case")]
-enum Calibration {
-    /// The document has no red, green and blue, or its Color calibration
-    /// step is off.
-    NotAsked,
-    Skipped {
-        why: String,
-    },
-    Done {
-        /// Whether the sky of red and blue is to be levelled to green's.
-        #[serde(skip)]
-        neutral_sky: bool,
-        /// The multipliers applied to every state of red, green and blue.
-        gains: [f32; 3],
-        /// The Gaia stars behind the weaker of the two color fits.
-        stars: usize,
-    },
-}
-
 /// Runs the document's Color calibration step: measures the gains of red,
 /// green and blue against Gaia on the stacks as registered, and applies
 /// them to every state of the three channels.
@@ -1047,196 +739,6 @@ fn calibrate_colors(
             why: "no gains were measured".into(),
         },
     }
-}
-
-/// Stretches each channel whose stretches include the layered stretch over
-/// the whole image, and adds the result as the channel's stretched plane.
-/// Returns the planes added or replaced, which are stretched for display.
-///
-/// The channel is stretched in its last linear state: after the last
-/// Linear step that changed it, a background correction there in full, or
-/// as stacked. Calibrated red, green and blue with the same stretches are
-/// stretched together as one color image, so their balance is kept.
-///
-/// The stars of such a channel follow it: the channel with its stars put
-/// back is stretched with the very stretch the starless channel got, and
-/// the stars are unscreened from that, so they screen back onto the
-/// starless channel as they were. Stars the star stretch already made are
-/// left as they are. A line with its continuum subtracted is stretched as
-/// its channel's stretch chain resolves for it.
-fn stretch_whole_images(
-    prepared: &mut RegisteredChannels,
-    stretches: &BTreeMap<
-        StackColorRole,
-        Vec<crate::server::stack_preview::stretch::StackStretchRequest>,
-    >,
-    calibrated: bool,
-    already_display: &[String],
-) -> Vec<String> {
-    use crate::server::stack_preview::color_calibration::interleave;
-    use crate::studio::{stars_channel, stretched_channel};
-    use crate::studio_sources::line_channel;
-    use seiza_stacking::LinearImage;
-    use seiza_stretch::StretchModel;
-
-    let linear = |prepared: &RegisteredChannels, name: &str| prepared.last_state(name);
-    // One image of one channel, or three interleaved, and back.
-    let combine = |images: &[LinearImage]| -> Result<LinearImage, String> {
-        match images {
-            [one] => Ok(one.clone()),
-            [red, green, blue] => interleave(red, green, blue),
-            _ => Err("a group is one channel or three".to_string()),
-        }
-    };
-    let split = |image: &LinearImage| -> Vec<Vec<f32>> {
-        (0..image.channels)
-            .map(|channel| {
-                image
-                    .data
-                    .iter()
-                    .skip(channel)
-                    .step_by(image.channels)
-                    .copied()
-                    .collect()
-            })
-            .collect()
-    };
-    let layered: Vec<(StackColorRole, String)> = stretches
-        .iter()
-        .filter(|(_, stages)| {
-            stages.iter().any(|stage| {
-                matches!(
-                    stage.model,
-                    StretchModel::Layered(_) | StretchModel::LayeredHdr(_)
-                )
-            })
-        })
-        .filter_map(|(role, _)| Some((*role, crate::studio_flow::role_name(*role).ok()?)))
-        .collect();
-    let rgb = [
-        StackColorRole::Red,
-        StackColorRole::Green,
-        StackColorRole::Blue,
-    ];
-    let same = |a: StackColorRole, b: StackColorRole| {
-        serde_json::to_value(&stretches[&a]).ok() == serde_json::to_value(&stretches[&b]).ok()
-    };
-    let together = calibrated
-        && rgb
-            .iter()
-            .all(|role| layered.iter().any(|(other, _)| other == role))
-        && same(rgb[0], rgb[1])
-        && same(rgb[1], rgb[2]);
-    let mut groups: Vec<Vec<(StackColorRole, String)>> = Vec::new();
-    if together {
-        groups.push(
-            layered
-                .iter()
-                .filter(|(role, _)| rgb.contains(role))
-                .cloned()
-                .collect(),
-        );
-    }
-    groups.extend(
-        layered
-            .iter()
-            .filter(|(role, _)| !(together && rgb.contains(role)))
-            .map(|entry| vec![entry.clone()]),
-    );
-
-    let mut added = Vec::new();
-    for group in groups {
-        let stages = &stretches[&group[0].0];
-        let label = group
-            .iter()
-            .map(|(_, name)| name.as_str())
-            .collect::<Vec<_>>()
-            .join(", ");
-        let Some(images) = group
-            .iter()
-            .map(|(_, name)| linear(prepared, name))
-            .collect::<Option<Vec<_>>>()
-        else {
-            continue;
-        };
-        let stretched = combine(&images)
-            .and_then(|image| crate::color_steps::stretch_for_display(&image, stages));
-        let (stretched, stretch) = match stretched {
-            Ok(stretched) => stretched,
-            Err(error) => {
-                println!("  {label} was not stretched: {error}");
-                continue;
-            }
-        };
-        let starless = split(&stretched);
-        for ((_, name), samples) in group.iter().zip(&starless) {
-            let plane = stretched_channel(name);
-            if prepared.add_plane(&plane, samples.clone()) {
-                added.push(plane);
-            }
-        }
-
-        // The stars, with the starless image's own stretch.
-        let wanted = group.iter().all(|(_, name)| {
-            let stars = stars_channel(name);
-            prepared.names.contains(&stars) && !already_display.contains(&stars)
-        });
-        if wanted {
-            let with_stars: Option<Vec<LinearImage>> = group
-                .iter()
-                .zip(&images)
-                .map(|((_, name), image)| {
-                    let mut image = image.clone();
-                    let stars = prepared.plane(&stars_channel(name))?;
-                    for (sample, star) in image.data.iter_mut().zip(&stars.data) {
-                        *sample += *star;
-                    }
-                    Some(image)
-                })
-                .collect();
-            let original = with_stars
-                .ok_or_else(|| "a stars plane is missing".to_string())
-                .and_then(|images| combine(&images))
-                .and_then(|image| stretch.apply(&image));
-            match original {
-                Ok(original) => {
-                    for (((_, name), original), base) in
-                        group.iter().zip(split(&original)).zip(&starless)
-                    {
-                        let stars = original
-                            .iter()
-                            .zip(base)
-                            .map(|(original, base)| crate::color_steps::unscreen(*original, *base))
-                            .collect();
-                        let plane = stars_channel(name);
-                        if prepared.replace_plane(&plane, stars) {
-                            added.push(plane);
-                        }
-                    }
-                }
-                Err(error) => println!("  The stars of {label} were not stretched: {error}"),
-            }
-        }
-
-        // A line with its continuum subtracted, stretched as its channel's
-        // chain resolves for it.
-        for (_, name) in &group {
-            let line = line_channel(name);
-            let Some(image) = prepared.plane(&line) else {
-                continue;
-            };
-            match crate::color_steps::stretch_for_display(&image, stages) {
-                Ok((stretched, _)) => {
-                    let plane = stretched_channel(&line);
-                    if prepared.add_plane(&plane, stretched.data) {
-                        added.push(plane);
-                    }
-                }
-                Err(error) => println!("  {line} was not stretched: {error}"),
-            }
-        }
-    }
-    added
 }
 
 /// Where a picture's channel stacks come from.
@@ -1424,26 +926,6 @@ pub fn channel_and_file(file: &str) -> Result<String> {
         )
     })?;
     Ok(format!("{}={file}", crate::studio_flow::role_name(role)?))
-}
-
-/// The largest rectangle in which every input, as stacked, covers every
-/// pixel, with Seiza's crop: what PSF Guard's color previews keep with the
-/// crop "Inscribed". As x, y, width and height, or `None` when the inputs
-/// share no such rectangle.
-fn automatic_crop(prepared: &RegisteredChannels) -> Option<[usize; 4]> {
-    let inputs: Vec<(String, seiza_stacking::LinearImage)> = prepared
-        .names
-        .iter()
-        .filter(|name| !name.contains('@'))
-        .filter_map(|name| Some((name.clone(), prepared.plane(name)?)))
-        .collect();
-    let samples: Vec<seiza_compose::ChannelSamples<'_>> = inputs
-        .iter()
-        .map(|(name, image)| seiza_compose::ChannelSamples::new(name, image))
-        .collect();
-    let report = seiza_compose::crop_report(&samples, seiza_compose::ColorCrop::Inscribed).ok()?;
-    let region = report.region;
-    Some([region.x, region.y, region.width, region.height])
 }
 
 #[cfg(test)]

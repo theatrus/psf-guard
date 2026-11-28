@@ -36,10 +36,12 @@ use crate::server::api::ApiResponse;
 use crate::server::extract::DbContext;
 use crate::server::handlers::AppError;
 use crate::server::state::AppState;
+// Shared with PSF Studio.
+pub use psf_studio_core::color::{StackStretchRequest, STRETCH_ANALYSIS_SAMPLES};
 
 const STRETCH_CACHE_VERSION: u32 = 2;
 const DECONVOLUTION_CACHE_VERSION: u32 = 1;
-const STRETCH_ANALYSIS_SAMPLES: usize = 200_000;
+
 const STRETCH_BYTES_PER_SAMPLE: u64 = 16;
 const DECONVOLUTION_BYTES_PER_SAMPLE: u64 = 40;
 const LINEAR_BLACK_PERCENTILE: f64 = 0.001;
@@ -52,13 +54,6 @@ pub(super) const SEIZA_STRETCH_OUTPUT_VERSION: &str = seiza_stretch::OUTPUT_VERS
 pub struct StackDeconvolutionResult {
     pub config: DeconvolutionConfig,
     pub channels: Vec<ChannelDiagnostics>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct StackStretchRequest {
-    pub model: StretchModel,
-    #[serde(default)]
-    pub color_strategy: ColorStrategy,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -79,16 +74,6 @@ pub struct StackViewProcessingRequest {
     /// defaults; a mono stack never is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color_calibration: Option<super::color_calibration::StackColorCalibration>,
-}
-
-impl StackStretchRequest {
-    pub(crate) fn config(&self) -> StretchConfig {
-        StretchConfig {
-            model: self.model.clone(),
-            color_strategy: self.color_strategy,
-            max_analysis_samples: STRETCH_ANALYSIS_SAMPLES,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]

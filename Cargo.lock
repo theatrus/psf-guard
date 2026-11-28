@@ -4671,10 +4671,15 @@ dependencies = [
 name = "psf-studio-core"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "half",
+ "seiza-background",
+ "seiza-compose",
+ "seiza-deconvolution",
  "seiza-fits",
  "seiza-image-io",
  "seiza-stacking",
+ "seiza-stretch",
  "seiza-xisf",
  "serde",
  "serde_json",

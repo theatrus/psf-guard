@@ -1,9 +1,11 @@
 //! Combined recipes and continuum stages on exact aligned linear revisions.
 use super::*;
+// The continuum settings are shared with PSF Studio.
+pub(crate) use psf_studio_core::color::{ContinuumMode, EmissionLineSettings, EmissionProcessing};
 use seiza_stacking::{
-    ContinuumDiagnostics, ContinuumFitOptions, ContinuumFitOutcome, ContinuumOrigin,
-    ContinuumPhotometryOptions, ContinuumPlan, ContinuumSource, ContinuumSources,
-    ContinuumTransfer, EmissionBlendLine, EmissionBlendOptions, EmissionNegativePolicy,
+    ContinuumDiagnostics, ContinuumFitOutcome, ContinuumOrigin, ContinuumPlan, ContinuumSource,
+    ContinuumSources, ContinuumTransfer, EmissionBlendLine, EmissionBlendOptions,
+    EmissionNegativePolicy,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -11,100 +13,6 @@ use seiza_stacking::{
 pub enum CombinedColorRecipe {
     Emission,
     BroadbandStructure,
-}
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ContinuumMode {
-    #[default]
-    Automatic,
-    Manual,
-    Off,
-}
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct EmissionLineSettings {
-    pub amount: f64,
-    pub coefficients: Vec<f64>,
-    pub reference_flux_ratios: Vec<f64>,
-}
-impl Default for EmissionLineSettings {
-    fn default() -> Self {
-        Self {
-            amount: 0.25,
-            coefficients: Vec::new(),
-            reference_flux_ratios: Vec::new(),
-        }
-    }
-}
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct EmissionProcessing {
-    pub mode: ContinuumMode,
-    pub lines: BTreeMap<StackColorRole, EmissionLineSettings>,
-    /// Only explicit physical working-unit limits; otherwise use producer clipping maps.
-    pub saturation: BTreeMap<StackColorRole, f64>,
-    pub fit: ContinuumFitOptions,
-    pub photometry: ContinuumPhotometryOptions,
-    pub positive_contribution: bool,
-    pub broadband_amount: f64,
-    /// Optional scientific export in calibrated physical units, independent of display amounts.
-    pub flux_calibration: Option<seiza_stacking::EmissionFluxCalibration>,
-}
-impl Default for EmissionProcessing {
-    fn default() -> Self {
-        Self {
-            mode: Default::default(),
-            lines: [
-                StackColorRole::Ha,
-                StackColorRole::Oiii,
-                StackColorRole::Sii,
-            ]
-            .into_iter()
-            .map(|r| (r, Default::default()))
-            .collect(),
-            saturation: BTreeMap::new(),
-            fit: Default::default(),
-            photometry: Default::default(),
-            positive_contribution: true,
-            broadband_amount: 0.0,
-            flux_calibration: None,
-        }
-    }
-}
-impl EmissionProcessing {
-    pub(crate) fn validate(&self) -> Result<(), String> {
-        if self.mode == ContinuumMode::Automatic && self.photometry.max_pixel_residual.is_none() {
-            return Err("Automatic continuum subtraction requires pixel profile validation".into());
-        }
-        if self.mode == ContinuumMode::Manual && self.photometry.psf_matching.is_some() {
-            return Err("Use Automatic continuum mode for measured PSF matching, or disable matching before entering manual weights".into());
-        }
-        if !self.broadband_amount.is_finite()
-            || !(0.0..=1.0).contains(&self.broadband_amount)
-            || self.lines.is_empty()
-            || self.lines.keys().any(|r| {
-                !matches!(
-                    r,
-                    StackColorRole::Ha | StackColorRole::Oiii | StackColorRole::Sii
-                )
-            })
-            || self.lines.values().any(|v| {
-                !v.amount.is_finite()
-                    || !(0.0..=5.0).contains(&v.amount)
-                    || v.coefficients.iter().any(|c| !c.is_finite() || *c < 0.0)
-                    || v.reference_flux_ratios
-                        .iter()
-                        .any(|r| !r.is_finite() || *r <= 0.0)
-            })
-            || self
-                .saturation
-                .values()
-                .any(|v| !v.is_finite() || *v <= 0.0)
-        {
-            return Err("Emission amounts must be zero to five, broadband structure zero to one, and manual scales finite and positive".into());
-        }
-        Ok(())
-    }
 }
 /// Mapped linear residuals ignore display blend strengths and flux exports.
 /// Keep those choices in the final composition key, outside BXT/SXT inputs.
