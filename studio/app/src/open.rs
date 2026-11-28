@@ -90,6 +90,8 @@ pub(super) struct TargetLink {
     /// A one-time ticket from a signed-in click, which Studio trades for a
     /// token when it is not connected to the server yet.
     pub ticket: Option<String>,
+    /// The Studio document to open; the target's latest when there is none.
+    pub document: Option<String>,
 }
 
 /// Reads a `psf-studio://open?…` link. `None` for any other text.
@@ -106,6 +108,7 @@ pub(super) fn target_link(link: &str) -> Option<TargetLink> {
         project: field(query, "project")?.parse().ok()?,
         target: field(query, "target")?.parse().ok()?,
         ticket: field(query, "ticket").filter(|ticket| !ticket.is_empty()),
+        document: field(query, "document").filter(|document| !document.is_empty()),
     })
 }
 
@@ -277,6 +280,7 @@ mod tests {
                 project: 11,
                 target: 17,
                 ticket: None,
+                document: None,
             })
         );
         assert_eq!(

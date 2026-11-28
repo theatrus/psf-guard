@@ -27,6 +27,7 @@ import CalibrationMasterButton from './CalibrationMasterInspector';
 import StackSnrCurve from './StackSnrCurve';
 import ScoringChangedNote from './ScoringChangedNote';
 import StackColorPreviewPanel from './StackColorPreviewPanel';
+import StudioDocuments from './StudioDocuments';
 import {
   appliedProcessingQueryKey as channelProcessingQueryKey,
   colorCatalogQueryPrefix,
@@ -350,7 +351,7 @@ export default function StackPreviewPanel({
   mosaic = false,
 }: StackPreviewPanelProps) {
   const queryClient = useQueryClient();
-  const { canCompute } = useAccess();
+  const { canCompute, canWrite } = useAccess();
   const scoringPreferences = useScoringPreferences();
   const currentScoring = useMemo(
     () => stackScoringSettings(scoringPreferences),
@@ -1125,6 +1126,8 @@ export default function StackPreviewPanel({
           onOpenImage={onOpenImage}
           targetId={scopedTarget}
         />
+
+        <StudioDocuments dbId={dbId} projectId={projectId} canWrite={canWrite} />
 
         {displayKeys.length > 0 && (
           <div

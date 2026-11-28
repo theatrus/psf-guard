@@ -1,9 +1,10 @@
-import { useState, type MouseEvent } from 'react';
+import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
 import { apiClient } from '../api/client';
 import type { ApiResponse, StudioDocumentSummary } from '../api/types';
 import { studioLink } from '../utils/studioLink';
+import { useOpenInStudio } from '../utils/useOpenInStudio';
 import { PROCESSING_SETUPS_QUERY_KEY } from './defaultColorSetup';
 
 function errorMessage(error: unknown): string {
@@ -29,13 +30,7 @@ function formatDate(seconds: number): string {
 interface StudioDocumentsProps {
   dbId: string;
   projectId: number;
-  /** This server's address as PSF Studio reaches it; empty while unknown. */
-  serverOrigin: string;
-  targetNames: Map<number, string>;
   canWrite: boolean;
-  /** Opens a document in PSF Studio, adding a ticket on a server with
-   *  sign-in. */
-  onOpen: (event: MouseEvent<HTMLAnchorElement>, targetId: number, documentId: string) => void;
 }
 
 /**
@@ -43,15 +38,18 @@ interface StudioDocumentsProps {
  * exports, and **Open in PSF Studio**. An editor can save a document as a
  * Color processing setup or delete it.
  */
-export default function StudioDocuments({
-  dbId,
-  projectId,
-  serverOrigin,
-  targetNames,
-  canWrite,
-  onOpen,
-}: StudioDocumentsProps) {
+export default function StudioDocuments({ dbId, projectId, canWrite }: StudioDocumentsProps) {
   const queryClient = useQueryClient();
+  const studio = useOpenInStudio(dbId, projectId);
+  const serverOrigin = studio.origin;
+  const targets = useQuery({
+    queryKey: ['studioDocumentTargets', dbId, projectId],
+    queryFn: () => apiClient.getTargets(dbId, projectId),
+  });
+  const targetNames = useMemo(
+    () => new Map((targets.data ?? []).map((target) => [target.id, target.name])),
+    [targets.data],
+  );
   const queryKey = ['studioDocuments', dbId, projectId];
   const documents = useQuery({
     queryKey,
@@ -98,6 +96,7 @@ export default function StudioDocuments({
   return (
     <section className="studio-documents" aria-label="PSF Studio documents">
       <h4>PSF Studio documents</h4>
+      {studio.error && <span className="status-message error" role="alert">{studio.error}</span>}
       <ul>
         {list.map((document) => {
           const target = document.target_id;
@@ -168,7 +167,7 @@ export default function StudioDocuments({
                   <a
                     className="stack-preview-card-action"
                     href={studioLink(serverOrigin, dbId, projectId, target, undefined, document.id)}
-                    onClick={(event) => onOpen(event, target, document.id)}
+                    onClick={(event) => void studio.open(event, target, document.id)}
                     title="PSF Studio opens this document, with the target's current channel stacks. PSF Studio must be installed on this computer."
                   >
                     Open in PSF Studio

@@ -7544,6 +7544,10 @@
   gap: 0.25rem;
 }
 
+.studio-document-main strong {
+  overflow-wrap: anywhere;
+}
+
 .studio-document-setup {
   display: flex;
   flex-wrap: wrap;

@@ -30,6 +30,9 @@ pub(super) struct ExportRun {
     /// For an editor: the key for everything before the junction when the
     /// file was written. The file then opens in its default app.
     for_editor: Option<String>,
+    /// Where a small image of the picture is written, for a picture on a
+    /// server: the preview its document's list shows.
+    pub preview: Option<PathBuf>,
 }
 
 impl ExportRun {
@@ -146,6 +149,11 @@ impl Studio {
             stop: AtomicBool::new(false),
             done: Mutex::new(None),
             for_editor,
+            preview: self.server_save.linked().then(|| {
+                std::env::temp_dir()
+                    .join("psf-studio-previews")
+                    .join(format!("{}.png", uuid::Uuid::new_v4().simple()))
+            }),
         });
         self.export = Some(run.clone());
         self.tell_export(&format!("Exporting {}…", file_name(&path)));
@@ -193,7 +201,7 @@ impl Studio {
                     },
                     None => {
                         self.tell_export(&format!("Exported {name}."));
-                        self.export_finished(&run.path);
+                        self.export_finished(&run.path, run.preview.clone());
                     }
                 }
             }
@@ -309,6 +317,12 @@ fn export(
         }
     }
     let (width, height) = (image.width, image.height);
+    if let Some(preview) = &run.preview {
+        // A preview that fails costs the list its image, not the export.
+        if let Err(reason) = write_preview(preview, width, height, &image.data, peak) {
+            eprintln!("the preview was not written: {reason}");
+        }
+    }
     match extension(&run.path).as_deref() {
         Some("avif") => save_hdr(&run.path, width, height, &image.data),
         Some("tif" | "tiff") => {
@@ -345,6 +359,91 @@ pub(super) fn for_display(rgb: &[f32], display: WorkingSpace) -> Vec<f32> {
         .iter()
         .flat_map(|pixel| WORKING_SPACE.map_to_display(*pixel, display))
         .collect()
+}
+
+/// The long side of a preview, in pixels.
+const PREVIEW_SIDE: usize = 1024;
+
+/// Writes a small sRGB PNG of interleaved RGB in the working space: each
+/// preview pixel the mean of the pixels under it. An HDR picture's values
+/// above SDR white, up to `peak`, roll off into the top of the range, so
+/// the rest looks as it does on an SDR display.
+pub(super) fn write_preview(
+    path: &Path,
+    width: usize,
+    height: usize,
+    rgb: &[f32],
+    peak: f32,
+) -> Result<(), String> {
+    let (small_width, small_height) = preview_size(width, height);
+    let mut sums = vec![0.0_f64; small_width * small_height * 3];
+    let mut counts = vec![0_u32; small_width * small_height];
+    for y in 0..height {
+        let row = y * small_height / height;
+        for x in 0..width {
+            let at = row * small_width + x * small_width / width;
+            counts[at] += 1;
+            for channel in 0..3 {
+                sums[at * 3 + channel] += f64::from(rgb[(y * width + x) * 3 + channel]);
+            }
+        }
+    }
+    let means: Vec<f32> = sums
+        .iter()
+        .enumerate()
+        .map(|(at, sum)| roll_off((sum / f64::from(counts[at / 3].max(1))) as f32, peak))
+        .collect();
+    let bytes: Vec<u8> = for_display(&means, WorkingSpace::Srgb)
+        .iter()
+        .map(|value| (value.clamp(0.0, 1.0) * 255.0).round() as u8)
+        .collect();
+    if let Some(folder) = path.parent() {
+        std::fs::create_dir_all(folder).map_err(|error| error.to_string())?;
+    }
+    let file = std::fs::File::create(path).map_err(|error| error.to_string())?;
+    let mut encoder = png::Encoder::new(
+        std::io::BufWriter::new(file),
+        small_width as u32,
+        small_height as u32,
+    );
+    encoder.set_color(png::ColorType::Rgb);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder
+        .write_header()
+        .and_then(|mut writer| writer.write_image_data(&bytes))
+        .map_err(|error| error.to_string())
+}
+
+/// Where a preview's highlights start to roll off.
+const PREVIEW_KNEE: f32 = 0.8;
+
+/// A value as a preview shows it: unchanged up to the knee; above it, a
+/// curve that flattens as it rises and reaches 1 at `peak`.
+fn roll_off(value: f32, peak: f32) -> f32 {
+    if value <= PREVIEW_KNEE || peak <= 1.0 {
+        return value.min(1.0);
+    }
+    let room = 1.0 - PREVIEW_KNEE;
+    // Exponential approach to 1; scaled so the peak lands at 1 - 1/e^k,
+    // then stretched to reach 1 exactly.
+    let span = (peak - PREVIEW_KNEE).max(f32::EPSILON);
+    let k = span / room;
+    let reach = 1.0 - (-k).exp();
+    let over = value.min(peak) - PREVIEW_KNEE;
+    PREVIEW_KNEE + room * (1.0 - (-over / room).exp()) / reach
+}
+
+/// A preview's size: the picture's shape, at most `PREVIEW_SIDE` on its long
+/// side, and never larger than the picture.
+fn preview_size(width: usize, height: usize) -> (usize, usize) {
+    let long = width.max(height).max(1);
+    if long <= PREVIEW_SIDE {
+        return (width.max(1), height.max(1));
+    }
+    (
+        (width * PREVIEW_SIDE / long).max(1),
+        (height * PREVIEW_SIDE / long).max(1),
+    )
 }
 
 /// A path's extension, in lower case.
@@ -515,6 +614,36 @@ fn parity(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_preview_is_the_picture_scaled_to_its_long_side() {
+        assert_eq!(preview_size(6248, 4176), (1024, 684));
+        assert_eq!(preview_size(4176, 6248), (684, 1024));
+        assert_eq!(preview_size(300, 200), (300, 200));
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("preview.png");
+        // Gray at 0.5, and an HDR highlight at the peak of 8.
+        let mut rgb = vec![0.5_f32; 2048 * 1024 * 3];
+        rgb[..3].copy_from_slice(&[8.0, 8.0, 8.0]);
+        write_preview(&path, 2048, 1024, &rgb, 8.0).unwrap();
+        let decoder =
+            png::Decoder::new(std::io::BufReader::new(std::fs::File::open(&path).unwrap()));
+        let mut reader = decoder.read_info().unwrap();
+        let mut bytes = vec![0; reader.output_buffer_size()];
+        let info = reader.next_frame(&mut bytes).unwrap();
+        assert_eq!((info.width, info.height), (1024, 512));
+        // The gray stays as an SDR display shows it; the corner averages
+        // one highlight with three grays.
+        let gray = bytes[3 * 600];
+        assert!((gray as i32 - 128).abs() <= 3, "{gray}");
+        assert!(bytes[0] > gray, "{} {gray}", bytes[0]);
+        // The roll-off keeps SDR values, reaches 1 at the peak, and rises.
+        assert_eq!(roll_off(0.5, 8.0), 0.5);
+        assert!((roll_off(8.0, 8.0) - 1.0).abs() < 1e-5);
+        assert!(roll_off(1.0, 8.0) > roll_off(0.9, 8.0));
+        assert!(roll_off(2.0, 8.0) < 1.0);
+        assert_eq!(roll_off(1.5, 1.0), 1.0);
+    }
 
     #[test]
     fn an_export_name_keeps_the_chosen_format() {

@@ -591,23 +591,30 @@ Built as proposed, with these differences:
   when it was last used: recording each use would write the registry on
   every request.
 - **The token** lasts a fixed 90 days.
-- **Saving** happens five seconds after edits stop. Nothing is sent when
-  Studio quits, so edits made in the last five seconds wait for the next
-  launch. Opening a revision saves nothing: the link marks it as opened, and
-  the text Studio reads it as counts as sent.
+- **Saving** happens five seconds after edits stop. Quitting or closing the
+  window saves at once and waits up to 15 seconds for the server; GPUI
+  gives a quit handler only 200 ms, so Studio's own loop holds the quit.
+  Opening a revision saves nothing: the link marks it as opened, and the
+  text Studio reads it as counts as sent.
+- **The preview** is made from each export's pixels, 1024 pixels on its
+  long side, with HDR highlights rolled off above 0.8, and stored with the
+  revision the export came from. A save renders no preview of its own: the
+  CPU renderer has no reduced-resolution mode.
+- **Changed stacks.** A record's stacks keep the frame they were
+  registered to and their size. Opening compares them with the target's
+  stacks: the same frame and size open with a note; another frame or size
+  asks first.
+- **The project's document list** sits under **Stacks** on the stacks page,
+  with previews, exports to download, **Open in PSF Studio** (the link
+  names the document), **Save as a Color setup** and **Delete**. Saving as
+  a setup reads `GET /studio-documents/{id}/processing` and saves through the
+  existing setups API, so the editor check stays where it was.
 - **Exports** go to the project when **Also save to the project** is on,
   which it is for every picture from a server.
 - **The control socket and `psf-studio-mcp`** can connect, browse, open,
   save a picture to a target, resolve a conflict and sign out.
 
-Not built yet:
-
-- the preview image for lists;
-- the changed-stacks message: a document records its stacks' fingerprints,
-  but opening does not compare them yet;
-- the project page's list of Studio documents in PSF Guard, with **Delete**;
-  deleting is in the API only;
-- **Save as a Color processing setup**.
+Not built: a preview for a document that was never exported.
 
 Found while testing: macOS ties a Keychain item to the program that wrote
 it. A Studio build that is not signed with the same identity, such as each

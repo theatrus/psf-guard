@@ -1,4 +1,4 @@
-import { isValidElement, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react';
+import { isValidElement, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { formatIntegration, totalIntegration } from '../utils/integrationTime';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
@@ -41,9 +41,8 @@ import { buildColorExposureSets, colorSourceKey, colorSourcesLabel, completedCol
 import { withRetainedColorExposureSets } from './colorExposureCards';
 import { fetchDefaultColorFor } from './defaultColorSetup';
 import './StackColorSources.css';
-import { openStudioLink, studioLink, useServerOrigin } from '../utils/studioLink';
-import StudioDocuments from './StudioDocuments';
-import { useAccess } from '../auth/access';
+import { studioLink } from '../utils/studioLink';
+import { useOpenInStudio } from '../utils/useOpenInStudio';
 
 /** A channel's frame count, or that WBPP made it and recorded none. */
 function sourceFramesText(source: Pick<StackColorSource, 'accepted_frames' | 'wbpp'>): string {
@@ -603,27 +602,10 @@ export default function StackColorPreviewPanel({
   targetId = null,
 }: StackColorPreviewPanelProps) {
   const queryClient = useQueryClient();
-  const serverOrigin = useServerOrigin();
   // On a server with sign-in, a link to PSF Studio carries a one-time
   // ticket, minted when the person clicks it.
-  const { status: accessStatus, canWrite: canWriteAccess } = useAccess();
-  const studioNeedsTicket = accessStatus.authentication_required;
-  const [studioError, setStudioError] = useState('');
-  const openInStudio = async (
-    event: MouseEvent<HTMLAnchorElement>,
-    targetId: number,
-    documentId?: string,
-  ) => {
-    if (!studioNeedsTicket) return;
-    event.preventDefault();
-    setStudioError('');
-    try {
-      const ticket = await apiClient.createStudioTicket();
-      openStudioLink(studioLink(serverOrigin, dbId, projectId, targetId, ticket, documentId));
-    } catch (failure) {
-      setStudioError(failure instanceof Error ? failure.message : String(failure));
-    }
-  };
+  const studio = useOpenInStudio(dbId, projectId);
+  const serverOrigin = studio.origin;
   const [watchedJobIds, setWatchedJobIds] = useState<string[]>([]);
   // The card that asked for each composition still being prepared, which
   // names no channel stacks yet to match a card by, and whether it came
@@ -1138,23 +1120,15 @@ export default function StackColorPreviewPanel({
               key={target.target_id}
               className="stack-preview-card-action"
               href={studioLink(serverOrigin, dbId, projectId, target.target_id)}
-              onClick={(event) => void openInStudio(event, target.target_id)}
+              onClick={(event) => void studio.open(event, target.target_id)}
               title="PSF Studio opens this target's latest Studio document, or a new one from its channel stacks, and saves your edits back to this project. PSF Studio must be installed on this computer. The first time, PSF Studio asks you to confirm the connection to this server."
             >
               Open {target.target_name} in PSF Studio
             </a>
           ))}
-          {studioError && <span className="status-message error" role="alert">{studioError}</span>}
+          {studio.error && <span className="status-message error" role="alert">{studio.error}</span>}
         </div>
       )}
-      <StudioDocuments
-        dbId={dbId}
-        projectId={projectId}
-        serverOrigin={serverOrigin}
-        targetNames={new Map(targets.map((target) => [target.target_id, target.target_name]))}
-        canWrite={canWriteAccess}
-        onOpen={(event, targetId, documentId) => void openInStudio(event, targetId, documentId)}
-      />
       <div className="stack-color-grid">
         {targets.flatMap((target) => {
           const targetJobs = (catalog.data?.jobs ?? []).filter((job) => job.target_id === target.target_id);

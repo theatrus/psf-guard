@@ -31,28 +31,25 @@ const iris: StudioDocumentSummary = {
   }],
 };
 
-function show(canWrite: boolean, onOpen = vi.fn()) {
-  render(
-    <StudioDocuments dbId="test" projectId={1} serverOrigin="http://localhost:3000"
-      targetNames={new Map([[42, 'NGC 7023']])} canWrite={canWrite} onOpen={onOpen} />,
-    { wrapper: wrapper() },
-  );
-  return onOpen;
+function show(canWrite: boolean) {
+  server.use(http.get('/api/db/test/projects/1/targets', () => ok([{
+    id: 42, name: 'NGC 7023', active: true, image_count: 1, accepted_count: 1,
+    rejected_count: 0, has_files: true,
+  }])));
+  render(<StudioDocuments dbId="test" projectId={1} canWrite={canWrite} />, { wrapper: wrapper() });
 }
 
 describe('StudioDocuments', () => {
   it('lists a document with its exports and opens it in PSF Studio', async () => {
     server.use(http.get('/api/db/test/studio-documents', () => ok([iris])));
-    const onOpen = show(false);
+    show(false);
     expect(await screen.findByText('Iris')).toBeInTheDocument();
-    expect(screen.getByText(/NGC 7023 · Revision 3, saved by ana/)).toBeInTheDocument();
+    expect(await screen.findByText(/NGC 7023 · Revision 3, saved by ana/)).toBeInTheDocument();
     const exported = screen.getByRole('link', { name: 'Iris.tif' });
     expect(exported.getAttribute('href')).toMatch(/\/api\/db\/test\/studio-documents\/files\/a{64}$/);
     expect(screen.getByText('148 MB, from revision 2')).toBeInTheDocument();
     const open = screen.getByRole('link', { name: 'Open in PSF Studio' });
     expect(open.getAttribute('href')).toContain(`&document=${iris.id}`);
-    fireEvent.click(open);
-    expect(onOpen).toHaveBeenCalledWith(expect.anything(), 42, iris.id);
     // A viewer neither deletes nor saves setups.
     expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Save as a Color setup' })).toBeNull();

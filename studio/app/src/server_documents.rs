@@ -18,7 +18,8 @@
 //! tile store, stacks and tool results are made again on each computer.
 
 use super::servers::{
-    kept_token, Client, DocumentRecord, Failure, FileUse, SaveFailure, ServerRecord,
+    kept_token, stacks_changed, Client, DocumentRecord, Failure, FileUse, SaveFailure,
+    ServerRecord, StacksChanged,
 };
 use super::Studio;
 use crate::studio_model::{Document, JunctionState, StageKind};
@@ -30,6 +31,25 @@ use std::time::{Duration, Instant};
 
 /// How long edits must stop before a save goes to the server.
 const SETTLE: Duration = Duration::from_secs(5);
+/// How long Studio waits for a save to reach the server before it quits.
+const QUIT_WAIT: Duration = Duration::from_secs(15);
+
+/// Set when the person quits or closes the window. Studio's loop saves the
+/// document here and sends changes not on the server yet, then quits.
+pub static QUIT_ASKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Asks Studio to quit once its document is saved, here and on its server.
+/// Studio quits after `QUIT_WAIT` and a second whatever happens.
+pub fn quit_after_saving(cx: &mut gpui::App) {
+    QUIT_ASKED.store(true, std::sync::atomic::Ordering::Relaxed);
+    cx.spawn(async move |cx| {
+        cx.background_executor()
+            .timer(QUIT_WAIT + Duration::from_secs(1))
+            .await;
+        cx.update(|cx| cx.quit());
+    })
+    .detach();
+}
 /// How long to wait before trying an unreachable server again.
 const RETRY: Duration = Duration::from_secs(30);
 
@@ -114,10 +134,13 @@ pub(super) struct ServerSave {
     /// Exports being sent to the project.
     exporting: Option<Arc<Mutex<Option<ExportOutcome>>>>,
     retry_after: Option<Instant>,
-    /// Exports to save to the project once the document is saved.
-    exports: Vec<PathBuf>,
+    /// Exports to save to the project once the document is saved, each with
+    /// its preview when one was written.
+    exports: Vec<(PathBuf, Option<PathBuf>)>,
     /// Whether an export is also saved to the project.
     pub export_to_project: bool,
+    /// When the person asked to quit while changes were unsent.
+    quit_asked_at: Option<Instant>,
 }
 
 impl ServerSave {
@@ -169,6 +192,9 @@ fn stacks_of(document: &Path) -> Value {
                     "job_id": stack["job_id"],
                     "group_index": stack["group_index"],
                     "artifact_revision": stack["artifact_revision"],
+                    "reference_image_id": stack["reference_image_id"],
+                    "width": stack["sky_orientation"]["output_width"],
+                    "height": stack["sky_orientation"]["output_height"],
                 })
             })
             .collect(),
@@ -206,7 +232,12 @@ fn send(
         (Some(id), Some(revision)) => client.save_document(
             &link.database,
             id,
-            json!({ "base_revision": revision, "document": document, "files": files }),
+            json!({
+                "base_revision": revision,
+                "document": document,
+                "files": files,
+                "stacks": stacks_of(document_path),
+            }),
         )?,
         _ => client
             .create_document(
@@ -225,8 +256,14 @@ fn send(
     Ok((record, text_hash(text)))
 }
 
-/// Uploads an export and records it against the document's revision.
-fn send_export(client: &Client, link: &ServerLink, path: &Path) -> Result<(), Failure> {
+/// Uploads an export, and its preview, and records it against the
+/// document's revision.
+fn send_export(
+    client: &Client,
+    link: &ServerLink,
+    path: &Path,
+    preview: Option<&Path>,
+) -> Result<(), Failure> {
     let (Some(id), Some(revision)) = (&link.document_id, link.revision) else {
         return Err(Failure::Failed(
             "The document is not on the server yet".to_string(),
@@ -235,6 +272,17 @@ fn send_export(client: &Client, link: &ServerLink, path: &Path) -> Result<(), Fa
     let stamp = crate::studio_model::FileStamp::of(path)
         .map_err(|error| Failure::Failed(error.to_string()))?;
     client.upload_file(&link.database, &stamp.sha256, path)?;
+    let preview = match preview.filter(|preview| preview.is_file()) {
+        Some(preview) => {
+            let sha = crate::studio_model::FileStamp::of(preview)
+                .map_err(|error| Failure::Failed(error.to_string()))?
+                .sha256;
+            client.upload_file(&link.database, &sha, preview)?;
+            let _ = std::fs::remove_file(preview);
+            Some(sha)
+        }
+        None => None,
+    };
     let name = path
         .file_name()
         .map_or_else(String::new, |name| name.to_string_lossy().to_string());
@@ -244,7 +292,13 @@ fn send_export(client: &Client, link: &ServerLink, path: &Path) -> Result<(), Fa
     client.add_export(
         &link.database,
         id,
-        json!({ "sha256": stamp.sha256, "revision": revision, "name": name, "format": format }),
+        json!({
+            "sha256": stamp.sha256,
+            "revision": revision,
+            "name": name,
+            "format": format,
+            "preview": preview,
+        }),
     )
 }
 
@@ -306,6 +360,48 @@ impl Studio {
     /// takes in a save that finished.
     pub(super) fn follow_server_save(&mut self) {
         self.follow_running_save();
+        self.send_when_settled();
+    }
+
+    /// Whether the open picture has changes or exports not on its server,
+    /// which a save can still send.
+    fn has_unsent(&self) -> bool {
+        let save = &self.server_save;
+        let Some((_, link)) = &save.link else {
+            return false;
+        };
+        if matches!(
+            save.state,
+            Some(SaveState::Conflict(_)) | Some(SaveState::LocalOnly(_))
+        ) {
+            return save.running.is_some();
+        }
+        save.running.is_some()
+            || save.exporting.is_some()
+            || !save.exports.is_empty()
+            || link.opened
+            || link.sent.as_deref() != Some(text_hash(&self.document.to_json()).as_str())
+    }
+
+    /// Quits once a save asked for by quitting has reached the server, or
+    /// cannot, or has taken too long.
+    pub(super) fn follow_quit(&mut self, cx: &mut gpui::App) {
+        if !QUIT_ASKED.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+        // The last edit is saved here first, however soon the quit came.
+        self.save_document();
+        let asked = *self
+            .server_save
+            .quit_asked_at
+            .get_or_insert_with(Instant::now);
+        if !self.has_unsent() || asked.elapsed() >= QUIT_WAIT {
+            cx.quit();
+        }
+    }
+
+    /// Starts a save once edits have stopped, or at once when quitting.
+    fn send_when_settled(&mut self) {
         let Some(link) = self.current_link() else {
             return;
         };
@@ -356,12 +452,14 @@ impl Studio {
         if !matches!(save.state, Some(SaveState::LocalOnly(_))) {
             save.state = Some(SaveState::Saving);
         }
+        let quitting = QUIT_ASKED.load(std::sync::atomic::Ordering::Relaxed);
         let settled = save
             .changed
             .as_ref()
             .is_some_and(|(at, _)| at.elapsed() >= SETTLE)
-            || !save.exports.is_empty();
-        let waiting = save.retry_after.is_some_and(|at| Instant::now() < at);
+            || !save.exports.is_empty()
+            || quitting;
+        let waiting = !quitting && save.retry_after.is_some_and(|at| Instant::now() < at);
         if save.running.is_some() || !settled || waiting {
             return;
         }
@@ -461,9 +559,9 @@ impl Studio {
         let slot = Arc::new(Mutex::new(None));
         let filled = slot.clone();
         std::thread::spawn(move || {
-            let outcome = exports
-                .iter()
-                .try_for_each(|path| send_export(&client, &link, path));
+            let outcome = exports.iter().try_for_each(|(path, preview)| {
+                send_export(&client, &link, path, preview.as_deref())
+            });
             *filled.lock().expect("export save") = Some(outcome);
         });
         self.server_save.exporting = Some(slot);
@@ -472,9 +570,14 @@ impl Studio {
 
     /// An export finished: saves it to the project too, when the picture is
     /// on a server and the person asked for that.
-    pub(super) fn export_finished(&mut self, path: &Path) {
-        if self.server_save.export_to_project && self.current_link().is_some() {
-            self.server_save.exports.push(path.to_path_buf());
+    pub(super) fn export_finished(&mut self, path: &Path, preview: Option<PathBuf>) {
+        if self.current_link().is_none() {
+            return;
+        }
+        if self.server_save.export_to_project {
+            self.server_save.exports.push((path.to_path_buf(), preview));
+        } else if let Some(preview) = preview {
+            let _ = std::fs::remove_file(preview);
         }
     }
 
@@ -487,6 +590,9 @@ impl Studio {
             .nth(1)
             .unwrap_or(&link.server)
             .to_string();
+        if QUIT_ASKED.load(std::sync::atomic::Ordering::Relaxed) {
+            return Some(format!("Saving to {host} before quitting…"));
+        }
         Some(match self.server_save.state.as_ref()? {
             SaveState::Saved => format!("Saved to {host}"),
             SaveState::Saving => format!("Saving to {host}…"),
@@ -558,6 +664,7 @@ impl Studio {
                 project: link.project,
                 target: link.target,
                 ticket: None,
+                document: None,
             },
             Which::Document(id),
             true,
@@ -580,11 +687,11 @@ pub enum Which {
 fn fetch(
     client: &Client,
     target: &super::open::TargetLink,
-    id: &str,
+    record: &DocumentRecord,
     document_path: &Path,
     discard: bool,
 ) -> Result<(), Failure> {
-    let record = client.document_record(&target.database, id)?;
+    let id = record.id.as_str();
     let revision = record
         .current()
         .map(|current| current.revision)
@@ -601,7 +708,7 @@ fn fetch(
             .is_some_and(|link| link.document_id.as_deref() == Some(id));
     if !keep_local {
         let text = client.revision_text(&target.database, id, revision)?;
-        let text = localize(client, &target.database, &record, &text, document_path)?;
+        let text = localize(client, &target.database, record, &text, document_path)?;
         let temporary = document_path.with_extension("json.saving");
         std::fs::write(&temporary, &text)
             .and_then(|()| std::fs::rename(&temporary, document_path))
@@ -626,9 +733,23 @@ fn fetch(
     .map_err(Failure::Failed)
 }
 
-/// A document of a target, made ready to open: the picture's name, once
-/// its document and link are written.
-pub(super) type Fetching = Arc<Mutex<Option<Result<String, Failure>>>>;
+/// What fetching a document came to.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Fetched {
+    /// Ready to prepare: the picture's name, and a note for the person.
+    Ready { name: String, note: Option<String> },
+    /// The target's stacks were registered anew since the document was
+    /// saved: the person chooses whether to open it with them.
+    Reframed(Which),
+}
+
+/// A document of a target being made ready to open.
+pub(super) type Fetching = Arc<Mutex<Option<Result<Fetched, Failure>>>>;
+
+/// What a person reads when a document's stacks were registered anew.
+pub const REFRAMED: &str = "The target's stacks were registered to another frame or at another \
+     size since this document was saved. Masks, heals and the crop are in the old stacks' \
+     pixels, so they may fall in the wrong place.";
 
 impl Studio {
     /// Opens one of a target's documents on a server: the document is
@@ -638,6 +759,18 @@ impl Studio {
         target: super::open::TargetLink,
         which: Which,
         discard: bool,
+    ) {
+        self.open_server_document_with(target, which, discard, false);
+    }
+
+    /// Opens a document; `new_stacks` opens it even when its stacks were
+    /// registered anew.
+    pub(super) fn open_server_document_with(
+        &mut self,
+        target: super::open::TargetLink,
+        which: Which,
+        discard: bool,
+        new_stacks: bool,
     ) {
         let Some(record) = self.server_record(&target.server) else {
             self.say("Not opened: Studio is not connected to that server");
@@ -686,37 +819,66 @@ impl Studio {
                     }
                     .save(&folder.join(format!("{name}.json")))
                     .map_err(Failure::Failed)?;
-                    return Ok(name);
+                    return Ok(Fetched::Ready { name, note: None });
+                };
+                let record = client.document_record(&target.database, &id)?;
+                let now = client
+                    .stacked_targets(&target.database, target.project)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .find(|stacked| stacked.target_id == target.target)
+                    .map(|stacked| stacked.source_candidates)
+                    .unwrap_or_default();
+                let note = match stacks_changed(&record.stacks, &now) {
+                    StacksChanged::No => None,
+                    StacksChanged::Rebuilt => Some(
+                        "The target's stacks were built again since this document was saved. \
+                         Studio opens it with the new stacks."
+                            .to_string(),
+                    ),
+                    StacksChanged::Reframed if !new_stacks => {
+                        return Ok(Fetched::Reframed(Which::Document(id)));
+                    }
+                    StacksChanged::Reframed => None,
                 };
                 let name = format!("{base}-{}", &id.replace('-', "")[..8.min(id.len())]);
                 fetch(
                     &client,
                     &target,
-                    &id,
+                    &record,
                     &folder.join(format!("{name}.json")),
                     discard,
                 )?;
-                Ok(name)
+                Ok(Fetched::Ready { name, note })
             })();
             *filled.lock().expect("fetching") = Some(outcome);
         });
-        self.servers.fetching = Some((fetching_target, token, slot));
+        self.servers.fetching = Some((fetching_target, token, slot, discard));
         self.say("Fetching the document from the server…");
     }
 
     /// Prepares a fetched document's picture once it is here.
     pub(super) fn follow_fetching(&mut self) {
-        let Some((_, _, slot)) = &self.servers.fetching else {
+        let Some((_, _, slot, _)) = &self.servers.fetching else {
             return;
         };
         let Some(outcome) = slot.lock().expect("fetching").take() else {
             return;
         };
-        let Some((target, token, _)) = self.servers.fetching.take() else {
+        let Some((target, token, _, discard)) = self.servers.fetching.take() else {
             return;
         };
         match outcome {
-            Ok(name) => self.open_target_named(&target, token, &name),
+            Ok(Fetched::Ready { name, note }) => {
+                self.open_target_named(&target, token, &name);
+                if let Some(note) = note {
+                    self.say(&note);
+                }
+            }
+            Ok(Fetched::Reframed(which)) => {
+                self.servers.reframed = Some((target, which, discard));
+                self.servers.open = true;
+            }
             Err(failure) => self.say(&format!("The document was not fetched: {failure}")),
         }
     }
@@ -758,7 +920,8 @@ mod tests {
         .unwrap();
         assert_eq!(
             stacks_of(&document),
-            json!([{"filter_name":"Ha","job_id":"j","group_index":0,"artifact_revision":"r"}])
+            json!([{"filter_name":"Ha","job_id":"j","group_index":0,"artifact_revision":"r",
+                "reference_image_id":null,"width":null,"height":null}])
         );
         assert_eq!(stacks_of(&folder.path().join("Other.json")), json!([]));
     }
@@ -777,6 +940,7 @@ mod tests {
             id: "a".to_string(),
             name: "Iris".to_string(),
             revisions: Vec::new(),
+            stacks: Vec::new(),
         };
         // No request is made for an exported junction.
         let client = Client::new("http://127.0.0.1:9", None);

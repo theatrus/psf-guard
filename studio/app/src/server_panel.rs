@@ -216,7 +216,10 @@ pub(super) struct ServerPanel {
     document: Which,
     /// A document being fetched before its picture is prepared, with the
     /// token the preparing needs.
-    pub fetching: Option<(super::open::TargetLink, Option<String>, Fetching)>,
+    pub fetching: Option<(super::open::TargetLink, Option<String>, Fetching, bool)>,
+    /// A document whose stacks were registered anew, waiting for the person
+    /// to open it with the new stacks or not.
+    pub reframed: Option<(super::open::TargetLink, Which, bool)>,
     /// A link's ticket traded for a token, waiting for the person.
     pub link: Option<LinkConnect>,
     /// A link's ticket being traded.
@@ -242,6 +245,7 @@ impl Default for ServerPanel {
             documents: Load::Idle,
             document: Which::Latest,
             fetching: None,
+            reframed: None,
             link: None,
             trading: None,
         }
@@ -532,6 +536,7 @@ impl Studio {
                 project,
                 target,
                 ticket: None,
+                document: None,
             },
             which,
             false,
@@ -547,6 +552,7 @@ impl Studio {
             project: panel.project?,
             target: panel.target?,
             ticket: None,
+            document: None,
         })
     }
 
@@ -585,7 +591,8 @@ impl Studio {
                     self.servers.address = record.address;
                     return;
                 }
-                self.open_server_document(link, Which::Latest, false);
+                let which = link.document.clone().map_or(Which::Latest, Which::Document);
+                self.open_server_document(link, which, false);
             }
             (None, Some(ticket)) => {
                 let client = Client::new(&link.server, None);
@@ -605,7 +612,8 @@ impl Studio {
                     saves_documents: true,
                     expires_at: None,
                 });
-                self.open_server_document(link, Which::Latest, false);
+                let which = link.document.clone().map_or(Which::Latest, Which::Document);
+                self.open_server_document(link, which, false);
             }
         }
     }
@@ -662,7 +670,12 @@ impl Studio {
         }
         self.servers.keep_server(link.record);
         self.servers.open = false;
-        self.open_server_document(link.target, Which::Latest, false);
+        let which = link
+            .target
+            .document
+            .clone()
+            .map_or(Which::Latest, Which::Document);
+        self.open_server_document(link.target, which, false);
     }
 
     fn panel_button(
@@ -832,6 +845,8 @@ impl Studio {
         }
         let card = if self.servers.link.is_some() {
             self.link_card(cx)
+        } else if self.servers.reframed.is_some() {
+            self.reframed_card(cx)
         } else {
             self.browse_card(window, cx)
         };
@@ -850,6 +865,51 @@ impl Studio {
                 .child(card)
                 .into_any_element(),
         )
+    }
+
+    fn reframed_card(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        div()
+            .w(px(520.0))
+            .p_4()
+            .rounded_md()
+            .bg(rgb(PANE))
+            .text_color(rgb(TEXT))
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(
+                div()
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .child("Open this document with the new stacks?"),
+            )
+            .child(Self::note(super::server_documents::REFRAMED))
+            .child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .child(Self::panel_button(
+                        "Open with the new stacks",
+                        "reframed-open",
+                        true,
+                        cx,
+                        |this, _, _| {
+                            if let Some((target, which, discard)) = this.servers.reframed.take() {
+                                this.servers.open = false;
+                                this.open_server_document_with(target, which, discard, true);
+                            }
+                        },
+                    ))
+                    .child(Self::panel_button(
+                        "Cancel",
+                        "reframed-cancel",
+                        true,
+                        cx,
+                        |this, _, _| {
+                            this.servers.reframed = None;
+                        },
+                    )),
+            )
+            .into_any_element()
     }
 
     fn link_card(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {

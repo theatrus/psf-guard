@@ -581,6 +581,8 @@ PSF Studio saves the document to the project a few seconds after you stop
 editing. The top bar shows “Saved to *server*”, “Saving to *server*…”, or
 “Saved on this computer only” with the reason. When the server cannot be
 reached, PSF Studio keeps saving on its computer and tries again later.
+When you quit PSF Studio or close its window, it saves the document to the
+server first, for up to 15 seconds.
 
 The server keeps:
 
@@ -589,12 +591,19 @@ The server keeps:
 - the file an external editor saved at the Finish step, since PSF Studio
   cannot make it again;
 - exports. **Also save to the project** in PSF Studio's Export section is on
-  for a picture from a server.
+  for a picture from a server. The export also gives the document a small
+  preview image for lists.
 
 The server does not keep what PSF Studio computes from the document: tile
 stores, downloaded stacks and tool results such as star removal. Another
 computer computes them again when it opens the document, which can take
 minutes for some tools.
+
+When the target's stacks were built again since the document was saved,
+PSF Studio opens the document with the new stacks and says so. When the
+stacks were registered to another frame or at another size, masks, heals
+and the crop may fall in the wrong place: PSF Studio asks first, with **Open
+with the new stacks** and **Cancel**.
 
 When another computer saved the document first, PSF Studio keeps your edits
 and shows **Save as a copy**, which saves them as a new document, and **Open
@@ -602,6 +611,21 @@ the newer version**, which discards them and opens the server's revision.
 
 **Save this picture to the target** in the panel puts a picture PSF Studio
 opened from stack files on the chosen target, as a new document.
+
+### A project's Studio documents
+
+A project's stacks page lists its **PSF Studio documents** under **Stacks**:
+each document's preview, last revision, who saved it and when, and its
+exports, which you can download. **Open in PSF Studio** opens that document.
+An editor also has:
+
+- **Save as a Color setup**, which saves the document's steps as a Color
+  processing setup that color previews can start from. It works when every
+  step is one PSF Guard's color pipeline runs; otherwise the page explains
+  which step is not.
+- **Delete**, which asks first and then deletes the document, its revisions,
+  and the files no other document uses. A copy open in PSF Studio stays on
+  that computer.
 
 ### From the command line
 

@@ -224,6 +224,10 @@ pub struct NewExport {
     pub revision: u32,
     pub name: String,
     pub format: String,
+    /// A small image of the export, uploaded first, which becomes the
+    /// preview of the revision it came from.
+    #[serde(default)]
+    pub preview: Option<String>,
 }
 
 /// One database's Studio documents.
@@ -524,12 +528,18 @@ impl StudioDocuments {
         let Some(mut record) = self.record(id)? else {
             return Ok(None);
         };
-        if !record
+        let Some(at) = record
             .revisions
             .iter()
-            .any(|revision| revision.revision == export.revision)
-        {
+            .position(|revision| revision.revision == export.revision)
+        else {
             bail!("the document has no revision {}", export.revision);
+        };
+        if let Some(preview) = &export.preview {
+            if !self.has_file(preview)? {
+                bail!("the file {preview} is not on the server: upload it first");
+            }
+            record.revisions[at].preview = Some(preview.clone());
         }
         let path = self.file_path(&export.sha256)?;
         let size = std::fs::metadata(&path)
@@ -739,6 +749,7 @@ mod tests {
                     revision: 1,
                     name: "Iris.tif".to_string(),
                     format: "TIF".to_string(),
+                    preview: Some(export.clone()),
                 },
                 "ana",
                 100,
@@ -771,6 +782,15 @@ mod tests {
         assert!(store.revision(&created.id, 2).unwrap().is_none());
         assert_eq!(record.exports[0].format, "tif");
         assert_eq!(record.exports[0].size, 16);
+        assert_eq!(
+            record.revisions[0].preview.as_deref(),
+            Some(export.as_str())
+        );
+        assert_eq!(
+            store.list(None, None).unwrap()[0].preview.as_deref(),
+            Some(export.as_str()),
+            "the newest revision with a preview gives the list's"
+        );
     }
 
     #[test]

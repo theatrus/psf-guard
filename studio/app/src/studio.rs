@@ -1029,6 +1029,12 @@ pub struct Studio {
 
 impl Studio {
     fn new(options: Options, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        // Closing the window quits, once the document is saved here and on
+        // its server.
+        window.on_window_should_close(cx, |_, cx| {
+            server_documents::quit_after_saving(cx);
+            false
+        });
         let control_wanted = options.control;
         let parity_report = options.parity_report.clone();
         // SAFETY: `NSView` is an AppKit class, windows are opened on the main
@@ -1185,6 +1191,7 @@ impl Studio {
                 this.follow_editor();
                 this.follow_servers();
                 this.follow_server_save();
+                this.follow_quit(cx);
                 this.follow_derived();
                 this.follow_store_opening();
                 this.follow_late();
@@ -1734,7 +1741,8 @@ pub fn run(options: Options) {
             KeyBinding::new("cmd-shift-z", Redo, None),
             KeyBinding::new("cmd-q", Quit, None),
         ]);
-        cx.on_action(|_: &Quit, cx| cx.quit());
+        // The document is saved here and on its server first.
+        cx.on_action(|_: &Quit, cx| server_documents::quit_after_saving(cx));
         cx.set_menus(vec![
             Menu {
                 name: "PSF Studio".into(),

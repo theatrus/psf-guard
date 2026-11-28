@@ -292,13 +292,94 @@ pub struct Target {
 }
 
 /// One channel stack of a target, as the color stack list gives it.
-#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 pub struct ChannelStack {
     pub filter_name: String,
     #[serde(default)]
     pub accepted_frames: usize,
     #[serde(default)]
     pub total_exposure_seconds: Option<f64>,
+    #[serde(default)]
+    pub job_id: String,
+    #[serde(default)]
+    pub group_index: usize,
+    #[serde(default)]
+    pub artifact_revision: String,
+    /// The frame the stack was registered to.
+    #[serde(default)]
+    pub reference_image_id: Option<i32>,
+    #[serde(default)]
+    pub sky_orientation: Option<SkyOrientation>,
+}
+
+/// The size a stack is drawn at.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub struct SkyOrientation {
+    pub output_width: usize,
+    pub output_height: usize,
+}
+
+/// A stack a document was made from, as its record keeps it.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub struct StackFingerprint {
+    pub filter_name: String,
+    pub job_id: String,
+    pub group_index: usize,
+    pub artifact_revision: String,
+    #[serde(default)]
+    pub reference_image_id: Option<i32>,
+    #[serde(default)]
+    pub width: Option<usize>,
+    #[serde(default)]
+    pub height: Option<usize>,
+}
+
+/// How a target's stacks now differ from those a document was made from.
+#[derive(Clone, Debug, PartialEq)]
+pub enum StacksChanged {
+    /// The same stacks, or the document records none.
+    No,
+    /// Built again, registered to the same frame at the same size: masks,
+    /// heals and the crop still fall where they did.
+    Rebuilt,
+    /// Registered to another frame, or another size.
+    Reframed,
+}
+
+/// Compares the stacks a document was made from with a target's stacks now.
+/// A size or a frame that either side does not know is taken as the same,
+/// and so is a side with no stacks: there is nothing to compare.
+pub fn stacks_changed(recorded: &[StackFingerprint], now: &[ChannelStack]) -> StacksChanged {
+    if recorded.is_empty() || now.is_empty() {
+        return StacksChanged::No;
+    }
+    let same = |old: &StackFingerprint, new: &ChannelStack| {
+        old.job_id == new.job_id
+            && old.group_index == new.group_index
+            && old.artifact_revision == new.artifact_revision
+    };
+    if recorded.len() == now.len()
+        && recorded
+            .iter()
+            .all(|old| now.iter().any(|new| same(old, new)))
+    {
+        return StacksChanged::No;
+    }
+    let differs =
+        |old: Option<usize>, new: Option<usize>| matches!((old, new), (Some(a), Some(b)) if a != b);
+    let reframed =
+        recorded.iter().any(|old| {
+            now.iter().any(|new| {
+            matches!((old.reference_image_id, new.reference_image_id), (Some(a), Some(b)) if a != b)
+                || differs(old.width, new.sky_orientation.as_ref().map(|sky| sky.output_width))
+                || differs(old.height, new.sky_orientation.as_ref().map(|sky| sky.output_height))
+        })
+        });
+    if reframed {
+        StacksChanged::Reframed
+    } else {
+        StacksChanged::Rebuilt
+    }
 }
 
 /// A target with its channel stacks.
@@ -463,6 +544,9 @@ pub struct DocumentRecord {
     pub id: String,
     pub name: String,
     pub revisions: Vec<RevisionEntry>,
+    /// The stacks the document was made from.
+    #[serde(default)]
+    pub stacks: Vec<StackFingerprint>,
 }
 
 impl DocumentRecord {
@@ -710,6 +794,51 @@ mod tests {
         assert!(!std::fs::read_to_string(&path).unwrap().contains("psfg_"));
         list.remove("http://localhost:3000");
         assert!(list.servers.is_empty());
+    }
+
+    #[test]
+    fn stacks_built_again_are_told_from_stacks_registered_anew() {
+        let recorded = |revision: &str, reference: i32, width: usize| StackFingerprint {
+            filter_name: "Ha".to_string(),
+            job_id: "j".to_string(),
+            group_index: 0,
+            artifact_revision: revision.to_string(),
+            reference_image_id: Some(reference),
+            width: Some(width),
+            height: Some(4000),
+        };
+        let now = |revision: &str, reference: i32, width: usize| ChannelStack {
+            filter_name: "Ha".to_string(),
+            job_id: "j".to_string(),
+            artifact_revision: revision.to_string(),
+            reference_image_id: Some(reference),
+            sky_orientation: Some(SkyOrientation {
+                output_width: width,
+                output_height: 4000,
+            }),
+            ..ChannelStack::default()
+        };
+        assert_eq!(stacks_changed(&[], &[now("r", 1, 6000)]), StacksChanged::No);
+        assert_eq!(
+            stacks_changed(&[recorded("r", 1, 6000)], &[]),
+            StacksChanged::No
+        );
+        assert_eq!(
+            stacks_changed(&[recorded("r", 1, 6000)], &[now("r", 1, 6000)]),
+            StacksChanged::No
+        );
+        assert_eq!(
+            stacks_changed(&[recorded("r", 1, 6000)], &[now("r2", 1, 6000)]),
+            StacksChanged::Rebuilt
+        );
+        assert_eq!(
+            stacks_changed(&[recorded("r", 1, 6000)], &[now("r2", 2, 6000)]),
+            StacksChanged::Reframed
+        );
+        assert_eq!(
+            stacks_changed(&[recorded("r", 1, 6000)], &[now("r2", 1, 6100)]),
+            StacksChanged::Reframed
+        );
     }
 
     #[test]

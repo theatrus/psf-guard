@@ -56,7 +56,14 @@
   **Also save to the project**, its exports. Another computer opens the same
   picture; tool results are computed again there. When two computers save
   the same document, the second keeps its edits and offers **Save as a copy**
-  or **Open the newer version**.
+  or **Open the newer version**. Quitting PSF Studio saves to the server
+  first.
+- A project's stacks page lists its PSF Studio documents, with a preview
+  from the last export, the exports to download, **Open in PSF Studio**, and
+  for an editor **Save as a Color setup** and **Delete**.
+- PSF Studio says when a document's stacks were built again since it was
+  saved, and asks before opening one whose stacks were registered to
+  another frame, where masks and heals may fall in the wrong place.
 - `psf-guard studio` reads its token from `PSF_GUARD_TOKEN`, which other
   users of the computer cannot see, before `--token`.
 - PSF Studio, the experimental color editor, now runs an input's
