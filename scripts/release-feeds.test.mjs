@@ -190,14 +190,16 @@ test('stages one copy of each installer and keeps MSI and signed updater files',
     {
       os: 'macos-latest', cli: 'psf-guard-cli', asset: 'psf-guard-macos-arm64',
       inputs: ['dmg/PSF Guard_1.2.3_aarch64.dmg', 'macos/PSF Guard.app/Contents/MacOS/psf-guard', 'macos/PSF Guard.app.tar.gz', 'macos/PSF Guard.app.tar.gz.sig'],
-      outputs: ['PSF.Guard_1.2.3_aarch64.dmg', 'PSF-Guard-1.2.3-macos-aarch64.app.tar.gz', 'PSF-Guard-1.2.3-macos-aarch64.app.tar.gz.sig'],
+      // PSF Studio's own disk image, outside Tauri's bundle folder.
+      others: ['studio-dmg/PSF Studio_1.2.3_aarch64.dmg'],
+      outputs: ['PSF.Guard_1.2.3_aarch64.dmg', 'PSF.Studio_1.2.3_aarch64.dmg', 'PSF-Guard-1.2.3-macos-aarch64.app.tar.gz', 'PSF-Guard-1.2.3-macos-aarch64.app.tar.gz.sig'],
     },
   ];
   for (const fixture of cases) {
     await t.test(fixture.os, async (t) => {
       const directory = await mkdtemp(path.join(os.tmpdir(), 'psf-release-assets-'));
       t.after(() => rm(directory, { recursive: true, force: true }));
-      for (const name of [fixture.cli, ...fixture.inputs.map((name) => `bundle/${name}`)]) {
+      for (const name of [fixture.cli, ...fixture.inputs.map((name) => `bundle/${name}`), ...(fixture.others ?? [])]) {
         const file = path.join(directory, 'target/release', name);
         await mkdir(path.dirname(file), { recursive: true });
         await writeFile(file, `fixture ${name}\n`);
