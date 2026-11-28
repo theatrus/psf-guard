@@ -73,6 +73,10 @@ pub struct RevisionEntry {
     pub revision: u32,
     pub saved_at: i64,
     pub saved_by: String,
+    /// The computer the revision was saved from, as PSF Studio gives its
+    /// name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub saved_from: Option<String>,
     #[serde(default)]
     pub files: Vec<FileUse>,
     /// A small image of the picture, when one was saved with it.
@@ -147,6 +151,8 @@ pub struct DocumentSummary {
     pub saved_at: i64,
     pub saved_by: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub saved_from: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub preview: Option<String>,
     /// Exports saved to the project, newest first.
     pub exports: Vec<ExportEntry>,
@@ -163,6 +169,7 @@ impl From<&DocumentRecord> for DocumentSummary {
             revision: current.revision,
             saved_at: current.saved_at,
             saved_by: current.saved_by.clone(),
+            saved_from: current.saved_from.clone(),
             preview: record
                 .revisions
                 .iter()
@@ -189,6 +196,9 @@ pub struct NewDocument {
     pub files: Vec<FileUse>,
     #[serde(default)]
     pub preview: Option<String>,
+    /// The computer the document is saved from.
+    #[serde(default)]
+    pub saved_from: Option<String>,
 }
 
 /// A save of an existing document.
@@ -208,6 +218,9 @@ pub struct Save {
     /// The stacks, when the document was opened with newer ones.
     #[serde(default)]
     pub stacks: Option<Vec<StackFingerprint>>,
+    /// The computer the document is saved from.
+    #[serde(default)]
+    pub saved_from: Option<String>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -244,6 +257,23 @@ fn valid_sha256(sha: &str) -> bool {
 
 fn valid_id(id: &str) -> bool {
     uuid::Uuid::parse_str(id).is_ok_and(|parsed| parsed.hyphenated().to_string() == id)
+}
+
+/// The most characters kept of a computer's name.
+const MAX_COMPUTER_CHARS: usize = 64;
+
+/// A computer's name as a revision keeps it: without control characters,
+/// trimmed, and cut to `MAX_COMPUTER_CHARS`. `None` when nothing is left.
+fn clean_computer(name: Option<&str>) -> Option<String> {
+    let name: String = name?
+        .chars()
+        .filter(|letter| !letter.is_control())
+        .collect::<String>()
+        .trim()
+        .chars()
+        .take(MAX_COMPUTER_CHARS)
+        .collect();
+    (!name.is_empty()).then_some(name)
 }
 
 fn clean_name(name: &str) -> Result<String> {
@@ -448,6 +478,7 @@ impl StudioDocuments {
                 revision: 1,
                 saved_at: now,
                 saved_by: by.to_string(),
+                saved_from: clean_computer(new.saved_from.as_deref()),
                 files: new.files,
                 preview: new.preview,
             }],
@@ -480,6 +511,7 @@ impl StudioDocuments {
             revision,
             saved_at: now,
             saved_by: by.to_string(),
+            saved_from: clean_computer(save.saved_from.as_deref()),
             files: save.files,
             preview: save.preview,
         });
@@ -659,6 +691,7 @@ mod tests {
             document: document(),
             files,
             preview: None,
+            saved_from: None,
         }
     }
 
@@ -675,6 +708,7 @@ mod tests {
             preview: None,
             name: None,
             stacks: None,
+            saved_from: None,
         };
         let Some(Saved::Saved(saved)) = store.save(&created.id, save(1), "ben", 200).unwrap()
         else {
@@ -691,6 +725,55 @@ mod tests {
         assert_eq!(store.list(Some(11), None).unwrap()[0].revision, 2);
         assert!(store.list(Some(12), None).unwrap().is_empty());
         assert!(store.list(None, Some(17)).unwrap().len() == 1);
+    }
+
+    #[test]
+    fn a_revision_keeps_the_computer_it_was_saved_from() {
+        let folder = tempfile::tempdir().unwrap();
+        let store = store(&folder);
+        let created = store
+            .create(
+                NewDocument {
+                    saved_from: Some("  Studio\u{7}Mac ".to_string()),
+                    ..new_document(Vec::new())
+                },
+                "ana",
+                100,
+            )
+            .unwrap();
+        assert_eq!(created.current().saved_from.as_deref(), Some("StudioMac"));
+        let save = Save {
+            base_revision: 1,
+            document: document(),
+            files: Vec::new(),
+            preview: None,
+            name: None,
+            stacks: None,
+            saved_from: Some("x".repeat(100)),
+        };
+        let Some(Saved::Saved(saved)) = store.save(&created.id, save, "ana", 200).unwrap() else {
+            panic!("saved");
+        };
+        assert_eq!(
+            saved.current().saved_from.as_ref().map(String::len),
+            Some(64)
+        );
+        let listed = &store.list(Some(11), None).unwrap()[0];
+        assert_eq!(listed.saved_from, saved.current().saved_from);
+        // A save that gives no computer keeps none.
+        let blank = Save {
+            base_revision: 2,
+            document: document(),
+            files: Vec::new(),
+            preview: None,
+            name: None,
+            stacks: None,
+            saved_from: Some("   ".to_string()),
+        };
+        let Some(Saved::Saved(saved)) = store.save(&created.id, blank, "ana", 300).unwrap() else {
+            panic!("saved");
+        };
+        assert_eq!(saved.current().saved_from, None);
     }
 
     #[test]
@@ -766,6 +849,7 @@ mod tests {
                         preview: None,
                         name: None,
                         stacks: None,
+                        saved_from: None,
                     },
                     "ana",
                     100,

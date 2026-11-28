@@ -161,6 +161,12 @@ pub fn computer_name() -> String {
         .unwrap_or_else(|| "a Mac".to_string())
 }
 
+/// This computer's name, asked of macOS once: each save sends it.
+pub fn this_computer() -> &'static str {
+    static NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    NAME.get_or_init(computer_name)
+}
+
 /// The token Studio keeps for a server, if any.
 pub fn kept_token(address: &str) -> Option<String> {
     #[cfg(target_os = "macos")]
@@ -518,6 +524,9 @@ pub struct DocumentSummary {
     pub revision: u32,
     pub saved_at: i64,
     pub saved_by: String,
+    /// The computer the newest revision was saved from.
+    #[serde(default)]
+    pub saved_from: Option<String>,
 }
 
 /// A file a revision uses.
@@ -533,7 +542,11 @@ pub struct FileUse {
 pub struct RevisionEntry {
     pub revision: u32,
     #[serde(default)]
+    pub saved_at: i64,
+    #[serde(default)]
     pub saved_by: String,
+    #[serde(default)]
+    pub saved_from: Option<String>,
     #[serde(default)]
     pub files: Vec<FileUse>,
 }

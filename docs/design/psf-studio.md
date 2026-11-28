@@ -596,10 +596,22 @@ Built as proposed, with these differences:
   gives a quit handler only 200 ms, so Studio's own loop holds the quit.
   Opening a revision saves nothing: the link marks it as opened, and the
   text Studio reads it as counts as sent.
-- **The preview** is made from each export's pixels, 1024 pixels on its
-  long side, with HDR highlights rolled off above 0.8, and stored with the
-  revision the export came from. A save renders no preview of its own: the
-  CPU renderer has no reduced-resolution mode.
+- **The preview** is 1024 pixels on its long side, with HDR highlights
+  rolled off above 0.8. An export's is made from the export's pixels and
+  stored with the revision the export came from. A save sends one at most
+  every ten minutes, and always on quitting: the GPU draws the final
+  picture once from the pyramid level a fitted view would use and reads it
+  back (`Renderer::preview_picture`), because the CPU renderer has no
+  reduced-resolution mode. The save waits up to five seconds for it, then
+  goes without one. It is drawn even while the window shows nothing.
+- **Earlier revisions.** Choosing a document in the panel lists up to 12
+  earlier revisions under it. One opens as a picture of its own
+  (`<target>-<id>-r<n>`), linked to the newest revision, so its edits save as
+  a new revision after the newest and edits to the newest copy stay put.
+- **Two computers.** Each save sends the computer's name; the revision
+  keeps it (`saved_from`, at most 64 characters). Studio's list says a
+  document may still be open on another computer when that computer saved
+  it in the last ten minutes. The web list shows the computer too.
 - **Changed stacks.** A record's stacks keep the frame they were
   registered to and their size. Opening compares them with the target's
   stacks: the same frame and size open with a note; another frame or size
@@ -613,8 +625,6 @@ Built as proposed, with these differences:
   which it is for every picture from a server.
 - **The control socket and `psf-studio-mcp`** can connect, browse, open,
   save a picture to a target, resolve a conflict and sign out.
-
-Not built: a preview for a document that was never exported.
 
 Found while testing: macOS ties a Keychain item to the program that wrote
 it. A Studio build that is not signed with the same identity, such as each

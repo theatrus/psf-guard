@@ -35,8 +35,9 @@ fn store(state: &AppState, database: &str) -> Result<StudioDocuments, AppError> 
         .map_err(|error| AppError::BadRequest(error.to_string()))
 }
 
-/// Who saves: the signed-in user, or this computer on a server without
-/// accounts.
+/// Who saves: the signed-in user, or "this computer" on a server without
+/// accounts. PSF Studio and the project page read that value to word such
+/// a save by the computer it came from instead.
 fn saved_by(access: Option<Extension<RequestAccess>>) -> String {
     access
         .and_then(|Extension(access)| access.username)

@@ -52,6 +52,12 @@ pub fn quit_after_saving(cx: &mut gpui::App) {
 }
 /// How long to wait before trying an unreachable server again.
 const RETRY: Duration = Duration::from_secs(30);
+/// How often a save also sends a new preview for the document list. The
+/// save made on quitting always sends one.
+const PREVIEW_EVERY: Duration = Duration::from_secs(10 * 60);
+/// How long a save waits for the GPU to draw its preview before it goes
+/// without one.
+const PREVIEW_WAIT: Duration = Duration::from_secs(5);
 
 /// A picture's link to its document on a server.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -141,6 +147,33 @@ pub(super) struct ServerSave {
     pub export_to_project: bool,
     /// When the person asked to quit while changes were unsent.
     quit_asked_at: Option<Instant>,
+    /// When a save last sent a preview, or gave up waiting for one.
+    preview_at: Option<Instant>,
+    /// The preview asked of the render thread for the next save: its id,
+    /// when it was asked, and the picture's peak once the request is made.
+    preview_asked: Option<PreviewAsked>,
+    /// Counts previews asked for, to tell their requests apart.
+    previews: u64,
+}
+
+/// A preview asked of the render thread: its id, when it was asked, and
+/// the picture's peak once the request is made.
+type PreviewAsked = (u64, Instant, Arc<Mutex<Option<f32>>>);
+
+/// A preview for a save: the render thread's image and the picture's peak.
+pub(super) struct SavePreview {
+    image: super::PreviewImage,
+    peak: f32,
+}
+
+/// What a save does about its preview.
+enum PreviewStep {
+    /// Send this one.
+    Ready(SavePreview),
+    /// The GPU is drawing it: the save waits.
+    Waiting,
+    /// The save goes without one.
+    Without,
 }
 
 impl ServerSave {
@@ -209,9 +242,16 @@ fn send(
     name: &str,
     text: &str,
     document_path: &Path,
+    preview: Option<SavePreview>,
 ) -> Outcome {
     let document: Value = serde_json::from_str(text)
         .map_err(|error| SaveFailure::Failed(Failure::Failed(error.to_string())))?;
+    let preview = match preview {
+        Some(preview) => {
+            send_preview(client, &link.database, preview).map_err(SaveFailure::Failed)?
+        }
+        None => None,
+    };
     let mut files = Vec::new();
     if let Ok(parsed) = Document::from_json(text)
         && let Some((path, sha)) = edited_file(&parsed)
@@ -236,7 +276,9 @@ fn send(
                 "base_revision": revision,
                 "document": document,
                 "files": files,
+                "preview": preview,
                 "stacks": stacks_of(document_path),
+                "saved_from": super::servers::this_computer(),
             }),
         )?,
         _ => client
@@ -249,11 +291,45 @@ fn send(
                     "stacks": stacks_of(document_path),
                     "document": document,
                     "files": files,
+                    "preview": preview,
+                    "saved_from": super::servers::this_computer(),
                 }),
             )
             .map_err(SaveFailure::Failed)?,
     };
     Ok((record, text_hash(text)))
+}
+
+/// Writes a save's preview as a small PNG and uploads it. Returns its hash,
+/// or `None` when the PNG could not be written: the save then goes without
+/// a preview.
+fn send_preview(
+    client: &Client,
+    database: &str,
+    preview: SavePreview,
+) -> Result<Option<String>, Failure> {
+    let path = std::env::temp_dir()
+        .join("psf-studio-previews")
+        .join(format!("{}.png", uuid::Uuid::new_v4().simple()));
+    let image = &preview.image;
+    if let Err(reason) = super::export::write_preview(
+        &path,
+        image.width as usize,
+        image.height as usize,
+        &image.rgb,
+        preview.peak,
+    ) {
+        eprintln!("the preview was not written: {reason}");
+        return Ok(None);
+    }
+    let sent = crate::studio_model::FileStamp::of(&path)
+        .map_err(|error| Failure::Failed(error.to_string()))
+        .and_then(|stamp| {
+            client.upload_file(database, &stamp.sha256, &path)?;
+            Ok(stamp.sha256)
+        });
+    let _ = std::fs::remove_file(&path);
+    sent.map(Some)
 }
 
 /// Uploads an export, and its preview, and records it against the
@@ -308,7 +384,7 @@ fn send_export(
 pub fn localize(
     client: &Client,
     database: &str,
-    record: &DocumentRecord,
+    uses: &[FileUse],
     text: &str,
     document_path: &Path,
 ) -> Result<String, Failure> {
@@ -317,10 +393,7 @@ pub fn localize(
     let junction = document.junction_mut(StageKind::Finish);
     match &mut junction.state {
         JunctionState::Edited { path, edited, .. } => {
-            let uses = record
-                .current()
-                .and_then(|current| current.files.iter().find(|file| file.role == "edited"));
-            match uses {
+            match uses.iter().find(|file| file.role == "edited") {
                 Some(file) if file.sha256 == edited.sha256 => {
                     let local = document_path.with_extension("edit.tif");
                     client.download_file(database, &file.sha256, &local)?;
@@ -474,16 +547,107 @@ impl Studio {
         } else {
             None
         };
+        let preview = match self.preview_for_save(quitting) {
+            PreviewStep::Ready(preview) => Some(preview),
+            PreviewStep::Waiting => return,
+            PreviewStep::Without => None,
+        };
         let client = Client::new(&record.address, token);
         let name = self.document.name.clone();
         let slot = Arc::new(Mutex::new(None));
         let filled = slot.clone();
         std::thread::spawn(move || {
-            let outcome = send(&client, &link, &name, &text, &document_path);
+            let outcome = send(&client, &link, &name, &text, &document_path, preview);
             *filled.lock().expect("server save") = Some(outcome);
         });
+        let save = &mut self.server_save;
         save.running = Some(slot);
         save.state = Some(SaveState::Saving);
+    }
+
+    /// The preview the next save sends: one is sent at most every
+    /// `PREVIEW_EVERY`, and always on quitting. The GPU draws it from the
+    /// canvas's tiles, so it shows the picture as the canvas does.
+    fn preview_for_save(&mut self, quitting: bool) -> PreviewStep {
+        let due = quitting
+            || self
+                .server_save
+                .preview_at
+                .is_none_or(|at| at.elapsed() >= PREVIEW_EVERY);
+        if !due {
+            return PreviewStep::Without;
+        }
+        if let Some((id, asked, peak)) = self.server_save.preview_asked.clone() {
+            let drawn = self.canvas.read_mut(|shared| match &shared.preview_image {
+                Some((known, _)) if *known == id => shared.preview_image.take(),
+                _ => None,
+            });
+            let peak = *peak.lock().expect("preview peak");
+            if let (Some((_, image)), Some(peak)) = (drawn, peak) {
+                self.finish_preview();
+                return PreviewStep::Ready(SavePreview { image, peak });
+            }
+            if asked.elapsed() < PREVIEW_WAIT {
+                return PreviewStep::Waiting;
+            }
+            // The GPU did not draw it in time: this save, and the next ones
+            // until the preview is due again, go without one.
+            self.finish_preview();
+            return PreviewStep::Without;
+        }
+        // The picture sampled for an output stretch must be the one the
+        // canvas shows, as for an export.
+        if self.store_path().is_none()
+            || (self.picture_wanted.is_some()
+                && self.picture_samples.as_ref().map(|(id, _)| *id) != self.picture_wanted)
+        {
+            return PreviewStep::Without;
+        }
+        self.ask_for_preview();
+        PreviewStep::Waiting
+    }
+
+    /// Asks the render thread for a preview of the final picture. The scene
+    /// is built on a thread of its own, as an export's is.
+    fn ask_for_preview(&mut self) {
+        let save = &mut self.server_save;
+        save.previews += 1;
+        let id = save.previews;
+        let peak = Arc::new(Mutex::new(None));
+        save.preview_asked = Some((id, Instant::now(), peak.clone()));
+        let document = self.document.clone();
+        let band_info = self.band_info.clone();
+        let picture_samples = self.picture_samples.clone();
+        let scene_version = self.scene_version;
+        let resolved = self.scene_worker.resolved();
+        let crop = self.crop_rect();
+        let canvas = self.canvas.clone();
+        std::thread::spawn(move || {
+            let (mut final_scene, states) = super::panes::scene(
+                &document,
+                &band_info,
+                &crate::studio_model::Place::Final.view(),
+                scene_version,
+                picture_samples
+                    .as_ref()
+                    .map(|(id, samples)| (*id, samples.as_slice())),
+                &mut crate::output_stretch::ResolvedChains::from_resolved(&resolved),
+                &[],
+            );
+            final_scene.stretches = Arc::new(band_info.stretches(&states).unwrap_or_default());
+            let picture = final_scene.picture(&[]);
+            *peak.lock().expect("preview peak") = Some(picture.peak());
+            canvas.edit(|state| {
+                state.preview = Some(Arc::new(super::PreviewRequest { id, picture, crop }));
+            });
+        });
+    }
+
+    /// Ends the preview under way: the render thread draws no more of it.
+    fn finish_preview(&mut self) {
+        self.server_save.preview_asked = None;
+        self.server_save.preview_at = Some(Instant::now());
+        self.canvas.edit(|state| state.preview = None);
     }
 
     fn follow_running_save(&mut self) {
@@ -679,23 +843,37 @@ pub enum Which {
     Latest,
     New,
     Document(String),
+    /// An earlier revision of a document.
+    Revision(String, u32),
 }
 
-/// Fetches a document for this computer: its newest revision written to
-/// `document_path`, with its edited file beside it, and the link. The
-/// copy here is kept when it holds edits not yet sent, unless `discard`.
+/// Fetches a document for this computer: its newest revision, or `at`,
+/// written to `document_path`, with its edited file beside it, and the
+/// link. The copy here is kept when it holds edits not yet sent, unless
+/// `discard`.
+///
+/// The link names the newest revision even when an earlier one is read, so
+/// edits to an earlier revision are saved as a new revision after the
+/// newest.
 fn fetch(
     client: &Client,
     target: &super::open::TargetLink,
     record: &DocumentRecord,
     document_path: &Path,
     discard: bool,
+    at: Option<u32>,
 ) -> Result<(), Failure> {
     let id = record.id.as_str();
     let revision = record
         .current()
         .map(|current| current.revision)
         .ok_or_else(|| Failure::Failed("The document has no revision".to_string()))?;
+    let read = at.unwrap_or(revision);
+    let entry = record
+        .revisions
+        .iter()
+        .find(|entry| entry.revision == read)
+        .ok_or_else(|| Failure::Failed(format!("The server no longer keeps revision {read}")))?;
     let local = ServerLink::load(document_path);
     let unsent = local.as_ref().is_some_and(|link| {
         std::fs::read_to_string(document_path)
@@ -707,8 +885,8 @@ fn fetch(
             .as_ref()
             .is_some_and(|link| link.document_id.as_deref() == Some(id));
     if !keep_local {
-        let text = client.revision_text(&target.database, id, revision)?;
-        let text = localize(client, &target.database, record, &text, document_path)?;
+        let text = client.revision_text(&target.database, id, read)?;
+        let text = localize(client, &target.database, &entry.files, &text, document_path)?;
         let temporary = document_path.with_extension("json.saving");
         std::fs::write(&temporary, &text)
             .and_then(|()| std::fs::rename(&temporary, document_path))
@@ -797,8 +975,14 @@ impl Studio {
             let outcome = (|| {
                 std::fs::create_dir_all(&folder)
                     .map_err(|error| Failure::Failed(error.to_string()))?;
+                let asked = which.clone();
+                let mut at = None;
                 let id = match which {
                     Which::Document(id) => Some(id),
+                    Which::Revision(id, revision) => {
+                        at = Some(revision);
+                        Some(id)
+                    }
                     Which::New => None,
                     Which::Latest => client
                         .documents(&target.database, target.project, target.target)?
@@ -829,7 +1013,9 @@ impl Studio {
                     .find(|stacked| stacked.target_id == target.target)
                     .map(|stacked| stacked.source_candidates)
                     .unwrap_or_default();
-                let note = match stacks_changed(&record.stacks, &now) {
+                let latest = record.current().map_or(0, |current| current.revision);
+                let at = at.filter(|revision| *revision != latest);
+                let stacks_note = match stacks_changed(&record.stacks, &now) {
                     StacksChanged::No => None,
                     StacksChanged::Rebuilt => Some(
                         "The target's stacks were built again since this document was saved. \
@@ -837,17 +1023,34 @@ impl Studio {
                             .to_string(),
                     ),
                     StacksChanged::Reframed if !new_stacks => {
-                        return Ok(Fetched::Reframed(Which::Document(id)));
+                        return Ok(Fetched::Reframed(asked));
                     }
                     StacksChanged::Reframed => None,
                 };
-                let name = format!("{base}-{}", &id.replace('-', "")[..8.min(id.len())]);
+                let revision_note = at.map(|revision| {
+                    format!(
+                        "Revision {revision} is open. Studio saves your edits to it as a new \
+                         revision, after revision {latest}."
+                    )
+                });
+                let note = match (revision_note, stacks_note) {
+                    (Some(first), Some(second)) => Some(format!("{first} {second}")),
+                    (first, second) => first.or(second),
+                };
+                // An earlier revision is a picture of its own here, so it
+                // leaves edits to the newest one alone.
+                let short = &id.replace('-', "")[..8.min(id.len())];
+                let name = match at {
+                    Some(revision) => format!("{base}-{short}-r{revision}"),
+                    None => format!("{base}-{short}"),
+                };
                 fetch(
                     &client,
                     &target,
                     &record,
                     &folder.join(format!("{name}.json")),
                     discard,
+                    at,
                 )?;
                 Ok(Fetched::Ready { name, note })
             })();
@@ -936,18 +1139,12 @@ mod tests {
             .junction_mut(StageKind::Finish)
             .exported(&file, "upstream")
             .unwrap();
-        let record = DocumentRecord {
-            id: "a".to_string(),
-            name: "Iris".to_string(),
-            revisions: Vec::new(),
-            stacks: Vec::new(),
-        };
         // No request is made for an exported junction.
         let client = Client::new("http://127.0.0.1:9", None);
         let text = localize(
             &client,
             "main",
-            &record,
+            &[],
             &document.to_json(),
             &folder.path().join("Iris.json"),
         )

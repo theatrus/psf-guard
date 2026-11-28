@@ -2791,6 +2791,8 @@ export interface StudioDocumentSummary {
   /** Unix seconds. */
   saved_at: number;
   saved_by: string;
+  /** The computer PSF Studio saved the revision from, when it gave one. */
+  saved_from?: string;
   /** SHA-256 of a small image of the picture, when one was saved. */
   preview?: string;
   /** Newest first. */

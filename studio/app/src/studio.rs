@@ -212,6 +212,25 @@ pub struct CanvasState {
     /// The final picture to sample for the histogram: the same patches,
     /// with every Finish step drawn by the GPU.
     final_probe: Option<Arc<PictureRequest>>,
+    /// A small picture of the whole final picture to draw, for the list of
+    /// a server's documents.
+    pub preview: Option<Arc<PreviewRequest>>,
+}
+
+/// A preview of the final picture that the UI asks the render thread for.
+pub struct PreviewRequest {
+    pub id: u64,
+    pub picture: Picture,
+    /// The part of the document the picture keeps, or `None` for all of it.
+    pub crop: Option<[f32; 4]>,
+}
+
+/// A preview the render thread drew: red, green and blue interleaved in the
+/// working space.
+pub struct PreviewImage {
+    pub width: u32,
+    pub height: u32,
+    pub rgb: Vec<f32>,
 }
 
 /// A sampling of the combined picture that the UI asks the render thread
@@ -273,6 +292,7 @@ impl CanvasState {
             gpu_frame_ms: None,
             probe: None,
             final_probe: None,
+            preview: None,
         }
     }
 
@@ -584,6 +604,8 @@ struct Shared {
     picture: Option<(u64, Arc<Vec<f32>>)>,
     /// The samples of the final picture last read, likewise.
     final_picture: Option<(u64, Arc<Vec<f32>>)>,
+    /// The preview last drawn, with the id of the request it answers.
+    preview_image: Option<(u64, PreviewImage)>,
     /// The frame copied for the control socket, with its capture's number.
     control_captured: Option<(u64, psf_studio_render::Captured)>,
 }
@@ -605,6 +627,11 @@ impl CanvasHandle {
 
     fn read<R>(&self, read: impl FnOnce(&Shared) -> R) -> R {
         read(&self.0 .0.lock().expect("canvas state"))
+    }
+
+    /// Reads and changes what the render thread left, without waking it.
+    fn read_mut<R>(&self, read: impl FnOnce(&mut Shared) -> R) -> R {
+        read(&mut self.0 .0.lock().expect("canvas state"))
     }
 }
 
@@ -628,6 +655,8 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
     let mut probe_scene: Option<(u64, GpuScene)> = None;
     let mut final_scene: Option<(u64, GpuScene)> = None;
     let mut final_sampled: Option<u64> = None;
+    let mut preview_scene: Option<(u64, GpuScene)> = None;
+    let mut previewed: Option<u64> = None;
     loop {
         let input_at = {
             let mut shared = lock.lock().expect("canvas state");
@@ -646,6 +675,7 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
             canvas.scenes = shared.canvas.scenes.clone();
             canvas.probe = shared.canvas.probe.clone();
             canvas.final_probe = shared.canvas.final_probe.clone();
+            canvas.preview = shared.canvas.preview.clone();
             canvas.wipe = shared.canvas.wipe;
             canvas.crop = shared.canvas.crop;
             canvas.show_clipping = shared.canvas.show_clipping;
@@ -730,6 +760,41 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
         renderer.capture_next =
             (capture.is_some() && options.capture_prefix.is_some()) || control_capture.is_some();
         let result = renderer.render(&frame);
+        // A preview is drawn even while the window shows nothing.
+        let mut preview_pending = false;
+        match canvas.preview.clone() {
+            Some(request) if previewed != Some(request.id) => {
+                if preview_scene
+                    .as_ref()
+                    .is_none_or(|(id, _)| *id != request.id)
+                {
+                    preview_scene =
+                        Some((request.id, GpuScene::new(&request.picture, &canvas.inputs)));
+                }
+                let scene = &preview_scene.as_ref().expect("the request's scene").1;
+                match renderer.preview_picture(
+                    request.id,
+                    scene,
+                    request.crop,
+                    export::PREVIEW_SIDE as u32,
+                ) {
+                    psf_studio_render::Previewed::Ready { width, height, rgb } => {
+                        previewed = Some(request.id);
+                        preview_scene = None;
+                        lock.lock().expect("canvas state").preview_image =
+                            Some((request.id, PreviewImage { width, height, rgb }));
+                    }
+                    psf_studio_render::Previewed::Pending => preview_pending = true,
+                }
+            }
+            Some(_) => {}
+            None => {
+                if preview_scene.take().is_some() {
+                    renderer.stop_preview();
+                }
+                previewed = None;
+            }
+        }
         if let Some(id) = control_capture {
             let mut shared = lock.lock().expect("canvas state");
             match renderer.captured.take() {
@@ -768,11 +833,15 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
             Err(error) => {
                 // The surface has no texture while the window is covered.
                 lock.lock().expect("canvas state").readout.error = Some(error);
+                animate |= preview_pending;
                 std::thread::sleep(Duration::from_millis(16));
                 continue;
             }
         };
-        animate = stats.tiles_coarse > 0 || stats.tiles_in_flight > 0 || stats.tiles_uploaded > 0;
+        animate = stats.tiles_coarse > 0
+            || stats.tiles_in_flight > 0
+            || stats.tiles_uploaded > 0
+            || preview_pending;
         // A sampling no document asks for any more is stopped.
         if canvas.probe.is_none() && probe_scene.take().is_some() {
             renderer.stop_sampling(ProbeSlot::First);
@@ -1057,6 +1126,7 @@ impl Studio {
                 readout: Readout::default(),
                 picture: None,
                 final_picture: None,
+                preview_image: None,
                 control_captured: None,
             }),
             Condvar::new(),

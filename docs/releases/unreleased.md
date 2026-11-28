@@ -58,9 +58,14 @@
   the same document, the second keeps its edits and offers **Save as a copy**
   or **Open the newer version**. Quitting PSF Studio saves to the server
   first.
-- A project's stacks page lists its PSF Studio documents, with a preview
-  from the last export, the exports to download, **Open in PSF Studio**, and
-  for an editor **Save as a Color setup** and **Delete**.
+- A project's stacks page lists its PSF Studio documents, with a preview,
+  who saved each one and from which computer, the exports to download,
+  **Open in PSF Studio**, and for an editor **Save as a Color setup** and
+  **Delete**. PSF Studio sends the preview as it saves, so a document you
+  never exported has one too.
+- PSF Studio's document list shows how long ago each document was saved and
+  from which computer, and warns when another computer saved it in the last
+  ten minutes. Click a document to list its earlier revisions and open one.
 - PSF Studio says when a document's stacks were built again since it was
   saved, and asks before opening one whose stacks were registered to
   another frame, where masks and heals may fall in the wrong place.

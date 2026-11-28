@@ -362,7 +362,7 @@ pub(super) fn for_display(rgb: &[f32], display: WorkingSpace) -> Vec<f32> {
 }
 
 /// The long side of a preview, in pixels.
-const PREVIEW_SIDE: usize = 1024;
+pub(super) const PREVIEW_SIDE: usize = 1024;
 
 /// Writes a small sRGB PNG of interleaved RGB in the working space: each
 /// preview pixel the mean of the pixels under it. An HDR picture's values

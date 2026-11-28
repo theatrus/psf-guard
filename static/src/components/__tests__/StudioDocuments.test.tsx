@@ -24,6 +24,7 @@ const iris: StudioDocumentSummary = {
   revision: 3,
   saved_at: 1_795_825_165,
   saved_by: 'ana',
+  saved_from: 'Observatory Mac',
   preview: 'b'.repeat(64),
   exports: [{
     sha256: 'a'.repeat(64), revision: 2, name: 'Iris.tif', format: 'tif',
@@ -40,11 +41,19 @@ function show(canWrite: boolean) {
 }
 
 describe('StudioDocuments', () => {
+  it('words a save on a server without accounts by the computer it came from', async () => {
+    server.use(http.get('/api/db/test/studio-documents', () => ok([
+      { ...iris, saved_by: 'this computer', saved_from: 'Observatory Mac' },
+    ])));
+    show(false);
+    expect(await screen.findByText(/Revision 3, saved from Observatory Mac on /)).toBeInTheDocument();
+  });
+
   it('lists a document with its exports and opens it in PSF Studio', async () => {
     server.use(http.get('/api/db/test/studio-documents', () => ok([iris])));
     show(false);
     expect(await screen.findByText('Iris')).toBeInTheDocument();
-    expect(await screen.findByText(/NGC 7023 · Revision 3, saved by ana/)).toBeInTheDocument();
+    expect(await screen.findByText(/NGC 7023 · Revision 3, saved by ana from Observatory Mac on /)).toBeInTheDocument();
     const exported = screen.getByRole('link', { name: 'Iris.tif' });
     expect(exported.getAttribute('href')).toMatch(/\/api\/db\/test\/studio-documents\/files\/a{64}$/);
     expect(screen.getByText('148 MB, from revision 2')).toBeInTheDocument();

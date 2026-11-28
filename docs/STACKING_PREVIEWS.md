@@ -564,9 +564,16 @@ out** in PSF Studio's panel revokes the connection from the PSF Studio side.
 
 In PSF Studio's **PSF Guard** panel, choose a database, a project and a
 target. **Documents** lists the target's Studio documents, newest first,
-with **New document**. Click **Open**. PSF Studio fetches the document and
-the target's current channel stacks, registers the stacks and opens the
-picture.
+with **New document**. Each document shows who saved it last, from which
+computer, and how long ago. When another computer saved it in the last ten
+minutes, the list says it may still be open there. Click **Open**. PSF
+Studio fetches the document and the target's current channel stacks,
+registers the stacks and opens the picture.
+
+Click a document to list its earlier revisions beneath it, then choose one
+and click **Open** to open that revision. PSF Studio opens it as a picture
+of its own, so the newest revision on this computer keeps its edits. Your
+edits to the earlier revision are saved as a new revision after the newest.
 
 In PSF Guard, **Open *target* in PSF Studio** over a project's color stacks
 does the same for the target's newest document. PSF Guard shows one link for
@@ -591,8 +598,11 @@ The server keeps:
 - the file an external editor saved at the Finish step, since PSF Studio
   cannot make it again;
 - exports. **Also save to the project** in PSF Studio's Export section is on
-  for a picture from a server. The export also gives the document a small
-  preview image for lists.
+  for a picture from a server;
+- a small preview image for lists. PSF Studio sends one with a save at most
+  every ten minutes, always when you quit, and with each export. The
+  preview of a save is drawn as the canvas draws the picture; an export's
+  is made from the export itself.
 
 The server does not keep what PSF Studio computes from the document: tile
 stores, downloaded stacks and tool results such as star removal. Another

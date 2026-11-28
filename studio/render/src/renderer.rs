@@ -230,6 +230,13 @@ pub struct Renderer {
     probes: [Option<PictureProbe>; 2],
     /// The tiles each sampling still needs, asked for after the view's.
     probe_wanted: [Vec<TileKey>; 2],
+    /// A small picture of the whole document under way.
+    preview: Option<PreviewRender>,
+    /// The tiles the preview still needs, asked for after the view's.
+    preview_wanted: Vec<TileKey>,
+    /// The tiles the last frame asked for, so a preview drawn while the
+    /// window shows nothing keeps them when it asks for its own.
+    last_wanted: Vec<TileKey>,
 }
 
 /// Which of two samplings of the picture a call is about, so a host can
@@ -258,6 +265,39 @@ pub enum Sampled {
     /// patch.
     Ready(Vec<f32>),
 }
+
+/// How far [`Renderer::preview_picture`] has got.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Previewed {
+    /// Its tiles are being computed, or the GPU is drawing it.
+    Pending,
+    /// The picture, `width` by `height`, red, green and blue interleaved, in
+    /// the working space. A pixel nothing covers is 0.
+    Ready {
+        width: u32,
+        height: u32,
+        rgb: Vec<f32>,
+    },
+}
+
+/// A preview being drawn: its size and, once drawn, the copy being read.
+struct PreviewRender {
+    id: u64,
+    width: u32,
+    height: u32,
+    targets: GpuTargets,
+    reading: Option<PreviewReading>,
+}
+
+struct PreviewReading {
+    buffer: wgpu::Buffer,
+    mapped: Arc<std::sync::Mutex<Option<Result<(), wgpu::BufferAsyncError>>>>,
+    row_bytes: u32,
+}
+
+/// Marks a preview's scene version, apart from the samplings' and the
+/// canvas panes'.
+const PREVIEW_VERSION: u64 = 1 << 62;
 
 /// A frame copied from the surface, as the display was given it.
 #[derive(Clone, Debug)]
@@ -394,6 +434,49 @@ fn take_patches(probe: &mut PictureProbe, reading: &ProbeReading, size: u32) {
         }
     }
     reading.buffer.unmap();
+}
+
+/// How a preview of `rect` (left, top, right, bottom in document pixels)
+/// fits in `long_side` pixels: the zoom, the image's width and height, and
+/// the pyramid level its tiles come from, as the canvas would choose for a
+/// view at that zoom. A region smaller than the preview is drawn at full
+/// size, not enlarged.
+fn preview_fit(rect: [f64; 4], long_side: u32, max_level: u8) -> (f64, u32, u32, u8) {
+    let (width, height) = ((rect[2] - rect[0]).max(1.0), (rect[3] - rect[1]).max(1.0));
+    let zoom = (f64::from(long_side.max(1)) / width.max(height)).min(1.0);
+    let level = ((1.0 / zoom).log2().floor().clamp(0.0, f64::from(max_level))) as u8;
+    (
+        zoom,
+        ((width * zoom).round() as u32).max(1),
+        ((height * zoom).round() as u32).max(1),
+        level,
+    )
+}
+
+/// A drawn preview's red, green and blue from its mapped buffer, as
+/// floats; a pixel nothing covers is 0.
+fn read_preview(reading: &PreviewReading, width: u32, height: u32) -> Vec<f32> {
+    let mut rgb = Vec::with_capacity(width as usize * height as usize * 3);
+    let Ok(mapped) = reading.buffer.slice(..).get_mapped_range() else {
+        return vec![0.0; width as usize * height as usize * 3];
+    };
+    for row in mapped
+        .chunks(reading.row_bytes as usize)
+        .take(height as usize)
+    {
+        let pixels: &[u16] = bytemuck::cast_slice(&row[..width as usize * 8]);
+        for pixel in pixels.as_chunks::<4>().0 {
+            rgb.extend(pixel[..3].iter().map(|bits| {
+                let value = half::f16::from_bits(*bits).to_f32();
+                if value.is_finite() {
+                    value
+                } else {
+                    0.0
+                }
+            }));
+        }
+    }
+    rgb
 }
 
 impl Renderer {
@@ -608,6 +691,9 @@ impl Renderer {
             capture_next: false,
             captured: None,
             probes: [None, None],
+            preview: None,
+            preview_wanted: Vec::new(),
+            last_wanted: Vec::new(),
             probe_wanted: [Vec::new(), Vec::new()],
         })
     }
@@ -710,21 +796,7 @@ impl Renderer {
         let view = frame.view;
 
         // Tiles: upload what the workers finished, then choose what to draw.
-        while stats.tiles_uploaded < self.uploads_per_frame {
-            let Some((key, samples)) = self.producer.take_finished() else {
-                break;
-            };
-            self.cache.insert(
-                &self.device,
-                &self.queue,
-                self.compositor.tile_layout(),
-                key,
-                &samples,
-                self.frame,
-            );
-            self.producer.uploaded(key);
-            stats.tiles_uploaded += 1;
-        }
+        stats.tiles_uploaded = self.upload_finished();
 
         let level = ((1.0 / view.zoom)
             .log2()
@@ -769,7 +841,15 @@ impl Renderer {
                 .copied()
                 .collect::<Vec<_>>(),
         );
+        wanted.extend(
+            self.preview_wanted
+                .iter()
+                .filter(|key| !wanted.contains(key))
+                .copied()
+                .collect::<Vec<_>>(),
+        );
         wanted.retain(|key| !self.cache.contains(*key));
+        self.last_wanted.clone_from(&wanted);
         self.producer.set_wanted(wanted);
 
         let mut chosen: Vec<ChosenTile> = Vec::with_capacity(visible_keys.len());
@@ -1157,6 +1237,188 @@ impl Renderer {
         result
     }
 
+    /// Uploads the tiles the workers finished, as many as a frame may.
+    /// Returns how many.
+    fn upload_finished(&mut self) -> u32 {
+        let mut uploaded = 0;
+        while uploaded < self.uploads_per_frame {
+            let Some((key, samples)) = self.producer.take_finished() else {
+                break;
+            };
+            self.cache.insert(
+                &self.device,
+                &self.queue,
+                self.compositor.tile_layout(),
+                key,
+                &samples,
+                self.frame,
+            );
+            self.producer.uploaded(key);
+            uploaded += 1;
+        }
+        uploaded
+    }
+
+    /// Draws the picture `scene` draws, the whole of `crop` (or of the
+    /// document), into a small image whose long side is `long_side` pixels
+    /// at most, and reads it back. It is drawn from the pyramid level the
+    /// size calls for, as the canvas draws a fitted view.
+    ///
+    /// Each call asks for the tiles still missing or takes the image once
+    /// the GPU has drawn it; it never waits for the GPU. It works while the
+    /// window shows nothing, so a covered window still gets its preview.
+    /// Calls with the same `id` carry on one preview; a new `id` starts
+    /// again.
+    pub fn preview_picture(
+        &mut self,
+        id: u64,
+        scene: &GpuScene,
+        crop: Option<[f32; 4]>,
+        long_side: u32,
+    ) -> Previewed {
+        let (document_width, document_height) = (
+            f64::from(self.pyramid.width),
+            f64::from(self.pyramid.height),
+        );
+        let rect = crop.map_or([0.0, 0.0, document_width, document_height], |crop| {
+            [
+                f64::from(crop[0]).clamp(0.0, document_width),
+                f64::from(crop[1]).clamp(0.0, document_height),
+                f64::from(crop[2]).clamp(0.0, document_width),
+                f64::from(crop[3]).clamp(0.0, document_height),
+            ]
+        });
+        let (zoom, width, height, level) = preview_fit(rect, long_side, self.pyramid.max_level());
+        if self.preview.as_ref().is_none_or(|preview| {
+            preview.id != id || (preview.width, preview.height) != (width, height)
+        }) {
+            self.preview = Some(PreviewRender {
+                id,
+                width,
+                height,
+                targets: self.compositor.targets(width, height),
+                reading: None,
+            });
+        }
+        let mut preview = self.preview.take().expect("a preview");
+        if let Some(reading) = preview.reading.take() {
+            let _ = self.device.poll(wgpu::PollType::Poll);
+            let mapped = reading.mapped.lock().expect("preview mapping").take();
+            match mapped {
+                None => {
+                    preview.reading = Some(reading);
+                    self.preview = Some(preview);
+                    return Previewed::Pending;
+                }
+                Some(Ok(())) => {
+                    let rgb = read_preview(&reading, width, height);
+                    reading.buffer.unmap();
+                    self.preview_wanted.clear();
+                    return Previewed::Ready { width, height, rgb };
+                }
+                // A buffer that could not be mapped is drawn again.
+                Some(Err(_)) => {}
+            }
+        }
+        let keys = keys_in(&self.pyramid, level, rect, 0);
+        // The window may show nothing, and then no frame uploads tiles.
+        self.upload_finished();
+        let missing: Vec<TileKey> = keys
+            .iter()
+            .filter(|key| !self.cache.contains(**key))
+            .copied()
+            .collect();
+        if !missing.is_empty() {
+            let mut wanted = self.last_wanted.clone();
+            let more: Vec<TileKey> = missing
+                .iter()
+                .filter(|key| !wanted.contains(key))
+                .copied()
+                .collect();
+            wanted.extend(more);
+            wanted.retain(|key| !self.cache.contains(*key));
+            self.producer.set_wanted(wanted);
+            self.preview_wanted = missing;
+            self.preview = Some(preview);
+            return Previewed::Pending;
+        }
+        self.preview_wanted.clear();
+        for key in &keys {
+            self.cache.touch(*key, self.frame);
+        }
+        let chosen: Vec<ChosenTile> = keys
+            .iter()
+            .filter_map(|key| chosen_tile(&self.pyramid, *key, *key, crop))
+            .collect();
+        let draws = tile_draws(&self.cache, &chosen);
+        let whole = [0, 0, width, height];
+        self.compositor.draw(
+            scene,
+            Some(id ^ PREVIEW_VERSION),
+            &preview.targets,
+            GpuView {
+                center: [(rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0],
+                zoom,
+            },
+            DrawArea {
+                viewport: whole,
+                scissor: whole,
+            },
+            &draws,
+            &[],
+            0.0,
+            true,
+        );
+        let row_bytes = (width * 8).next_multiple_of(256);
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("preview"),
+            size: u64::from(row_bytes) * u64::from(height),
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        encoder.copy_texture_to_buffer(
+            preview.targets.finished.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(row_bytes),
+                    rows_per_image: None,
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.queue.submit([encoder.finish()]);
+        let mapped = Arc::new(std::sync::Mutex::new(None));
+        let flag = mapped.clone();
+        buffer
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| {
+                *flag.lock().expect("preview mapping") = Some(result);
+            });
+        let _ = self.device.poll(wgpu::PollType::Poll);
+        preview.reading = Some(PreviewReading {
+            buffer,
+            mapped,
+            row_bytes,
+        });
+        self.preview = Some(preview);
+        Previewed::Pending
+    }
+
+    /// Stops a preview: asks for no more of its tiles.
+    pub fn stop_preview(&mut self) {
+        self.preview = None;
+        self.preview_wanted.clear();
+    }
+
     /// Stops a sampling of the picture: forgets the patches read and asks
     /// for no more of its tiles.
     pub fn stop_sampling(&mut self, slot: ProbeSlot) {
@@ -1367,11 +1629,29 @@ fn center_distance(pyramid: &Pyramid, key: TileKey, center: [f64; 2]) -> f64 {
 
 #[cfg(test)]
 mod shader_tests {
-    use super::present_source;
+    use super::{present_source, preview_fit};
 
     /// The present shader parses and validates, so a mistake in it is found
     /// by the tests rather than when the canvas starts. Seiza tests its
     /// compositor's shaders.
+    #[test]
+    fn a_preview_fits_its_long_side_and_draws_from_the_matching_level() {
+        // 6000 by 4000 into 1024: a zoom of about 0.17, so level 2.
+        let (zoom, width, height, level) = preview_fit([0.0, 0.0, 6000.0, 4000.0], 1024, 6);
+        assert!((zoom - 1024.0 / 6000.0).abs() < 1e-9);
+        assert_eq!((width, height, level), (1024, 683, 2));
+        // A crop is fitted, not the document.
+        let (_, width, height, _) = preview_fit([1000.0, 500.0, 2000.0, 3500.0], 1024, 6);
+        assert_eq!((width, height), (341, 1024));
+        // A small picture is not enlarged.
+        assert_eq!(
+            preview_fit([0.0, 0.0, 800.0, 600.0], 1024, 6),
+            (1.0, 800, 600, 0)
+        );
+        // The level stops at the pyramid's coarsest.
+        assert_eq!(preview_fit([0.0, 0.0, 100_000.0, 100.0], 1024, 3).3, 3);
+    }
+
     #[test]
     fn the_present_shader_compiles() {
         let source = present_source();

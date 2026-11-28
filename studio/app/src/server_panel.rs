@@ -16,7 +16,8 @@ use super::panes::{CONTROL, PANE, QUIET, SELECTED, TEXT};
 use super::server_documents::{Fetching, Which};
 use super::servers::{
     self, computer_name, forget_token, keep_token, kept_token, normal_address, Client, Database,
-    DocumentSummary, Failure, Project, ServerList, ServerRecord, StackedTarget, Target,
+    DocumentRecord, DocumentSummary, Failure, Project, ServerList, ServerRecord, StackedTarget,
+    Target,
 };
 use super::Studio;
 use gpui::{
@@ -26,6 +27,49 @@ use gpui::{
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+/// The earlier revisions a chosen document lists, at most.
+const EARLIER_SHOWN: usize = 12;
+
+/// How recent a save from another computer is for the list to say it may
+/// still be open there.
+const RECENT_SECONDS: i64 = 10 * 60;
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs() as i64)
+}
+
+/// Who saved a revision, from which computer, and how long ago: "saved by
+/// ana from Observatory Mac 3 minutes ago".
+///
+/// A server without accounts records every save as by "this computer",
+/// which reads wrongly beside another computer's name, so that save reads
+/// as "saved from Observatory Mac".
+fn saved_words(by: &str, from: Option<&str>, saved_at: i64, now: i64) -> String {
+    let when = ago(saved_at, now);
+    match from {
+        Some(from) if by == NO_ACCOUNT => format!("saved from {from} {when}"),
+        Some(from) => format!("saved by {by} from {from} {when}"),
+        None => format!("saved by {by} {when}"),
+    }
+}
+
+/// Who a server without accounts records as saving.
+const NO_ACCOUNT: &str = "this computer";
+
+/// How long ago `then` was, in Unix seconds, as a person says it.
+fn ago(then: i64, now: i64) -> String {
+    let seconds = (now - then).max(0);
+    let (count, unit) = match seconds {
+        0..60 => return "just now".to_string(),
+        60..3600 => (seconds / 60, "minute"),
+        3600..86_400 => (seconds / 3600, "hour"),
+        _ => (seconds / 86_400, "day"),
+    };
+    format!("{count} {unit}{} ago", if count == 1 { "" } else { "s" })
+}
 
 /// Something fetched on a thread of its own.
 pub(super) enum Load<T> {
@@ -214,6 +258,10 @@ pub(super) struct ServerPanel {
     /// The chosen target's Studio documents on the server.
     documents: Load<Vec<DocumentSummary>>,
     document: Which,
+    /// The chosen document's record, for its earlier revisions, and the
+    /// document it is of.
+    revisions: Load<DocumentRecord>,
+    revisions_of: Option<String>,
     /// A document being fetched before its picture is prepared, with the
     /// token the preparing needs.
     pub fetching: Option<(super::open::TargetLink, Option<String>, Fetching, bool)>,
@@ -244,6 +292,8 @@ impl Default for ServerPanel {
             target: None,
             documents: Load::Idle,
             document: Which::Latest,
+            revisions: Load::Idle,
+            revisions_of: None,
             fetching: None,
             reframed: None,
             link: None,
@@ -360,6 +410,11 @@ impl Studio {
         {
             failures.push(failure.clone());
         }
+        if panel.revisions.follow()
+            && let Some(failure) = panel.revisions.failure()
+        {
+            failures.push(failure.clone());
+        }
         if let Some(failure) = failures.first() {
             let message = panel.take_failure(failure);
             panel.message = Some(message);
@@ -437,7 +492,31 @@ impl Studio {
         };
         panel.target = Some(target);
         panel.document = Which::Latest;
+        panel.revisions = Load::Idle;
+        panel.revisions_of = None;
         panel.documents = Load::start(move || client.documents(&database, project, target));
+    }
+
+    /// Chooses one of the target's documents, and lists its earlier
+    /// revisions.
+    fn choose_document(&mut self, id: String) {
+        let panel = &mut self.servers;
+        panel.document = Which::Document(id.clone());
+        if panel.revisions_of.as_deref() == Some(id.as_str()) {
+            return;
+        }
+        let (Some(client), Some(database)) = (
+            panel
+                .server
+                .as_deref()
+                .and_then(|server| panel.client(server)),
+            panel.database.clone(),
+        ) else {
+            return;
+        };
+        let of = id.clone();
+        panel.revisions = Load::start(move || client.document_record(&database, &of));
+        panel.revisions_of = Some(id);
     }
 
     /// Lists a target's documents again when the panel shows that target:
@@ -1126,26 +1205,87 @@ impl Studio {
             .documents
             .done()
             .and_then(|documents| documents.first().map(|d| d.id.clone()));
+        let now = unix_now();
+        let earlier = panel
+            .revisions
+            .done()
+            .filter(|record| panel.revisions_of.as_deref() == Some(record.id.as_str()));
+        let mut revision_rows: Vec<(String, gpui::AnyElement)> = Vec::new();
+        if let Some(record) = earlier {
+            let id = record.id.clone();
+            for entry in record.revisions.iter().rev().skip(1).take(EARLIER_SHOWN) {
+                let revision = entry.revision;
+                let chosen = chosen_document == Which::Revision(id.clone(), revision);
+                let of = id.clone();
+                revision_rows.push((
+                    id.clone(),
+                    Self::panel_row(
+                        SharedString::from(format!("revision-{id}-{revision}")),
+                        chosen,
+                        format!("Revision {revision}"),
+                        Some(saved_words(
+                            &entry.saved_by,
+                            entry.saved_from.as_deref(),
+                            entry.saved_at,
+                            now,
+                        )),
+                        cx,
+                        move |this| this.servers.document = Which::Revision(of.clone(), revision),
+                    )
+                    .pl_5()
+                    .into_any_element(),
+                ));
+            }
+        }
         document_rows.extend(Self::load_rows(&panel.documents, "", |document| {
             let id = document.id.clone();
             let chosen = match &chosen_document {
                 Which::Document(chosen) => *chosen == id,
                 Which::Latest => latest.as_deref() == Some(id.as_str()),
-                Which::New => false,
+                Which::New | Which::Revision(..) => false,
             };
+            let mut detail = format!(
+                "Revision {}, {}",
+                document.revision,
+                saved_words(
+                    &document.saved_by,
+                    document.saved_from.as_deref(),
+                    document.saved_at,
+                    now,
+                )
+            );
+            if let Some(other) = document.saved_from.as_deref()
+                && other != servers::this_computer()
+                && now - document.saved_at < RECENT_SECONDS
+            {
+                detail.push_str(&format!(". It may still be open in PSF Studio on {other}."));
+            }
+            let open = id.clone();
             Self::panel_row(
                 SharedString::from(format!("document-{id}")),
                 chosen,
                 document.name.clone(),
-                Some(format!(
-                    "Revision {}, saved by {}",
-                    document.revision, document.saved_by
-                )),
+                Some(detail),
                 cx,
-                move |this| this.servers.document = Which::Document(id.clone()),
+                move |this| this.choose_document(open.clone()),
             )
             .into_any_element()
         }));
+        // Each chosen document's earlier revisions sit beneath it.
+        if !revision_rows.is_empty()
+            && let Some(at) = panel.documents.done().and_then(|documents| {
+                documents.iter().position(|document| {
+                    Some(&document.id) == revision_rows.first().map(|(id, _)| id)
+                })
+            })
+        {
+            // The New document row comes first.
+            let place = at + 2;
+            let rows: Vec<gpui::AnyElement> =
+                revision_rows.into_iter().map(|(_, row)| row).collect();
+            let place = place.min(document_rows.len());
+            document_rows.splice(place..place, rows);
+        }
         let can_open = chosen_target.is_some_and(|id| {
             stacked
                 .iter()
@@ -1357,6 +1497,7 @@ impl Studio {
                         "name": document.name,
                         "revision": document.revision,
                         "saved_by": document.saved_by,
+                        "saved_from": document.saved_from,
                     }))
                     .collect::<Vec<_>>()))
             ),
@@ -1364,7 +1505,21 @@ impl Studio {
                 Which::Latest => json!("latest"),
                 Which::New => json!("new"),
                 Which::Document(id) => json!(id),
+                Which::Revision(id, revision) => json!({ "id": id, "revision": revision }),
             },
+            "revisions": panel.revisions.done().map(|record| json!({
+                "id": record.id,
+                "revisions": record
+                    .revisions
+                    .iter()
+                    .map(|entry| json!({
+                        "revision": entry.revision,
+                        "saved_by": entry.saved_by,
+                        "saved_from": entry.saved_from,
+                        "saved_at": entry.saved_at,
+                    }))
+                    .collect::<Vec<_>>(),
+            })),
             "picture_on_server": self.server_save.linked(),
             "save_state": self.server_save_line(),
         })
@@ -1416,7 +1571,12 @@ impl Studio {
         match params["document"].as_str() {
             Some("latest") => self.servers.document = Which::Latest,
             Some("new") => self.servers.document = Which::New,
-            Some(id) => self.servers.document = Which::Document(id.to_string()),
+            Some(id) => {
+                self.choose_document(id.to_string());
+                if let Some(revision) = params["revision"].as_u64() {
+                    self.servers.document = Which::Revision(id.to_string(), revision as u32);
+                }
+            }
             None => {}
         }
         Ok(self.control_servers())
@@ -1448,6 +1608,26 @@ impl Studio {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_save_reads_as_how_long_ago_it_was() {
+        assert_eq!(ago(1000, 1030), "just now");
+        assert_eq!(ago(1000, 1000 + 60), "1 minute ago");
+        assert_eq!(ago(1000, 1000 + 7 * 60), "7 minutes ago");
+        assert_eq!(ago(0, 2 * 3600 + 5), "2 hours ago");
+        assert_eq!(ago(0, 86_400 * 3), "3 days ago");
+        // A clock behind the server's reads as now, not the future.
+        assert_eq!(ago(2000, 1000), "just now");
+        assert_eq!(
+            saved_words("ana", Some("Observatory Mac"), 0, 120),
+            "saved by ana from Observatory Mac 2 minutes ago"
+        );
+        assert_eq!(saved_words("ana", None, 0, 10), "saved by ana just now");
+        assert_eq!(
+            saved_words("this computer", Some("Observatory Mac"), 0, 10),
+            "saved from Observatory Mac just now"
+        );
+    }
 
     #[test]
     fn a_load_takes_in_its_result_once() {

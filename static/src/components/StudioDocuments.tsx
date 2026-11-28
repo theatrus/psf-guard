@@ -27,6 +27,21 @@ function formatDate(seconds: number): string {
   });
 }
 
+/** Who a server without accounts records as saving. */
+const NO_ACCOUNT = 'this computer';
+
+/**
+ * Who saved a document's newest revision, and from which computer. A
+ * server without accounts records every save as by "this computer", so that
+ * save reads by the computer it came from.
+ */
+function savedBy(document: StudioDocumentSummary): string {
+  const from = document.saved_from;
+  if (from && document.saved_by === NO_ACCOUNT) return `saved from ${from}`;
+  if (from) return `saved by ${document.saved_by} from ${from}`;
+  return `saved by ${document.saved_by}`;
+}
+
 interface StudioDocumentsProps {
   dbId: string;
   projectId: number;
@@ -115,7 +130,7 @@ export default function StudioDocuments({ dbId, projectId, canWrite }: StudioDoc
                 <strong>{document.name}</strong>
                 <span className="muted">
                   {target !== undefined && targetNames.get(target) ? `${targetNames.get(target)} · ` : ''}
-                  Revision {document.revision}, saved by {document.saved_by} on {formatDate(document.saved_at)}
+                  Revision {document.revision}, {savedBy(document)} on {formatDate(document.saved_at)}
                 </span>
                 {document.exports.length > 0 && (
                   <ul className="studio-document-exports" aria-label="Exports">
