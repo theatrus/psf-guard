@@ -46,6 +46,9 @@
 - The macOS desktop app now includes PSF Studio, and app updates update PSF
   Studio too. **Open in PSF Studio** opens the copy that came with the app;
   you no longer install PSF Studio separately on that Mac.
+- PSF Studio also comes on its own, as `PSF.Studio_<version>_aarch64.dmg`
+  in each release, for a Mac whose PSF Guard runs on a server. It does not
+  update itself yet: install the newer image when a release comes out.
 - PSF Studio opens stack files on a computer without PSF Guard. It reads
   each file's channel, registers the channels and extracts their
   backgrounds as PSF Guard does. Processing tools and Gaia color

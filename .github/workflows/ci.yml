@@ -376,6 +376,8 @@ jobs:
       run: |
         security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
         bash scripts/package-macos.sh
+        # PSF Studio's own disk image, from the Studio just built.
+        bash scripts/package-studio-macos.sh
 
     - name: Upload Tauri artifacts (Ubuntu)
       if: matrix.os == 'ubuntu-22.04'

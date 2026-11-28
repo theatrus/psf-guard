@@ -3605,7 +3605,9 @@ Gaps to fix, roughly in the order they got in the way:
   updates with it; Studio has no updater of its own. The desktop app
   registers its Studio for `psf-studio://` links each time it starts. See
   [App and server updates](../UPDATES.md). Windows and Linux installers do
-  not include Studio yet.
+  not include Studio yet. Each release also has PSF Studio's own disk
+  image, the same app, for a Mac whose PSF Guard runs on a server; it does
+  not update itself yet.
 - What is the smallest useful set of adjustments for the first Studio
   release?
 - Are clone and heal tools wanted among the manual tweaks? They can be stored

@@ -549,6 +549,41 @@ jobs:
         xcrun stapler validate "$dmg"
         spctl --assess --type open --context context:primary-signature -v "$dmg"
 
+    # PSF Studio's own disk image, for a Mac whose PSF Guard runs on a
+    # server: the PSF Studio.app that PSF Guard.app ships inside. The app is
+    # notarized and stapled first, so it opens offline once copied out of
+    # the image; then the image is notarized and stapled.
+    - name: Package and notarize PSF Studio (macOS)
+      if: matrix.os == 'macos-latest'
+      env:
+        APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        APPLE_API_KEY_PATH: AuthKey_${{ secrets.APPLE_API_KEY }}.p8
+        KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+      shell: bash
+      run: |
+        security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+        app="target/release/studio-bundle/PSF Studio.app"
+        test -d "$app"
+        codesign --verify --strict --verbose=2 "$app"
+        notarize() {
+          xcrun notarytool submit "$1" \
+            --key "$APPLE_API_KEY_PATH" \
+            --key-id "$APPLE_API_KEY" \
+            --issuer "$APPLE_API_ISSUER" \
+            --wait
+        }
+        zip="$RUNNER_TEMP/psf-studio.zip"
+        ditto -c -k --keepParent "$app" "$zip"
+        notarize "$zip"
+        xcrun stapler staple "$app"
+        dmg=$(bash scripts/package-studio-macos.sh "$app" | tail -1)
+        test -s "$dmg"
+        notarize "$dmg"
+        xcrun stapler staple "$dmg"
+        xcrun stapler validate "$dmg"
+        spctl --assess --type open --context context:primary-signature -v "$dmg"
+
     - name: Prepare release assets
       # always(): when verification fails these are exactly the files needed
       # for diagnosis, and the upload below has nothing to collect without them.
@@ -591,6 +626,10 @@ jobs:
             dmg=$(find target/release/bundle/dmg -name "*.dmg" -print -quit)
             test -n "$dmg" && test -s "$dmg"
             cp "$dmg" "release-assets/PSF.Guard_${APP_VERSION}_aarch64.dmg"
+            # PSF Studio on its own, for a Mac without PSF Guard.
+            studio=$(find target/release/studio-dmg -name "*.dmg" -print -quit)
+            test -n "$studio" && test -s "$studio"
+            cp "$studio" "release-assets/PSF.Studio_${APP_VERSION}_aarch64.dmg"
             # The DMG is the manual installer; the archive is required by
             # the signed updater. Do not publish a third copy as an app ZIP.
             updater=$(find target/release/bundle/macos -name "*.app.tar.gz" -print -quit)
