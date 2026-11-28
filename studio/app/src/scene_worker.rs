@@ -29,6 +29,7 @@ pub(super) struct SceneJob {
     pub picture_samples: Option<(u64, Arc<Vec<f32>>)>,
     pub scene_version: u64,
     pub histogram_wanted: bool,
+    pub parity_wanted: bool,
     pub source_generation: u64,
     pub crop: Option<[f32; 4]>,
     pub document_size: (u32, u32),
@@ -229,6 +230,7 @@ impl SceneWorker {
     }
 
     /// Whether a request waits or is being built.
+    #[cfg(target_os = "macos")]
     pub fn busy(&self) -> bool {
         let pending = self.shared.0.lock().expect("scene worker");
         pending.job.is_some() || pending.building
@@ -641,7 +643,7 @@ fn patch_rect(job: &SceneJob) -> [f32; 4] {
 /// it asks for the one in hand, `Some(None)` when it asks for none.
 #[allow(clippy::option_option)]
 fn picture_request(job: &SceneJob, caches: &mut Caches) -> Option<Option<Arc<PictureRequest>>> {
-    let wanted = needs_picture(&job.document) || job.histogram_wanted;
+    let wanted = needs_picture(&job.document) || job.histogram_wanted || job.parity_wanted;
     if !wanted {
         return caches.picture_wanted.take().map(|_| None);
     }

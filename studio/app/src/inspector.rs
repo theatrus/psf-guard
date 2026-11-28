@@ -2243,7 +2243,8 @@ impl Studio {
             Tool::Pan => "Drag to move the view. Every pane moves together.".to_string(),
             Tool::Brush => "Drag to paint the selected row's mask.".to_string(),
             Tool::Heal => format!(
-                "Option-click where the heal copies from, then drag over a blemish; later strokes copy from the same distance. Each stroke becomes a Heal step of {}.",
+                "{}-click where the heal copies from, then drag over a blemish. Later strokes copy from the same distance. Each stroke becomes a Heal step of {}.",
+                if cfg!(windows) { "Alt" } else { "Option" },
                 self.heal_target()
             ),
             Tool::Crop => {

@@ -742,12 +742,18 @@ what was measured, and what it changes.
 
 ## Investigation results
 
-### 1. GPUI canvas (2026-11-24, macOS only so far)
+### 1. GPUI canvas
+
+On Windows, wgpu renders the canvas into an offscreen sRGB texture. The
+render thread reads the latest frame back as BGRA for GPUI to draw. The UI
+reuses the current frame until a new one is ready. The macOS path uses a
+native Metal surface. The measurements in this section describe the macOS
+investigation on 2026-11-24.
 
 The code and the result files are in
 [`studio`](../../studio/README.md).
 
-**Result so far: go on macOS, not yet answered for Windows and Linux.** A
+**Result of the macOS investigation.** A
 GPUI window can host the tiled canvas and hold the display's frame rate. The
 same canvas in WebGPU holds it equally well, so rendering speed does not
 separate a native shell from a web one. Upstream GPUI has no way to host the
@@ -887,9 +893,10 @@ Tiles, in every run on both sides:
    browser tab, a heavy step computed in the same process, and output beyond
    8-bit sRGB. The crop preview and tile format investigations cover most of
    these and should compare both.
-3. **Conflict with the Shell decision.** The decision is a native GPUI
-   application. Upstream GPUI can host the canvas on macOS only. On Windows
-   and Linux the choices are:
+3. **Direct GPU presentation.** GPUI's `NativeView` provides a surface for
+   wgpu on macOS. Windows presents a bitmap in GPUI. These were the
+   alternatives considered for integrating a GPU surface on Windows
+   and Linux:
    - the `bite-gpui` fork with `gpui_interop`, which does not cover macOS, so
      Studio would track a fork and still need `NativeView` on macOS;
    - a child window or surface of our own, created from the window handle
@@ -908,7 +915,7 @@ Tiles, in every run on both sides:
 
 #### Not done yet
 
-- Windows and Linux, on any path.
+- Canvas performance on Windows and Linux.
 - Time from input to screen, which needs a real pointer and a camera or a
   latency probe.
 - A check by eye of the GPUI panel over the canvas. The measurements ran in

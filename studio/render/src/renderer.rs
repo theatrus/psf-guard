@@ -195,7 +195,7 @@ struct LastFrame {
 pub struct Renderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
-    surface: wgpu::Surface<'static>,
+    surface: Option<wgpu::Surface<'static>>,
     config: wgpu::SurfaceConfiguration,
     compositor: GpuCompositor,
     /// The compositor's textures, the size of the surface.
@@ -482,7 +482,7 @@ fn read_preview(reading: &PreviewReading, width: u32, height: u32) -> Vec<f32> {
 impl Renderer {
     pub async fn new(
         instance: &wgpu::Instance,
-        surface: wgpu::Surface<'static>,
+        surface: Option<wgpu::Surface<'static>>,
         cache_budget_bytes: u64,
         workers: usize,
         source: Arc<dyn TileSource>,
@@ -491,7 +491,7 @@ impl Renderer {
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: Some(&surface),
+                compatible_surface: surface.as_ref(),
                 force_fallback_adapter: false,
                 ..Default::default()
             })
@@ -510,30 +510,38 @@ impl Renderer {
             .await
             .map_err(|error| format!("no GPU device: {error}"))?;
 
-        let capabilities = surface.get_capabilities(&adapter);
-        // The present pass writes display-referred values, so the surface
-        // must not apply the sRGB curve a second time.
-        let format = output
-            .format
-            .filter(|format| capabilities.formats.contains(format))
-            .or_else(|| {
-                capabilities
-                    .formats
-                    .iter()
-                    .copied()
-                    .find(|format| !format.is_srgb())
-            })
-            .unwrap_or(capabilities.formats[0]);
-        let color_space = output
-            .color_space
-            .to_color_spaces()
-            .filter(|wanted| capabilities.color_spaces(format).contains(*wanted))
-            .map_or(wgpu::SurfaceColorSpace::Auto, |_| output.color_space);
-        let surface_offers = format!(
-            "formats {:?}; color spaces for {format:?}: {:?}",
-            capabilities.formats,
-            capabilities.color_spaces(format)
-        );
+        let (format, color_space, surface_offers) = if let Some(surface) = &surface {
+            let capabilities = surface.get_capabilities(&adapter);
+            // The present pass writes display-referred values.
+            let format = output
+                .format
+                .filter(|format| capabilities.formats.contains(format))
+                .or_else(|| {
+                    capabilities
+                        .formats
+                        .iter()
+                        .copied()
+                        .find(|format| !format.is_srgb())
+                })
+                .unwrap_or(capabilities.formats[0]);
+            let color_space = output
+                .color_space
+                .to_color_spaces()
+                .filter(|wanted| capabilities.color_spaces(format).contains(*wanted))
+                .map_or(wgpu::SurfaceColorSpace::Auto, |_| output.color_space);
+            let offers = format!(
+                "formats {:?}; color spaces for {format:?}: {:?}",
+                capabilities.formats,
+                capabilities.color_spaces(format)
+            );
+            (format, color_space, offers)
+        } else {
+            (
+                wgpu::TextureFormat::Bgra8Unorm,
+                wgpu::SurfaceColorSpace::Auto,
+                "sRGB image in GPUI".into(),
+            )
+        };
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
@@ -550,7 +558,9 @@ impl Renderer {
             view_formats: vec![],
             color_space,
         };
-        surface.configure(&device, &config);
+        if let Some(surface) = &surface {
+            surface.configure(&device, &config);
+        }
 
         let compositor = GpuCompositor::new(&device, &queue, FINISHED_FORMAT);
         let targets = compositor.targets(config.width, config.height);
@@ -746,7 +756,9 @@ impl Renderer {
         }
         self.config.width = width;
         self.config.height = height;
-        self.surface.configure(&self.device, &self.config);
+        if let Some(surface) = &self.surface {
+            surface.configure(&self.device, &self.config);
+        }
         self.targets = self.compositor.targets(width, height);
         self.present_inputs = present_bind_group(
             &self.device,
@@ -764,22 +776,19 @@ impl Renderer {
         let _ = self.device.poll(wgpu::PollType::Poll);
 
         let acquire_started = Instant::now();
-        // A covered window's surface has no texture. A frame someone asked
-        // to capture is drawn into one of the surface's size instead, and not
-        // shown.
-        let (target, offscreen) = match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(texture)
-            | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => (Some(texture), None),
-            other => {
-                self.surface.configure(&self.device, &self.config);
-                if !self.capture_next {
-                    return Err(format!("the surface had no texture: {other:?}"));
+        let target = match &self.surface {
+            Some(surface) => match surface.get_current_texture() {
+                wgpu::CurrentSurfaceTexture::Success(texture)
+                | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => Some(texture),
+                other => {
+                    surface.configure(&self.device, &self.config);
+                    if !self.capture_next {
+                        return Err(format!("the surface had no texture: {other:?}"));
+                    }
+                    None
                 }
-                (
-                    None,
-                    Some(self.surface_sized("offscreen frame", wgpu::TextureUsages::empty())),
-                )
-            }
+            },
+            None => None,
         };
         stats.acquire_ms = acquire_started.elapsed().as_secs_f32() * 1000.0;
         let encode_started = Instant::now();
@@ -919,12 +928,6 @@ impl Renderer {
         self.queue
             .write_buffer(&self.present_uniform, 0, bytemuck::bytes_of(&uniform));
 
-        let target_view = target
-            .as_ref()
-            .map(|target| &target.texture)
-            .or(offscreen.as_ref())
-            .expect("a surface texture or an offscreen one")
-            .create_view(&wgpu::TextureViewDescriptor::default());
         // An 8-bit surface is captured as BGRA bytes, a half-float one as
         // its RGBA halves; another format is not captured.
         let pixel_bytes = match self.config.format {
@@ -932,13 +935,20 @@ impl Renderer {
             wgpu::TextureFormat::Rgba16Float => Some(8),
             _ => None,
         };
-        let capture_texture = (std::mem::take(&mut self.capture_next) && pixel_bytes.is_some())
-            .then(|| self.surface_sized("capture", wgpu::TextureUsages::COPY_SRC));
+        let capture_requested = std::mem::take(&mut self.capture_next);
+        let capture_texture = ((capture_requested || self.surface.is_none())
+            && pixel_bytes.is_some())
+        .then(|| self.surface_sized("capture", wgpu::TextureUsages::COPY_SRC));
         let pixel_bytes = pixel_bytes.unwrap_or(4);
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-        self.present(&mut encoder, &target_view);
+        if let Some(target) = &target {
+            let view = target
+                .texture
+                .create_view(&wgpu::TextureViewDescriptor::default());
+            self.present(&mut encoder, &view);
+        }
         let capture = capture_texture.map(|texture| {
             let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
             self.present(&mut encoder, &view);

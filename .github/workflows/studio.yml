@@ -1,0 +1,40 @@
+name: PSF Studio
+
+on:
+  pull_request:
+    paths:
+    - 'studio/**'
+    - 'crates/psf-studio-core/**'
+    - '.github/workflows/studio.yml'
+  push:
+    branches: [main, master, 'release/**']
+    paths:
+    - 'studio/**'
+    - 'crates/psf-studio-core/**'
+    - '.github/workflows/studio.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: studio-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  windows:
+    name: Test PSF Studio on Windows
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: studio
+    steps:
+    - uses: actions/checkout@v7
+    - name: Install the Studio toolchain
+      run: rustup show active-toolchain
+    - name: Check Studio formatting
+      run: cargo fmt --all -- --check
+    - name: Lint Studio
+      run: cargo clippy --locked -p psf-studio -p psf-studio-render --all-targets -- -D warnings
+    - name: Test Studio
+      run: cargo test --locked -p psf-studio -p psf-studio-render

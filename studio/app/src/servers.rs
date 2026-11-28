@@ -3,7 +3,7 @@
 //! Studio keeps a list of servers in its settings folder: each server's
 //! address, the account it connected as, and whether that account may save
 //! documents. The list holds no secrets. A server with sign-in gives Studio a
-//! token, which Studio keeps in the macOS Keychain, one entry per address.
+//! token. Studio keeps one token per address in the OS credential store.
 //!
 //! Every call here blocks, so Studio makes them on threads of their own.
 
@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-/// The Keychain service Studio's tokens are kept under.
+/// The service name for Studio's saved tokens.
 const KEYCHAIN_SERVICE: &str = "PSF Studio";
 /// How long a request may take before Studio gives up on it.
 const REQUEST_SECONDS: u64 = 30;
@@ -46,12 +46,13 @@ pub struct ServerList {
 
 /// Studio's settings folder.
 pub fn settings_folder() -> PathBuf {
-    let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("."), PathBuf::from);
-    if cfg!(target_os = "macos") {
-        home.join("Library/Application Support/psf-studio")
-    } else {
-        home.join(".local/share/psf-studio")
-    }
+    std::env::var_os("PSF_STUDIO_DATA_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            dirs::data_local_dir()
+                .unwrap_or_else(std::env::temp_dir)
+                .join("psf-studio")
+        })
 }
 
 impl ServerList {
@@ -149,6 +150,7 @@ pub fn sends_in_the_clear(address: &str) -> bool {
 }
 
 /// This computer's name, for the label of the token a server mints.
+#[cfg(target_os = "macos")]
 pub fn computer_name() -> String {
     std::process::Command::new("scutil")
         .args(["--get", "ComputerName"])
@@ -161,7 +163,15 @@ pub fn computer_name() -> String {
         .unwrap_or_else(|| "a Mac".to_string())
 }
 
-/// This computer's name, asked of macOS once: each save sends it.
+#[cfg(windows)]
+pub fn computer_name() -> String {
+    std::env::var("COMPUTERNAME")
+        .ok()
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(|| "a Windows PC".into())
+}
+
+/// This computer's name, read once and sent with each save.
 pub fn this_computer() -> &'static str {
     static NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     NAME.get_or_init(computer_name)
@@ -175,14 +185,13 @@ pub fn kept_token(address: &str) -> Option<String> {
             .ok()
             .and_then(|bytes| String::from_utf8(bytes).ok())
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
     {
-        let _ = address;
-        None
+        windows_credentials::read(address)
     }
 }
 
-/// Keeps a server's token in the Keychain.
+/// Saves a server token in the OS credential store.
 pub fn keep_token(address: &str, token: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
@@ -193,23 +202,123 @@ pub fn keep_token(address: &str, token: &str) -> Result<(), String> {
         )
         .map_err(|error| format!("The token could not be kept in the Keychain: {error}"))
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
     {
-        let _ = (address, token);
-        Err("Studio keeps tokens in the macOS Keychain only".to_string())
+        windows_credentials::write(address, token).map_err(|error| {
+            format!("Could not save the token in Windows Credential Manager: {error}")
+        })
     }
 }
 
-/// Deletes a server's token from the Keychain. A token that is not there is
-/// no error.
+/// Removes a server token from the OS credential store, if present.
 pub fn forget_token(address: &str) {
     #[cfg(target_os = "macos")]
     {
         let _ = security_framework::passwords::delete_generic_password(KEYCHAIN_SERVICE, address);
     }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = address;
+    #[cfg(windows)]
+    windows_credentials::delete(address);
+}
+
+#[cfg(windows)]
+mod windows_credentials {
+    use super::KEYCHAIN_SERVICE;
+    use std::{io, ptr};
+    use windows_sys::Win32::Security::Credentials::{
+        CredDeleteW, CredFree, CredReadW, CredWriteW, CREDENTIALW, CRED_MAX_CREDENTIAL_BLOB_SIZE,
+        CRED_PERSIST_LOCAL_MACHINE, CRED_TYPE_GENERIC,
+    };
+
+    fn target(address: &str) -> Vec<u16> {
+        format!("{KEYCHAIN_SERVICE}/{address}")
+            .encode_utf16()
+            .chain([0])
+            .collect()
+    }
+
+    pub(super) fn read(address: &str) -> Option<String> {
+        let target = target(address);
+        let mut credential = ptr::null_mut();
+        // SAFETY: the target is NUL-terminated and the result is copied before CredFree.
+        unsafe {
+            if CredReadW(target.as_ptr(), CRED_TYPE_GENERIC, 0, &mut credential) == 0 {
+                return None;
+            }
+            let entry = &*credential;
+            let token = if entry.CredentialBlobSize == 0 {
+                None
+            } else {
+                let bytes = std::slice::from_raw_parts(
+                    entry.CredentialBlob,
+                    entry.CredentialBlobSize as usize,
+                );
+                std::str::from_utf8(bytes).ok().map(str::to_owned)
+            };
+            CredFree(credential.cast());
+            token
+        }
+    }
+
+    pub(super) fn write(address: &str, token: &str) -> io::Result<()> {
+        let mut target = target(address);
+        if token.len() > CRED_MAX_CREDENTIAL_BLOB_SIZE as usize {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "token is too long",
+            ));
+        }
+        let mut bytes = token.as_bytes().to_vec();
+        let entry = CREDENTIALW {
+            Type: CRED_TYPE_GENERIC,
+            TargetName: target.as_mut_ptr(),
+            CredentialBlobSize: bytes.len() as u32,
+            CredentialBlob: bytes.as_mut_ptr(),
+            Persist: CRED_PERSIST_LOCAL_MACHINE,
+            ..Default::default()
+        };
+        // SAFETY: the target and the blob remain alive for the call, and the blob size matches.
+        if unsafe { CredWriteW(&entry, 0) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    pub(super) fn delete(address: &str) {
+        let target = target(address);
+        // SAFETY: the target is a live NUL-terminated string.
+        unsafe { CredDeleteW(target.as_ptr(), CRED_TYPE_GENERIC, 0) };
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn credential_target_is_scoped_to_studio_and_server() {
+            let key = target("https://localhost:7211");
+            assert_eq!(key.last(), Some(&0));
+            assert_eq!(
+                String::from_utf16(&key[..key.len() - 1]).unwrap(),
+                "PSF Studio/https://localhost:7211"
+            );
+        }
+
+        #[test]
+        #[ignore = "requires the Windows user credential vault"]
+        fn token_round_trips_through_windows_credential_manager() {
+            struct TemporaryCredential(String);
+            impl Drop for TemporaryCredential {
+                fn drop(&mut self) {
+                    delete(&self.0);
+                }
+            }
+
+            let key = TemporaryCredential(format!("https://{}.localhost", uuid::Uuid::new_v4()));
+            write(&key.0, "test-token").unwrap();
+            assert_eq!(read(&key.0).as_deref(), Some("test-token"));
+            delete(&key.0);
+            assert!(read(&key.0).is_none());
+        }
     }
 }
 

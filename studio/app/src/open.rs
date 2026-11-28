@@ -33,12 +33,7 @@ pub fn keep_links(links: Vec<String>) {
 
 /// The folder Studio keeps its pictures in.
 pub(super) fn pictures_folder() -> PathBuf {
-    let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("."), PathBuf::from);
-    if cfg!(target_os = "macos") {
-        home.join("Library/Application Support/psf-studio/pictures")
-    } else {
-        home.join(".local/share/psf-studio/pictures")
-    }
+    super::servers::settings_folder().join("pictures")
 }
 
 /// A name for a picture's files: letters, digits, dashes and underscores.
@@ -397,6 +392,61 @@ fn prepare_files(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn opening_a_stack_again_keeps_the_document_in_a_path_with_spaces_and_unicode() {
+        use seiza_fits::{write_f32_image, F32ImageData, HeaderValue, WriteHeaderCard};
+
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("Nébuleuse L.fits");
+        let (width, height) = (192, 128);
+        let stars: Vec<(f32, f32)> = (0..24)
+            .map(|at| ((12 + at * 37 % 168) as f32, (10 + at * 23 % 108) as f32))
+            .collect();
+        let mut seed = 7_u32;
+        let pixels: Vec<f32> = (0..width * height)
+            .map(|at| {
+                let (x, y) = ((at % width) as f32, (at / width) as f32);
+                let starlight: f32 = stars
+                    .iter()
+                    .map(|(cx, cy)| 0.6 * (-((x - cx).powi(2) + (y - cy).powi(2)) / 4.0).exp())
+                    .sum();
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let noise = (seed >> 8) as f32 / (1 << 24) as f32 - 0.5;
+                65535.0 * (0.05 + 0.02 * x / width as f32 + 0.002 * noise + starlight)
+            })
+            .collect();
+        write_f32_image(
+            &path,
+            width,
+            height,
+            F32ImageData::Mono(&pixels),
+            &[
+                WriteHeaderCard::new("OBJECT", HeaderValue::String("M 42".into())),
+                WriteHeaderCard::new("FILTER", HeaderValue::String("L".into())),
+                WriteHeaderCard::new("IMAGETYP", HeaderValue::String("LIGHT".into())),
+            ],
+        )
+        .unwrap();
+        let workspace = folder.path().join("Studio pictures");
+        let store = workspace.join("M 42.pgtiles");
+        let document = workspace.join("M 42.json");
+
+        let files = [path];
+        prepare_files(&files, &store, &document, &|_| {}).unwrap();
+        let saved = std::fs::read_to_string(&document).unwrap();
+        let mut picture = crate::studio_model::Document::from_json(&saved).unwrap();
+        assert_eq!(picture.name, "M 42");
+        picture.name = "Edited M 42".into();
+        std::fs::write(&document, picture.to_json()).unwrap();
+
+        prepare_files(&files, &store, &document, &|_| {}).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(document).unwrap(),
+            picture.to_json()
+        );
+        assert!(crate::store_tiles::open_store(&store).is_ok());
+    }
 
     #[test]
     fn a_link_names_a_target_on_a_server_and_nothing_else_is_taken() {

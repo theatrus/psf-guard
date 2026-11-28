@@ -11,11 +11,13 @@ model, the tile store and frame reading come from `crates/psf-studio-core`,
 which both workspaces build, so both programs read and write the same
 documents.
 
-## Build and open a picture
+## Build PSF Studio
 
 ```bash
 cargo build --release -p psf-studio
 ```
+
+### macOS
 
 On macOS, build the application, with `psf-guard` inside it:
 
@@ -36,6 +38,31 @@ color. Regenerate the icons after changing it:
 ./generate-icons.sh
 ```
 
+### Windows
+
+Install the Visual Studio C++ build tools and a Windows SDK that includes
+FXC. From this directory, build and run PSF Studio in PowerShell.
+
+```powershell
+cargo build --locked --release -p psf-studio
+.\target\release\psf-studio.exe
+```
+
+To open stacks from PSF Guard and use its processing tools, put
+`psf-guard-cli.exe` beside Studio or add the CLI's folder to your PATH.
+To open Studio from PSF Guard's `psf-studio://` links, register the executable
+for your Windows account. Run the script again if you move the executable.
+
+```powershell
+.\register-windows.ps1 -Executable .\target\release\psf-studio.exe
+```
+
+Use Ctrl+Z to undo and Ctrl+Y to redo. Drag to pan, or scroll the mouse
+wheel to zoom. Hold Ctrl to zoom with a trackpad. The Windows canvas displays
+the image in SDR sRGB. HDR export is available.
+
+## Open a picture
+
 Open a picture in any of three ways:
 
 - In PSF Guard, open a project's stacks and click **Open *target* in PSF
@@ -45,22 +72,27 @@ Open a picture in any of three ways:
   its name.
 - From a terminal, run `psf-guard studio`; see `psf-guard studio --help`.
 
-Each way runs `psf-guard studio`, so the stacks are fetched, registered,
-calibrated and stretched by the same code. PSF-Studio finds `psf-guard`
-from `--psf-guard`, then the `PSF_GUARD` environment variable, then beside
-its own program, then on the `PATH`. Pictures are kept in
-`~/Library/Application Support/psf-studio/pictures`, never beside your
-stacks, and opening the same target or files again keeps the document.
-PSF Studio saves the document as you work, within a quarter of a second
-of each change; there is no Save command.
+PSF Studio can prepare local FITS and XISF stacks on its own. Opening a
+target from a PSF Guard server, running processing tools, and calibrating
+color require the PSF Guard CLI. Studio looks for the CLI in
+`--psf-guard`, the `PSF_GUARD` environment variable, beside Studio, and
+on your PATH. If you use the macOS copy bundled with PSF Guard, Studio
+also looks inside the app bundle.
+
+Studio saves your edits automatically. Open the same target or files again
+to resume editing. Studio stores pictures under
+`%LOCALAPPDATA%\psf-studio\pictures` on Windows and
+`~/Library/Application Support/psf-studio/pictures` on macOS.
+Set `PSF_STUDIO_DATA_DIR` before launch to use a different folder for Studio
+pictures and settings.
 
 ## Layout
 
 | Path | Contents |
 |---|---|
 | `render/` | The canvas: a GPU tile cache and three passes: masks from strokes, layers blended into one image, then the finish steps and the display transform. It depends on wgpu only. |
-| `app/` | The `psf-studio` program: a GPUI window that hosts the canvas in a native view, with the tree, the inspector and the tools. macOS only. |
-| `color/` | The display transform built from ICC profiles with Little CMS, and a check of the shader against Little CMS and ColorSync. macOS only. |
+| `app/` | The GPUI window, canvas, layer tree, inspector and tools for macOS and Windows. |
+| `color/` | ICC profiles for export, plus a macOS test utility that compares the display transform with Little CMS and ColorSync. |
 | `experiments/crop/` | Seiza deconvolution previewed on a crop, and `store_bench`, which measures PSF Guard's tile store. |
 | `experiments/web/` | The canvas as it was when the web comparison was measured, in WebGPU. |
 | `experiments/results/` | The measurements quoted in the design record. |
@@ -127,7 +159,7 @@ any other count as that many layers, up to eight. Each band's stretch is
 Seiza's automatic midtones stretch, resolved from patches of the image at
 full resolution; the band's slider sets where the background lands.
 
-## Drive Studio from an assistant
+## Drive Studio from an assistant on macOS
 
 Each running Studio window listens on a control socket of its own,
 `$TMPDIR/psf-studio/<pid>.sock`, which only your user can open. Start it with
