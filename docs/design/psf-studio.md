@@ -3471,8 +3471,10 @@ Gaps to fix, roughly in the order they got in the way:
   a run is due for; and Open in external editor writes the final picture
   as a 16-bit TIFF beside the document, opens it in its default app, and
   reads the file back when the app saves it, through the Finish stage's
-  junction, until Use Studio's result. Still open: a server target and
-  sign-in in Studio, and a Setup page that brings these together.
+  junction, until Use Studio's result. Choosing a server target and
+  signing in from Studio were built later the same day (“What is built,
+  and how it differs”). Still open: a Setup page that brings these
+  together.
 - [x] **Heals.** Done 2026-11-27: a heal is matched to its surroundings,
   its shift measured when it is made from the ring around the stroke and
   the ring around its source, on the picture the heal reads (rendered on
