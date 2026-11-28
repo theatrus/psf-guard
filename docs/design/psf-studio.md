@@ -2918,8 +2918,9 @@ The rules that keep it so:
 
 - **Setup is part of the workspace, not a page.** A separate Setup page
   was built first and dropped the same day: it hid the tree, so a person
-  lost sight of what they were building. What goes where is now shown in
-  the tree and the inspector.
+  lost sight of what they were building. What goes where is shown in the
+  tree and the inspector, and since 2026-11-27 also in Setup, the first
+  row of the tree, which covers the canvas but leaves the tree in view.
 - **Routes are read from the layers.** Where an input goes is read from
   the layers as they are (`Document::routes`), however they were made.
   No plan is stored beside them, so there is no state in which a document
@@ -3484,7 +3485,7 @@ Gaps to fix, roughly in the order they got in the way:
   and the rest counted), with the edits undone dimmed. Clicking an edit
   undoes or redoes up to it; the later ones stay to redo. Tried on the Iris
   copy: going back two edits put both opacities back and left Redo on.
-- [ ] **Setup and hand-off.** Done 2026-11-27: the document records the
+- [x] **Setup and hand-off.** Done 2026-11-27: the document records the
   recipe its layers were made with; the Combined picture's inspector
   starts with Tools by input, every input's tools in order with the inputs
   a run is due for; and Open in external editor writes the final picture
@@ -3492,8 +3493,15 @@ Gaps to fix, roughly in the order they got in the way:
   reads the file back when the app saves it, through the Finish stage's
   junction, until Use Studio's result. Choosing a server target and
   signing in from Studio were built later the same day (“What is built,
-  and how it differs”). Still open: a Setup page that brings these
-  together.
+  and how it differs”). Setup was built the same evening as the user
+  chose: **Setup** is the first row of the tree, and choosing it covers
+  the canvas, not the tree, with the recipes that fit (the one the layers
+  started from marked), each input's tools and where it goes (with **Add
+  to**), and a card per top-level part with its blend, palette slots,
+  **Move up**, **Move down** and **Remove part**, then **Add part**. It
+  stores nothing: every line is read from the layers and every control
+  edits them, so Undo covers it. Any other row of the tree shows the canvas
+  again (`studio/app/src/setup.rs`).
 - [x] **Heals.** Done 2026-11-27: a heal is matched to its surroundings,
   its shift measured when it is made from the ring around the stroke and
   the ring around its source, on the picture the heal reads (rendered on

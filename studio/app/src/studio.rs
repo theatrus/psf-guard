@@ -1067,6 +1067,8 @@ pub struct Studio {
     /// The name being typed while the picture is renamed, and the field's
     /// focus.
     renaming: Option<String>,
+    /// Whether Setup covers the canvas.
+    setup_open: bool,
     rename_focus: Option<gpui::FocusHandle>,
     /// Whether a TIFF export holds 32-bit floats, in place of 16 bits.
     tiff_float: bool,
@@ -1353,6 +1355,7 @@ impl Studio {
                 server_save: server_documents::ServerSave::new(),
                 export_line: String::new(),
                 renaming: None,
+                setup_open: false,
                 rename_focus: None,
                 tiff_float: false,
                 export_format: None,
@@ -1889,6 +1892,8 @@ mod server_documents;
 mod server_panel;
 #[path = "servers.rs"]
 pub(crate) mod servers;
+#[path = "setup.rs"]
+mod setup;
 #[path = "tools.rs"]
 mod tools;
 #[path = "tree.rs"]

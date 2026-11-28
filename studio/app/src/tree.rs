@@ -76,7 +76,10 @@ impl Studio {
 
     /// A row's name, with a quiet line under it that says what the row
     /// applies to.
-    fn named(name: impl Into<SharedString>, applies_to: impl Into<SharedString>) -> gpui::Div {
+    pub(super) fn named(
+        name: impl Into<SharedString>,
+        applies_to: impl Into<SharedString>,
+    ) -> gpui::Div {
         div()
             .flex_1()
             .overflow_hidden()
@@ -645,6 +648,7 @@ impl Studio {
             .gap_1()
             .p_3()
             .bg(rgb(PANE))
+            .child(self.setup_row(cx))
             .child(Self::heading("Inputs"))
             .children(self.input_rows(false, cx))
             .when(

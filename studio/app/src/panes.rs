@@ -2612,6 +2612,8 @@ impl Studio {
     /// Selects a row of the tree. A pane that is not pinned follows.
     pub(super) fn select(&mut self, row: Row) {
         self.selected = row;
+        // Any row of the tree shows the canvas again.
+        self.setup_open = false;
         if self.tool == Tool::Brush && !self.can_mask() {
             self.tool = Tool::Pan;
         }
@@ -4004,7 +4006,8 @@ impl Render for Studio {
                                             .size_full(),
                                         )
                                         .children(self.pane_labels(cx)),
-                                ),
+                                )
+                                .when(self.setup_open, |area| area.child(self.setup_view(cx))),
                         ),
                     )
                     .child(self.inspector(cx)),

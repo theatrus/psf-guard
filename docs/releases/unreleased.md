@@ -72,6 +72,11 @@
   document no longer takes a stack file's hash as its name: it starts with
   the target's name, or “Untitled picture”, and one named by a hash before
   shows as “Untitled picture” until you rename it.
+- PSF Studio has a **Setup** row at the top of its layer list. Choose it to
+  see the whole picture's setup in place of the canvas: the recipes that
+  fit your inputs, each input's tools and the parts it goes to, and a card
+  for each part with its blend, palette, order and **Remove part**. Every
+  change there is an ordinary edit of the layers, which **Undo** reverses.
 - When a target has no channel stacks yet, PSF Studio says so and offers
   **Build stacks in PSF Guard**, which opens the target's Stacks page,
   instead of failing as it prepares the picture.

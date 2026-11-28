@@ -498,6 +498,15 @@ impl Studio {
                     Ok(json!({ "started": !running, "queued": self.run_is_queued() }))
                 }
             }
+            "setup" => {
+                // Shows Setup over the canvas, or the canvas again.
+                if params["open"].as_bool().unwrap_or(true) {
+                    self.open_setup();
+                } else {
+                    self.setup_open = false;
+                }
+                Ok(json!({ "setup_open": self.setup_open }))
+            }
             "servers" => Ok(self.control_servers()),
             "rename" => match params["name"].as_str() {
                 Some(name) => self.rename_picture(name).map(|()| {
