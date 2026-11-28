@@ -991,6 +991,8 @@ pub struct Studio {
     /// The PSF Guard panel: servers Studio is connected to, and browsing
     /// them.
     servers: server_panel::ServerPanel,
+    /// The open picture's document on a server, when it has one.
+    server_save: server_documents::ServerSave,
     /// What the last export said: how far it has got, or how it ended.
     export_line: String,
     /// Whether a TIFF export holds 32-bit floats, in place of 16 bits.
@@ -1182,6 +1184,7 @@ impl Studio {
                 this.follow_export();
                 this.follow_editor();
                 this.follow_servers();
+                this.follow_server_save();
                 this.follow_derived();
                 this.follow_store_opening();
                 this.follow_late();
@@ -1266,6 +1269,7 @@ impl Studio {
                 editor_reading: None,
                 editor_looked: None,
                 servers: Default::default(),
+                server_save: server_documents::ServerSave::new(),
                 export_line: String::new(),
                 tiff_float: false,
                 export_format: None,
@@ -1795,6 +1799,8 @@ mod parts;
 mod protect;
 #[path = "scene_worker.rs"]
 mod scene_worker;
+#[path = "server_documents.rs"]
+mod server_documents;
 #[path = "server_panel.rs"]
 mod server_panel;
 #[path = "servers.rs"]

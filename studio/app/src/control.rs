@@ -509,6 +509,8 @@ impl Studio {
                 None => Err("`address` is needed".to_string()),
             },
             "open_server_target" => self.control_open_server_target(),
+            "save_picture_to_server" => self.control_save_picture(),
+            "resolve_conflict" => self.control_resolve_conflict(params),
             "capture" => return self.start_capture(params, reply.clone()),
             "sample" => return self.start_sample(params, reply.clone()),
             other => Err(format!("unknown method `{other}`")),

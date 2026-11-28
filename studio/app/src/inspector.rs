@@ -1902,11 +1902,25 @@ impl Studio {
                         })),
                 ))
             })
+            .when(self.server_save.linked(), |block| {
+                block.child(Self::field(
+                    "Project",
+                    Self::act(
+                        "Also save to the project",
+                        "export-to-project",
+                        self.server_save.export_to_project,
+                        cx,
+                        |this| {
+                            this.server_save.export_to_project = !this.server_save.export_to_project
+                        },
+                    ),
+                ))
+            })
             .when(!self.export_line.is_empty(), |block| {
                 block.child(Self::note(self.export_line.clone()))
             })
             .children(Self::help(
-                "Saves the picture as the canvas shows it, cropped, at full resolution: TIFF at 16 bits per channel or as 32-bit floats, PNG at 16 bits, FITS or XISF as 32-bit floats, or AVIF as HDR (PQ, Rec. 2020), which keeps an HDR picture's brightest areas above SDR white. Format sets the file's extension; an HDR picture starts as AVIF. A 32-bit float TIFF also keeps values above SDR white as they are. An extension typed in the name wins. When Studio was started with a working space's ICC profile, a TIFF or PNG carries it.",
+                "Saves the picture as the canvas shows it, cropped, at full resolution: TIFF at 16 bits per channel or as 32-bit floats, PNG at 16 bits, FITS or XISF as 32-bit floats, or AVIF as HDR (PQ, Rec. 2020), which keeps an HDR picture's brightest areas above SDR white. Format sets the file's extension; an HDR picture starts as AVIF. A 32-bit float TIFF also keeps values above SDR white as they are. An extension typed in the name wins. When Studio was started with a working space's ICC profile, a TIFF or PNG carries it. For a picture on a PSF Guard server, Also save to the project uploads the file to the project as well, with the document revision it came from.",
             ))
     }
 

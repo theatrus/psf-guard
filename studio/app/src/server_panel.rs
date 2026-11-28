@@ -13,9 +13,10 @@
 //! gets in the Keychain.
 
 use super::panes::{CONTROL, PANE, QUIET, SELECTED, TEXT};
+use super::server_documents::{Fetching, Which};
 use super::servers::{
     self, computer_name, forget_token, keep_token, kept_token, normal_address, Client, Database,
-    Failure, Project, ServerList, ServerRecord, StackedTarget, Target,
+    DocumentSummary, Failure, Project, ServerList, ServerRecord, StackedTarget, Target,
 };
 use super::Studio;
 use gpui::{
@@ -210,6 +211,12 @@ pub(super) struct ServerPanel {
     project: Option<i32>,
     targets: Load<(Vec<Target>, Vec<StackedTarget>)>,
     target: Option<i32>,
+    /// The chosen target's Studio documents on the server.
+    documents: Load<Vec<DocumentSummary>>,
+    document: Which,
+    /// A document being fetched before its picture is prepared, with the
+    /// token the preparing needs.
+    pub fetching: Option<(super::open::TargetLink, Option<String>, Fetching)>,
     /// A link's ticket traded for a token, waiting for the person.
     pub link: Option<LinkConnect>,
     /// A link's ticket being traded.
@@ -232,6 +239,9 @@ impl Default for ServerPanel {
             project: None,
             targets: Load::Idle,
             target: None,
+            documents: Load::Idle,
+            document: Which::Latest,
+            fetching: None,
             link: None,
             trading: None,
         }
@@ -248,6 +258,10 @@ impl ServerPanel {
             None
         };
         Some(Client::new(address, token))
+    }
+
+    pub(super) fn record(&self, address: &str) -> Option<ServerRecord> {
+        self.list.find(address).cloned()
     }
 
     fn save_list(&mut self) {
@@ -337,11 +351,17 @@ impl Studio {
         {
             failures.push(failure.clone());
         }
+        if panel.documents.follow()
+            && let Some(failure) = panel.documents.failure()
+        {
+            failures.push(failure.clone());
+        }
         if let Some(failure) = failures.first() {
             let message = panel.take_failure(failure);
             panel.message = Some(message);
         }
         self.follow_link_ticket();
+        self.follow_fetching();
     }
 
     fn choose_server(&mut self, address: String) {
@@ -397,6 +417,54 @@ impl Studio {
             Ok((targets, stacked))
         });
         panel.project = Some(project);
+    }
+
+    fn choose_target(&mut self, target: i32) {
+        let panel = &mut self.servers;
+        let (Some(client), Some(database), Some(project)) = (
+            panel
+                .server
+                .as_deref()
+                .and_then(|server| panel.client(server)),
+            panel.database.clone(),
+            panel.project,
+        ) else {
+            return;
+        };
+        panel.target = Some(target);
+        panel.document = Which::Latest;
+        panel.documents = Load::start(move || client.documents(&database, project, target));
+    }
+
+    /// Lists a target's documents again when the panel shows that target:
+    /// a save may have added one.
+    pub(super) fn refresh_documents_of(&mut self, (server, project, target): &(String, i32, i32)) {
+        let panel = &self.servers;
+        if panel.server.as_deref() == Some(server.as_str())
+            && panel.project == Some(*project)
+            && panel.target == Some(*target)
+        {
+            let which = panel.document.clone();
+            self.choose_target(*target);
+            self.servers.document = which;
+        }
+    }
+
+    /// Resolves a conflict, as **Save as a copy** or **Open the newer
+    /// version** does.
+    pub(super) fn control_resolve_conflict(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        if !self.server_save.conflict() {
+            return Err("The picture has no conflict".to_string());
+        }
+        match params["keep"].as_str() {
+            Some("copy") => self.save_as_copy(),
+            Some("newer") => self.open_newer_version(),
+            _ => return Err("`keep` is \"copy\" or \"newer\"".to_string()),
+        }
+        Ok(self.control_servers())
     }
 
     fn start_connect(&mut self) {
@@ -455,22 +523,46 @@ impl Studio {
         ) else {
             return;
         };
-        let token = panel
-            .list
-            .find(&server)
-            .filter(|record| record.signs_in)
-            .and_then(|_| kept_token(&server));
+        let which = panel.document.clone();
         self.servers.open = false;
-        self.open_target_with(
-            &super::open::TargetLink {
+        self.open_server_document(
+            super::open::TargetLink {
                 server,
                 database,
                 project,
                 target,
                 ticket: None,
             },
-            token,
+            which,
+            false,
         );
+    }
+
+    /// The chosen target, as a link names it.
+    fn chosen_target(&self) -> Option<super::open::TargetLink> {
+        let panel = &self.servers;
+        Some(super::open::TargetLink {
+            server: panel.server.clone()?,
+            database: panel.database.clone()?,
+            project: panel.project?,
+            target: panel.target?,
+            ticket: None,
+        })
+    }
+
+    /// Puts the open picture on the chosen target.
+    fn save_picture_to_chosen(&mut self) {
+        let Some(target) = self.chosen_target() else {
+            return;
+        };
+        match self.save_picture_to(&target) {
+            Ok(()) => {
+                self.servers.message =
+                    Some("The picture is saved to the target as a new document.".to_string());
+                self.servers.open = false;
+            }
+            Err(reason) => self.servers.message = Some(reason),
+        }
     }
 
     /// A link to a server Studio is connected to opens with that
@@ -493,7 +585,7 @@ impl Studio {
                     self.servers.address = record.address;
                     return;
                 }
-                self.open_target_with(&link, token);
+                self.open_server_document(link, Which::Latest, false);
             }
             (None, Some(ticket)) => {
                 let client = Client::new(&link.server, None);
@@ -503,8 +595,18 @@ impl Studio {
                 self.servers.trading = Some((link, trade));
                 self.say("Connecting to the server the link came from…");
             }
-            // A server without sign-in needs no ticket.
-            (None, None) => self.open_target_with(&link, None),
+            // A server without sign-in needs no ticket: Studio connects
+            // to it as it opens the target.
+            (None, None) => {
+                self.servers.keep_server(ServerRecord {
+                    address: link.server.clone(),
+                    signs_in: false,
+                    username: None,
+                    saves_documents: true,
+                    expires_at: None,
+                });
+                self.open_server_document(link, Which::Latest, false);
+            }
         }
     }
 
@@ -560,7 +662,7 @@ impl Studio {
         }
         self.servers.keep_server(link.record);
         self.servers.open = false;
-        self.open_target_with(&link.target, Some(link.token));
+        self.open_server_document(link.target, Which::Latest, false);
     }
 
     fn panel_button(
@@ -941,7 +1043,7 @@ impl Studio {
                         target.name.clone(),
                         Some(detail),
                         cx,
-                        move |this| this.servers.target = Some(id),
+                        move |this| this.choose_target(id),
                     )
                     .into_any_element()
                 })
@@ -950,11 +1052,53 @@ impl Studio {
             Load::Loading(_) => vec![Self::note("Loading…").into_any_element()],
             Load::Done(Err(_)) => vec![Self::note("Not loaded").into_any_element()],
         };
+        let chosen_document = panel.document.clone();
+        let mut document_rows = vec![Self::panel_row(
+            "document-new",
+            chosen_document == Which::New,
+            "New document",
+            Some("From PSF Guard's flow".to_string()),
+            cx,
+            |this| this.servers.document = Which::New,
+        )
+        .into_any_element()];
+        let latest = panel
+            .documents
+            .done()
+            .and_then(|documents| documents.first().map(|d| d.id.clone()));
+        document_rows.extend(Self::load_rows(&panel.documents, "", |document| {
+            let id = document.id.clone();
+            let chosen = match &chosen_document {
+                Which::Document(chosen) => *chosen == id,
+                Which::Latest => latest.as_deref() == Some(id.as_str()),
+                Which::New => false,
+            };
+            Self::panel_row(
+                SharedString::from(format!("document-{id}")),
+                chosen,
+                document.name.clone(),
+                Some(format!(
+                    "Revision {}, saved by {}",
+                    document.revision, document.saved_by
+                )),
+                cx,
+                move |this| this.servers.document = Which::Document(id.clone()),
+            )
+            .into_any_element()
+        }));
         let can_open = chosen_target.is_some_and(|id| {
             stacked
                 .iter()
                 .any(|stacks| stacks.target_id == id && !stacks.source_candidates.is_empty())
         }) && !self.is_running();
+        // A picture opened from files can go to the chosen target.
+        let can_save_picture = chosen_target.is_some()
+            && self.document_path().is_some()
+            && !self.server_save.linked()
+            && chosen_server
+                .as_deref()
+                .and_then(|server| self.servers.record(server))
+                .is_some_and(|record| record.saves_documents);
         let signed_out = chosen_server.as_ref().is_some_and(|server| {
             self.servers.databases.failure() == Some(&Failure::SignedOut)
                 && self.servers.list.find(server).is_some()
@@ -1044,7 +1188,10 @@ impl Studio {
                     )
                     .child(Self::panel_column("databases", "Databases", database_rows))
                     .child(Self::panel_column("projects", "Projects", project_rows))
-                    .child(Self::panel_column("targets", "Targets", target_rows)),
+                    .child(Self::panel_column("targets", "Targets", target_rows))
+                    .when(chosen_target.is_some(), |columns| {
+                        columns.child(Self::panel_column("documents", "Documents", document_rows))
+                    }),
             )
             .child(
                 div()
@@ -1061,6 +1208,13 @@ impl Studio {
                             .flex_1()
                             .child(Self::note(message.unwrap_or_default())),
                     )
+                    .child(Self::panel_button(
+                        "Save this picture to the target",
+                        "servers-save-picture",
+                        can_save_picture,
+                        cx,
+                        |this, _, _| this.save_picture_to_chosen(),
+                    ))
                     .child(Self::panel_button(
                         "Open",
                         "servers-open",
@@ -1134,7 +1288,36 @@ impl Studio {
                     .collect::<Vec<_>>()))
             ),
             "target": panel.target,
+            "documents": listed(
+                panel.documents.failure(),
+                json!(panel.documents.done().map(|list| list
+                    .iter()
+                    .map(|document| json!({
+                        "id": document.id,
+                        "name": document.name,
+                        "revision": document.revision,
+                        "saved_by": document.saved_by,
+                    }))
+                    .collect::<Vec<_>>()))
+            ),
+            "document": match &panel.document {
+                Which::Latest => json!("latest"),
+                Which::New => json!("new"),
+                Which::Document(id) => json!(id),
+            },
+            "picture_on_server": self.server_save.linked(),
+            "save_state": self.server_save_line(),
         })
+    }
+
+    /// Puts the open picture on the chosen target, as **Save this picture
+    /// to the target** does.
+    pub(super) fn control_save_picture(&mut self) -> Result<serde_json::Value, String> {
+        let target = self
+            .chosen_target()
+            .ok_or_else(|| "No target is chosen".to_string())?;
+        self.save_picture_to(&target)?;
+        Ok(self.control_servers())
     }
 
     /// Opens the panel and connects to `address`, as typing it and choosing
@@ -1168,7 +1351,13 @@ impl Studio {
             self.choose_project(project as i32);
         }
         if let Some(target) = params["target"].as_i64() {
-            self.servers.target = Some(target as i32);
+            self.choose_target(target as i32);
+        }
+        match params["document"].as_str() {
+            Some("latest") => self.servers.document = Which::Latest,
+            Some("new") => self.servers.document = Which::New,
+            Some(id) => self.servers.document = Which::Document(id.to_string()),
+            None => {}
         }
         Ok(self.control_servers())
     }

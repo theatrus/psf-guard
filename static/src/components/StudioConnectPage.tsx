@@ -20,6 +20,12 @@ function errorMessage(error: unknown): string {
 export default function StudioConnectPage() {
   const [searchParams] = useSearchParams();
   const code = searchParams.get('code') ?? '';
+  // A new code is a new connection: nothing decided for the last one
+  // carries over.
+  return <StudioConnect key={code} code={code} />;
+}
+
+function StudioConnect({ code }: { code: string }) {
   const [decided, setDecided] = useState<'allowed' | 'denied' | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');

@@ -3489,6 +3489,25 @@ impl Studio {
             )
             .child(div().w(px(1.0)).h(px(20.0)).bg(rgb(CONTROL)))
             .child(div().px_2().child(self.picture_name()))
+            .when_some(self.server_save_line(), |bar, line| {
+                bar.child(div().max_w(px(360.0)).child(Self::note(line)))
+            })
+            .when(self.server_save.conflict(), |bar| {
+                bar.child(Self::act(
+                    "Save as a copy",
+                    "server-copy",
+                    false,
+                    cx,
+                    |this| this.save_as_copy(),
+                ))
+                .child(Self::act(
+                    "Open the newer version",
+                    "server-newer",
+                    false,
+                    cx,
+                    |this| this.open_newer_version(),
+                ))
+            })
             .child(
                 div()
                     .id("open-files")

@@ -209,19 +209,30 @@ fn tools() -> Value {
         },
         {
             "name": "studio_browse_server",
-            "description": "Chooses a connected `server`, a `database` id, a `project` id and a `target` id in the PSF Guard panel, as clicking them does. Give the server first, then each next one once studio_servers lists it.",
+            "description": "Chooses a connected `server`, a `database` id, a `project` id, a `target` id and a `document` (an id, \"latest\" or \"new\") in the PSF Guard panel, as clicking them does. Give the server first, then each next one once studio_servers lists it.",
             "inputSchema": object(json!({
                 "instance": instance,
                 "server": { "type": "string" },
                 "database": { "type": "string" },
                 "project": { "type": "integer" },
-                "target": { "type": "integer" }
+                "target": { "type": "integer" },
+                "document": { "type": "string" }
             }), &[]),
         },
         {
             "name": "studio_open_server_target",
             "description": "Opens the target chosen in the PSF Guard panel, as Open does: the server's channel stacks are fetched with Studio's connection and prepared. Follow it with studio_wait_idle.",
             "inputSchema": object(json!({ "instance": instance }), &[]),
+        },
+        {
+            "name": "studio_save_picture_to_server",
+            "description": "Puts the open picture on the target chosen in the PSF Guard panel as a new Studio document, as Save this picture to the target does. Studio then saves it there a few seconds after edits stop.",
+            "inputSchema": object(json!({ "instance": instance }), &[]),
+        },
+        {
+            "name": "studio_resolve_conflict",
+            "description": "When another computer saved the picture's document first, keeps this computer's edits as a new document (`keep` \"copy\"), as Save as a copy does, or discards them and opens the server's newest revision (`keep` \"newer\"), as Open the newer version does.",
+            "inputSchema": object(json!({ "instance": instance, "keep": { "type": "string" } }), &["keep"]),
         },
         {
             "name": "studio_sign_out_server",
@@ -406,6 +417,16 @@ impl Server {
             "studio_open_server_target" => {
                 forward(self.instance(arguments)?, "open_server_target", json!({}))
             }
+            "studio_save_picture_to_server" => forward(
+                self.instance(arguments)?,
+                "save_picture_to_server",
+                json!({}),
+            ),
+            "studio_resolve_conflict" => forward(
+                self.instance(arguments)?,
+                "resolve_conflict",
+                json!({ "keep": arguments["keep"] }),
+            ),
             "studio_sign_out_server" => forward(
                 self.instance(arguments)?,
                 "sign_out_server",

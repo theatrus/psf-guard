@@ -191,7 +191,10 @@ impl Studio {
                         )),
                         Err(reason) => self.tell_export(&format!("{name} was written, but {reason}")),
                     },
-                    None => self.tell_export(&format!("Exported {name}.")),
+                    None => {
+                        self.tell_export(&format!("Exported {name}."));
+                        self.export_finished(&run.path);
+                    }
                 }
             }
             Some(Err(reason)) => {

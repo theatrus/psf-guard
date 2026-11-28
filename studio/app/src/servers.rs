@@ -429,6 +429,209 @@ impl Client {
     }
 }
 
+/// A Studio document on a server, as its list shows it.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct DocumentSummary {
+    pub id: String,
+    pub name: String,
+    pub revision: u32,
+    pub saved_at: i64,
+    pub saved_by: String,
+}
+
+/// A file a revision uses.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct FileUse {
+    pub role: String,
+    pub sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct RevisionEntry {
+    pub revision: u32,
+    #[serde(default)]
+    pub saved_by: String,
+    #[serde(default)]
+    pub files: Vec<FileUse>,
+}
+
+/// A document's record on a server.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct DocumentRecord {
+    pub id: String,
+    pub name: String,
+    pub revisions: Vec<RevisionEntry>,
+}
+
+impl DocumentRecord {
+    pub fn current(&self) -> Option<&RevisionEntry> {
+        self.revisions.last()
+    }
+}
+
+/// Why a save did not reach the server.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SaveFailure {
+    /// Another computer saved first: the server's current revision.
+    Conflict(DocumentRecord),
+    Failed(Failure),
+}
+
+/// The largest document Studio reads from a server.
+const MAX_DOCUMENT_BYTES: u64 = 64 * 1024 * 1024;
+
+impl Client {
+    fn documents_url(&self, database: &str) -> String {
+        format!("/db/{}/studio-documents", path_part(database))
+    }
+
+    fn with_token<B>(&self, request: ureq::RequestBuilder<B>) -> ureq::RequestBuilder<B> {
+        match &self.token {
+            Some(token) => request.header("Authorization", format!("Bearer {token}")),
+            None => request,
+        }
+    }
+
+    /// The documents of a target, most recently saved first.
+    pub fn documents(
+        &self,
+        database: &str,
+        project: i32,
+        target: i32,
+    ) -> Result<Vec<DocumentSummary>, Failure> {
+        self.get(&format!(
+            "{}?project={project}&target={target}",
+            self.documents_url(database)
+        ))
+    }
+
+    pub fn document_record(&self, database: &str, id: &str) -> Result<DocumentRecord, Failure> {
+        self.get(&format!(
+            "{}/{}",
+            self.documents_url(database),
+            path_part(id)
+        ))
+    }
+
+    /// A revision's document, as text.
+    pub fn revision_text(
+        &self,
+        database: &str,
+        id: &str,
+        revision: u32,
+    ) -> Result<String, Failure> {
+        let url = self.url(&format!(
+            "{}/{}/revisions/{revision}",
+            self.documents_url(database),
+            path_part(id)
+        ));
+        let mut response = self
+            .with_token(self.agent.get(url))
+            .call()
+            .map_err(|error| Failure::Unreachable(error.to_string()))?;
+        match response.status().as_u16() {
+            200 => response
+                .body_mut()
+                .with_config()
+                .limit(MAX_DOCUMENT_BYTES)
+                .read_to_string()
+                .map_err(|error| Failure::Failed(error.to_string())),
+            401 => Err(Failure::SignedOut),
+            status => Err(Failure::Failed(format!("The server answered {status}"))),
+        }
+    }
+
+    fn file_url(&self, database: &str, sha256: &str) -> String {
+        self.url(&format!("{}/files/{sha256}", self.documents_url(database)))
+    }
+
+    /// Uploads a file unless the server has it already.
+    pub fn upload_file(&self, database: &str, sha256: &str, path: &Path) -> Result<(), Failure> {
+        let url = self.file_url(database, sha256);
+        let known = self
+            .with_token(self.agent.head(&url))
+            .call()
+            .map_err(|error| Failure::Unreachable(error.to_string()))?;
+        if known.status().as_u16() == 200 {
+            return Ok(());
+        }
+        let file = std::fs::File::open(path).map_err(|error| {
+            Failure::Failed(format!("{} could not be read: {error}", path.display()))
+        })?;
+        Self::answer::<Value>(self.with_token(self.agent.put(&url)).send(&file)).map(|_| ())
+    }
+
+    /// Downloads a file to `path`, through a temporary file beside it.
+    pub fn download_file(&self, database: &str, sha256: &str, path: &Path) -> Result<(), Failure> {
+        let mut response = self
+            .with_token(self.agent.get(self.file_url(database, sha256)))
+            .call()
+            .map_err(|error| Failure::Unreachable(error.to_string()))?;
+        match response.status().as_u16() {
+            200 => {}
+            401 => return Err(Failure::SignedOut),
+            status => {
+                return Err(Failure::Failed(format!(
+                    "The server answered {status} for a file"
+                )))
+            }
+        }
+        let temporary = path.with_extension("downloading");
+        let written = (|| {
+            let mut file = std::fs::File::create(&temporary)?;
+            let mut reader = response.body_mut().with_config().limit(u64::MAX).reader();
+            std::io::copy(&mut reader, &mut file)?;
+            file.sync_all()?;
+            std::fs::rename(&temporary, path)
+        })();
+        written.map_err(|error| {
+            let _ = std::fs::remove_file(&temporary);
+            Failure::Failed(format!("The file was not downloaded: {error}"))
+        })
+    }
+
+    pub fn create_document(&self, database: &str, body: Value) -> Result<DocumentRecord, Failure> {
+        self.post(&self.documents_url(database), body)
+    }
+
+    /// Saves a revision, or answers the server's current one when another
+    /// computer saved first.
+    pub fn save_document(
+        &self,
+        database: &str,
+        id: &str,
+        body: Value,
+    ) -> Result<DocumentRecord, SaveFailure> {
+        let url = self.url(&format!(
+            "{}/{}",
+            self.documents_url(database),
+            path_part(id)
+        ));
+        let mut response = self
+            .with_token(self.agent.put(url))
+            .send_json(body)
+            .map_err(|error| SaveFailure::Failed(Failure::Unreachable(error.to_string())))?;
+        if response.status().as_u16() == 409 {
+            let body: Value = response.body_mut().read_json().unwrap_or(Value::Null);
+            return match serde_json::from_value(body["data"].clone()) {
+                Ok(record) => Err(SaveFailure::Conflict(record)),
+                Err(error) => Err(SaveFailure::Failed(Failure::Failed(error.to_string()))),
+            };
+        }
+        Self::answer(Ok(response)).map_err(SaveFailure::Failed)
+    }
+
+    pub fn add_export(&self, database: &str, id: &str, body: Value) -> Result<(), Failure> {
+        self.post::<Value>(
+            &format!("{}/{}/exports", self.documents_url(database), path_part(id)),
+            body,
+        )
+        .map(|_| ())
+    }
+}
+
 /// A name as one part of a URL path: everything but letters, digits and
 /// `-_.~` escaped.
 fn path_part(text: &str) -> String {

@@ -28,7 +28,7 @@ pub fn keep_links(links: Vec<String>) {
 }
 
 /// The folder Studio keeps its pictures in.
-fn pictures_folder() -> PathBuf {
+pub(super) fn pictures_folder() -> PathBuf {
     let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("."), PathBuf::from);
     if cfg!(target_os = "macos") {
         home.join("Library/Application Support/psf-studio/pictures")
@@ -81,7 +81,7 @@ fn field(query: &str, name: &str) -> Option<String> {
 }
 
 /// What a link asks Studio to open.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(super) struct TargetLink {
     pub server: String,
     pub database: String,
@@ -107,6 +107,23 @@ pub(super) fn target_link(link: &str) -> Option<TargetLink> {
         target: field(query, "target")?.parse().ok()?,
         ticket: field(query, "ticket").filter(|ticket| !ticket.is_empty()),
     })
+}
+
+/// The name of a server target's picture: the server and the database as
+/// given are part of it, so two servers' targets never share one picture.
+pub(super) fn target_picture_name(link: &TargetLink) -> String {
+    let identity = {
+        use sha2::{Digest, Sha256};
+        let hash = Sha256::digest(format!("{}\0{}", link.server, link.database));
+        hash.iter()
+            .take(4)
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    };
+    file_name(&format!(
+        "{}-p{}-t{}-{identity}",
+        link.database, link.project, link.target
+    ))
 }
 
 impl Studio {
@@ -144,25 +161,16 @@ impl Studio {
         self.start_run(command, Some((store, document)));
     }
 
-    /// Opens a target's channel stacks from a PSF Guard server, with the
-    /// server's token when it signs people in.
-    pub(super) fn open_target_with(&mut self, link: &TargetLink, token: Option<String>) {
-        // The server and the database as given are part of the picture's
-        // identity, so two servers' targets never share one picture.
-        let identity = {
-            use sha2::{Digest, Sha256};
-            let hash = Sha256::digest(format!("{}\0{}", link.server, link.database));
-            hash.iter()
-                .take(4)
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<String>()
-        };
-        let name = format!(
-            "{}-p{}-t{}-{identity}",
-            link.database, link.project, link.target
-        );
+    /// Opens a target's channel stacks from a PSF Guard server as the
+    /// picture `name`, with the server's token when it signs people in.
+    pub(super) fn open_target_named(
+        &mut self,
+        link: &TargetLink,
+        token: Option<String>,
+        name: &str,
+    ) {
         self.prepare_and_open(
-            &name,
+            name,
             vec![
                 "--server".into(),
                 link.server.clone().into(),
