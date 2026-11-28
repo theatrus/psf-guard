@@ -41,8 +41,8 @@ import { buildColorExposureSets, colorSourceKey, colorSourcesLabel, completedCol
 import { withRetainedColorExposureSets } from './colorExposureCards';
 import { fetchDefaultColorFor } from './defaultColorSetup';
 import './StackColorSources.css';
-import { studioLink, useServerOrigin } from '../utils/studioLink';
-import { useAccess } from '../auth/access';
+import { studioLink } from '../utils/studioLink';
+import { useOpenInStudio } from '../utils/useOpenInStudio';
 
 /** A channel's frame count, or that WBPP made it and recorded none. */
 function sourceFramesText(source: Pick<StackColorSource, 'accepted_frames' | 'wbpp'>): string {
@@ -602,11 +602,10 @@ export default function StackColorPreviewPanel({
   targetId = null,
 }: StackColorPreviewPanelProps) {
   const queryClient = useQueryClient();
-  const serverOrigin = useServerOrigin();
-  // PSF Studio asks the server as an anonymous caller, so a server that
-  // needs sign-in refuses it.
-  const { status: accessStatus } = useAccess();
-  const studioReachable = !accessStatus.authentication_required;
+  // On a server with sign-in, a link to PSF Studio carries a one-time
+  // ticket, minted when the person clicks it.
+  const studio = useOpenInStudio(dbId, projectId);
+  const serverOrigin = studio.origin;
   const [watchedJobIds, setWatchedJobIds] = useState<string[]>([]);
   // The card that asked for each composition still being prepared, which
   // names no channel stacks yet to match a card by, and whether it came
@@ -1114,18 +1113,20 @@ export default function StackColorPreviewPanel({
           {error instanceof Error ? error.message : 'Color preview failed'}
         </div>
       )}
-      {serverOrigin && studioReachable && targets.some((target) => (target.source_candidates ?? []).length > 0) && (
+      {serverOrigin && targets.some((target) => (target.source_candidates ?? []).length > 0) && (
         <div className="stack-color-studio">
           {targets.filter((target) => (target.source_candidates ?? []).length > 0).map((target) => (
             <a
               key={target.target_id}
               className="stack-preview-card-action"
               href={studioLink(serverOrigin, dbId, projectId, target.target_id)}
-              title="PSF Studio fetches this target's channel stacks from this server and opens them for color processing. PSF Studio must be installed on this computer."
+              onClick={(event) => void studio.open(event, target.target_id)}
+              title="PSF Studio opens this target's latest Studio document, or a new one from its channel stacks, and saves your edits back to this project. PSF Studio must be installed on this computer. The first time, PSF Studio asks you to confirm the connection to this server."
             >
               Open {target.target_name} in PSF Studio
             </a>
           ))}
+          {studio.error && <span className="status-message error" role="alert">{studio.error}</span>}
         </div>
       )}
       <div className="stack-color-grid">

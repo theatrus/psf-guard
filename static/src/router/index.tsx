@@ -11,6 +11,7 @@ import RigsPage from '../components/rigs/RigsPage';
 import CalibrationPage from '../components/calibration/CalibrationPage';
 import PlanPage from '../components/director/PlanPage';
 import LegacyPlanningRedirect from '../components/director/LegacyPlanningRedirect';
+import StudioConnectPage from '../components/StudioConnectPage';
 
 // Create React Query client
 const queryClient: QueryClient = new QueryClient({
@@ -77,6 +78,10 @@ const router = createHashRouter([
       {
         path: "calibration",
         element: <CalibrationPage />
+      },
+      {
+        path: "studio-connect",
+        element: <StudioConnectPage />
       }
     ]
   }

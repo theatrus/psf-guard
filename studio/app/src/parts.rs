@@ -24,7 +24,7 @@ fn id(text: String) -> SharedString {
 impl Studio {
     /// The document's inputs: its channels as prepared, without the
     /// states of one, such as its stars, that the store also holds.
-    fn inputs(&self) -> Vec<String> {
+    pub(super) fn inputs(&self) -> Vec<String> {
         self.document
             .channels()
             .into_iter()
@@ -165,15 +165,22 @@ impl Studio {
     /// The parts an input goes to, as words for its row in the tree.
     pub(super) fn goes_to(&self, input: &str) -> Option<String> {
         let parts = self.document.parts();
-        let mut names: Vec<&str> = Vec::new();
+        let mut names: Vec<String> = Vec::new();
         for route in self.document.routes() {
-            if route.shows != input {
+            // An input goes where a layer shows it, or shows a state of it,
+            // such as its stars.
+            if route.shows != input && route.input != input {
                 continue;
             }
-            let name = route
+            let part = route
                 .part
                 .and_then(|part| parts.iter().find(|group| group.id == part))
                 .map_or("top", |group| group.name.as_str());
+            let name = if route.shows == input {
+                part.to_string()
+            } else {
+                format!("{part} ({})", state_word(&route.shows))
+            };
             if !names.contains(&name) {
                 names.push(name);
             }
@@ -194,13 +201,18 @@ impl Studio {
             .document
             .routes()
             .into_iter()
-            .filter(|route| route.shows == input)
+            .filter(|route| route.shows == input || route.input == input)
             .map(|route| {
                 let part = route
                     .part
                     .and_then(|part| parts.iter().find(|(id, _)| *id == part))
                     .map_or("Top", |(_, name)| name.as_str())
                     .to_string();
+                let part = if route.shows == input {
+                    part
+                } else {
+                    format!("{part} ({})", state_word(&route.shows))
+                };
                 let layer = route.layer;
                 let color = self
                     .layer(layer)
@@ -283,6 +295,25 @@ impl Studio {
     }
 
     /// The menus over the layers: start from a recipe, or add a part.
+    /// Makes the picture from a recipe's parts. A recipe that shows stars
+    /// apart has them separated.
+    pub(super) fn choose_recipe(&mut self, recipe: &crate::studio_model::Recipe) {
+        let inputs = self.inputs();
+        self.document.use_recipe(recipe, &inputs);
+        self.selected = Row::Combined;
+        self.separate_stars();
+    }
+
+    /// Adds a part of `kind` and selects it; a part that shows stars apart
+    /// has them separated.
+    pub(super) fn add_part_of(&mut self, kind: PartKind) {
+        let inputs = self.inputs();
+        if let Some(part) = self.document.add_part(kind, &inputs) {
+            self.selected = Row::Layer(part);
+        }
+        self.separate_stars();
+    }
+
     pub(super) fn parts_bar(&self, cx: &mut Context<Self>) -> gpui::Div {
         let inputs = self.inputs();
         let recipes = recipes_for(&inputs)
@@ -290,9 +321,7 @@ impl Studio {
             .enumerate()
             .map(|(index, recipe)| {
                 Self::pick(recipe.name, ("recipe", index), false, cx, move |this| {
-                    let inputs = this.inputs();
-                    this.document.use_recipe(recipe, &inputs);
-                    this.selected = Row::Combined;
+                    this.choose_recipe(recipe);
                 })
             })
             .collect();
@@ -302,10 +331,7 @@ impl Studio {
             .enumerate()
             .map(|(index, kind)| {
                 Self::pick(kind.label(), ("add-part", index), false, cx, move |this| {
-                    let inputs = this.inputs();
-                    if let Some(part) = this.document.add_part(kind, &inputs) {
-                        this.selected = Row::Layer(part);
-                    }
+                    this.add_part_of(kind);
                 })
             })
             .collect();
@@ -315,6 +341,11 @@ impl Studio {
             .gap_1()
             .child(self.menu("recipe", "Recipe", recipes, cx))
             .child(self.menu("add-part", "Add part", kinds, cx))
+            .when(self.stars_missing() && !self.is_running(), |bar| {
+                bar.child(Self::note(
+                    "The stars layers show no stars yet: their inputs' stars have not been removed. Choose the recipe again to remove them with a star removal tool and prepare the store, or give each input a star removal tool and run the tools.",
+                ))
+            })
     }
 
     /// Removes a part with its layers.
@@ -322,4 +353,10 @@ impl Studio {
         self.document.remove_part(part);
         self.selected = Row::Combined;
     }
+}
+
+/// What a state of an input is, in a word: `stars` for `ha@stars`, `line`
+/// for `ha@line`.
+fn state_word(channel: &str) -> &str {
+    channel.split_once('@').map_or(channel, |(_, state)| state)
 }

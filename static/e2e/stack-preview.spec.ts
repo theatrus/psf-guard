@@ -783,7 +783,7 @@ test('runs RC-Astro on the color channels together', async ({ page }, testInfo) 
 
 // The built-in color pipeline the server seeds the "Default" setup with.
 const BUILT_IN_COLOR_PIPELINE = JSON.parse(fs.readFileSync(
-  fileURLToPath(new URL('../../src/processing_setups/default_color.json', import.meta.url)), 'utf8'
+  fileURLToPath(new URL('../../crates/psf-studio-core/src/default_color.json', import.meta.url)), 'utf8'
 ));
 
 interface ListedSetup { name: string; kind: string; updated_unix_seconds: number }

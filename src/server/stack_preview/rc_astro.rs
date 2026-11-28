@@ -339,6 +339,42 @@ pub(crate) fn schemas_for(
         .collect()
 }
 
+/// Has a star removal step save the stars as an image of their own, with
+/// Unscreen Stars off, so they are linear and can be added back. Refuses a
+/// tool that cannot save its stars.
+pub(crate) fn keep_linear_stars(
+    step: &mut ProcessingStep,
+    schema: &ExternalToolSchema,
+) -> Result<(), String> {
+    let star_parameter = schema
+        .parameters
+        .iter()
+        .find(|p| matches!(p.name.as_str(), "stars" | "difference") && p.flag.is_some())
+        .ok_or_else(|| format!("{} cannot save the stars it removes", step.provider))?;
+    step.parameters
+        .retain(|name, _| name != "stars" && name != "difference");
+    step.parameters.insert(
+        star_parameter.name.clone(),
+        ExternalParameterValue::Bool(true),
+    );
+    if let Some(unscreen) = schema
+        .parameters
+        .iter()
+        .find(|p| p.name == "unscreen" && p.flag.is_some())
+    {
+        match unscreen.kind {
+            seiza_stacking::ExternalParameterKind::Bool { default: false } => {
+                step.parameters.remove("unscreen");
+            }
+            _ => {
+                step.parameters
+                    .insert("unscreen".into(), ExternalParameterValue::Bool(false));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Canonicalize a request against the live schemas: refuse unknown,
 /// GUI-only, and out-of-range parameters with a clear message before
 /// anything runs, and coerce a whole-number float (which JSON delivers as
@@ -1251,6 +1287,41 @@ mod tests {
             "parameters": [],
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn a_star_removal_is_made_to_keep_its_stars_linear() {
+        let flagged = |name: &str, label: &str| {
+            serde_json::from_value(serde_json::json!({
+                "name": name, "flag": format!("--{name}"), "label": label,
+                "description": "", "kind": {"type": "bool", "default": false},
+            }))
+            .unwrap()
+        };
+        let mut sxt = schema("sxt", "2.6.6", 11);
+        sxt.parameters = vec![
+            flagged("stars", "Generate Star Image"),
+            flagged("unscreen", "Unscreen Stars"),
+        ];
+        // A Studio input's star tool, chosen with its defaults or with the
+        // stars screened.
+        let mut chosen = step("sxt");
+        keep_linear_stars(&mut chosen, &sxt).unwrap();
+        assert_eq!(
+            chosen.parameters,
+            BTreeMap::from([("stars".to_string(), ExternalParameterValue::Bool(true))])
+        );
+        let mut screened = step("sxt");
+        screened
+            .parameters
+            .insert("unscreen".into(), ExternalParameterValue::Bool(true));
+        screened
+            .parameters
+            .insert("stars".into(), ExternalParameterValue::Bool(false));
+        keep_linear_stars(&mut screened, &sxt).unwrap();
+        assert_eq!(screened.parameters, chosen.parameters);
+        // A tool with no stars output is refused.
+        assert!(keep_linear_stars(&mut step("sxt"), &schema("sxt", "2.6.6", 11)).is_err());
     }
 
     /// Workers whose own worker runs a stand-in noise model.

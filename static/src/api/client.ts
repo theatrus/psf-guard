@@ -63,6 +63,8 @@ import type { GuidFillReport, GuidReport, ImportedCopiesMerge, ImportedCopiesRep
   AccountPreferences,
   AuthStatus,
   AuthTokenSummary,
+  StudioConnectWaiting,
+  StudioDocumentSummary,
   AuthUserSummary,
   CreateAuthTokenRequest,
   CreateAuthUserRequest,
@@ -1130,6 +1132,88 @@ export const apiClient = {
     );
     if (!data.data) throw new Error(data.error || 'Failed to remove user');
     return data.data;
+  },
+
+  getStudioConnect: async (code: string): Promise<StudioConnectWaiting> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<StudioConnectWaiting>>(
+      '/auth/studio/approve',
+      { params: { code } }
+    );
+    if (!data.data) throw new Error(data.error || 'No PSF Studio is waiting with this code');
+    return data.data;
+  },
+
+  decideStudioConnect: async (code: string, allow: boolean): Promise<void> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<unknown>>('/auth/studio/approve', {
+      code,
+      allow,
+    });
+    if (!data.success) throw new Error(data.error || 'The code could not be approved');
+  },
+
+  /** A project's PSF Studio documents, most recently saved first. */
+  getStudioDocuments: async (dbId: string, projectId: number): Promise<StudioDocumentSummary[]> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<StudioDocumentSummary[]>>(
+      `/db/${encodeURIComponent(dbId)}/studio-documents`,
+      { params: { project: projectId } }
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to load the Studio documents');
+    return data.data;
+  },
+
+  /** Deletes a Studio document, its revisions, and the files no other
+   *  document uses. */
+  /** Renames a Studio document without a new revision. */
+  renameStudioDocument: async (
+    dbId: string,
+    id: string,
+    name: string,
+  ): Promise<StudioDocumentSummary> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.patch<ApiResponse<StudioDocumentSummary>>(
+      `/db/${encodeURIComponent(dbId)}/studio-documents/${encodeURIComponent(id)}`,
+      { name },
+    );
+    if (!data.success || !data.data) {
+      throw new Error(data.error || 'The Studio document was not renamed');
+    }
+    return data.data;
+  },
+
+  deleteStudioDocument: async (dbId: string, id: string): Promise<void> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.delete<ApiResponse<unknown>>(
+      `/db/${encodeURIComponent(dbId)}/studio-documents/${encodeURIComponent(id)}`
+    );
+    if (!data.success) throw new Error(data.error || 'The Studio document was not deleted');
+  },
+
+  /** A Studio document's current revision as color processing settings. */
+  getStudioDocumentProcessing: async (dbId: string, id: string): Promise<unknown> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<unknown>>(
+      `/db/${encodeURIComponent(dbId)}/studio-documents/${encodeURIComponent(id)}/processing`
+    );
+    if (!data.data) throw new Error(data.error || 'The document cannot be a Color processing setup');
+    return data.data;
+  },
+
+  /** Where a file a Studio document uses can be downloaded. */
+  studioFileUrl: (dbId: string, sha256: string): string =>
+    withServerUrl(`/api/db/${encodeURIComponent(dbId)}/studio-documents/files/${sha256}`),
+
+  /** A one-time ticket for a link that opens PSF Studio, which lasts about
+   *  a minute. */
+  createStudioTicket: async (): Promise<string> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<{ ticket: string; expires_at: number }>>(
+      '/auth/studio/ticket'
+    );
+    if (!data.data) throw new Error(data.error || 'PSF Studio could not be opened');
+    return data.data.ticket;
   },
 
   getAuthTokens: async (): Promise<AuthTokenSummary[]> => {

@@ -91,7 +91,7 @@ type Listed = Option<Result<Vec<ToolInfo>, String>>;
 
 /// A run of `psf-guard studio-prepare`, as the thread that reads it
 /// reports it.
-struct Run {
+pub(super) struct Run {
     /// The last line the program printed.
     line: String,
     /// How it ended, once it has.
@@ -107,6 +107,9 @@ struct Run {
     started: std::time::Instant,
     /// Whether a person stopped the run.
     stopped: bool,
+    /// Whether the run is of tool steps on a layer or the picture, which
+    /// leaves the store as it is.
+    late: bool,
 }
 
 /// The processing tools of the app.
@@ -131,6 +134,26 @@ pub(super) struct Tools {
     /// Each input's tools as they were when the store was prepared, to say
     /// when the document has moved on.
     prepared: Option<serde_json::Value>,
+    /// Whether Run tools was asked for while a run was under way: one more
+    /// run starts with the document as it is then, once the store the run
+    /// prepared is open.
+    queued: bool,
+    /// Whether the tool steps on layers and the picture run once the store
+    /// a run prepares is open.
+    late_after: bool,
+}
+
+/// The program of the PSF Guard app this Studio ships inside: from
+/// `PSF Guard.app/Contents/Helpers/PSF Studio.app/Contents/MacOS/psf-studio`,
+/// `PSF Guard.app/Contents/MacOS/psf-guard`. `None` for a Studio on its own.
+fn enclosing_psf_guard(executable: &std::path::Path) -> Option<PathBuf> {
+    let studio_app = executable.parent()?.parent()?.parent()?;
+    let helpers = studio_app.parent()?;
+    if helpers.file_name()? != "Helpers" {
+        return None;
+    }
+    let program = helpers.parent()?.join("MacOS").join("psf-guard");
+    program.is_file().then_some(program)
 }
 
 impl Tools {
@@ -138,7 +161,8 @@ impl Tools {
     pub(super) fn new(options: &Options) -> Self {
         let listing = Arc::new(Mutex::new(None));
         // The program given, or the one named by PSF_GUARD, or the one
-        // beside this program, or the one on the PATH.
+        // beside this program, or that of the PSF Guard app this one ships
+        // inside, or the one on the PATH.
         let binary_path = options
             .psf_guard
             .clone()
@@ -147,6 +171,7 @@ impl Tools {
                 let beside = std::env::current_exe().ok()?.with_file_name("psf-guard");
                 beside.is_file().then_some(beside)
             })
+            .or_else(|| enclosing_psf_guard(&std::env::current_exe().ok()?))
             .unwrap_or_else(|| PathBuf::from("psf-guard"));
         {
             let binary = binary_path.clone();
@@ -180,6 +205,8 @@ impl Tools {
             status: String::new(),
             saved: String::new(),
             prepared: None,
+            queued: false,
+            late_after: false,
         }
     }
 }
@@ -187,27 +214,27 @@ impl Tools {
 impl Studio {
     // ---- the document's tools -------------------------------------------
 
-    /// The step that holds an input's tools.
-    fn tools_step(&self, channel: &str) -> Option<&StepRecord> {
+    /// The tool steps of an input or of a color group, in the document's
+    /// order.
+    fn tool_steps(&self, band: &str) -> Vec<&StepRecord> {
         self.document
             .stage(StageKind::Linear)
             .steps
             .iter()
-            .find(|step| {
-                step.kind.name() == flow_operations::RC_ASTRO_INPUT
-                    && step.band.as_deref() == Some(channel)
+            .filter(|step| {
+                crate::studio_model::is_tool_step(step) && step.band.as_deref() == Some(band)
             })
+            .collect()
     }
 
-    /// An input's tools in order: each provider with its settings, as PSF
-    /// Guard keeps them.
-    fn chain(&self, channel: &str) -> Vec<serde_json::Value> {
-        match self.tools_step(channel).map(|step| &step.kind) {
-            Some(StepKind::Operation { settings, .. }) => {
-                settings["steps"].as_array().cloned().unwrap_or_default()
-            }
-            _ => Vec::new(),
-        }
+    /// The tools of an input or of a color group in order: each provider
+    /// with its settings, one per tool step.
+    fn chain(&self, band: &str) -> Vec<serde_json::Value> {
+        self.tool_steps(band)
+            .into_iter()
+            .filter_map(crate::studio_model::tool_of)
+            .cloned()
+            .collect()
     }
 
     fn provider_of(step: &serde_json::Value) -> &str {
@@ -217,42 +244,20 @@ impl Studio {
             .unwrap_or_default()
     }
 
-    /// Every input's tools, to tell whether the store was prepared for
-    /// them.
+    /// Every input's Linear steps that preparing a store runs, and the
+    /// continuum subtraction, to tell whether the store was prepared for
+    /// them. A record of this form says `"format": 2`.
     fn all_chains(&self) -> serde_json::Value {
         let mut chains = self
             .document
             .channels()
             .into_iter()
             .map(|channel| {
-                let chain = self.chain(&channel);
-                (channel, serde_json::Value::Array(chain))
+                let program = crate::studio_model::input_program(&self.document, &channel);
+                (channel, serde_json::Value::Array(program))
             })
             .collect::<serde_json::Map<_, _>>();
-        // An input's deconvolution is prepared with the store as well.
-        for step in &self.document.stage(StageKind::Linear).steps {
-            if let (
-                true,
-                Some(band),
-                StepKind::Operation {
-                    operation,
-                    settings,
-                    ..
-                },
-            ) = (step.enabled, &step.band, &step.kind)
-                && operation == flow_operations::DECONVOLUTION
-            {
-                chains.insert(format!("{band}:deconvolution"), settings.clone());
-            }
-        }
-        // Tools that run on a color group are prepared with the store too.
-        for (band, _) in crate::studio_model::COLOR_GROUPS {
-            let chain = self.group_chain(band);
-            if !chain.is_empty() {
-                chains.insert(format!("{band}:together"), chain.into());
-            }
-        }
-        // Continuum subtraction is prepared with the store as well.
+        chains.insert("format".to_string(), 2.into());
         chains.insert(
             "continuum".to_string(),
             self.continuum_step()
@@ -300,58 +305,98 @@ impl Studio {
         }
     }
 
-    /// Records that the store the canvas draws was prepared for the
-    /// document as it is.
-    pub(super) fn tools_are_prepared(&mut self) {
-        self.tools.prepared = Some(self.all_chains());
+    /// Records which tools the store the canvas draws was prepared with:
+    /// `ran`, the tools a run that just prepared it was given; else the
+    /// record kept beside the store, when it is of the store as it is now;
+    /// else the document's tools as they are. The record is written beside
+    /// the store, so a later session knows which changes the store lacks.
+    pub(super) fn tools_are_prepared(&mut self, ran: Option<serde_json::Value>) {
+        let store = self.tools.store.clone();
+        let now = self.all_chains();
+        // A record from before each tool was a step lists chains, not
+        // steps, and is not read; the store's own record of the steps it
+        // was prepared with is, with continuum subtraction as it is now.
+        let recorded = |record: serde_json::Value| (record["format"] == 2).then_some(record);
+        let prepared = ran
+            .or_else(|| {
+                store
+                    .as_deref()
+                    .and_then(prepared_record::read)
+                    .and_then(recorded)
+            })
+            .or_else(|| {
+                let record =
+                    std::fs::read_to_string(store.as_deref()?.with_extension("prepared.json"))
+                        .ok()?;
+                let record: serde_json::Value = serde_json::from_str(&record).ok()?;
+                let mut program = record["program"].as_object()?.clone();
+                program.insert("format".to_string(), 2.into());
+                program.insert("continuum".to_string(), now["continuum"].clone());
+                Some(serde_json::Value::Object(program))
+            })
+            .unwrap_or(now);
+        if let Some(store) = &store {
+            prepared_record::write(store, &prepared);
+        }
+        self.tools.prepared = Some(prepared);
     }
 
-    /// Writes an input's tools into the document. An input with no tool
-    /// has no tools step.
-    fn set_chain(&mut self, channel: &str, mut chain: Vec<serde_json::Value>) {
-        // A chain runs its tools in the order of what they do.
-        let place = |step: &serde_json::Value| {
-            let provider = Self::provider_of(step);
-            let category = self
-                .tools
-                .tools
-                .iter()
-                .find(|tool| tool.key == provider)
-                .map_or("", |tool| tool.category.as_str());
-            CATEGORIES
-                .iter()
-                .position(|(name, _)| *name == category)
-                .unwrap_or(CATEGORIES.len())
-        };
-        chain.sort_by_key(place);
-        let existing = self.tools_step(channel).map(|step| step.id);
-        if chain.is_empty() {
-            if let Some(id) = existing {
-                self.document.remove_step(id);
-                if self.selected_step() == Some(id) {
-                    self.selected = Row::Input(channel.to_string());
-                }
+    /// The inputs whose tools changed since the store was prepared, which
+    /// Run tools would bring up to date, in the document's order. A color
+    /// group's tools count for each of its inputs, and continuum
+    /// subtraction for each line.
+    pub(super) fn inputs_to_run(&self) -> Vec<String> {
+        match &self.tools.prepared {
+            Some(prepared) => {
+                changed_inputs(prepared, &self.all_chains(), &self.document.channels())
             }
-            return;
+            None => Vec::new(),
         }
-        let settings = serde_json::json!({ "steps": chain });
-        match existing {
-            Some(id) => {
-                self.document.set_step_settings(id, settings);
-            }
-            None => {
-                // Tools run before the background is fitted.
-                let steps = &self.document.stage(StageKind::Linear).steps;
-                let before = steps
-                    .iter()
-                    .position(|step| step.kind.name() == flow_operations::BACKGROUND)
-                    .unwrap_or(steps.len());
-                let mut step =
-                    operation(flow_operations::RC_ASTRO_INPUT, Accepts::Linear).for_band(channel);
-                if let StepKind::Operation { settings: own, .. } = &mut step.kind {
-                    *own = settings;
+    }
+
+    /// Writes the tools of an input or of a color group into its tool
+    /// steps, one kind of tool at a time: a kind the chain lacks loses its
+    /// steps, a kind it has updates the first step of that kind, and a new
+    /// kind gets a step where [`crate::studio_model::new_tool_step_index`]
+    /// puts it. Steps keep their places, so an order a person chose holds.
+    fn set_chain(&mut self, band: &str, chain: Vec<serde_json::Value>) {
+        let kind =
+            |tool: &serde_json::Value| crate::studio_model::tool_operation(Self::provider_of(tool));
+        for operation in flow_operations::TOOLS {
+            let wanted = chain.iter().find(|tool| kind(tool) == operation);
+            let existing: Vec<uuid::Uuid> = self
+                .tool_steps(band)
+                .into_iter()
+                .filter(|step| step.kind.name() == operation)
+                .map(|step| step.id)
+                .collect();
+            match (wanted, existing.first()) {
+                (None, _) => {
+                    for id in existing {
+                        self.document.remove_step(id);
+                        if self.selected_step() == Some(id)
+                            && let Row::InputStep { channel, .. } = &self.selected
+                        {
+                            self.selected = Row::Input(channel.clone());
+                        }
+                    }
                 }
-                let _ = self.document.insert_step(StageKind::Linear, before, step);
+                (Some(tool), Some(id)) => {
+                    let changed = self
+                        .document
+                        .step(*id)
+                        .and_then(|(_, step)| crate::studio_model::tool_of(step))
+                        != Some(tool);
+                    if changed {
+                        self.document.set_step_settings(*id, tool.clone());
+                    }
+                }
+                (Some(tool), None) => {
+                    let at =
+                        crate::studio_model::new_tool_step_index(&self.document, band, operation);
+                    let step = crate::studio_model::tool_step(tool.clone()).for_band(band);
+                    let _ = self.document.insert_step(StageKind::Linear, at, step);
+                }
             }
         }
     }
@@ -367,7 +412,7 @@ impl Studio {
     /// Chooses the provider of one kind of tool for an input, or none.
     /// When the input's stars are removed with its group, the choice is
     /// the group's.
-    fn set_tool(&mut self, channel: &str, category: &str, provider: Option<&str>) {
+    pub(super) fn set_tool(&mut self, channel: &str, category: &str, provider: Option<&str>) {
         let together = (category == STARS)
             .then(|| self.stars_together(channel))
             .flatten();
@@ -388,6 +433,84 @@ impl Studio {
         }
     }
 
+    // ---- separating the stars a picture shows ----------------------------
+
+    /// The inputs the picture's layers show, with a stars layer read as
+    /// the input its stars came from.
+    fn shown_inputs(&self) -> Vec<String> {
+        let mut inputs: Vec<String> = Vec::new();
+        for layer in self.document.layers() {
+            if let LayerSource::Band { band } = &layer.source {
+                let input = band.strip_suffix("@stars").unwrap_or(band).to_string();
+                if !inputs.contains(&input) {
+                    inputs.push(input);
+                }
+            }
+        }
+        inputs
+    }
+
+    /// Whether a layer shows stars that the store does not hold: their
+    /// input's stars have not been separated.
+    pub(super) fn stars_missing(&self) -> bool {
+        self.document
+            .layers()
+            .iter()
+            .any(|layer| match &layer.source {
+                LayerSource::Band { band } => {
+                    band.ends_with("@stars") && self.band_info.band_of(band).is_none()
+                }
+                _ => false,
+            })
+    }
+
+    /// Whether an input's stars are removed by its tools, its own or its
+    /// color group's.
+    fn removes_stars(&self, channel: &str) -> bool {
+        self.chain(channel)
+            .iter()
+            .any(|step| self.is_of(Self::provider_of(step), STARS))
+            || self.stars_together(channel).is_some()
+    }
+
+    /// When the picture shows stars apart from its other layers, as the
+    /// RGB stars and Stars parts do, removes the stars of every input it
+    /// shows, with the first star removal tool this computer has, and has
+    /// `psf-guard` prepare the store again: the other layers then show the
+    /// inputs without their stars, and the stars layers show the stars.
+    /// The inputs of a color group, such as red, green and blue, lose their
+    /// stars together, so the stars keep their colors.
+    pub(super) fn separate_stars(&mut self) {
+        let shows_stars = self.document.layers().iter().any(
+            |layer| matches!(&layer.source, LayerSource::Band { band } if band.ends_with("@stars")),
+        );
+        if !shows_stars {
+            return;
+        }
+        let Some(provider) = self
+            .tools
+            .tools
+            .iter()
+            .find(|tool| tool.category == STARS)
+            .map(|tool| tool.key.clone())
+        else {
+            self.tools.status = "Not separated: the stars layers need a star removal tool, such as RC-Astro StarXTerminator, and this computer has none.".to_string();
+            return;
+        };
+        for input in self.shown_inputs() {
+            if self.removes_stars(&input) {
+                continue;
+            }
+            self.set_tool(&input, STARS, Some(&provider));
+            if self.group_of(&input).is_some() {
+                self.set_stars_together(&input, true);
+            }
+        }
+        if self.stars_missing() && self.cannot_run().is_none() {
+            self.run_tools();
+        }
+    }
+
     // ---- star removal on a color group ----------------------------------
 
     /// The color group an input belongs to, when the document has at least
@@ -403,10 +526,10 @@ impl Studio {
         (present.len() >= 2).then_some((band, present))
     }
 
-    /// The inputs a color group's tools step applies to, as a person reads
+    /// The inputs a color group's tool step applies to, as a person reads
     /// them: "Ha, OIII, SII together". `None` for any other step.
     pub(super) fn group_applies_to(&self, step: &StepRecord) -> Option<String> {
-        if step.kind.name() != flow_operations::RC_ASTRO_COLOR {
+        if !crate::studio_model::is_tool_step(step) {
             return None;
         }
         let band = step.band.as_deref()?;
@@ -423,59 +546,14 @@ impl Studio {
         Some(format!("{} together", present.join(", ")))
     }
 
-    /// The step that holds a color group's tools.
-    fn group_step(&self, band: &str) -> Option<&StepRecord> {
-        self.document
-            .stage(StageKind::Linear)
-            .steps
-            .iter()
-            .find(|step| {
-                step.kind.name() == flow_operations::RC_ASTRO_COLOR
-                    && step.band.as_deref() == Some(band)
-            })
-    }
-
     /// A color group's tools in order.
     fn group_chain(&self, band: &str) -> Vec<serde_json::Value> {
-        match self.group_step(band).map(|step| &step.kind) {
-            Some(StepKind::Operation { settings, .. }) => {
-                settings["steps"].as_array().cloned().unwrap_or_default()
-            }
-            _ => Vec::new(),
-        }
+        self.chain(band)
     }
 
-    /// Writes a color group's tools into the document. A group with no
-    /// tool has no step.
+    /// Writes a color group's tools into its tool steps.
     fn set_group_chain(&mut self, band: &str, chain: Vec<serde_json::Value>) {
-        let existing = self.group_step(band).map(|step| step.id);
-        if chain.is_empty() {
-            if let Some(id) = existing {
-                self.document.remove_step(id);
-            }
-            return;
-        }
-        let settings = serde_json::json!({ "steps": chain });
-        match existing {
-            Some(id) => {
-                self.document.set_step_settings(id, settings);
-            }
-            None => {
-                // A group's tools run after its inputs' own and before the
-                // background is fitted.
-                let steps = &self.document.stage(StageKind::Linear).steps;
-                let before = steps
-                    .iter()
-                    .position(|step| step.kind.name() == flow_operations::BACKGROUND)
-                    .unwrap_or(steps.len());
-                let mut step =
-                    operation(flow_operations::RC_ASTRO_COLOR, Accepts::Linear).for_band(band);
-                if let StepKind::Operation { settings: own, .. } = &mut step.kind {
-                    *own = settings;
-                }
-                let _ = self.document.insert_step(StageKind::Linear, before, step);
-            }
-        }
+        self.set_chain(band, chain);
     }
 
     /// The band of the group an input's stars are removed with, when they
@@ -587,12 +665,58 @@ impl Studio {
         }
     }
 
+    /// Turns a tool's shifted second pass on or off, for one input's tool
+    /// or its group's.
+    fn set_shifted_pass(&mut self, channel: &str, provider: &str, on: bool) {
+        let mut chain = self.chain(channel);
+        for step in &mut chain {
+            if Self::provider_of(step) == provider {
+                step[crate::studio_model::SHIFTED_PASS_KEY] = on.into();
+            }
+        }
+        self.set_chain(channel, chain);
+    }
+
     /// The settings of an input's tools that a person can set, in the
     /// order they are listed: the tool, the setting, and its value now.
+    /// The kind of tool the selected row is a step of, when it is a tool
+    /// step: its Tools block shows that kind alone.
+    fn selected_tool_kind(&self) -> Option<&'static str> {
+        let (_, step) = self.document.step(self.selected_step()?)?;
+        let provider = Self::provider_of(crate::studio_model::tool_of(step)?).to_string();
+        let category = self
+            .tools
+            .tools
+            .iter()
+            .find(|tool| tool.key == provider)
+            .map(|tool| tool.category.clone())?;
+        CATEGORIES
+            .iter()
+            .find(|(key, _)| *key == category)
+            .map(|(key, _)| *key)
+    }
+
     fn tool_settings(&self, channel: &str) -> Vec<(String, Setting, serde_json::Value)> {
+        let kind = self.selected_tool_kind();
+        let mut listed: Vec<_> = self
+            .shown_chain(channel)
+            .iter()
+            .filter(|step| kind.is_none_or(|kind| self.is_of(Self::provider_of(step), kind)))
+            .flat_map(|step| self.settings_of_tool(step))
+            .collect();
+        listed.truncate(MAX_TOOL_SETTINGS);
+        listed
+    }
+
+    /// The settings of one tool, as a tool step keeps it, that a person can
+    /// set: the tool, the setting, and its value now.
+    fn settings_of_tool(
+        &self,
+        step: &serde_json::Value,
+    ) -> Vec<(String, Setting, serde_json::Value)> {
         let mut listed = Vec::new();
-        for step in self.shown_chain(channel) {
-            let provider = Self::provider_of(&step).to_string();
+        {
+            let provider = Self::provider_of(step).to_string();
             let Some(schema) = self
                 .tools
                 .tools
@@ -600,10 +724,17 @@ impl Studio {
                 .find(|tool| tool.key == provider)
                 .and_then(|tool| tool.schema.as_ref())
             else {
-                continue;
+                return listed;
             };
+            // A star removal always keeps its stars, linear, for the stars
+            // layers; `psf-guard` sets those two settings itself.
+            let removes_stars = self.is_of(&provider, STARS);
             for setting in &schema.parameters {
-                if setting.flag.is_none() || matches!(setting.kind, SettingKind::Other) {
+                if setting.flag.is_none()
+                    || matches!(setting.kind, SettingKind::Other)
+                    || (removes_stars
+                        && matches!(setting.name.as_str(), "stars" | "difference" | "unscreen"))
+                {
                     continue;
                 }
                 let value = step["parameters"]
@@ -618,8 +749,18 @@ impl Studio {
                 listed.push((provider.clone(), setting.clone(), value));
             }
         }
-        listed.truncate(MAX_TOOL_SETTINGS);
         listed
+    }
+
+    /// The selected step and its tool, when it is a tool step on a layer or
+    /// the picture.
+    fn selected_late_tool(&self) -> Option<(uuid::Uuid, serde_json::Value)> {
+        let id = self.selected_step()?;
+        let (stage, step) = self.document.step(id)?;
+        if stage == StageKind::Linear {
+            return None;
+        }
+        Some((id, crate::studio_model::tool_of(step)?.clone()))
     }
 
     /// The input the selected row belongs to.
@@ -632,6 +773,21 @@ impl Studio {
 
     /// Applies a tool setting's slider, from 0 to 1.
     pub(super) fn tool_slider_moved(&mut self, index: usize, position: f32) {
+        // A tool step on a layer or the picture keeps its own settings.
+        if let Some((id, mut tool)) = self.selected_late_tool() {
+            let Some((_, setting, _)) = self.settings_of_tool(&tool).into_iter().nth(index) else {
+                return;
+            };
+            let Some(value) = slider_value(&setting, position) else {
+                return;
+            };
+            if !tool["parameters"].is_object() {
+                tool["parameters"] = serde_json::json!({});
+            }
+            tool["parameters"][setting.name.as_str()] = value;
+            self.document.set_step_settings(id, tool);
+            return;
+        }
         let Some(channel) = self.selected_input() else {
             return;
         };
@@ -639,17 +795,8 @@ impl Studio {
         else {
             return;
         };
-        let value: serde_json::Value = match setting.kind {
-            SettingKind::Float { min, max, .. } => {
-                // Two decimals are as fine as the tools' own sliders.
-                let value = min + (max - min) * f64::from(position);
-                ((value * 100.0).round() / 100.0).into()
-            }
-            SettingKind::Int { min, max, .. } => {
-                ((min as f64 + (max as f64 - min as f64) * f64::from(position)).round() as i64)
-                    .into()
-            }
-            SettingKind::Bool { .. } | SettingKind::Other => return,
+        let Some(value) = slider_value(&setting, position) else {
+            return;
         };
         self.set_tool_value(&channel, &provider, &setting.name, value);
     }
@@ -658,9 +805,9 @@ impl Studio {
 
     /// Whether the tools can be run from here, and why not when they
     /// cannot.
-    fn cannot_run(&self) -> Option<&'static str> {
-        if self.tools.binary.is_none() {
-            Some("The psf-guard program was not found.")
+    pub(super) fn cannot_run(&self) -> Option<&'static str> {
+        if !self.psf_guard_installed() {
+            Some("Processing tools run through PSF Guard, which is not on this computer. Install PSF Guard to run them.")
         } else if self.tools.store.is_none() || self.tools.document.is_none() {
             Some("Tools run on a store of channel stacks. This document has none.")
         } else {
@@ -670,7 +817,7 @@ impl Studio {
 
     /// Saves the document and has `psf-guard` prepare the store again for
     /// it. The canvas takes the new store when the run ends.
-    fn run_tools(&mut self) {
+    pub(super) fn run_tools(&mut self) {
         let (Some(binary), Some(store), Some(document)) = (
             self.tools.binary.clone(),
             self.tools.store.clone(),
@@ -679,8 +826,17 @@ impl Studio {
             return;
         };
         if self.tools.run.is_some() {
+            self.tools.queued = true;
             return;
         }
+        // With the store prepared for the document, only the tool steps on
+        // layers and the picture are left to run.
+        if self.inputs_to_run().is_empty() && !self.late_to_run().is_empty() {
+            self.save_document();
+            self.run_late_tools();
+            return;
+        }
+        self.tools.late_after = true;
         if let Err(error) = std::fs::write(&document, self.document.to_json()) {
             self.tools.status = format!("The document could not be saved: {error}");
             return;
@@ -736,8 +892,33 @@ impl Studio {
     }
 
     /// The open picture's store, if any.
+    /// The document file the picture is saved to, if it has one.
+    pub(super) fn document_path(&self) -> Option<&std::path::Path> {
+        self.tools.document.as_deref()
+    }
+
     pub(super) fn store_path(&self) -> Option<&std::path::Path> {
         self.tools.store.as_deref()
+    }
+
+    /// Whether one more run is to start when the run under way ends.
+    pub(super) fn run_is_queued(&self) -> bool {
+        self.tools.queued
+    }
+
+    /// Whether the document's steps changed since the run under way
+    /// started, so its result will not show them.
+    pub(super) fn changed_during_run(&self) -> bool {
+        self.tools.run.as_ref().is_some_and(|run| {
+            run.lock()
+                .expect("tool run")
+                .chains
+                .as_ref()
+                .is_some_and(|chains| {
+                    !changed_inputs(chains, &self.all_chains(), &self.document.channels())
+                        .is_empty()
+                })
+        })
     }
 
     /// Shows a message in the top bar.
@@ -764,6 +945,119 @@ impl Studio {
         }
     }
 
+    /// Starts sampling every band over the whole image, for the stretches,
+    /// in place of the patches read when the store was opened.
+    pub(super) fn start_whole_samples(&mut self) {
+        if let Some(task) = self.whole_samples.take() {
+            task.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        let covered = self.base_bands.automatic_crop;
+        self.whole_samples = self
+            .base_bands
+            .store
+            .clone()
+            .map(|store| super::WholeSampling::start(store, covered));
+    }
+
+    /// Takes in the planes worked out from the whole image that are done,
+    /// and starts tasks for the ones the canvas's stretches wait for: two
+    /// at a time, as each reads the whole store.
+    pub(super) fn follow_derived(&mut self) {
+        // The stretches resolved again from the whole image's samples.
+        let sampled = self
+            .whole_samples
+            .as_ref()
+            .and_then(|task| task.done.lock().expect("whole-image samples").take());
+        if let Some(result) = sampled {
+            self.whole_samples = None;
+            match result {
+                Ok(channels) => {
+                    self.base_bands = Arc::new(self.base_bands.with_whole_samples(&channels));
+                    self.band_info = Arc::new(self.base_bands.with_derived(&self.derived));
+                    self.analysed.clear();
+                    self.bands_generation += 1;
+                    self.refresh_canvas();
+                }
+                Err(error) => {
+                    self.tools.status = format!("Not sampled over the whole image: {error}");
+                }
+            }
+        }
+        let mut finished = false;
+        let mut running = Vec::new();
+        for task in std::mem::take(&mut self.derive_tasks) {
+            let done = task.done.lock().expect("derived plane").take();
+            match done {
+                None => running.push(task),
+                Some(Ok(plane)) => {
+                    self.derived.retain(|known| known.key != plane.key);
+                    self.derived.push(Arc::new(plane));
+                    finished = true;
+                }
+                Some(Err(error)) => {
+                    self.tools.status = format!("{} stopped: {error}", task.describe());
+                }
+            }
+        }
+        self.derive_tasks = running;
+        if finished {
+            self.show_derived();
+        }
+        let Some(store) = self.base_bands.store.clone() else {
+            return;
+        };
+        let scenes = self.canvas.read(|shared| shared.canvas.scenes.clone());
+        let mut wanted: Vec<crate::derived::DerivedKey> = Vec::new();
+        for key in scenes.iter().flat_map(|scene| scene.missing_planes()) {
+            if !wanted.contains(&key) {
+                wanted.push(key);
+            }
+        }
+        for key in wanted {
+            let known = self.derived.iter().any(|plane| plane.key == key)
+                || self.derive_tasks.iter().any(|task| task.key == key);
+            if known {
+                continue;
+            }
+            if self.derive_tasks.len() >= 2 {
+                break;
+            }
+            let reads = key
+                .bands
+                .iter()
+                .zip(&key.states)
+                .map(|(band, state)| self.base_bands.band_read(*band, *state))
+                .collect();
+            self.derive_tasks
+                .push(crate::derived::DeriveTask::start(store.clone(), key, reads));
+        }
+    }
+
+    /// Draws the store with the planes worked out from it, which load again
+    /// tile by tile.
+    pub(super) fn show_derived_planes(&mut self) {
+        self.show_derived();
+    }
+
+    /// Draws the store with the planes worked out from it, which load again
+    /// tile by tile.
+    fn show_derived(&mut self) {
+        let Some(store) = self.base_bands.store.clone() else {
+            return;
+        };
+        self.band_info = Arc::new(self.base_bands.with_derived(&self.derived));
+        let source = Arc::new(crate::derived::DerivedSource {
+            store,
+            planes: self.derived.clone(),
+        });
+        {
+            let mut shared = self.canvas.0 .0.lock().expect("canvas state");
+            shared.canvas.inputs = Arc::new(self.band_info.gpu_inputs());
+            shared.new_source = Some(source);
+        }
+        self.refresh_canvas();
+    }
+
     /// Whether a run of `psf-guard` is in hand.
     pub(super) fn is_running(&self) -> bool {
         self.tools.run.is_some()
@@ -774,7 +1068,29 @@ impl Studio {
     /// started. `psf-guard` reports a tool's progress as a line such as
     /// `ha: RC-Astro StarXTerminator (40%)`.
     pub(super) fn run_progress(&self) -> Option<(String, Option<f32>, std::time::Duration)> {
-        let run = self.tools.run.as_ref()?;
+        let Some(run) = self.tools.run.as_ref() else {
+            if let Some(task) = &self.store_opening {
+                return Some((
+                    "Opening the store".to_string(),
+                    None,
+                    task.started.elapsed(),
+                ));
+            }
+            if let Some(task) = &self.whole_samples {
+                return Some((
+                    "Sampling each band over the whole image".to_string(),
+                    None,
+                    task.started.elapsed(),
+                ));
+            }
+            // A plane being worked out from the whole image.
+            let task = self.derive_tasks.first()?;
+            let what = match self.derive_tasks.len() {
+                1 => task.describe().to_string(),
+                more => format!("{} and {} more", task.describe(), more - 1),
+            };
+            return Some((what, Some(task.share()), task.started.elapsed()));
+        };
         let run = run.lock().expect("tool run");
         let line = run.line.trim();
         let share = line
@@ -798,10 +1114,16 @@ impl Studio {
         self.tools.binary.clone()
     }
 
+    /// Whether the `psf-guard` program is on this computer: the path given,
+    /// or a bare name found on the PATH.
+    pub(super) fn psf_guard_installed(&self) -> bool {
+        self.psf_guard().is_some_and(|program| installed(&program))
+    }
+
     /// Starts a run of `psf-guard` and follows what it prints. With
     /// `opens`, the run prepares a picture, and its store and document are
     /// opened when it ends.
-    pub(super) fn start_run(&mut self, mut command: Command, opens: Option<(PathBuf, PathBuf)>) {
+    pub(super) fn start_run(&mut self, command: Command, opens: Option<(PathBuf, PathBuf)>) {
         if self.tools.run.is_some() {
             return;
         }
@@ -813,68 +1135,56 @@ impl Studio {
             process: None,
             stopped: false,
             started: std::time::Instant::now(),
+            late: false,
         }));
         self.tools.run = Some(run.clone());
         std::thread::spawn(move || {
-            let program = command.get_program().to_string_lossy().into_owned();
-            // A group of its own, so a stop reaches the tools it starts.
-            #[cfg(unix)]
-            {
-                use std::os::unix::process::CommandExt;
-                command.process_group(0);
-            }
-            let child = command
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn();
-            let outcome = match child {
-                Err(error) => Err(format!("{program} did not start: {error}")),
-                Ok(mut child) => {
-                    {
-                        let mut state = run.lock().expect("tool run");
-                        state.process = Some(child.id());
-                        // A stop asked for before the program started.
-                        if state.stopped {
-                            let _ = Command::new("kill")
-                                .arg("-TERM")
-                                .arg(format!("-{}", child.id()))
-                                .status();
-                        }
-                    }
-                    // Both pipes are read at once: a program that fills one
-                    // while the other is read would wait forever.
-                    let errors = child.stderr.take().map(|stderr| {
-                        std::thread::spawn(move || {
-                            BufReader::new(stderr)
-                                .lines()
-                                .map_while(Result::ok)
-                                .filter(|line| !line.trim().is_empty())
-                                .last()
-                        })
-                    });
-                    if let Some(stdout) = child.stdout.take() {
-                        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                            run.lock().expect("tool run").line = line.trim().to_string();
-                        }
-                    }
-                    let last_error = errors.and_then(|reader| reader.join().ok()).flatten();
-                    let waited = child.wait();
-                    // The process is gone, so a later stop must not reach a
-                    // group that has taken its number.
-                    let stopped = {
-                        let mut state = run.lock().expect("tool run");
-                        state.process = None;
-                        state.stopped
-                    };
-                    match waited {
-                        _ if stopped => Err("stopped".to_string()),
-                        Ok(status) if status.success() => Ok(()),
-                        Ok(_) => Err(last_error.unwrap_or_else(|| "it failed".to_string())),
-                        Err(error) => Err(error.to_string()),
-                    }
-                }
-            };
+            let outcome = run_program(&run, command);
             run.lock().expect("tool run").done = Some(outcome);
+        });
+    }
+
+    /// Starts `job` on a thread of its own as the run in hand: it shows on
+    /// the progress line, and Stop stops the program it is running. With
+    /// `opens`, the job prepares a picture, and its store and document are
+    /// opened when it ends; without, the store is not opened again.
+    pub(super) fn start_job(
+        &mut self,
+        opens: Option<(PathBuf, PathBuf)>,
+        job: impl FnOnce(&Arc<Mutex<Run>>) -> Result<(), String> + Send + 'static,
+    ) {
+        if self.tools.run.is_some() {
+            return;
+        }
+        let run = Arc::new(Mutex::new(Run {
+            line: "Starting…".to_string(),
+            done: None,
+            late: opens.is_none(),
+            opens,
+            chains: None,
+            process: None,
+            stopped: false,
+            started: std::time::Instant::now(),
+        }));
+        self.tools.run = Some(run.clone());
+        std::thread::spawn(move || {
+            // A job that panics ends with an error, so the run ends and the
+            // next one can start.
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(&run)))
+                .unwrap_or_else(|panic| {
+                    let reason = panic
+                        .downcast_ref::<&str>()
+                        .map(|text| text.to_string())
+                        .or_else(|| panic.downcast_ref::<String>().cloned())
+                        .unwrap_or_else(|| "it stopped unexpectedly".to_string());
+                    Err(format!("it failed: {reason}"))
+                });
+            let stopped = is_stopped(&run);
+            run.lock().expect("tool run").done = Some(if stopped {
+                Err("stopped".to_string())
+            } else {
+                outcome
+            });
         });
     }
 
@@ -886,20 +1196,38 @@ impl Studio {
             }
         }
         let Some(run) = self.tools.run.clone() else {
+            // A run asked for during the last one starts once the store
+            // that run prepared is open; then the tool steps on layers and
+            // the picture run on it.
+            if self.tools.queued && self.store_opening.is_none() {
+                self.tools.queued = false;
+                self.run_tools();
+            } else if self.tools.late_after && self.store_opening.is_none() {
+                self.tools.late_after = false;
+                self.run_late_tools();
+            }
             return;
         };
-        let (line, done, opens, chains) = {
+        let (line, done, opens, chains, late) = {
             let mut run = run.lock().expect("tool run");
             (
                 run.line.clone(),
                 run.done.take(),
                 run.opens.clone(),
                 run.chains.clone(),
+                run.late,
             )
         };
         self.tools.status = line;
         match done {
             None => {}
+            // Tool steps on a layer or the picture leave the store as it
+            // is: their results are read as they are found.
+            Some(Ok(())) if late => {
+                self.tools.run = None;
+                self.tools.status = "The tools ran. The canvas shows their result.".to_string();
+                self.follow_late();
+            }
             Some(Ok(())) => {
                 self.tools.run = None;
                 match opens {
@@ -907,19 +1235,18 @@ impl Studio {
                     None => {
                         self.tools.status =
                             "The tools ran. The canvas shows their result.".to_string();
-                        self.reload_store();
                         // The store holds the tools the run was given, not
                         // any changed while it ran.
-                        if chains.is_some() {
-                            self.tools.prepared = chains;
-                        }
+                        self.reload_store(chains);
                     }
                 }
             }
             Some(Err(error)) => {
                 self.tools.run = None;
+                self.tools.queued = false;
+                self.tools.late_after = false;
                 // A stopped run leaves the store it was writing behind.
-                if error == "stopped" {
+                if error == "stopped" && !late {
                     let store = opens
                         .as_ref()
                         .map(|(store, _)| store.clone())
@@ -933,36 +1260,81 @@ impl Studio {
         }
     }
 
-    /// Draws the store again from its file, after a run prepared it.
-    /// Shows a picture a run prepared: its document, then its store.
+    /// Shows a picture a run prepared: its document, then its store, once
+    /// the store is open.
     fn show_picture(&mut self, store: PathBuf, document: PathBuf) {
-        // The picture on screen keeps its last edits.
-        self.save_document();
         let opened = std::fs::read_to_string(&document)
             .map_err(|error| error.to_string())
             .and_then(|text| {
                 crate::studio_model::Document::from_json(&text).map_err(|error| error.to_string())
             });
-        let opened = match opened {
-            Ok(opened) => opened,
+        match opened {
+            Ok(mut opened) => {
+                super::adopt(&mut opened);
+                self.open_store(store, Some((document, opened)), None)
+            }
             Err(error) => {
                 self.tools.status = format!("Not opened: the document could not be read ({error})");
-                return;
             }
+        }
+    }
+
+    /// Draws the store again from its file, after a run prepared it with
+    /// the tools `ran`.
+    fn reload_store(&mut self, ran: Option<serde_json::Value>) {
+        if let Some(path) = self.tools.store.clone() {
+            self.open_store(path, None, ran);
+        }
+    }
+
+    /// Opens the store at `path` on a thread of its own, with `document`
+    /// to show with it. The canvas keeps the picture it shows until the
+    /// store is open; an opening started later replaces this one.
+    pub(super) fn open_store(
+        &mut self,
+        path: PathBuf,
+        document: Option<(PathBuf, crate::studio_model::Document)>,
+        ran: Option<serde_json::Value>,
+    ) {
+        self.store_opening = Some(StoreOpening::start(path, document, ran));
+    }
+
+    /// Shows the store the opening task opened, once it is open.
+    pub(super) fn follow_store_opening(&mut self) {
+        let opened = self
+            .store_opening
+            .as_ref()
+            .and_then(|task| task.done.lock().expect("store opening").take());
+        let Some(opened) = opened else {
+            return;
         };
-        // The store is opened first, so a store that cannot be opened
-        // leaves the picture on screen as it was.
-        let (source, bands) = match crate::store_tiles::source(Some(&store)) {
-            Ok(source) => source,
+        let task = self.store_opening.take().expect("an opening");
+        if super::timing() {
+            eprintln!(
+                "store: opened in {:.1} ms off the UI thread",
+                task.started.elapsed().as_secs_f64() * 1e3
+            );
+        }
+        // A store that cannot be opened leaves the picture on screen as it
+        // was.
+        let (source, bands) = match opened {
+            Ok(opened) => opened,
             Err(error) => {
                 self.tools.status = format!("Not opened: the store could not be read ({error})");
                 return;
             }
         };
-        self.document = opened;
+        let Some((document_path, document)) = task.document else {
+            self.show_source(source, bands, task.ran);
+            return;
+        };
+        // The picture on screen keeps its last edits.
+        self.save_document();
+        self.document = document;
+        self.history.reset(self.document.to_json());
         self.document_is_saved();
-        self.tools.store = Some(store);
-        self.tools.document = Some(document);
+        self.tools.store = Some(task.path);
+        self.tools.document = Some(document_path);
         self.tools.status = String::new();
         self.selected = crate::studio_model::Row::Combined;
         self.pins.clear();
@@ -971,76 +1343,50 @@ impl Studio {
         self.drag = None;
         self.alone = false;
         self.mask_shown = false;
-        self.show_source(source, bands);
+        self.show_source(source, bands, None);
         self.canvas.edit(|canvas| canvas.fit());
     }
 
-    fn reload_store(&mut self) {
-        let Some(path) = self.tools.store.clone() else {
-            return;
-        };
-        let (source, bands) = match crate::store_tiles::source(Some(&path)) {
-            Ok(opened) => opened,
-            Err(error) => {
-                self.tools.status = format!("Not opened: the store could not be read ({error})");
-                return;
-            }
-        };
-        self.show_source(source, bands);
-    }
-
     /// Draws a store's tiles from now on.
+    /// `ran` is the tools a run that just prepared the store was given.
     fn show_source(
         &mut self,
         source: Arc<dyn psf_studio_render::TileSource>,
         bands: crate::store_tiles::Bands,
+        ran: Option<serde_json::Value>,
     ) {
         let pyramid = source.pyramid();
         self.band_info = Arc::new(bands);
+        self.base_bands = self.band_info.clone();
+        // Planes of the store before are of no use now, the tools' results
+        // among them: they are read again for this store.
+        self.late = super::late_tools::Late::default();
+        for task in &self.derive_tasks {
+            task.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        self.derive_tasks.clear();
+        self.derived.clear();
         self.analysed.clear();
+        self.bands_generation += 1;
+        self.start_whole_samples();
+        self.source_generation += 1;
         self.levels = pyramid.levels;
         {
             let mut shared = self.canvas.0 .0.lock().expect("canvas state");
             shared.canvas.document_size = (pyramid.width, pyramid.height);
             shared.canvas.band_count = self.band_info.len();
+            shared.canvas.inputs = Arc::new(self.band_info.gpu_inputs());
             shared.new_source = Some(source);
         }
         self.take_in_new_inputs();
-        self.tools_are_prepared();
+        self.tools_are_prepared(ran);
         self.refresh_canvas();
     }
 
-    /// Gives the document an input and a layer for each input the store
-    /// has that the document lacks: the stars a star removal took out.
-    /// The stars go on top with the screen blend, which puts stars back
-    /// onto a starless picture, and are stretched as their input is.
+    /// Gives the document the inputs the store has that it lacks; see
+    /// [`take_in_inputs`].
     pub(super) fn take_in_new_inputs(&mut self) {
-        let known = self.document.channels();
-        let new: Vec<String> = self
-            .band_info
-            .names
-            .iter()
-            .filter(|name| !known.contains(name))
-            .cloned()
-            .collect();
-        for name in new {
-            let source = operation(flow_operations::CHANNEL_STACK, Accepts::Linear).for_band(&name);
-            let _ = self
-                .document
-                .insert_step(StageKind::Sources, usize::MAX, source);
-            // A line with its continuum subtracted is an input to add to a
-            // part; stars go back on top at once.
-            if name.ends_with("@line") {
-                continue;
-            }
-            let mut layer = LayerRecord::new(
-                &channel_label(&name),
-                LayerSource::Band { band: name.clone() },
-            );
-            layer.blend = BlendMode::Screen;
-            layer.color = Some([1.0; 3]);
-            let _ = self.document.insert_layer(usize::MAX, layer);
-        }
+        take_in_inputs(&mut self.document, &self.band_info.names);
     }
 
     // ---- the controls ---------------------------------------------------
@@ -1062,7 +1408,12 @@ impl Studio {
         } else if self.tools.tools.is_empty() {
             block = block.child(Self::note("Looking for the tools this computer has…"));
         }
-        for (at, (category, title)) in CATEGORIES.iter().enumerate() {
+        let kind = self.selected_tool_kind();
+        for (at, (category, title)) in CATEGORIES
+            .iter()
+            .enumerate()
+            .filter(|(_, (category, _))| kind.is_none_or(|kind| kind == *category))
+        {
             let offered: Vec<&ToolInfo> = self
                 .tools
                 .tools
@@ -1141,6 +1492,11 @@ impl Studio {
                         "On this input alone, after its own tools, or on the group's registered inputs combined into one color image, as PSF Guard's color tools run.",
                     ));
             }
+            if *category == STARS && !none_chosen {
+                block = block.children(Self::help(
+                    "The stars it removes are kept, linear, as an input of their own, such as Ha stars, for a stars layer to add back.",
+                ));
+            }
         }
         // The chosen tools' settings.
         for (index, (provider, setting, value)) in
@@ -1160,6 +1516,27 @@ impl Studio {
                     .is_none_or(|(before, ..)| *before != provider);
             if first {
                 block = block.child(Self::heading(tool));
+                // Sharpening can run twice, the second time on the input
+                // shifted by half a tile, against BlurXTerminator's seams.
+                let own = self.chain(channel);
+                let step = own.iter().find(|step| Self::provider_of(step) == provider);
+                if let Some(step) = step.filter(|_| self.is_of(&provider, "sharpen")) {
+                    let on = step[crate::studio_model::SHIFTED_PASS_KEY]
+                        .as_bool()
+                        .unwrap_or(false);
+                    let (channel, key) = (channel.to_string(), provider.clone());
+                    block = block
+                        .child(Self::act(
+                            format!("Second pass, shifted: {}", if on { "on" } else { "off" }),
+                            ("tool-shifted", index),
+                            on,
+                            cx,
+                            move |this| this.set_shifted_pass(&channel, &key, !on),
+                        ))
+                        .children(Self::help(
+                            "Runs the tool a second time on the input moved by half a tile, and averages the two, so the seams between BlurXTerminator's tiles fall in different places. On the Cat's Eye it took about 80% of the seams' pattern out. It doubles the tool's time.",
+                        ));
+                }
             }
             block = match setting.kind {
                 SettingKind::Float { min, max, .. } => {
@@ -1197,31 +1574,370 @@ impl Studio {
         }
         // Running them.
         let running = self.tools.run.is_some();
-        let changed = self
-            .tools
-            .prepared
-            .as_ref()
-            .is_some_and(|prepared| *prepared != self.all_chains());
+        let changed = !self.inputs_to_run().is_empty();
         if self.cannot_run().is_none() {
+            let label = match (running, self.tools.queued) {
+                (false, _) => "Run tools",
+                (true, false) => "Run again after this run",
+                (true, true) => "Runs again after this run",
+            };
             block = block
-                .child(
-                    Self::act(
-                        if running { "Running…" } else { "Run tools" },
-                        "tools-run",
-                        running,
-                        cx,
-                        |this| this.run_tools(),
-                    ),
-                )
+                .child(Self::act(
+                    label,
+                    "tools-run",
+                    running && self.tools.queued,
+                    cx,
+                    |this| this.run_tools(),
+                ))
                 .children(Self::help(
-                    "Runs every input's tools and prepares the store again. A tool that ran with these settings before is not run again.",
+                    "Runs every input's tools and prepares the store again. A tool that ran with these settings before is not run again. During a run, it runs once more when the run ends, with the steps as they are then.",
                 ));
             if changed && !running {
-                block = block.child(div().text_xs().child("Changed. Run to update."));
+                block = block.child(div().text_xs().child(
+                    "The store was prepared with other tools. Run tools to update the picture.",
+                ));
             }
         }
         if !self.tools.status.is_empty() {
             block = block.child(div().text_xs().child(self.tools.status.clone()));
+        }
+        block
+    }
+}
+
+/// A tool setting's value at a slider's position, from 0 to 1. A switch
+/// has none.
+fn slider_value(setting: &Setting, position: f32) -> Option<serde_json::Value> {
+    Some(match setting.kind {
+        SettingKind::Float { min, max, .. } => {
+            // Two decimals are as fine as the tools' own sliders.
+            let value = min + (max - min) * f64::from(position);
+            ((value * 100.0).round() / 100.0).into()
+        }
+        SettingKind::Int { min, max, .. } => {
+            ((min as f64 + (max as f64 - min as f64) * f64::from(position)).round() as i64).into()
+        }
+        SettingKind::Bool { .. } | SettingKind::Other => return None,
+    })
+}
+
+/// Sets the line a run shows.
+/// Whether a person stopped the run.
+pub(super) fn is_stopped(run: &Arc<Mutex<Run>>) -> bool {
+    run.lock().map_or(true, |run| run.stopped)
+}
+
+pub(super) fn set_line(run: &Arc<Mutex<Run>>, line: &str) {
+    run.lock().expect("tool run").line = line.to_string();
+}
+
+/// Runs `command` for `run`, in a process group of its own so a stop
+/// reaches the tools it starts, with each line it prints as the run's
+/// line. A run stopped before is not started.
+pub(super) fn run_program(run: &Arc<Mutex<Run>>, mut command: Command) -> Result<(), String> {
+    if run.lock().expect("tool run").stopped {
+        return Err("stopped".to_string());
+    }
+    let program = command.get_program().to_string_lossy().into_owned();
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn();
+    match child {
+        Err(error) => Err(format!("{program} did not start: {error}")),
+        Ok(mut child) => {
+            {
+                let mut state = run.lock().expect("tool run");
+                state.process = Some(child.id());
+                // A stop asked for before the program started.
+                if state.stopped {
+                    let _ = Command::new("kill")
+                        .arg("-TERM")
+                        .arg(format!("-{}", child.id()))
+                        .status();
+                }
+            }
+            // Both pipes are read at once: a program that fills one while
+            // the other is read would wait forever.
+            let errors = child.stderr.take().map(|stderr| {
+                std::thread::spawn(move || {
+                    BufReader::new(stderr)
+                        .lines()
+                        .map_while(Result::ok)
+                        .filter(|line| !line.trim().is_empty())
+                        .last()
+                })
+            });
+            if let Some(stdout) = child.stdout.take() {
+                for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                    run.lock().expect("tool run").line = line.trim().to_string();
+                }
+            }
+            let last_error = errors.and_then(|reader| reader.join().ok()).flatten();
+            let waited = child.wait();
+            // The process is gone, so a later stop must not reach a group
+            // that has taken its number.
+            let stopped = {
+                let mut state = run.lock().expect("tool run");
+                state.process = None;
+                state.stopped
+            };
+            match waited {
+                _ if stopped => Err("stopped".to_string()),
+                Ok(status) if status.success() => Ok(()),
+                Ok(_) => Err(last_error.unwrap_or_else(|| "it failed".to_string())),
+                Err(error) => Err(error.to_string()),
+            }
+        }
+    }
+}
+
+impl Studio {
+    /// A new tool step of one kind, with the first tool of that kind this
+    /// computer has.
+    pub(super) fn new_tool_step(&self, operation: &str) -> StepRecord {
+        let category = match operation {
+            flow_operations::SHARPENING => "sharpen",
+            flow_operations::NOISE_REDUCTION => "denoise",
+            _ => STARS,
+        };
+        let fallback = match category {
+            "sharpen" => "bxt",
+            "denoise" => "nxt",
+            _ => "sxt",
+        };
+        let provider = self
+            .tools
+            .tools
+            .iter()
+            .find(|tool| tool.category == category && tool.unavailable.is_none())
+            .map_or(fallback.to_string(), |tool| tool.key.clone());
+        crate::studio_model::tool_step(serde_json::json!({ "provider": provider }))
+    }
+
+    /// A menu of the three kinds of tool, which adds one with `add`.
+    pub(super) fn tool_menu(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        cx: &mut Context<Self>,
+        add: impl Fn(&mut Self, StepRecord) + Clone + 'static,
+    ) -> gpui::Div {
+        let picks = [
+            flow_operations::SHARPENING,
+            flow_operations::NOISE_REDUCTION,
+            flow_operations::STAR_REMOVAL,
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, operation)| {
+            let add = add.clone();
+            Self::pick(operation, (id, index), false, cx, move |this| {
+                let step = this.new_tool_step(operation);
+                add(this, step);
+            })
+        })
+        .collect();
+        self.menu(id, label, picks, cx)
+    }
+
+    /// The controls of a tool step on a layer or the picture: its tool and
+    /// settings, whether it has run for the document as it is, and for a
+    /// star removal whether its stars go back right after it. `on` is what
+    /// it runs on, in words.
+    pub(super) fn late_tool_block(
+        &self,
+        step: &StepRecord,
+        on: &str,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let id = step.id;
+        let tool = crate::studio_model::tool_of(step)
+            .cloned()
+            .unwrap_or_default();
+        let provider = Self::provider_of(&tool).to_string();
+        let operation = step.kind.name();
+        let category = match operation {
+            flow_operations::SHARPENING => "sharpen",
+            flow_operations::NOISE_REDUCTION => "denoise",
+            flow_operations::STAR_REMOVAL => STARS,
+            _ => "",
+        };
+        let mut block = div().flex().flex_col().gap_1().child(Self::heading("Tool"));
+        if let Some(why) = self.cannot_run() {
+            block = block.child(Self::note(why));
+        }
+        // The tool: any of this kind this computer has.
+        let picks: Vec<_> = self
+            .tools
+            .tools
+            .iter()
+            .filter(|offered| offered.category == category && offered.unavailable.is_none())
+            .enumerate()
+            .map(|(index, offered)| {
+                let key = offered.key.clone();
+                Self::pick(
+                    offered.name.clone(),
+                    ("late-tool", index),
+                    offered.key == provider,
+                    cx,
+                    move |this| {
+                        let Some((_, step)) = this.document.step(id) else {
+                            return;
+                        };
+                        let mut tool = crate::studio_model::tool_of(step)
+                            .cloned()
+                            .unwrap_or_default();
+                        if tool["provider"] != key.as_str() {
+                            tool["provider"] = key.clone().into();
+                            tool["parameters"] = serde_json::json!({});
+                            this.document.set_step_settings(id, tool);
+                        }
+                    },
+                )
+            })
+            .collect();
+        let shown_name = self
+            .tools
+            .tools
+            .iter()
+            .find(|offered| offered.key == provider)
+            .map_or(provider.clone(), |offered| offered.name.clone());
+        block = block.child(Self::field(
+            operation.to_string(),
+            self.menu(format!("late-tool-{id}"), &shown_name, picks, cx),
+        ));
+        block = block.child(Self::note(if self.late.has(id) {
+            format!("Drawn from its result: the tool ran on {on} as the steps before it leave it.")
+        } else {
+            format!(
+                "Not run for these edits. Run tools renders {on} at full resolution as the steps before it leave it, runs the tool on it, and draws the result here."
+            )
+        }));
+        // Its settings.
+        let toggle = |name: String, now: bool| {
+            move |this: &mut Self| {
+                let Some((_, step)) = this.document.step(id) else {
+                    return;
+                };
+                let mut tool = crate::studio_model::tool_of(step)
+                    .cloned()
+                    .unwrap_or_default();
+                if !tool["parameters"].is_object() {
+                    tool["parameters"] = serde_json::json!({});
+                }
+                tool["parameters"][name.as_str()] = (!now).into();
+                this.document.set_step_settings(id, tool);
+            }
+        };
+        for (index, (_, setting, value)) in self
+            .settings_of_tool(&tool)
+            .into_iter()
+            .take(MAX_TOOL_SETTINGS)
+            .enumerate()
+        {
+            block = match setting.kind {
+                SettingKind::Float { min, max, .. } => {
+                    let now = value.as_f64().unwrap_or(min);
+                    block.child(self.labelled_slider(
+                        format!("{} {now:.2}", setting.label),
+                        SliderId::ToolParam(index),
+                        ((now - min) / (max - min).max(f64::EPSILON)) as f32,
+                        cx,
+                    ))
+                }
+                SettingKind::Int { min, max, .. } => {
+                    let now = value.as_i64().unwrap_or(min);
+                    block.child(self.labelled_slider(
+                        format!("{} {now}", setting.label),
+                        SliderId::ToolParam(index),
+                        (now as f64 - min as f64) as f32
+                            / (max as f64 - min as f64).max(1.0) as f32,
+                        cx,
+                    ))
+                }
+                SettingKind::Bool { .. } => {
+                    let now = value.as_bool().unwrap_or(false);
+                    block.child(Self::act(
+                        format!("{}: {}", setting.label, if now { "on" } else { "off" }),
+                        ("late-switch", index),
+                        now,
+                        cx,
+                        toggle(setting.name.clone(), now),
+                    ))
+                }
+                SettingKind::Other => block,
+            };
+        }
+        let flag = |key: &'static str, now: bool| {
+            move |this: &mut Self| {
+                let Some((_, step)) = this.document.step(id) else {
+                    return;
+                };
+                let mut tool = crate::studio_model::tool_of(step)
+                    .cloned()
+                    .unwrap_or_default();
+                tool[key] = (!now).into();
+                this.document.set_step_settings(id, tool);
+            }
+        };
+        if category == "sharpen" {
+            let on = tool[crate::studio_model::SHIFTED_PASS_KEY]
+                .as_bool()
+                .unwrap_or(false);
+            block = block
+                .child(Self::act(
+                    format!("Second pass, shifted: {}", if on { "on" } else { "off" }),
+                    "late-shifted",
+                    on,
+                    cx,
+                    flag(crate::studio_model::SHIFTED_PASS_KEY, on),
+                ))
+                .children(Self::help(
+                    "Runs the tool a second time on the image moved, and averages the two, so the seams between BlurXTerminator's tiles fall in different places. Studio measures how far apart the seams are from the two passes, and when the move was not half that, runs once more moved by half of it.",
+                ));
+        }
+        // A tool layer's stars are a layer of their own, which is shown,
+        // faded or moved as any layer is.
+        let stars_layer = self.document.layer_of_adjustment(id).is_some();
+        if category == STARS && stars_layer {
+            block = block.children(Self::help(
+                "The stars it takes out are the layer Stars it took out, screened over the picture. Hide, fade or move that layer to change where they go back.",
+            ));
+        }
+        if category == STARS && !stars_layer {
+            let shown = super::late_tools::stars_shown(step);
+            block = block
+                .child(Self::heading("Stars"))
+                .child(Self::act(
+                    if shown {
+                        "Added back after this step"
+                    } else {
+                        "Left out"
+                    },
+                    "late-stars",
+                    shown,
+                    cx,
+                    flag(crate::studio_model::STARS_SHOWN_KEY, shown),
+                ))
+                .children(Self::help(
+                    "The stars it takes out are kept beside its result, and screened back over it right after this step, so the steps after it work on the picture with its stars. Left out, the picture stays starless from here on.",
+                ));
+        }
+        if self.cannot_run().is_none() {
+            let running = self.is_running();
+            block = block.child(Self::act(
+                if running { "Running…" } else { "Run tools" },
+                "late-run",
+                running,
+                cx,
+                |this| this.run_tools(),
+            ));
         }
         block
     }
@@ -1243,4 +1959,343 @@ fn remove_partial_stores(store: &std::path::Path) {
             let _ = std::fs::remove_file(entry.path());
         }
     }
+}
+
+/// What opening a store gives: the canvas's tile source and its bands.
+type Opened = Result<
+    (
+        Arc<dyn psf_studio_render::TileSource>,
+        crate::store_tiles::Bands,
+    ),
+    String,
+>;
+
+/// A store being opened and analysed on a thread of its own.
+pub(super) struct StoreOpening {
+    path: PathBuf,
+    /// The document to show with the store, and where it is saved.
+    document: Option<(PathBuf, crate::studio_model::Document)>,
+    /// The tools the run that prepared the store was given.
+    ran: Option<serde_json::Value>,
+    done: Arc<Mutex<Option<Opened>>>,
+    started: std::time::Instant,
+}
+
+impl StoreOpening {
+    fn start(
+        path: PathBuf,
+        document: Option<(PathBuf, crate::studio_model::Document)>,
+        ran: Option<serde_json::Value>,
+    ) -> Self {
+        let done = Arc::new(Mutex::new(None));
+        let (result, at) = (done.clone(), path.clone());
+        std::thread::Builder::new()
+            .name("open store".into())
+            .spawn(move || {
+                let opened = crate::store_tiles::source(Some(&at));
+                *result.lock().expect("store opening") = Some(opened);
+            })
+            .expect("spawning a task");
+        Self {
+            path,
+            document,
+            ran,
+            done,
+            started: std::time::Instant::now(),
+        }
+    }
+}
+
+/// Which of `channels` have Linear steps in `now` other than those in
+/// `prepared`, both as [`Studio::all_chains`] lists them: by input, and
+/// continuum subtraction, which counts for each line.
+fn changed_inputs(
+    prepared: &serde_json::Value,
+    now: &serde_json::Value,
+    channels: &[String],
+) -> Vec<String> {
+    let (Some(prepared), Some(now)) = (prepared.as_object(), now.as_object()) else {
+        return Vec::new();
+    };
+    // An input with no steps has no entry, an empty list or null alike: a
+    // stars input a run added has none, as the store it came from.
+    let empty = |value: Option<&serde_json::Value>| match value {
+        None | Some(serde_json::Value::Null) => true,
+        Some(serde_json::Value::Array(steps)) => steps.is_empty(),
+        Some(_) => false,
+    };
+    let lines = ["sii", "ha", "oiii"];
+    let mut changed: Vec<&str> = Vec::new();
+    for key in now.keys().chain(prepared.keys()) {
+        let (now, prepared) = (now.get(key), prepared.get(key));
+        if key == "format" || now == prepared || (empty(now) && empty(prepared)) {
+            continue;
+        }
+        if key == "continuum" {
+            changed.extend(lines);
+        } else {
+            changed.push(key);
+        }
+    }
+    channels
+        .iter()
+        .filter(|channel| changed.contains(&channel.as_str()))
+        .cloned()
+        .collect()
+}
+
+/// Gives `document` an input for each of `names` it lacks, such as the
+/// stars a star removal took out, and a layer for new stars to show them.
+/// The stars go on top with the screen blend, which puts stars back onto a
+/// starless picture, and are stretched as their input is.
+///
+/// A channel a layer already reads gets no other layer. Nor do new stars
+/// when the picture already has a stars layer: its parts, such as RGB
+/// stars, say which stars it shows, and more would add the stars twice. A
+/// line with its continuum subtracted is an input to add to a part, with no
+/// layer of its own.
+fn take_in_inputs(document: &mut crate::studio_model::Document, names: &[String]) {
+    let known = document.channels();
+    let read: Vec<String> = document
+        .layers()
+        .iter()
+        .filter_map(|layer| match &layer.source {
+            LayerSource::Band { band } => Some(band.clone()),
+            _ => None,
+        })
+        .collect();
+    let shows_stars = read.iter().any(|band| band.ends_with("@stars"));
+    for name in names.iter().filter(|name| !known.contains(name)) {
+        let source = operation(flow_operations::CHANNEL_STACK, Accepts::Linear).for_band(name);
+        let _ = document.insert_step(StageKind::Sources, usize::MAX, source);
+        let stars = name.ends_with("@stars");
+        if name.ends_with("@line") || read.contains(name) || (stars && shows_stars) {
+            continue;
+        }
+        let mut layer = LayerRecord::new(
+            &channel_label(name),
+            LayerSource::Band { band: name.clone() },
+        );
+        layer.blend = BlendMode::Screen;
+        layer.color = Some([1.0; 3]);
+        let _ = document.insert_layer(usize::MAX, layer);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_studio_inside_psf_guard_runs_psf_guard_s_program() {
+        let folder = tempfile::tempdir().unwrap();
+        let contents = folder.path().join("PSF Guard.app/Contents");
+        let studio = contents.join("Helpers/PSF Studio.app/Contents/MacOS");
+        std::fs::create_dir_all(&studio).unwrap();
+        std::fs::create_dir_all(contents.join("MacOS")).unwrap();
+        let program = contents.join("MacOS/psf-guard");
+        std::fs::write(&program, b"").unwrap();
+        assert_eq!(
+            super::enclosing_psf_guard(&studio.join("psf-studio")),
+            Some(program)
+        );
+        // A Studio on its own has no enclosing app.
+        let alone = folder
+            .path()
+            .join("PSF Studio.app/Contents/MacOS/psf-studio");
+        assert_eq!(super::enclosing_psf_guard(&alone), None);
+    }
+
+    fn names(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| name.to_string()).collect()
+    }
+
+    fn layer_bands(document: &crate::studio_model::Document) -> Vec<String> {
+        document
+            .layers()
+            .iter()
+            .filter_map(|layer| match &layer.source {
+                LayerSource::Band { band } => Some(band.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn changed_steps_name_the_inputs_a_run_would_update() {
+        let channels = names(&["ha", "oiii", "sii", "red"]);
+        let sxt =
+            serde_json::json!([{"operation": "Star removal", "settings": {"provider": "sxt"}}]);
+        let prepared = serde_json::json!({
+            "format": 2, "ha": [], "oiii": [], "sii": [], "red": [], "continuum": null,
+        });
+        assert!(changed_inputs(&prepared, &prepared, &channels).is_empty());
+        let mut now = prepared.clone();
+        now["oiii"] = sxt.clone();
+        assert_eq!(changed_inputs(&prepared, &now, &channels), names(&["oiii"]));
+        // A step taken away counts as a change too.
+        assert_eq!(changed_inputs(&now, &prepared, &channels), names(&["oiii"]));
+        // A stars input a run added, with no steps, is not a change.
+        let mut with_stars = prepared.clone();
+        with_stars["oiii@stars"] = serde_json::json!([]);
+        let mut channels_with_stars = channels.clone();
+        channels_with_stars.push("oiii@stars".to_string());
+        assert!(changed_inputs(&prepared, &with_stars, &channels_with_stars).is_empty());
+        // Continuum subtraction counts for each line.
+        let mut now = prepared.clone();
+        now["continuum"] = serde_json::json!({});
+        assert_eq!(
+            changed_inputs(&prepared, &now, &channels),
+            names(&["ha", "oiii", "sii"])
+        );
+    }
+
+    #[test]
+    fn a_tool_chosen_for_an_input_is_a_step_of_its_own() {
+        let inputs = names(&["ha", "oiii"]);
+        let mut document = super::super::panes::flow_document(&inputs);
+        let background = document
+            .stage(StageKind::Linear)
+            .steps
+            .iter()
+            .position(|step| step.kind.name() == flow_operations::BACKGROUND)
+            .unwrap();
+        let tool =
+            crate::studio_model::tool_step(serde_json::json!({ "provider": "nxt" })).for_band("ha");
+        let at = crate::studio_model::new_tool_step_index(
+            &document,
+            "ha",
+            flow_operations::NOISE_REDUCTION,
+        );
+        assert_eq!(at, background);
+        document.insert_step(StageKind::Linear, at, tool).unwrap();
+        // The input's program lists the tool before the background.
+        let program = crate::studio_model::input_program(&document, "ha");
+        let operations: Vec<&str> = program
+            .iter()
+            .map(|step| step["operation"].as_str().unwrap())
+            .collect();
+        assert_eq!(operations, ["Noise reduction", "Background extraction"]);
+    }
+
+    #[test]
+    fn new_stars_get_a_layer_only_when_the_picture_shows_none() {
+        let inputs = names(&["ha", "oiii", "red", "green", "blue"]);
+        let mut plain = super::super::panes::flow_document(&inputs);
+        let before = layer_bands(&plain);
+        take_in_inputs(&mut plain, &names(&["ha", "oiii", "ha@stars"]));
+        assert!(plain.channels().contains(&"ha@stars".to_string()));
+        assert_eq!(layer_bands(&plain).len(), before.len() + 1);
+        assert!(layer_bands(&plain).contains(&"ha@stars".to_string()));
+
+        // A picture whose RGB stars layers read red, green and blue stars
+        // takes the new stars in as inputs, with no layer added.
+        let mut with_stars = super::super::panes::flow_document(&inputs);
+        for band in ["red@stars", "green@stars", "blue@stars"] {
+            let layer = LayerRecord::new(
+                &channel_label(band),
+                LayerSource::Band {
+                    band: band.to_string(),
+                },
+            );
+            let _ = with_stars.insert_layer(usize::MAX, layer);
+        }
+        let before = layer_bands(&with_stars);
+        let stars = names(&[
+            "red@stars",
+            "green@stars",
+            "blue@stars",
+            "ha@stars",
+            "oiii@stars",
+        ]);
+        take_in_inputs(&mut with_stars, &stars);
+        assert_eq!(layer_bands(&with_stars), before);
+        for name in &stars {
+            assert!(with_stars.channels().contains(name), "{name} is an input");
+        }
+    }
+}
+
+/// The tools a store was prepared with, kept in a file beside it
+/// (`picture.tools.json` beside `picture.pgtiles`) with the store's size
+/// and modification time. A record of another version of the store, such
+/// as one prepared outside Studio, is not read.
+mod prepared_record {
+    use std::path::{Path, PathBuf};
+
+    fn path(store: &Path) -> PathBuf {
+        store.with_extension("tools.json")
+    }
+
+    /// The store's size and modification time, in nanoseconds.
+    fn version(store: &Path) -> Option<(u64, u128)> {
+        let metadata = std::fs::metadata(store).ok()?;
+        let modified = metadata
+            .modified()
+            .ok()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?
+            .as_nanos();
+        Some((metadata.len(), modified))
+    }
+
+    pub(super) fn read(store: &Path) -> Option<serde_json::Value> {
+        let text = std::fs::read_to_string(path(store)).ok()?;
+        let record: serde_json::Value = serde_json::from_str(&text).ok()?;
+        let (size, modified) = version(store)?;
+        let matches = record["size"].as_u64() == Some(size)
+            && record["modified"].as_str() == Some(modified.to_string().as_str());
+        matches.then(|| record["tools"].clone())
+    }
+
+    /// Writes the record next to the store, through a temporary file, so a
+    /// record is whole or absent. A record that cannot be written is left
+    /// out: the next session takes the document's tools as prepared.
+    pub(super) fn write(store: &Path, tools: &serde_json::Value) {
+        let Some((size, modified)) = version(store) else {
+            return;
+        };
+        let record = serde_json::json!({
+            "size": size,
+            "modified": modified.to_string(),
+            "tools": tools,
+        });
+        let target = path(store);
+        let temporary = target.with_extension(format!("{}.tmp", std::process::id()));
+        if std::fs::write(&temporary, record.to_string()).is_ok()
+            && std::fs::rename(&temporary, &target).is_err()
+        {
+            let _ = std::fs::remove_file(&temporary);
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn a_record_is_read_only_for_the_store_it_was_written_for() {
+            let folder = tempfile::tempdir().unwrap();
+            let store = folder.path().join("picture.pgtiles");
+            std::fs::write(&store, b"tiles").unwrap();
+            let tools = serde_json::json!({"ha": [{"provider": "sxt", "parameters": {}}]});
+            write(&store, &tools);
+            assert!(folder.path().join("picture.tools.json").is_file());
+            assert_eq!(read(&store), Some(tools));
+            // The store prepared again, by Studio or another program.
+            std::fs::write(&store, b"other tiles").unwrap();
+            assert_eq!(read(&store), None);
+        }
+    }
+}
+
+/// Whether `program` can be started: a file at a path, or a bare name found
+/// in one of the PATH's folders.
+fn installed(program: &std::path::Path) -> bool {
+    if program.components().count() > 1 {
+        return program.is_file();
+    }
+    std::env::var_os("PATH").is_some_and(|path| {
+        std::env::split_paths(&path).any(|folder| folder.join(program).is_file())
+    })
 }

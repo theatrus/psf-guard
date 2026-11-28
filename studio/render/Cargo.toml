@@ -10,3 +10,9 @@ description = "The tiled wgpu canvas of PSF-Studio. No dependency on a UI toolki
 wgpu.workspace = true
 bytemuck.workspace = true
 half = "2"
+# Seiza's compositor draws the canvas.
+seiza-compose.workspace = true
+
+[dev-dependencies]
+# Checks the shaders in tests, as wgpu does when the canvas starts.
+naga = { version = "30.0.2", features = ["wgsl-in"] }

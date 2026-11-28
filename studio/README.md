@@ -7,8 +7,8 @@ built and what is not.
 
 PSF-Studio is its own Cargo workspace. It is not part of the PSF Guard
 build: GPUI is a git dependency on Zed and needs Rust 1.100. The document
-model and the tile store are compiled from PSF Guard's source, under
-`src/studio` and `src/image_steps`, so both programs read and write the same
+model, the tile store and frame reading come from `crates/psf-studio-core`,
+which both workspaces build, so both programs read and write the same
 documents.
 
 ## Build and open a picture
@@ -72,8 +72,8 @@ The experiments answer investigations 1, 3 and 9 of the design record.
 The app shows the staged workflow from the design record: a rail of six
 stages, the showing stage's steps or layers on the left, the canvas, and the
 stage's own controls on the right. The panes are written against the
-document model in PSF Guard's `src/studio/`. The app compiles those source
-files directly, so it needs no build of PSF Guard.
+document model in `crates/psf-studio-core/src/studio/`, which the app builds
+as a dependency, so it needs no build of PSF Guard.
 
 The canvas draws from the document:
 
@@ -102,9 +102,9 @@ to turn the band off.
 ## Open a tile store
 
 The canvas draws the synthetic document unless it is given a tile store, the
-file format of PSF Guard's `src/studio/store.rs`. Write part of the synthetic
-document to a store, then open it. The default is 12,000 by 8,000 pixels in
-eight bands, which takes 4.1 GB.
+file format of `crates/psf-studio-core/src/studio/store.rs`. Write part of the
+synthetic document to a store, then open it. The default is 12,000 by 8,000
+pixels in eight bands, which takes 4.1 GB.
 
 ```bash
 cargo run --release -p psf-studio -- --make-store /tmp/synthetic.pgtiles
@@ -126,6 +126,34 @@ store. One band is shown as a gray layer, three as red, green and blue, and
 any other count as that many layers, up to eight. Each band's stretch is
 Seiza's automatic midtones stretch, resolved from patches of the image at
 full resolution; the band's slider sets where the background lands.
+
+## Drive Studio from an assistant
+
+Each running Studio window listens on a control socket of its own,
+`$TMPDIR/psf-studio/<pid>.sock`, which only your user can open. Start it with
+`--no-control` to leave the socket off. `psf-studio-mcp` is a Model Context
+Protocol server that drives windows through these sockets, so an assistant
+such as Claude Code can see what Studio shows. Build both programs:
+
+```bash
+cargo build --release -p psf-studio -p psf-studio-mcp
+```
+
+Then register the server with Claude Code, from this directory:
+
+```bash
+claude mcp add psf-studio -- "$PWD/target/release/psf-studio-mcp"
+```
+
+The server's tools open a window on a copy of a document (`studio_open`),
+read what it shows (`studio_state`), select rows and change settings
+(`studio_select`, `studio_set_step`, `studio_set_layer`), wait until the
+canvas has caught up (`studio_wait_idle`), and return the canvas or a region
+of the final picture rendered on the CPU as images with their values
+(`studio_capture`, `studio_sample`). A window it opens runs `psf-studio`
+from beside the server, or `PSF_STUDIO_BIN`, with `psf-guard` from this
+repository's release build, or `PSF_GUARD`. It closes only windows it
+opened. `PSF_STUDIO_CONTROL_DIR` moves the sockets for both programs.
 
 ## Run the measurements
 
@@ -186,11 +214,13 @@ cargo run --release -p psf-studio-color -- results/color.json display-0.icc
 ```
 
 Run the canvas on a wide-gamut surface. `--output` is `srgb8`, `p3-8`,
-`p3-float` or `p3-extended`. `--working` is the ICC profile of the document's
-working space; the canvas converts from it to the surface's color space.
+`p3-float` or `p3-extended`. Studio composes in Rec. 2020 on the sRGB
+curve, and the canvas maps the picture into the surface's primaries: sRGB
+for `srgb8`, Display P3 for the others. `p3-extended` also shows an HDR
+picture's highlights brighter than white.
 
 ```bash
-cargo run --release -p psf-studio -- --output p3-extended --working "/System/Library/ColorSync/Profiles/AdobeRGB1998.icc"
+cargo run --release -p psf-studio -- --output p3-extended
 ```
 
 The panel's **Layer** line shows the pixel format and color space that the

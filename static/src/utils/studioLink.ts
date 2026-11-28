@@ -16,15 +16,33 @@ export function useServerOrigin(): string {
   return origin;
 }
 
-/** The link that has PSF Studio fetch one target's channel stacks from this
- *  server and open them. PSF Studio registers the `psf-studio` scheme. The
- *  link carries no token: PSF Studio asks the server as an anonymous caller. */
-export function studioLink(origin: string, dbId: string, projectId: number, targetId: number): string {
+/** The link that has PSF Studio open one target from this server: the
+ *  Studio document `document`, or else the target's latest, or a new one
+ *  from the target's channel stacks.
+ *  PSF Studio registers the `psf-studio` scheme. On a server with sign-in,
+ *  `ticket` is a one-time ticket from `/api/auth/studio/ticket`, which PSF
+ *  Studio trades for a connection when it has none to this server yet. The
+ *  link never carries a lasting token. */
+export function studioLink(
+  origin: string,
+  dbId: string,
+  projectId: number,
+  targetId: number,
+  ticket?: string,
+  document?: string,
+): string {
   const query = new URLSearchParams({
     server: origin,
     db: dbId,
     project: String(projectId),
     target: String(targetId),
   });
+  if (document) query.set('document', document);
+  if (ticket) query.set('ticket', ticket);
   return `psf-studio://open?${query.toString()}`;
+}
+
+/** Hands a link to PSF Studio through the system. */
+export function openStudioLink(link: string): void {
+  window.location.href = link;
 }

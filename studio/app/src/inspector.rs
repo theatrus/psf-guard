@@ -6,24 +6,22 @@
 
 use super::panes::{
     amount, amount_in, amount_range, is_drawn, mask_words, new_stretch, operation,
-    stretch_settings, ADJUSTMENTS, CONTROL, PANE, QUIET, STRETCHES,
+    output_stretch_step, stretch_settings, ADJUSTMENTS, MAX_SKY_FLOOR, PANE, SKY_FLOOR, STRETCHES,
 };
 use super::{SliderId, Studio, Tool, PANEL_WIDTH};
 use crate::image_steps::Accepts;
 use crate::studio_model::{
-    balance_colors, channel_label, flow_operations, hue_of, input_steps, layer_name,
-    level_for_zoom, own_step_for_channel, BlendMode, CropRecord, JunctionStatus, LayerRecord,
-    LayerSource, MaskRecord, MaskShape, Row, SharedMask, StageKind, StepKind, StepRecord,
+    balance_colors, channel_label, flow_operations, hue_of, layer_name, level_for_zoom,
+    own_step_for_channel, BlendMode, CropRecord, JunctionStatus, LayerRecord, LayerSource,
+    MaskRecord, MaskShape, Row, SharedMask, StageKind, StepKind, StepRecord,
 };
 use gpui::{div, prelude::*, px, rgb, AnyElement, Context};
 use uuid::Uuid;
 
-/// The steps a reduced view leaves out, because their result depends on
-/// pixel scale. The engine reports these per step; the demo names them.
-const FULL_RESOLUTION_ONLY: [&str; 1] = ["Noise reduction"];
-
 /// The steps offered on the combined picture.
-const FINISH_STEPS: [(&str, Accepts); 3] = [
+const FINISH_STEPS: [(&str, Accepts); 5] = [
+    (flow_operations::OUTPUT_STRETCH, Accepts::Display),
+    (crate::tone_step::OPERATION, Accepts::Display),
     ("Curves", Accepts::Display),
     ("Saturation", Accepts::Display),
     ("Local contrast", Accepts::Display),
@@ -53,7 +51,7 @@ impl Studio {
         layers[..at]
             .iter()
             .rev()
-            .find(|other| !matches!(other.source, LayerSource::Adjustment { .. }))
+            .find(|other| !other.source.is_adjustment())
             .map(|other| other.id)
     }
 
@@ -63,13 +61,7 @@ impl Studio {
         let above = layer
             .and_then(|id| layers.iter().position(|other| other.id == id))
             .map_or(layers.len(), |at| at + 1);
-        let adjustment = LayerRecord::new(
-            name,
-            LayerSource::Adjustment {
-                operation: name.to_string(),
-                settings: serde_json::Value::Null,
-            },
-        );
+        let adjustment = crate::studio_model::adjustment_layer(operation(name, Accepts::Display));
         let id = adjustment.id;
         if self.document.insert_layer(above, adjustment).is_ok() {
             self.selected = Row::Layer(id);
@@ -96,7 +88,8 @@ impl Studio {
         self.menu(id, label, picks, cx)
     }
 
-    /// The menu that adds a step to the Finish stage.
+    /// The menus that add a step or a tool on top of every layer, as an
+    /// adjustment layer of its own.
     fn finish_menu(&self, cx: &mut Context<Self>) -> gpui::Div {
         let picks = FINISH_STEPS
             .iter()
@@ -104,19 +97,94 @@ impl Studio {
             .map(|(index, (name, accepts))| {
                 let (name, accepts) = (*name, *accepts);
                 Self::pick(name, ("add-finish", index), false, cx, move |this| {
-                    let step = operation(name, accepts);
-                    let id = step.id;
-                    if this
-                        .document
-                        .insert_step(StageKind::Finish, usize::MAX, step)
-                        .is_ok()
-                    {
-                        this.selected = Row::Finish(id);
-                    }
+                    let step = if name == flow_operations::OUTPUT_STRETCH {
+                        output_stretch_step()
+                    } else if name == crate::tone_step::OPERATION {
+                        StepRecord::new(StepKind::Operation {
+                            operation: name.to_string(),
+                            accepts,
+                            settings: crate::tone_step::new_settings(),
+                        })
+                    } else {
+                        operation(name, accepts)
+                    };
+                    this.selected = Row::Layer(this.document.add_picture_step(step));
                 })
             })
             .collect();
-        Self::field("Finish", self.menu("add-finish", "Add step", picks, cx))
+        column()
+            .child(Self::field(
+                "On top",
+                self.menu("add-finish", "Add step", picks, cx),
+            ))
+            .child(Self::field(
+                "",
+                self.tool_menu("add-finish-tool", "Add tool", cx, |this, step| {
+                    this.selected = Row::Layer(this.document.add_picture_step(step));
+                }),
+            ))
+    }
+
+    /// The narrowband balance: on or off, and its settings, which the canvas
+    /// draws at once. It matches OIII, and SII, to H-alpha, each by a curve
+    /// resolved from the stretched channels.
+    fn balance_block(&self, step: &StepRecord, cx: &mut Context<Self>) -> gpui::Div {
+        let id = step.id;
+        let StepKind::Operation { settings, .. } = &step.kind else {
+            return column();
+        };
+        let balance = settings["balance"].clone();
+        let on = balance.is_object();
+        let switch = Self::act(
+            if on { "Balance on" } else { "Balance off" },
+            "balance-on",
+            on,
+            cx,
+            move |this| {
+                let Some((
+                    _,
+                    StepRecord {
+                        kind: StepKind::Operation { settings, .. },
+                        ..
+                    },
+                )) = this.document.step(id)
+                else {
+                    return;
+                };
+                let mut settings = settings.clone();
+                settings["balance"] = if on {
+                    serde_json::Value::Null
+                } else {
+                    serde_json::json!({
+                        "shadow_protection": 1.0,
+                        "oiii_boost": 1.0,
+                        "sii_boost": 1.0,
+                    })
+                };
+                this.document.set_step_settings(id, settings);
+            },
+        );
+        let sliders = super::panes::BALANCE_CONTROLS
+            .iter()
+            .enumerate()
+            .filter(|_| on)
+            .map(|(index, (key, label, low, high))| {
+                let value = balance[*key].as_f64().unwrap_or(1.0);
+                self.labelled_slider(
+                    format!("{label} {value:.2}"),
+                    SliderId::BalanceParam(index),
+                    ((value - low) / (high - low)) as f32,
+                    cx,
+                )
+            })
+            .collect::<Vec<_>>();
+        column()
+            .child(Self::heading("Balance"))
+            .child(switch)
+            .children(sliders)
+            .children(Self::help(
+                "Matches OIII, and SII, to H-alpha: each by a curve worked out from the stretched channels, which the canvas draws once it is resolved. Shadow protection keeps the darkest sky as it is.",
+            ))
     }
 
     /// What every step's controls share: on or off, its amount, whether the
@@ -136,9 +204,16 @@ impl Studio {
                 operation,
                 settings,
                 ..
-            } if operation == flow_operations::STRETCH => {
+            } if operation == flow_operations::STRETCH
+                || operation == flow_operations::OUTPUT_STRETCH =>
+            {
                 Some(self.stretch_controls(id, settings, cx))
             }
+            StepKind::Operation {
+                operation,
+                settings,
+                ..
+            } if operation == crate::tone_step::OPERATION => Some(self.tone_controls(settings, cx)),
             StepKind::Operation { operation, .. } => amount_range(operation).map(|(low, high)| {
                 let value = amount(step);
                 self.labelled_slider(
@@ -149,6 +224,26 @@ impl Studio {
                 )
             }),
             StepKind::Heal { .. } => None,
+        };
+        // Where a heal copies from, from the healed pixels.
+        let copies = match &step.kind {
+            StepKind::Heal { offset: [x, y], .. } => {
+                let part = |amount: i64, positive: &str, negative: &str| match amount {
+                    0 => None,
+                    amount if amount > 0 => Some(format!("{amount} px {positive}")),
+                    amount => Some(format!("{} px {negative}", -amount)),
+                };
+                let parts: Vec<String> = [part(*x, "right", "left"), part(*y, "down", "up")]
+                    .into_iter()
+                    .flatten()
+                    .collect();
+                Some(if parts.is_empty() {
+                    "Copies from the healed pixels themselves.".to_string()
+                } else {
+                    format!("Copies from {}.", parts.join(" and "))
+                })
+            }
+            StepKind::Operation { .. } => None,
         };
         column()
             .child(Self::act(
@@ -161,6 +256,10 @@ impl Studio {
                 },
             ))
             .children(slider)
+            .children(copies.map(Self::note))
+            .when(name == flow_operations::NARROWBAND, |pane| {
+                pane.child(self.balance_block(step, cx))
+            })
             // A step of a layer or of the picture has an opacity. A step of
             // an input is applied in full.
             .when(
@@ -179,15 +278,30 @@ impl Studio {
                     && !self.band_info.calibration.is_empty(),
                 |pane| pane.child(Self::note(self.band_info.calibration.clone())),
             )
-            .when(!is_drawn(stage, step, &self.band_info), |pane| {
-                pane.children(Self::help(
-                    "The document records this step. The canvas does not draw it yet.",
-                ))
-            })
+            .when(
+                !is_drawn(stage, step, &self.band_info)
+                    && !(crate::studio_model::is_tool_step(step) && stage != StageKind::Linear),
+                |pane| {
+                    pane.children(Self::help(
+                        "The document records this step. The canvas does not draw it yet.",
+                    ))
+                },
+            )
             .when_some(mask_words(&self.document, &step.mask), |pane, words| {
                 pane.child(Self::heading("Mask"))
                     .child(div().text_xs().child(words))
             })
+            // A step on layers or on the picture can be limited by
+            // brightness; an input's steps are baked into the input.
+            .when(
+                stage != StageKind::Linear && stage != StageKind::Stretch,
+                |pane| {
+                    pane.when(step.mask.is_none(), |pane| {
+                        pane.child(Self::heading("Mask"))
+                    })
+                    .child(self.range_block(&step.mask, cx))
+                },
+            )
             .when(masked, |pane| {
                 pane.child(Self::act(
                     "Remove mask",
@@ -201,15 +315,21 @@ impl Studio {
             })
     }
 
-    /// A Stretch step's controls: which of Seiza's stretches it is, and
-    /// that stretch's settings. A step that follows another Stretch step
-    /// of the same input stretches what that one left.
+    /// A Stretch or Output stretch step's controls: which of Seiza's
+    /// stretches it is, and that stretch's settings. A step that follows
+    /// another Stretch step of the same input stretches what that one left,
+    /// as an output stretch stretches what the output stretches before it
+    /// left. An output stretch also chooses how it treats the channels.
     fn stretch_controls(
         &self,
         id: Uuid,
         settings: &serde_json::Value,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
+        let output = self
+            .document
+            .step(id)
+            .is_some_and(|(_, step)| step.kind.name() == flow_operations::OUTPUT_STRETCH);
         let kind = settings["model"]["type"]
             .as_str()
             .unwrap_or_default()
@@ -246,6 +366,9 @@ impl Studio {
                     "This step uses the stretch “{kind}”, which the canvas does not draw."
                 )))
             });
+        if output {
+            block = block.child(self.channels_field(id, settings, cx));
+        }
         for (index, (key, label, low, high)) in stretch_settings(&kind).iter().enumerate() {
             let value = settings["model"][*key].as_f64().unwrap_or(*low);
             block = block.child(self.labelled_slider(
@@ -254,6 +377,68 @@ impl Studio {
                 ((value - low) / (high - low)) as f32,
                 cx,
             ));
+        }
+        // A stretch with no sky floor of its own takes one after it.
+        if !output && !kind.starts_with("layered") {
+            let floor = settings[SKY_FLOOR].as_f64().unwrap_or(0.0);
+            block = block
+                .child(self.labelled_slider(
+                    format!("Sky floor {floor:.2}"),
+                    SliderId::SkyFloor,
+                    (floor / MAX_SKY_FLOOR) as f32,
+                    cx,
+                ))
+                .children(Self::help(
+                    "Takes the stretched sky up to this level to black, and stretches the range above it so white stays white, as the layered stretches' Sky floor does. Use it for what background extraction leaves. 0 leaves the stretch as it is.",
+                ));
+        }
+        // Core compression before any stretch but the layered ones, which
+        // read maps of their own (Layered, HDR has its own compression).
+        if !output && !kind.starts_with("layered") {
+            let core: seiza_stretch::CoreCompression = settings
+                .get(super::panes::CORE_COMPRESSION)
+                .and_then(|value| serde_json::from_value(value.clone()).ok())
+                .unwrap_or(seiza_stretch::CoreCompression {
+                    amount: 0.0,
+                    ..Default::default()
+                });
+            let (low, high) = super::panes::CORE_THRESHOLD;
+            block = block
+                .child(Self::heading("Core compression"))
+                .child(self.labelled_slider(
+                    format!("Amount {:.2}", core.amount),
+                    SliderId::CoreAmount,
+                    core.amount as f32,
+                    cx,
+                ))
+                .when(core.amount > 0.0, |block| {
+                    block
+                        .child(self.labelled_slider(
+                            format!("Threshold {:.0}σ", core.threshold),
+                            SliderId::CoreThreshold,
+                            ((core.threshold / low).ln() / (high / low).ln()) as f32,
+                            cx,
+                        ))
+                        .child(self.labelled_slider(
+                            format!("Size {:.0} px", core.scale),
+                            SliderId::CoreScale,
+                            (core.scale.ln() / 256f64.ln()) as f32,
+                            cx,
+                        ))
+                })
+                .children(Self::help(
+                    "Brings a bright core's broad glow down before the stretch, so the stretch can show more inside it. Structure smaller than Size keeps its contrast. Threshold is how far above the background, in noise sigmas, the compression starts. 0 leaves the stretch as it is.",
+                ));
+        }
+        // In an HDR picture every stretch continues into the headroom; the
+        // knee is the picture's, shown here where the core is worked on.
+        if self.document.headroom.is_some() && kind != "layered-hdr" {
+            block = block
+                .child(Self::heading("HDR"))
+                .child(self.knee_slider(cx))
+                .children(Self::help(
+                    "Above the knee, this stretch continues into the picture's headroom, up to the band's brightest sample. A lower knee gives the bright core more of the headroom and more contrast there. The knee is the picture's, so it moves every stretch.",
+                ));
         }
         block.child(Self::act(
             "Add stretch",
@@ -265,6 +450,7 @@ impl Studio {
                     return;
                 };
                 let band = step.band.clone();
+                let output = step.kind.name() == flow_operations::OUTPUT_STRETCH;
                 let Some(at) = this
                     .document
                     .stage(stage)
@@ -274,28 +460,117 @@ impl Studio {
                 else {
                     return;
                 };
-                let mut next = StepRecord::new(StepKind::Operation {
-                    operation: flow_operations::STRETCH.to_string(),
-                    accepts: Accepts::Linear,
-                    settings: serde_json::json!({
-                        "model": new_stretch("ghs"),
-                        "color_strategy": "linked",
-                    }),
-                });
+                let mut next = if output {
+                    output_stretch_step()
+                } else {
+                    StepRecord::new(StepKind::Operation {
+                        operation: flow_operations::STRETCH.to_string(),
+                        accepts: Accepts::Linear,
+                        settings: serde_json::json!({
+                            "model": new_stretch("ghs"),
+                            "color_strategy": "linked",
+                        }),
+                    })
+                };
                 next.band = band.clone();
                 let new = next.id;
-                if this.document.insert_step(stage, at + 1, next).is_ok()
-                    && let Row::InputStep { channel, .. } = &this.selected
-                {
-                    this.selected = Row::InputStep {
-                        channel: channel.clone(),
-                        step: new,
-                    };
+                if this.document.insert_step(stage, at + 1, next).is_ok() {
+                    match &this.selected {
+                        Row::InputStep { channel, .. } => {
+                            this.selected = Row::InputStep {
+                                channel: channel.clone(),
+                                step: new,
+                            };
+                        }
+                        Row::Finish(_) => this.selected = Row::Finish(new),
+                        _ => {}
+                    }
                 }
             },
         ))
-        .children(Self::help(
-            "Stretches of one input apply in order. Each is resolved from what the one before it left.",
+        .children(Self::help(if output {
+            "Output stretches apply in order to the combined picture. Each is resolved from what the one before it left."
+        } else {
+            "Stretches of one input apply in order. Each is resolved from what the one before it left."
+        }))
+    }
+
+    /// A Tone and color step's controls: Camera Raw's Basic sliders.
+    fn tone_controls(&self, settings: &serde_json::Value, cx: &mut Context<Self>) -> gpui::Div {
+        let tone = crate::tone_step::from_settings(settings);
+        let values = [
+            tone.exposure,
+            tone.contrast,
+            tone.highlights,
+            tone.shadows,
+            tone.whites,
+            tone.blacks,
+            tone.texture,
+            tone.clarity,
+            tone.dehaze,
+            tone.vibrance,
+            tone.saturation,
+        ];
+        let mut block = column();
+        for (index, ((_, label, low, high), value)) in
+            seiza_compose::tone::CONTROLS.iter().zip(values).enumerate()
+        {
+            // Camera Raw's Presence group: Texture, Clarity and Dehaze, then
+            // Vibrance and Saturation.
+            if index == 6 {
+                block = block.child(Self::heading("Presence"));
+            }
+            block = block.child(self.labelled_slider(
+                format!("{label} {value:+.2}"),
+                SliderId::FinishParam(index),
+                (value - low) / (high - low),
+                cx,
+            ));
+        }
+        block.children(Self::help(
+            "Exposure, Contrast, Highlights, Shadows, Whites and Blacks change the brightness and keep each pixel's color. Whites up and Blacks down clip more of the picture to white and to black. Highlights and Shadows move the tones of each area and keep the detail in it, so a star stays as bright above a lifted sky. Texture raises or lowers fine detail, Clarity the contrast of larger structures in the midtones, and Dehaze takes away a gray veil such as sky glow while keeping colored nebulae. When the picture is HDR (set under Final picture), the brightest areas keep their place above SDR white instead of clipping; raise Exposure or Whites to put more there.",
+        ))
+    }
+
+    /// How an output stretch treats the channels: one curve for all three,
+    /// a curve for each, or one curve for the luminance that keeps each
+    /// pixel's color.
+    fn channels_field(
+        &self,
+        id: Uuid,
+        settings: &serde_json::Value,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let current = settings["color_strategy"].as_str().unwrap_or("linked");
+        let mut choices = Self::segmented();
+        for (index, (strategy, label)) in [
+            ("linked", "Linked"),
+            ("unlinked", "Each channel"),
+            ("luminance-preserving", "Luminance"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let settings = settings.clone();
+            choices = choices.child(Self::act(
+                label,
+                ("stretch-channels", index),
+                strategy == current,
+                cx,
+                move |this| {
+                    let mut settings = settings.clone();
+                    settings["color_strategy"] = strategy.into();
+                    this.document.set_step_settings(id, settings);
+                },
+            ));
+        }
+        // The three choices do not fit beside a label, so they have a line
+        // of their own.
+        column()
+            .child(Self::heading("Channels"))
+            .child(choices)
+            .children(Self::help(
+            "Linked: one curve stretches red, green and blue. Each channel: Seiza resolves a separate curve for red, green and blue, which neutralizes a colored background. Luminance: one curve stretches the brightness and each pixel keeps its color.",
         ))
     }
 
@@ -309,10 +584,80 @@ impl Studio {
                 "The stack as PSF Guard made it, before any step.",
             ))
             .child(self.routes_block(channel, cx))
+            .children(self.stars_stretch_block(channel, cx))
             .children(self.continuum_block(channel, cx))
             .child(self.tools_block(channel, cx))
             .child(self.zoom_notes(channel))
             .into_any_element()
+    }
+
+    /// For the stars a tool took out of an input: whether they follow the
+    /// input's stretch or have one of their own, and a button for each.
+    fn stars_stretch_block(&self, channel: &str, cx: &mut Context<Self>) -> Option<gpui::Div> {
+        let input = channel.strip_suffix("@stars")?.to_string();
+        let own: Option<Uuid> = self
+            .document
+            .stage(StageKind::Stretch)
+            .steps
+            .iter()
+            .find(|step| {
+                step.band.as_deref() == Some(channel)
+                    && step.kind.name() == flow_operations::STRETCH
+            })
+            .map(|step| step.id);
+        let channel = channel.to_string();
+        let words = match own {
+            Some(_) => "Their own".to_string(),
+            None => format!("Follows {}'s", channel_label(&input)),
+        };
+        Some(
+            column()
+                .child(Self::field("Stretch", Self::note(words)))
+                .child(match own {
+                    None => Self::act("Stretch on their own", "stars-own-stretch", false, cx, move |this| {
+                        this.give_stars_a_stretch(&channel, &input)
+                    }),
+                    Some(id) => Self::act("Follow the input's stretch", "stars-follow", false, cx, move |this| {
+                        this.document.remove_step(id);
+                    }),
+                })
+                .children(Self::help(
+                    "Stars follow their input's stretch, so they go back as they were taken out. Stretched on their own, they start from a copy of it, a Stretch step of the stars that changes without changing the nebula; select it to set it.",
+                )),
+        )
+    }
+
+    /// Gives the stars `channel` a Stretch step of their own, a copy of
+    /// their input's, and selects it.
+    fn give_stars_a_stretch(&mut self, channel: &str, input: &str) {
+        let source = self
+            .document
+            .stage(StageKind::Stretch)
+            .steps
+            .iter()
+            .rposition(|step| {
+                step.band.as_deref() == Some(input) && step.kind.name() == flow_operations::STRETCH
+            });
+        let Some(at) = source else {
+            return;
+        };
+        let mut step = StepRecord::new(
+            self.document.stage(StageKind::Stretch).steps[at]
+                .kind
+                .clone(),
+        );
+        step.band = Some(channel.to_string());
+        let id = step.id;
+        if self
+            .document
+            .insert_step(StageKind::Stretch, at + 1, step)
+            .is_ok()
+        {
+            self.selected = Row::InputStep {
+                channel: channel.to_string(),
+                step: id,
+            };
+        }
     }
 
     /// For an emission line: whether the continuum under it is subtracted,
@@ -375,11 +720,13 @@ impl Studio {
         column()
             .child(Self::title(step.kind.name().to_string(), applies_to))
             .child(self.step_controls(stage, step, cx))
-            .when(
-                step.kind.name() == flow_operations::RC_ASTRO_INPUT
-                    || (step.kind.name() == flow_operations::RC_ASTRO_COLOR && step.band.is_some()),
-                |pane| pane.child(self.tools_block(&channel, cx)),
-            )
+            .when(crate::studio_model::is_tool_step(step), |pane| {
+                pane.child(self.tools_block(&channel, cx))
+            })
+            .children(self.linear_order_block(step, &channel, cx))
+            .when(step.kind.name() == flow_operations::BACKGROUND, |pane| {
+                pane.child(self.protect_block(id, cx))
+            })
             .children(own)
             .child(Self::act(
                 if shared {
@@ -463,6 +810,7 @@ impl Studio {
                 layer.opacity,
                 cx,
             ))
+            .children(self.star_reduction_block(layer, cx))
             .child(self.blend_block(layer, cx))
             .child(self.mask_block(layer, cx))
             .child(self.shared_mask_block(layer, cx))
@@ -506,6 +854,21 @@ impl Studio {
                 cx,
                 move |this, name| this.add_adjustment_above(Some(id), name),
             )))
+            .child(Self::field(
+                "Tools",
+                self.tool_menu("layer-tool", "Run a tool on this", cx, move |this, step| {
+                    let step_id = step.id;
+                    if this.document.insert_layer_step(id, step).is_ok() {
+                        this.selected = Row::LayerStep {
+                            layer: id,
+                            step: step_id,
+                        };
+                    }
+                }),
+            ))
+            .children(Self::help(
+                "A tool here runs on this layer alone, as its stretch and its edits before the tool leave it, when the tools run. The stars a star removal takes out go back right after it.",
+            ))
             .child(Self::heading("Layer"))
             .child(
                 wrap()
@@ -535,7 +898,9 @@ impl Studio {
                             }
                         },
                     ))
-                    .when(layer.group.is_none(), |row| {
+                    .when(
+                        self.document.ancestors(id).len() < crate::studio_model::MAX_GROUP_DEPTH,
+                        |row| {
                         row.child(Self::act(
                             "Group",
                             "layer-group",
@@ -559,7 +924,27 @@ impl Studio {
                         },
                     )),
             )
+            .child(self.order_block(id, cx))
             .into_any_element()
+    }
+
+    /// Buttons that move a layer, or a group with its members, one place
+    /// up or down the stack, as the list shows it.
+    fn order_block(&self, id: Uuid, cx: &mut Context<Self>) -> gpui::Div {
+        column()
+            .child(Self::field(
+                "Order",
+                wrap()
+                    .child(Self::act("Move up", "layer-up", false, cx, move |this| {
+                        this.document.step_layer(id, true);
+                    }))
+                    .child(Self::act("Move down", "layer-down", false, cx, move |this| {
+                        this.document.step_layer(id, false);
+                    })),
+            ))
+            .children(Self::help(
+                "A layer in a group moves among the group's layers; a group moves with its layers past the next layer or group. A row dragged onto a layer goes above it, or below it when dropped on the layer's lower half; dragged onto a group, it joins the group on top.",
+            ))
     }
 
     /// The blend modes, with the layer's own marked.
@@ -585,9 +970,101 @@ impl Studio {
             .children(Self::help(only_help))
     }
 
+    /// Buttons that move a step that changes an input's samples, such as
+    /// a tool or the background extraction, past the step before or after
+    /// it in the input's list. The store runs them in that order.
+    fn linear_order_block(
+        &self,
+        step: &StepRecord,
+        channel: &str,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::Div> {
+        if !crate::studio_model::changes_input(step, channel) {
+            return None;
+        }
+        let id = step.id;
+        let mut mover = |label: &'static str, key: &'static str, later: bool| {
+            let channel = channel.to_string();
+            Self::act(label, key, false, cx, move |this| {
+                crate::studio_model::move_linear_step(&mut this.document, id, &channel, later);
+            })
+        };
+        let (earlier, later) = (
+            mover("Move earlier", "linear-earlier", false),
+            mover("Move later", "linear-later", true),
+        );
+        Some(
+            column()
+                .child(Self::field("Order", wrap().child(earlier).child(later)))
+                .children(Self::help(
+                    "Moves the step past the one before or after it in this input's list. Preparing the store runs the tools, deconvolution and background extraction in that order: a tool after Background extraction runs on the stack with its background corrected. A step shared by every input, such as Background extraction, moves for every input. A new order takes effect when the tools run again; the toolbar lists the inputs.",
+                )),
+        )
+    }
+
+    /// The Star reduction slider, for a layer that shows stars a tool took
+    /// out of an input, or a group with such layers.
+    fn star_reduction_block(
+        &self,
+        layer: &LayerRecord,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::Div> {
+        let is_stars = |layer: &LayerRecord| matches!(&layer.source, LayerSource::Band { band } if band.ends_with("@stars"));
+        let group = matches!(layer.source, LayerSource::Group);
+        let shows_stars = if group {
+            self.document.group_members(layer.id).any(is_stars)
+        } else {
+            is_stars(layer)
+        };
+        if !shows_stars {
+            return None;
+        }
+        let from_group = (!group && layer.star_reduction == 0.0)
+            .then(|| {
+                self.document
+                    .layers()
+                    .iter()
+                    .find(|other| Some(other.id) == layer.group)
+                    .map(|group| group.star_reduction)
+            })
+            .flatten()
+            .filter(|amount| *amount > 0.0);
+        let help = if group {
+            "Makes the group's stars smaller: each is blended toward a one-pixel erosion of itself. The stars of its layers are reduced together, so their colors keep. The first change works out the reduced stars from the whole image, which takes a moment."
+        } else {
+            "Makes this layer's stars smaller: each is blended toward a one-pixel erosion of itself. Above 0%, this layer's amount is used in place of its group's. The first change works out the reduced stars from the whole image, which takes a moment."
+        };
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(self.labelled_slider(
+                    format!("Star reduction {:.0}%", layer.star_reduction * 100.0),
+                    SliderId::StarReduction,
+                    layer.star_reduction,
+                    cx,
+                ))
+                .children(from_group.map(|amount| {
+                    Self::note(format!(
+                        "Reduced {:.0}% with the group's other stars.",
+                        amount * 100.0
+                    ))
+                }))
+                .children(Self::help(help)),
+        )
+    }
+
     fn inspect_group(&self, layer: &LayerRecord, cx: &mut Context<Self>) -> AnyElement {
         let id = layer.id;
         let members = self.document.group_members(id).count();
+        let (pass_through, clipped) = (layer.pass_through, layer.clipped);
+        // A group goes into a new group while every layer in it stays
+        // within the depth groups go to.
+        let can_nest = {
+            let mut trial = self.document.clone();
+            trial.group_layer(id).is_ok()
+        };
         column()
             .child(Self::title(
                 layer.name.clone(),
@@ -609,6 +1086,7 @@ impl Studio {
                 layer.opacity,
                 cx,
             ))
+            .children(self.star_reduction_block(layer, cx))
             .child(self.blend_block(layer, cx))
             .child(self.palette_block(Some(id), cx))
             .child(Self::field("Layers", self.add_layer_menu(Some(id), cx)))
@@ -636,12 +1114,51 @@ impl Studio {
                 move |this, name| this.add_adjustment_above(Some(id), name),
             )))
             .child(Self::heading("Group"))
+            .child(Self::act(
+                if pass_through {
+                    "Layers pass through"
+                } else {
+                    "Layers blend together first"
+                },
+                "pass-through",
+                pass_through,
+                cx,
+                move |this| {
+                    if let Some(group) = this.document.layer_mut(id) {
+                        group.pass_through = !pass_through;
+                    }
+                },
+            ))
+            .children(Self::help(
+                "Passing through, each layer blends straight onto the layers beneath the group, as if it were not grouped; the group's opacity and masks still limit each one, and its own adjustments do not apply.",
+            ))
+            .child(Self::act(
+                if clipped { "Clipped" } else { "Not clipped" },
+                "group-clipped",
+                clipped,
+                cx,
+                move |this| {
+                    if let Some(group) = this.document.layer_mut(id) {
+                        group.clipped = !clipped;
+                    }
+                },
+            ))
+            .children(Self::help(
+                "A clipped group shows only inside the mask of the layer beneath it, and not at all while that layer is hidden.",
+            ))
             .child(
                 wrap()
                     .child(Self::act("Ungroup", "ungroup", false, cx, move |this| {
                         this.document.ungroup(id);
                         this.selected = Row::Combined;
                     }))
+                    .when(can_nest, |row| {
+                        row.child(Self::act("Group", "group-group", false, cx, move |this| {
+                            if let Ok(group) = this.document.group_layer(id) {
+                                this.selected = Row::Layer(group);
+                            }
+                        }))
+                    })
                     .child(Self::act("Delete", "part-delete", false, cx, move |this| {
                         this.remove_part(id)
                     })),
@@ -649,6 +1166,7 @@ impl Studio {
             .children(Self::help(
                 "Ungrouping keeps the layers where they are and removes the group's own mask and adjustments.",
             ))
+            .child(self.order_block(id, cx))
             .into_any_element()
     }
 
@@ -675,12 +1193,8 @@ impl Studio {
                     on,
                     cx,
                     move |this| {
-                        if let Some(layer) = this.document.layer_mut(id) {
-                            layer.mask = (!on).then_some(MaskRecord::Shared {
-                                mask: mask_id,
-                                inverted: false,
-                            });
-                        }
+                        this.document
+                            .set_layer_shared_mask(id, (!on).then_some((mask_id, false)));
                     },
                 )
             })
@@ -701,26 +1215,22 @@ impl Studio {
                         return;
                     };
                     let mask = this.document.add_mask(SharedMask::new(vec![input]));
-                    if let Some(layer) = this.document.layer_mut(id) {
-                        layer.mask = Some(MaskRecord::Shared {
-                            mask,
-                            inverted: false,
-                        });
-                    }
+                    this.document.set_layer_shared_mask(id, Some((mask, false)));
                     this.selected = Row::Mask(mask);
                 },
             )))
             .children(Self::help(
                 "A shared mask follows the signal of one or two inputs. Several layers can be behind the same mask, or its inverse.",
             ))
-            .when(painted, |pane| {
-                pane.children(Self::help("Choosing a shared mask replaces the painted mask."))
+            .when(painted || layer.painted_too.is_some(), |pane| {
+                pane.children(Self::help(
+                    "A painted mask stays with a shared mask: the layer shows only where both let it.",
+                ))
             })
             .when_some(used, |pane, (mask, inverted)| {
                 let set = move |this: &mut Self, inverted: bool| {
-                    if let Some(layer) = this.document.layer_mut(id) {
-                        layer.mask = Some(MaskRecord::Shared { mask, inverted });
-                    }
+                    this.document
+                        .set_layer_shared_mask(id, Some((mask, inverted)));
                 };
                 pane.child(
                     Self::segmented()
@@ -929,7 +1439,7 @@ impl Studio {
             let Some(color) = layer.color.filter(|_| layer.source.shows_pixels()) else {
                 continue;
             };
-            if layer.blend == BlendMode::Luminance || index >= psf_studio_render::MAX_LAYERS {
+            if layer.blend == BlendMode::Luminance {
                 continue;
             }
             let (hue, saturation, _) = hue_of(color);
@@ -969,6 +1479,57 @@ impl Studio {
     }
 
     /// A layer's mask, and the button that removes it.
+    /// A mask by brightness: its sliders when the layer or step has one, or
+    /// the button that adds one when it has no mask.
+    pub(super) fn range_block(
+        &self,
+        mask: &Option<MaskRecord>,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        match mask {
+            Some(MaskRecord::Range { low, high, feather }) => {
+                let to = if *high >= super::panes::RANGE_BRIGHTEST {
+                    "To the brightest".to_string()
+                } else {
+                    format!("To {high:.2}")
+                };
+                column()
+                    .child(self.labelled_slider(format!("From {low:.2}"), SliderId::RangeLow, *low, cx))
+                    .child(self.labelled_slider(
+                        to,
+                        SliderId::RangeHigh,
+                        high.min(1.0),
+                        cx,
+                    ))
+                    .child(self.labelled_slider(
+                        format!("Softness {feather:.2}"),
+                        SliderId::RangeFeather,
+                        feather / super::panes::RANGE_MAX_FEATHER,
+                        cx,
+                    ))
+                    .children(Self::help(
+                        "Applies only where the brightness is between From and To, fading out over Softness beyond them. A layer that shows an input reads its own brightness; an adjustment or a step reads the picture it changes.",
+                    ))
+            }
+            None => column().child(Self::act(
+                "Mask by brightness",
+                "range-add",
+                false,
+                cx,
+                |this| {
+                    if let Some(mask) = this.range_mask_mut() {
+                        *mask = Some(MaskRecord::Range {
+                            low: 0.5,
+                            high: super::panes::RANGE_BRIGHTEST,
+                            feather: 0.1,
+                        });
+                    }
+                },
+            )),
+            Some(_) => column(),
+        }
+    }
+
     fn mask_block(&self, layer: &LayerRecord, cx: &mut Context<Self>) -> gpui::Div {
         let id = layer.id;
         column()
@@ -980,6 +1541,7 @@ impl Studio {
                         "None: it applies everywhere. Paint one with the mask brush.".to_string()
                     })),
             )
+            .child(self.range_block(&layer.mask, cx))
             .when(layer.mask.is_some(), |pane| {
                 pane.child(Self::act(
                     "Remove mask",
@@ -997,10 +1559,15 @@ impl Studio {
 
     fn inspect_adjustment_layer(&self, layer: &LayerRecord, cx: &mut Context<Self>) -> AnyElement {
         let id = layer.id;
-        let LayerSource::Adjustment {
-            operation,
-            settings,
-        } = &layer.source
+        let Some(StepRecord {
+            kind:
+                StepKind::Operation {
+                    operation,
+                    settings,
+                    ..
+                },
+            ..
+        }) = layer.source.adjustment_step()
         else {
             return div().into_any_element();
         };
@@ -1059,6 +1626,58 @@ impl Studio {
                 this.document.remove_layer(id);
                 this.selected = Row::Combined;
             }))
+            .child(self.order_block(id, cx))
+            .into_any_element()
+    }
+
+    /// An adjustment layer that changes the layers beneath it as a Finish
+    /// step changes the picture: a stretch, Tone, a heal or a tool.
+    fn inspect_step_layer(&self, layer: &LayerRecord, cx: &mut Context<Self>) -> AnyElement {
+        let Some(step) = layer.source.adjustment_step() else {
+            return div().into_any_element();
+        };
+        let id = layer.id;
+        let tool = crate::studio_model::is_tool_step(step);
+        // The step applies while the layer is shown, at the layer's
+        // opacity: what a step's own switch and opacity do elsewhere.
+        let mut shown = step.clone();
+        shown.enabled = layer.visible;
+        shown.opacity = layer.opacity;
+        // The layer's mask has a block of its own.
+        shown.mask = None;
+        let heal = matches!(step.kind, StepKind::Heal { .. });
+        column()
+            .child(Self::title(
+                layer.name.clone(),
+                if tool {
+                    "A tool run on the picture as the layers beneath it make it. Its result covers them."
+                } else {
+                    "A step on the picture as the layers beneath it make it."
+                },
+            ))
+            .child(self.histogram_block())
+            .child(self.step_controls(StageKind::Finish, &shown, cx))
+            .when(tool, |pane| {
+                pane.child(self.late_tool_block(
+                    step,
+                    if layer.group.is_some() {
+                        "its group's members beneath it"
+                    } else {
+                        "the layers beneath it"
+                    },
+                    cx,
+                ))
+            })
+            .when(!heal, |pane| {
+                pane.child(self.mask_block(layer, cx))
+                    .child(self.shared_mask_block(layer, cx))
+            })
+            .child(Self::act("Remove", "layer-remove", false, cx, move |this| {
+                this.document.remove_layer(id);
+                this.selected = Row::Combined;
+            }))
+            .child(self.order_block(id, cx))
+            .child(self.finish_menu(cx))
             .into_any_element()
     }
 
@@ -1073,31 +1692,37 @@ impl Studio {
                 format!("An edit of {} only.", owner.name),
             ))
             .child(self.step_controls(stage, step, cx))
-            .when(is_adjustment, |pane| {
-                pane.child(Self::heading("Applies to"))
-                    .child(
-                        wrap()
-                            .child(Self::button(
-                                format!("{} only", owner.name),
-                                "scope-own",
-                                true,
-                            ))
-                            .child(Self::act(
-                                "Beneath",
-                                "scope-stack",
-                                false,
-                                cx,
-                                move |this| {
-                                    if let Ok(new) = this.document.detach_adjustment(id) {
-                                        this.selected = Row::Layer(new);
-                                    }
-                                },
-                            )),
-                    )
-                    .children(Self::help(
-                        "Paint with the mask brush to limit where this adjustment applies.",
-                    ))
+            .when(crate::studio_model::is_tool_step(step), |pane| {
+                pane.child(self.late_tool_block(step, &format!("{} alone", owner.name), cx))
             })
+            .when(
+                is_adjustment && !crate::studio_model::is_tool_step(step),
+                |pane| {
+                    pane.child(Self::heading("Applies to"))
+                        .child(
+                            wrap()
+                                .child(Self::button(
+                                    format!("{} only", owner.name),
+                                    "scope-own",
+                                    true,
+                                ))
+                                .child(Self::act(
+                                    "Beneath",
+                                    "scope-stack",
+                                    false,
+                                    cx,
+                                    move |this| {
+                                        if let Ok(new) = this.document.detach_adjustment(id) {
+                                            this.selected = Row::Layer(new);
+                                        }
+                                    },
+                                )),
+                        )
+                        .children(Self::help(
+                            "Paint with the mask brush to limit where this adjustment applies.",
+                        ))
+                },
+            )
             .child(Self::act("Remove", "step-remove", false, cx, move |this| {
                 this.document.remove_step(id);
                 this.selected = Row::Layer(layer);
@@ -1105,12 +1730,76 @@ impl Studio {
             .into_any_element()
     }
 
+    /// Every input's tools in one table: what runs on each, in order, and
+    /// whether a run is due. Clicking an input selects it.
+    /// An input's processing tools, in the order they run: "BlurXTerminator
+    /// · StarXTerminator", or "no tools".
+    pub(super) fn tool_words(&self, channel: &str) -> String {
+        let tools: Vec<String> = crate::studio_model::input_steps(&self.document, channel)
+            .into_iter()
+            .filter_map(|listed| {
+                let (stage, step) = self.document.step(listed.id)?;
+                (stage == StageKind::Linear
+                    && step.enabled
+                    && crate::studio_model::is_tool_step(step))
+                .then(|| step.kind.name().to_string())
+            })
+            .collect();
+        if tools.is_empty() {
+            "no tools".to_string()
+        } else {
+            tools.join(" · ")
+        }
+    }
+
+    fn tools_table(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let due = self.inputs_to_run();
+        let rows = self
+            .document
+            .channels()
+            .into_iter()
+            .enumerate()
+            .map(|(index, channel)| {
+                let words = self.tool_words(&channel);
+                let flag = if due.contains(&channel) {
+                    " · to run"
+                } else {
+                    ""
+                };
+                let picked = channel.clone();
+                div()
+                    .id(("tools-table", index))
+                    .flex()
+                    .gap_2()
+                    .text_xs()
+                    .cursor_pointer()
+                    .child(div().w(px(72.0)).child(channel_label(&channel)))
+                    .child(div().flex_1().child(format!("{words}{flag}")))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.selected = Row::Input(picked.clone());
+                        this.refresh_canvas();
+                        cx.notify();
+                    }))
+            })
+            .collect::<Vec<_>>();
+        column()
+            .child(Self::heading("Tools by input"))
+            .when_some(self.document.recipe.clone(), |pane, recipe| {
+                pane.child(div().text_xs().child(format!("Made with the recipe {recipe}.")))
+            })
+            .children(rows)
+            .children(Self::help(
+                "Each input's processing tools, in the order they run. Click an input to change them.",
+            ))
+    }
+
     fn inspect_combined(&self, cx: &mut Context<Self>) -> AnyElement {
         column()
             .child(Self::title(
                 "Combined",
-                "Every layer, blended bottom to top, before the Finish steps.",
+                "Every layer, blended bottom to top.",
             ))
+            .child(self.tools_table(cx))
             .child(self.palette_block(None, cx))
             .child(self.section("tones", "Tones", false, cx, |this, cx| this.tones_block(cx)))
             .child(Self::act("Balance colors", "balance", false, cx, |this| {
@@ -1145,10 +1834,16 @@ impl Studio {
                 step.kind.name().to_string(),
                 "A step on the whole picture, after the layers are combined.",
             ))
+            .child(self.histogram_block())
             .child(self.step_controls(stage, step, cx))
-            .children(Self::help(
-                "Paint with the mask brush to limit where this step applies.",
-            ))
+            .when(crate::studio_model::is_tool_step(step), |pane| {
+                pane.child(self.late_tool_block(step, "the picture", cx))
+            })
+            .when(!crate::studio_model::is_tool_step(step), |pane| {
+                pane.children(Self::help(
+                    "Paint with the mask brush to limit where this step applies.",
+                ))
+            })
             .child(Self::act("Remove", "step-remove", false, cx, move |this| {
                 this.document.remove_step(id);
                 this.selected = Row::Combined;
@@ -1157,12 +1852,243 @@ impl Studio {
             .into_any_element()
     }
 
+    /// The histogram of the final picture: red, green and blue over the
+    /// luminance, with the share of pixels clipped to black and to white.
+    fn histogram_block(&self) -> gpui::Div {
+        let Some(histogram) = self.histogram.clone() else {
+            return column()
+                .child(Self::heading("Histogram"))
+                .child(Self::note("Reading the picture…"));
+        };
+        let (black, white) = (histogram.black * 100.0, histogram.white * 100.0);
+        let above = histogram.above * 100.0;
+        let empty = histogram.masked && histogram.pixels == 0;
+        let title = if histogram.masked {
+            "Histogram of the masked area"
+        } else {
+            "Histogram"
+        };
+        let chart = gpui::canvas(
+            |_, _, _| (),
+            move |bounds, (), window, _| {
+                let peak = histogram.peak() as f32;
+                let width = f32::from(bounds.size.width) / crate::histogram::BINS as f32;
+                let height = f32::from(bounds.size.height);
+                // Luminance first, in gray, then each channel over it.
+                let colors = [0x9a9a9aff, 0xe0505080, 0x50d05080, 0x5080f080];
+                for (channel, color) in [3, 0, 1, 2].into_iter().zip(colors) {
+                    for (index, count) in histogram.bins[channel].iter().enumerate() {
+                        let tall = (*count as f32 / peak).min(1.0) * height;
+                        if tall <= 0.0 {
+                            continue;
+                        }
+                        let origin = gpui::point(
+                            bounds.origin.x + gpui::px(index as f32 * width),
+                            bounds.origin.y + gpui::px(height - tall),
+                        );
+                        window.paint_quad(gpui::fill(
+                            gpui::Bounds::new(origin, gpui::size(gpui::px(width), gpui::px(tall))),
+                            gpui::rgba(color),
+                        ));
+                    }
+                }
+            },
+        )
+        .w_full()
+        .h(gpui::px(80.0));
+        column()
+            .child(Self::heading(title))
+            .when(empty, |block| {
+                block.child(Self::note(
+                    "The mask covers none of the sampled picture. Paint it larger, or move it, to see its area here.",
+                ))
+            })
+            .child(div().bg(gpui::rgb(0x111316)).child(chart))
+            .child(Self::note(if above > 0.0 {
+                format!(
+                    "Clipped: {black:.2}% to black, {white:.2}% to white. Above SDR white: {above:.2}%"
+                )
+            } else {
+                format!("Clipped: {black:.2}% to black, {white:.2}% to white")
+            }))
+    }
+
+    /// HDR: whether the whole picture may be brighter than SDR white, and how
+    /// far.
+    fn hdr_block(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let headroom = self.document.headroom;
+        let mut block = column().child(Self::field(
+            "HDR",
+            Self::act(
+                if headroom.is_some() { "On" } else { "Off" },
+                "picture-hdr",
+                headroom.is_some(),
+                cx,
+                move |this| this.set_hdr(headroom.is_none()),
+            ),
+        ));
+        if let Some(headroom) = headroom {
+            let (_, label, low, high) = crate::tone_step::HEADROOM;
+            block = block
+                .child(self.labelled_slider(
+                    format!("{label} {headroom:.1} stops"),
+                    SliderId::Headroom,
+                    (headroom - low) / (high - low),
+                    cx,
+                ))
+                .child(self.knee_slider(cx));
+        }
+        block.children(Self::help(
+            "With HDR on, the whole picture may be brighter than SDR white, up to the headroom (each stop doubles the light): the stretches, the combined picture and every Finish step. Every stretch continues above its knee into the headroom, so the band's brightest sample reaches the top; Layered, HDR also compresses the core. A lower knee gives the bright core more of the headroom and more contrast there. Every view of the picture shows it brighter than white on an HDR display. Export it as AVIF, a 32-bit float TIFF, FITS or XISF to keep it.",
+        ))
+    }
+
+    /// The picture's HDR knee, as a slider.
+    fn knee_slider(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let (_, label, low, high) = crate::tone_step::HDR_KNEE;
+        let knee = self
+            .document
+            .hdr_knee
+            .unwrap_or(crate::tone_step::DEFAULT_HDR_KNEE);
+        self.labelled_slider(
+            format!("{label} {knee:.2}"),
+            SliderId::HdrKnee,
+            (knee - low) / (high - low),
+            cx,
+        )
+    }
+
+    /// Export: the final picture at full resolution, to a file.
+    fn export_block(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let running = self.export.clone();
+        column()
+            .child(Self::field(
+                "Export",
+                match running {
+                    Some(run) => Self::act("Stop export", "export-stop", false, cx, move |_| {
+                        run.stop()
+                    }),
+                    None => Self::button("Export…", "export", false).on_click(cx.listener(
+                        |this, _, _, cx| {
+                            this.open_menu = None;
+                            this.pick_export(cx);
+                            cx.stop_propagation();
+                            cx.notify();
+                        },
+                    )),
+                },
+            ))
+            .child(Self::field(
+                "Format",
+                gpui::div().flex().flex_wrap().children(
+                    super::export::EXPORT_FORMATS
+                        .iter()
+                        .enumerate()
+                        .map(|(index, (extension, label))| {
+                            let extension: &'static str = extension;
+                            Self::act(
+                                *label,
+                                ("export-format", index),
+                                self.export_format() == extension,
+                                cx,
+                                move |this| this.export_format = Some(extension),
+                            )
+                        }),
+                ),
+            ))
+            .when(self.export_format() == "tif", |block| {
+                block.child(Self::field(
+                    "TIFF",
+                    gpui::div()
+                        .flex()
+                        .child(Self::act("16-bit", "tiff-16", !self.tiff_float, cx, |this| {
+                            this.tiff_float = false
+                        }))
+                        .child(Self::act("32-bit float", "tiff-32", self.tiff_float, cx, |this| {
+                            this.tiff_float = true
+                        })),
+                ))
+            })
+            .when(self.server_save.linked(), |block| {
+                block.child(Self::field(
+                    "Project",
+                    Self::act(
+                        "Also save to the project",
+                        "export-to-project",
+                        self.server_save.export_to_project,
+                        cx,
+                        |this| {
+                            this.server_save.export_to_project = !this.server_save.export_to_project
+                        },
+                    ),
+                ))
+            })
+            .when(!self.export_line.is_empty(), |block| {
+                block.child(Self::note(self.export_line.clone()))
+            })
+            .children(Self::help(
+                "Saves the picture as the canvas shows it, cropped, at full resolution: TIFF at 16 bits per channel or as 32-bit floats, PNG at 16 bits, FITS or XISF as 32-bit floats, or AVIF as HDR (PQ, Rec. 2020), which keeps an HDR picture's brightest areas above SDR white. Format sets the file's extension; an HDR picture starts as AVIF. A 32-bit float TIFF also keeps values above SDR white as they are. An extension typed in the name wins. When Studio was started with a working space's ICC profile, a TIFF or PNG carries it. For a picture on a PSF Guard server, Also save to the project uploads the file to the project as well, with the document revision it came from.",
+            ))
+    }
+
+    /// The view stretch: what draws a channel nothing stretches yet, for
+    /// looking only.
+    fn inspect_view_stretch(&self, cx: &mut Context<Self>) -> AnyElement {
+        let kind = self.view_stretch["type"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        let kinds = STRETCHES
+            .iter()
+            .enumerate()
+            .map(|(index, (name, label))| {
+                let name = *name;
+                Self::pick(
+                    *label,
+                    ("view-stretch-kind", index),
+                    name == kind,
+                    cx,
+                    move |this| this.view_stretch = new_stretch(name),
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut block = column()
+            .child(Self::title(
+                "View stretch",
+                "For looking only. Not saved or exported.",
+            ))
+            .child(Self::field(
+                "Stretch",
+                self.menu("view-stretch-kind", "Kind", kinds, cx),
+            ));
+        for (index, (key, label, low, high)) in stretch_settings(&kind).iter().enumerate() {
+            let value = self.view_stretch[*key].as_f64().unwrap_or(*low);
+            block = block.child(self.labelled_slider(
+                format!("{label} {value:.2}"),
+                SliderId::ViewStretchParam(index),
+                ((value - low) / (high - low)) as f32,
+                cx,
+            ));
+        }
+        block
+            .child(Self::act("Done", "view-stretch-done", false, cx, |this| {
+                this.view_stretch_open = false
+            }))
+            .children(Self::help(
+                "The view stretch draws a channel that nothing in the view stretches yet: before the Stretch stage, or a channel with no Stretch step. A channel the document stretches is always drawn with the document's stretch. The view stretch only changes what you see: the document does not keep it, and an export leaves such a channel linear.",
+            ))
+            .into_any_element()
+    }
+
     fn inspect_final(&self, cx: &mut Context<Self>) -> AnyElement {
         column()
             .child(Self::title("Final picture", "Every step of the document."))
+            .child(self.histogram_block())
+            .child(self.hdr_block(cx))
+            .child(self.export_block(cx))
             .child(self.crop_block(cx))
             .child(self.finish_menu(cx))
-            .child(self.junction_block())
+            .child(self.junction_block(cx))
             .into_any_element()
     }
 
@@ -1219,60 +2145,62 @@ impl Studio {
 
     // ---- blocks under the row's controls --------------------------------
 
-    /// Which of an input's steps the view leaves out at this zoom.
-    fn zoom_notes(&self, channel: &str) -> gpui::Div {
+    /// The zoom and the pyramid level the view reads. Every step's result
+    /// is drawn at any zoom: the tools ran on the whole stack when the store
+    /// was prepared.
+    fn zoom_notes(&self, _channel: &str) -> gpui::Div {
         let zoom = self.canvas.read(|shared| shared.canvas.view.zoom);
         let level = level_for_zoom(zoom, self.levels);
-        let omitted: Vec<&str> = input_steps(&self.document, channel)
-            .iter()
-            .filter_map(|row| self.document.step(row.id))
-            .map(|(_, step)| step.kind.name())
-            .filter(|name| level > 0 && FULL_RESOLUTION_ONLY.contains(name))
-            .collect();
-        let note = if omitted.is_empty() {
-            "The view leaves out no step for its zoom.".to_string()
-        } else {
-            format!(
-                "At this zoom the view leaves out: {}. Zoom to 100% or use a crop preview to see them.",
-                omitted.join(", ")
-            )
-        };
-        column()
-            .child(Self::heading("Zoom"))
-            .child(
-                div()
-                    .text_xs()
-                    .child(format!("Zoom {:.0}%, pyramid level {level}", zoom * 100.0)),
-            )
-            .child(div().text_xs().child(note))
+        column().child(Self::heading("Zoom")).child(
+            div()
+                .text_xs()
+                .child(format!("Zoom {:.0}%, pyramid level {level}", zoom * 100.0)),
+        )
     }
 
-    fn junction_block(&self) -> gpui::Div {
-        // The key for everything before the junction comes from the engine's
-        // cache keys, which the canvas does not use yet.
-        let status = match self.document.stage(StageKind::Finish).junction.status("") {
-            JunctionStatus::Computed => "Export uses Studio's own result.",
-            JunctionStatus::WaitingForEdit => "A file is open in an external editor.",
-            JunctionStatus::Edited => "Export uses the file edited outside Studio.",
+    /// The round trip to another editor: what the canvas shows, and the
+    /// buttons that open the picture there and come back.
+    fn junction_block(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let status = self.editor_status();
+        let out = !matches!(status, JunctionStatus::Computed);
+        let words = match status {
+            JunctionStatus::Computed => "The canvas and Export show Studio's picture.",
+            JunctionStatus::WaitingForEdit => {
+                "The picture is open in another app. Save it there and Studio brings the edit back."
+            }
+            JunctionStatus::Edited => "The canvas and Export show the file the other app saved.",
             JunctionStatus::EditedFromOlderResult => {
-                "The edited file was made from an older result."
+                "The canvas and Export show the file the other app saved, which does not include the changes made in Studio since it was opened there."
             }
             JunctionStatus::WaitingOnOlderResult => {
-                "The file in the external editor was made from an older result."
+                "The picture is open in another app, and has changed in Studio since. Open it again to edit the current picture."
             }
         };
         column()
             .child(Self::heading("External editor"))
-            .child(div().text_xs().child(status))
+            .child(div().text_xs().child(words))
             .child(
-                div()
-                    .px_2()
-                    .py_1()
-                    .rounded_sm()
-                    .bg(rgb(CONTROL))
-                    .text_color(rgb(QUIET))
-                    .child("Open in external editor"),
+                wrap()
+                    .child(Self::act(
+                        if out { "Open again" } else { "Open in external editor" },
+                        "editor-open",
+                        false,
+                        cx,
+                        |this| this.open_in_editor(),
+                    ))
+                    .when(out, |row| {
+                        row.child(Self::act(
+                            "Use Studio's result",
+                            "editor-back",
+                            false,
+                            cx,
+                            |this| this.use_studio_result(),
+                        ))
+                    }),
             )
+            .children(Self::help(
+                "Opens the final picture as a 16-bit TIFF in its default app, such as Photoshop. The file is kept beside the document.",
+            ))
             .children(Self::help(
                 "Disabled: Studio cannot write the file for an editor yet.",
             ))
@@ -1284,13 +2212,16 @@ impl Studio {
             Row::Input(channel) | Row::InputStep { channel, .. } => {
                 format!("the {} input only", channel_label(channel))
             }
-            Row::Layer(layer) | Row::LayerStep { layer, .. } => self
-                .layer(*layer)
-                .filter(|layer| layer.source.shows_pixels())
-                .map_or_else(
-                    || "nothing: an adjustment or a group has no pixels to heal".to_string(),
-                    |layer| format!("the layer {} only", layer.name),
+            Row::Layer(layer) | Row::LayerStep { layer, .. } => match self.layer(*layer) {
+                Some(layer) if layer.source.shows_pixels() => {
+                    format!("the layer {} only", layer.name)
+                }
+                Some(layer) if layer.source.is_adjustment() => format!(
+                    "the picture as {} leaves it, as a Heal layer right above it",
+                    layer.name
                 ),
+                _ => "nothing: a group has no pixels to heal".to_string(),
+            },
             Row::Combined | Row::Finish(_) | Row::Final | Row::Mask(_) => {
                 "the whole picture".to_string()
             }
@@ -1312,11 +2243,14 @@ impl Studio {
             Tool::Pan => "Drag to move the view. Every pane moves together.".to_string(),
             Tool::Brush => "Drag to paint the selected row's mask.".to_string(),
             Tool::Heal => format!(
-                "Drag over a blemish. Each stroke becomes a Heal step of {}.",
+                "Option-click where the heal copies from, then drag over a blemish; later strokes copy from the same distance. Each stroke becomes a Heal step of {}.",
                 self.heal_target()
             ),
             Tool::Crop => {
                 "Drag a rectangle over the picture. Studio crops the picture to it.".to_string()
+            }
+            Tool::Protect => {
+                "Press at a region's centre and drag out to set its width and height. The background extraction keeps it out of the sky it measures.".to_string()
             }
         };
         let brushing = matches!(self.tool, Tool::Brush | Tool::Heal);
@@ -1333,7 +2267,10 @@ impl Studio {
                         row.child(tool(Tool::Brush, "Brush", cx))
                     })
                     .child(tool(Tool::Heal, "Heal", cx))
-                    .child(tool(Tool::Crop, "Crop", cx)),
+                    .child(tool(Tool::Crop, "Crop", cx))
+                    .when(self.selected_background_step().is_some(), |row| {
+                        row.child(tool(Tool::Protect, "Protect", cx))
+                    }),
             )
             .children(Self::help(help))
             .when(brushing, |pane| {
@@ -1405,10 +2342,14 @@ impl Studio {
 
     pub(super) fn inspector(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let controls = match self.selected.clone() {
+            _ if self.view_stretch_open => self.inspect_view_stretch(cx),
             Row::Input(channel) => self.inspect_input(&channel, cx),
             Row::InputStep { channel, step } => self.inspect_input_step(&channel, step, cx),
             Row::Layer(id) => match self.layer(id) {
-                Some(layer) if matches!(layer.source, LayerSource::Adjustment { .. }) => {
+                Some(layer) if self.selected_step_layer().is_some() => {
+                    self.inspect_step_layer(layer, cx)
+                }
+                Some(layer) if layer.source.is_adjustment() => {
                     self.inspect_adjustment_layer(layer, cx)
                 }
                 Some(layer) if layer.source == LayerSource::Group => self.inspect_group(layer, cx),

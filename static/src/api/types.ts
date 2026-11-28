@@ -2018,6 +2018,7 @@ export interface StackColorJob {
   artifact_revision: string;
   cache_version: number;
   stacking_version: string;
+  compose_version: string;
   background_version: string;
   deconvolution_version: string;
   linear_input_id: string | null;
@@ -2757,10 +2758,56 @@ export interface AuthTokenSummary {
   /** The access the token grants now: its user's role, narrowed by read_only. */
   role: AccessRole;
   read_only: boolean;
+  /** `studio` for a PSF Studio connection: it reads, and saves Studio
+   *  documents when its user is an editor. */
+  scope: 'all' | 'studio';
   /** Unix seconds. */
   created_at: number;
   /** Unix seconds; absent means the token does not expire. */
   expires_at?: number;
+}
+
+/** An export saved from a PSF Studio document to its project. */
+export interface StudioDocumentExport {
+  sha256: string;
+  /** The document revision the export was made from. */
+  revision: number;
+  name: string;
+  format: string;
+  /** Bytes. */
+  size: number;
+  /** Unix seconds. */
+  saved_at: number;
+  saved_by: string;
+}
+
+/** A PSF Studio document saved to a project, as the list shows it. */
+export interface StudioDocumentSummary {
+  id: string;
+  name: string;
+  project_id: number;
+  target_id?: number;
+  revision: number;
+  /** Unix seconds. */
+  saved_at: number;
+  saved_by: string;
+  /** The computer PSF Studio saved the revision from, when it gave one. */
+  saved_from?: string;
+  /** SHA-256 of a small image of the picture, when one was saved. */
+  preview?: string;
+  /** Newest first. */
+  exports: StudioDocumentExport[];
+}
+
+/** A PSF Studio waiting for a person to approve its code. */
+export interface StudioConnectWaiting {
+  user_code: string;
+  /** The computer PSF Studio runs on, as it named itself. */
+  client_name: string;
+  /** Unix seconds. */
+  expires_at: number;
+  /** Whether a Studio connection of this account may save documents. */
+  saves_documents: boolean;
 }
 
 export interface CreateAuthTokenRequest {

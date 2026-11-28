@@ -8,19 +8,10 @@
 use crate::processing_setups::{ProcessingSetupKind, ProcessingSetupRecord};
 use crate::server::stack_preview::color::{StackColorProcessing, StackColorRole};
 use crate::studio::{color_setup_from_document, document_from_color_setup, Document, StudioError};
+pub use psf_studio_core::color::role_name;
 
 fn refuse(reason: impl std::fmt::Display) -> StudioError {
     StudioError::Document(reason.to_string())
-}
-
-/// The name a role has in saved settings, such as `ha`.
-pub fn role_name(role: StackColorRole) -> Result<String, StudioError> {
-    match serde_json::to_value(role).map_err(refuse)? {
-        serde_json::Value::String(name) => Ok(name),
-        other => Err(refuse(format!(
-            "a channel role is saved as text, not {other}"
-        ))),
-    }
 }
 
 /// A document that applies `processing` to the channels of one color card.
@@ -67,7 +58,7 @@ pub fn processing_from_document(document: &Document) -> Result<StackColorProcess
 mod tests {
     use super::*;
     use crate::processing_setups::DEFAULT_COLOR_SETTINGS;
-    use crate::studio::{flow_operations as op, StageKind};
+    use crate::studio::flow_operations as op;
     use serde_json::{json, Value};
 
     const SHO: [StackColorRole; 3] = [
@@ -82,6 +73,29 @@ mod tests {
 
     fn as_json(processing: &StackColorProcessing) -> Value {
         serde_json::to_value(processing).unwrap()
+    }
+
+    /// A new picture's document is built from the default setup as saved,
+    /// by `psf_studio_core::prepare::new_document`, which PSF Studio uses
+    /// too. It gives the color pipeline the settings PSF Guard's typed
+    /// default does.
+    #[test]
+    fn a_new_document_gives_the_pipeline_the_default_settings() {
+        let roles = [
+            StackColorRole::Luminance,
+            StackColorRole::Red,
+            StackColorRole::Green,
+            StackColorRole::Blue,
+        ];
+        let typed = document_from_processing("M 31", &default_processing(), &roles).unwrap();
+        let mut shared = psf_studio_core::prepare::new_document("M 31", &roles).unwrap();
+        let mut typed = typed;
+        typed.use_layered_stretch();
+        shared.name = typed.name.clone();
+        assert_eq!(
+            as_json(&processing_from_document(&shared).unwrap()),
+            as_json(&processing_from_document(&typed).unwrap())
+        );
     }
 
     #[test]
@@ -100,12 +114,16 @@ mod tests {
         let mut processing = default_processing();
         processing.emission = Some(Default::default());
         processing.narrowband = Some(Default::default());
-        // A chain with no steps is enough to carry the setting through.
-        let chain = || serde_json::from_value(json!({ "steps": [] })).unwrap();
-        processing.color_rc_astro = Some(chain());
+        // One tool in a chain is enough to carry the setting through: each
+        // tool is a step of its own, and a chain with none has no step.
+        let chain = |provider: &str| {
+            serde_json::from_value(json!({ "steps": [{ "provider": provider, "parameters": {} }] }))
+                .unwrap()
+        };
+        processing.color_rc_astro = Some(chain("nxt"));
         processing
             .input_rc_astro
-            .insert(StackColorRole::Ha, chain());
+            .insert(StackColorRole::Ha, chain("bxt"));
         processing.input_deconvolutions.insert(
             StackColorRole::Oiii,
             seiza_deconvolution::DeconvolutionConfig::conservative(3.0),
@@ -120,7 +138,14 @@ mod tests {
             .filter(|step| step.kind.name() == op::OTHER)
             .count();
         assert_eq!(other, 0);
-        assert_eq!(document.stage(StageKind::Finish).steps.len(), 1);
+        assert_eq!(
+            document
+                .layers()
+                .iter()
+                .filter(|layer| layer.source.is_adjustment())
+                .count(),
+            1
+        );
         let back = processing_from_document(&document).unwrap();
         assert_eq!(as_json(&back), as_json(&processing));
     }

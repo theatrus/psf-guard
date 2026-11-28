@@ -14,7 +14,7 @@ import { ALL_COLOR_ROLES, defaultColorProcessing } from '../stackColorProcessing
 
 // The server seeds the "Default" Color setup from this file.
 const seeded = JSON.parse(
-  readFileSync(resolve(__dirname, '../../../../src/processing_setups/default_color.json'), 'utf8')
+  readFileSync(resolve(__dirname, '../../../../crates/psf-studio-core/src/default_color.json'), 'utf8')
 ) as StackColorProcessing;
 
 function faint(): StackColorProcessing {

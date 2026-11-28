@@ -78,6 +78,8 @@ pub mod state;
 pub mod static_file_service;
 pub mod storage;
 pub mod storage_settings;
+pub mod studio_connect;
+pub mod studio_documents;
 pub mod sync_preview;
 pub mod sync_sequence;
 pub mod ts_sync;
@@ -260,6 +262,43 @@ fn check_management_needs_a_login(
 /// authorization layers.
 pub fn api_router(state: Arc<AppState>) -> Router {
     let db_routes: Router<Arc<AppState>> = Router::new()
+        .route(
+            "/studio-documents",
+            get(studio_documents::list_route)
+                .post(studio_documents::create_route)
+                .layer(DefaultBodyLimit::max(
+                    crate::studio_documents::MAX_DOCUMENT_BYTES + 1024 * 1024,
+                )),
+        )
+        .route(
+            "/studio-documents/files/{sha}",
+            get(studio_documents::file_route)
+                .head(studio_documents::file_route)
+                .put(studio_documents::upload_route)
+                .layer(DefaultBodyLimit::disable()),
+        )
+        .route(
+            "/studio-documents/{id}",
+            get(studio_documents::record_route)
+                .put(studio_documents::save_route)
+                .patch(studio_documents::rename_route)
+                .delete(studio_documents::delete_route)
+                .layer(DefaultBodyLimit::max(
+                    crate::studio_documents::MAX_DOCUMENT_BYTES + 1024 * 1024,
+                )),
+        )
+        .route(
+            "/studio-documents/{id}/revisions/{revision}",
+            get(studio_documents::revision_route),
+        )
+        .route(
+            "/studio-documents/{id}/exports",
+            post(studio_documents::export_route),
+        )
+        .route(
+            "/studio-documents/{id}/processing",
+            get(studio_documents::processing_route),
+        )
         .route("/refresh-cache", put(handlers::refresh_file_cache))
         .route("/cache-progress", get(handlers::get_cache_refresh_progress))
         .route(
@@ -788,6 +827,17 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route("/auth/status", get(auth::status))
         .route("/auth/login", post(auth::login))
         .route("/auth/logout", post(auth::logout))
+        .route("/auth/studio/connect", post(studio_connect::connect_route))
+        .route(
+            "/auth/studio/approve",
+            get(studio_connect::waiting_route).post(studio_connect::approve_route),
+        )
+        .route("/auth/studio/ticket", post(studio_connect::ticket_route))
+        .route("/auth/studio/token", post(studio_connect::token_route))
+        .route(
+            "/auth/studio/disconnect",
+            post(studio_connect::disconnect_route),
+        )
         .route(
             "/auth/users",
             get(user_admin::list_users).post(user_admin::create_user),

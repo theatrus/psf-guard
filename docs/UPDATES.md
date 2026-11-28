@@ -137,6 +137,22 @@ A `v*` tag runs `.github/workflows/release.yml`. The job:
 7. builds `notice.json`; and
 8. attaches both feeds and the signed payloads to the GitHub release.
 
+On macOS the desktop app includes PSF Studio, at
+`PSF Guard.app/Contents/Helpers/PSF Studio.app`. An update replaces the
+whole `PSF Guard.app`, so PSF Studio updates at the same time. It has the
+desktop app's version number, without a suffix such as `-dev`, which macOS
+does not accept. `scripts/package-macos.sh` builds and
+signs Studio, then has Tauri copy it into the app before Tauri signs and
+notarizes the app. When the desktop app starts, it registers its PSF Studio
+as the handler of `psf-studio://` links, so **Open in PSF Studio** opens the
+copy that came with it.
+
+Each release also has PSF Studio on its own, `PSF.Studio_<version>_aarch64.dmg`,
+for a Mac whose PSF Guard runs on a server. It is the same app, notarized
+and stapled by itself. It does not update itself yet: install the newer
+image from the release. `scripts/package-studio-macos.sh` builds the image
+from the app `scripts/package-macos.sh` built.
+
 Tauri does not sign `updater.json` itself. The manifest carries one signature
 for each platform payload. The app checks that signature with the public key
 embedded in `tauri.conf.json` before it installs the downloaded file.

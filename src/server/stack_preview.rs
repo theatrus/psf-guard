@@ -112,6 +112,13 @@ pub use method::{StackFinalPass, StackMethod, StackReference, StackWeighting};
 /// output changes, and holds it there with a test.
 pub const SEIZA_STACKING_OUTPUT_VERSION: &str = seiza_stacking::OUTPUT_VERSION;
 
+/// The Seiza release whose color composition this build reproduces:
+/// palettes, LRGB, color calibration, narrowband balance and star layers.
+/// Color previews, the processing-tool runs on a color picture, and a
+/// one-shot-color stack's calibration key on it, as stacks key on
+/// [`SEIZA_STACKING_OUTPUT_VERSION`].
+pub const SEIZA_COMPOSE_OUTPUT_VERSION: &str = seiza_compose::OUTPUT_VERSION;
+
 /// The stretch release every stack id was built with when the card preview
 /// still entered the id. Ids keep it, so a Seiza release that changes only
 /// how previews render builds no stack again: Build renders the previews
@@ -3309,28 +3316,10 @@ fn write_clipped(
 /// is none. One that cannot be read is logged and treated as absent: the
 /// stack still calibrates, only without rendering clipped cores neutral.
 pub(crate) fn read_clipped(path: &FsPath) -> Option<seiza_stacking::LinearImage> {
-    if !path.exists() {
-        return None;
-    }
-    // Read as written: the map holds fractions, not samples a stack scales.
-    match seiza_stacking::FitsFrame::open(path) {
-        Ok(frame) if frame.image.channels == 1 => Some(frame.image),
-        Ok(frame) => {
-            tracing::warn!(
-                "Ignoring clipped map {}: it has {} channels, not one",
-                path.display(),
-                frame.image.channels
-            );
-            None
-        }
-        Err(error) => {
-            tracing::warn!(
-                "Ignoring unreadable clipped map {}: {error}",
-                path.display()
-            );
-            None
-        }
-    }
+    psf_studio_core::prepare::read_clipping_map(path).unwrap_or_else(|error| {
+        tracing::warn!("Ignoring a clipped map: {error}");
+        None
+    })
 }
 
 /// The exposure the accumulator has taken so far. Turned-away frames carry no

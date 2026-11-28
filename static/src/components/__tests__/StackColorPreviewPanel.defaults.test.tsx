@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, within, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -7,6 +7,13 @@ import { server } from '../../test/msw-server';
 import type { StackColorJob, StackColorProcessing, StackColorRole, StackColorSource } from '../../api/types';
 import StackColorPreviewPanel from '../StackColorPreviewPanel';
 import { AccessContext } from '../../auth/access';
+import { openStudioLink } from '../../utils/studioLink';
+
+// Handing a link to PSF Studio would navigate the test page away.
+vi.mock('../../utils/studioLink', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../utils/studioLink')>()),
+  openStudioLink: vi.fn(),
+}));
 import { ALL_COLOR_ROLES, defaultColorProcessing } from '../stackColorProcessing';
 
 const ok = (data: unknown, status = 200) =>
@@ -24,7 +31,7 @@ const queued: StackColorJob = {
   state: 'queued', phase: 'Queued', sources, source_family_key: 'family',
   created_unix_seconds: 1, artifact_revision: '', processed_channels: 0, total_channels: 3,
   progress: { completed_units: 0, total_units: 3, active_phase: null, current_role: null, current_stage: null, stage_count: null, phases: [] },
-  cache_version: 12, stacking_version: 'test', background_version: 'test', deconvolution_version: '',
+  cache_version: 12, stacking_version: 'test', compose_version: 'test', background_version: 'test', deconvolution_version: '',
   linear_input_id: null, crop: 'none', crop_report: null, processing: null,
   resolved_input_stretches: {}, resolved_input_deconvolutions: {}, resolved_output_stretches: [],
   resolved_backgrounds: {}, resolved_background_protection: {}, background_protection_fallbacks: {},
@@ -89,7 +96,10 @@ describe('a color card with no preview yet', () => {
 
 
 describe('the PSF Studio link', () => {
-  it('is left out on a server that needs sign-in, which PSF Studio cannot pass', async () => {
+  it('carries a one-time ticket on a server that needs sign-in', async () => {
+    const opened = vi.mocked(openStudioLink);
+    opened.mockClear();
+    let tickets = 0;
     server.use(
       http.get('/api/stack-activity', () => ok({ active: [] })),
       http.get('/api/processing-setups', () => ok({ schema_version: 1, setups: [], default_color: null })),
@@ -101,6 +111,10 @@ describe('the PSF Studio link', () => {
         }],
         jobs: [],
       })),
+      http.post('/api/auth/studio/ticket', () => {
+        tickets += 1;
+        return ok({ ticket: 'one-time', expires_at: 1 });
+      }),
     );
     const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
     render(<QueryClientProvider client={client}>
@@ -114,7 +128,10 @@ describe('the PSF Studio link', () => {
     </QueryClientProvider>);
 
     await screen.findByRole('button', { name: 'Build RGB color preview' });
-    expect(screen.queryByRole('link', { name: 'Open M31 in PSF Studio' })).toBeNull();
+    await userEvent.click(screen.getByRole('link', { name: 'Open M31 in PSF Studio' }));
+    await waitFor(() => expect(opened).toHaveBeenCalledTimes(1));
+    expect(tickets).toBe(1);
+    expect(opened.mock.calls[0][0]).toMatch(/&target=42&ticket=one-time$/);
   });
 });
 

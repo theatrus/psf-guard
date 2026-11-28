@@ -250,6 +250,8 @@ impl ServerState {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn main() {
     init_logging();
+    // On its own thread: LaunchServices can take a moment.
+    std::thread::spawn(crate::commands::studio_sources::register_bundled_studio);
 
     let registry_path = DbRegistry::default_path().expect("Could not resolve config path");
     let server_config = TauriServerConfig {

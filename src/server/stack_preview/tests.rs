@@ -4932,6 +4932,7 @@ fn only_a_color_stack_preview_goes_out_of_date_with_the_calibration() {
         reference_image_id: Some(1),
         solution_fingerprint: None,
         catalog: None,
+        compose_version: super::SEIZA_COMPOSE_OUTPUT_VERSION.into(),
     });
     assert_eq!(
         preview_calibration_outdated(&color, current).as_deref(),

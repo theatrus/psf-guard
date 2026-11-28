@@ -363,8 +363,15 @@ are created again. Calibration master previews can also render again after
 an app update; this does not rebuild the masters.
 
 Stack cache keys use `seiza_stacking::OUTPUT_VERSION`; stretch results and
-card previews use `seiza_stretch::OUTPUT_VERSION`. These identify compatible
-output, rather than the installed crate release. Card previews record
+card previews use `seiza_stretch::OUTPUT_VERSION`. Color previews also use
+`seiza_compose::OUTPUT_VERSION`, the version of Seiza's color composition:
+palettes, LRGB, color calibration, narrowband balance and star layers. So do
+the processing-tool runs on a color picture, such as star removal for RGB
+stars. A color build's prepared inputs do not: they are made before any color
+composition, so a change to it leaves them in place. A one-shot-color stack's color calibration records
+it too, so its stretch results and card preview are out of date when Seiza's
+color calibration changes. These identify compatible output, rather than the
+installed crate release. Card previews record
 `preview_stretch_version`, and a new `preview_revision` lets the page load
 the refreshed image without discarding the completed stack.
 
@@ -528,24 +535,140 @@ progress instead of an idle panel.
 
 PSF Studio is a separate, experimental editor for color processing. It
 starts from a target's channel stacks and keeps its own document of layers,
-so nothing it does changes PSF Guard's previews.
+so nothing it does changes PSF Guard's previews. Studio saves its documents
+to the project on this server, so another computer opens the same picture.
 
-Install PSF Studio on the computer you browse from. Then open a project's
-stacks and click **Open *target* in PSF Studio** over the color stacks. PSF
-Guard shows one link for each target in the color stacks section, when the
-target has channel stacks.
+### Connect PSF Studio to this server
 
-PSF Studio fetches the target's current channel stacks from this server,
-registers them and opens them. Opening the same target again keeps the PSF
-Studio document you left.
+Install PSF Studio on the computer you browse from.
 
-The link carries no sign-in, so PSF Guard shows it only on a server that
-needs none. For a server that needs sign-in, run this on the computer you
-browse from, with an API token from **Settings › Server & access › Users ›
-API tokens**:
+1. In PSF Studio, click **PSF Guard** in the top bar.
+2. Under **Connect to a server**, enter this server's address, such as
+   `guard.example.com` or `localhost:3000`, and click **Connect**.
+3. On a server with sign-in, PSF Studio shows a code and opens the
+   **Connect PSF Studio** page in your browser. Sign in if you need to,
+   check that the page shows the same code, and click **Allow**.
+
+PSF Studio keeps its connection in the macOS Keychain. The connection stays
+while PSF Studio uses it: each day it is used, the server moves its expiry
+to 90 days later, so it ends only after 90 days unused. The connection can
+read projects, targets and stacks, and save Studio documents
+and their exports to projects. It cannot grade frames, change plans, sync or
+manage databases. With a read-only account, PSF Studio saves documents on
+its own computer only.
+
+**Settings › Server & access › Users › API tokens** lists each connection as
+“PSF Studio on *computer*”. Click **Revoke** to sign that PSF Studio out; it
+then shows the server as signed out and offers **Connect again**. **Sign
+out** in PSF Studio's panel revokes the connection from the PSF Studio side.
+
+### Open a target
+
+In PSF Studio's **PSF Guard** panel, choose a database, a project and a
+target. **Documents** lists the target's Studio documents, newest first,
+with **New document**. Each document shows who saved it last, from which
+computer, and how long ago. When another computer saved it in the last ten
+minutes, the list says it may still be open there. Click **Open**. PSF
+Studio fetches the document and the target's current channel stacks,
+registers the stacks and opens the picture.
+
+PSF Studio opens a target from its channel stacks. When the target has none
+yet, the Documents column says so and shows **Build stacks in PSF Guard**,
+and **Open** or a link explains the same instead of failing. The button
+opens the target's Stacks page in your browser: click **Build stacks**
+there, then open the target in PSF Studio again once the stacks are ready.
+
+Click a document to list its earlier revisions beneath it, then choose one
+and click **Open** to open that revision. PSF Studio opens it as a picture
+of its own, so the newest revision on this computer keeps its edits. Your
+edits to the earlier revision are saved as a new revision after the newest.
+
+In PSF Guard, **Open *target* in PSF Studio** over a project's color stacks
+does the same for the target's newest document. PSF Guard shows one link for
+each target that has channel stacks. On a server with sign-in, the link
+carries a ticket that works once, for about a minute. When PSF Studio is not
+connected to this server yet, it asks whether to connect as your account
+before it keeps the connection.
+
+### Saving
+
+PSF Studio saves the document to the project a few seconds after you stop
+editing. The top bar shows “Saved to *server*”, “Saving to *server*…”, or
+“Saved on this computer only” with the reason. When the server cannot be
+reached, PSF Studio keeps saving on its computer and tries again later.
+When you quit PSF Studio or close its window, it saves the document to the
+server first, for up to 15 seconds.
+
+The server keeps:
+
+- every revision of the document, the last 50 and any revision an export
+  came from;
+- the file an external editor saved at the Finish step, since PSF Studio
+  cannot make it again;
+- exports. **Also save to the project** in PSF Studio's Export section is on
+  for a picture from a server;
+- a small preview image for lists. PSF Studio sends one with a save at most
+  every ten minutes, always when you quit, and with each export. The
+  preview of a save is drawn as the canvas draws the picture; an export's
+  is made from the export itself.
+
+The server does not keep what PSF Studio computes from the document: tile
+stores, downloaded stacks and tool results such as star removal. Another
+computer computes them again when it opens the document, which can take
+minutes for some tools.
+
+When the target's stacks were built again since the document was saved,
+PSF Studio opens the document with the new stacks and says so. When the
+stacks were registered to another frame or at another size, masks, heals
+and the crop may fall in the wrong place: PSF Studio asks first, with **Open
+with the new stacks** and **Cancel**.
+
+When another computer saved the document first, PSF Studio keeps your edits
+and shows **Save as a copy**, which saves them as a new document, and **Open
+the newer version**, which discards them and opens the server's revision.
+
+**Save this picture to the target** in the panel puts a picture PSF Studio
+opened from stack files on the chosen target, as a new document.
+
+### Name a document
+
+A document from a target starts with the target's name. A picture made
+from stack files takes the OBJECT name in the first file's header. When the
+header has none and the file is named by its hash, as PSF Guard's stored
+stacks are, the picture is called “Untitled picture”. Such a picture takes
+the target's name when you save it to a target or open it from one.
+
+To rename a document in PSF Studio, click its name in the top bar, type the
+new name and press Return; Esc cancels. The rename is an edit: **Undo**
+reverses it, and the next save sends it to the server. On a project's stacks
+page, an editor clicks **Rename** beside a document, types the new name and
+clicks **Rename**. A rename there adds no revision, and PSF Studio takes the
+new name the next time it saves or opens the document.
+
+### A project's Studio documents
+
+A project's stacks page lists its **PSF Studio documents** under **Stacks**:
+each document's name and preview, last revision, who saved it and when, and
+its exports, which you can download. **Open in PSF Studio** opens that document.
+An editor also has:
+
+- **Save as a Color setup**, which saves the document's steps as a Color
+  processing setup that color previews can start from. It works when every
+  step is one PSF Guard's color pipeline runs; otherwise the page explains
+  which step is not.
+- **Delete**, which asks first and then deletes the document, its revisions,
+  and the files no other document uses. A copy open in PSF Studio stays on
+  that computer.
+
+### From the command line
+
+`psf-guard studio` prepares a target's picture without PSF Studio's panel.
+On a server with sign-in, set `PSF_GUARD_TOKEN` to an API token from
+**Settings › Server & access › Users › API tokens** rather than passing
+`--token`, which every user of the computer can read:
 
 ```bash
-psf-guard studio --server https://guard.example --db DATABASE --project PROJECT --target TARGET --token TOKEN --folder ~/Pictures/studio
+PSF_GUARD_TOKEN=psfg_… psf-guard studio --server https://guard.example --db DATABASE --project PROJECT --target TARGET --folder ~/Pictures/studio
 ```
 
 ## Stacks made by WBPP
@@ -2371,14 +2494,14 @@ RGB and LRGB previews, and one-shot-color stacks, are color calibrated
 against Gaia star colors by default. Narrowband palettes are false color and
 never are.
 
-Seiza does the calibration (`seiza_stacking::calibrate_and_stretch`). It
+Seiza does the calibration (`seiza_compose::calibrate_and_stretch`). It
 measures each Gaia star in R, G and B, fits instrumental color against Gaia
 BP−RP, and finds the gains that make a star the Sun's color come out white.
 It also offsets each channel so the sky is one gray. PSF Guard gives Seiza
 the solution of the image it calibrates: the fresh pixel solve of the
 reference stack's reference frame, carried through the stack's saved
 source-to-output transform and, for a composition, its edge crop
-(`seiza_stacking::transform_wcs`). Every other channel was registered to
+(`seiza_compose::transform_wcs`). Every other channel was registered to
 that stack's grid (R for RGB, L for LRGB), so the stars land on all three
 channels.
 

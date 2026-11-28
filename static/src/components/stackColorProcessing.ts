@@ -63,7 +63,7 @@ export function colorCalibrationApplies(roles: StackColorRole[]): boolean {
 /** The built-in color pipeline, for these channels. Its inputs run the
  *  deconvolution and RC-Astro steps their channel cards applied. The server
  *  seeds the "Default" Color setup with this pipeline for every channel
- *  (src/processing_setups/default_color.json, checked by a test), and new
+ *  (crates/psf-studio-core/src/default_color.json, checked by a test), and new
  *  color builds start from whichever setup is marked default; this is the
  *  fallback when the server's choice is not available. */
 export function defaultColorProcessing(roles: StackColorRole[]): StackColorProcessing {

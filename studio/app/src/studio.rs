@@ -1,25 +1,28 @@
 use crate::bench::Bench;
+use crate::canvas::{ComputedMask, Layer, SceneParts};
 use crate::store_tiles::{BandState, BandStretch, Bands};
 use crate::studio_model::{CropRecord, Document, Place, Row, Split, Stroke, StrokeMode};
 use gpui::{
-    prelude::*, px, rgb, size, App, Bounds, Context, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, NativeView, Pixels, Point, ScrollDelta, ScrollEvent, Window, WindowBounds,
-    WindowOptions,
+    actions, prelude::*, px, rgb, size, App, Bounds, Context, KeyBinding, Menu, MenuItem,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, NativeView, Pixels, Point,
+    ScrollDelta, ScrollEvent, Window, WindowBounds, WindowOptions,
 };
+
+actions!(studio, [Undo, Redo, Quit]);
 use objc2::{
     class, msg_send,
     rc::{Allocated, Retained},
     runtime::AnyObject,
 };
-use psf_studio_render::MAX_LAYERS;
 use psf_studio_render::{
-    pane_rect, ComputedMask, FinishStep, Frame, FrameStats, Layer, LayerHeal, Output, Pane,
-    Renderer, Segment, View,
+    pane_rect, Frame, FrameStats, Output, Pane, ProbeSlot, Renderer, Sampled, View,
 };
 use raw_window_handle::{
     AppKitDisplayHandle, AppKitWindowHandle, RawDisplayHandle, RawWindowHandle,
 };
-use std::cell::Cell;
+use seiza_compose::gpu::{GpuInput, GpuScene, MAX_LAYERS};
+use seiza_compose::picture::{FinishStep, LayerHeal, Picture, Segment, Transfer};
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::ptr::NonNull;
@@ -34,9 +37,6 @@ pub struct Options {
     /// The surface to present to: `srgb8` (the default), `p3-8`, `p3-float`
     /// or `p3-extended`.
     pub output: String,
-    /// The ICC profile of the document's working space. With one, the canvas
-    /// converts from it to the surface's color space.
-    pub working_profile: Option<PathBuf>,
     /// A tile store to open in place of the synthetic document.
     pub open: Option<PathBuf>,
     /// A PSF-Studio document to open with the store, in place of PSF
@@ -47,11 +47,17 @@ pub struct Options {
     pub psf_guard: Option<PathBuf>,
     /// Where the benchmark writes PNG captures of selected frames.
     pub capture_prefix: Option<PathBuf>,
+    /// Where to write how far the CPU render of the picture's sampled
+    /// patches is from the canvas's, once the canvas has sampled them.
+    pub parity_report: Option<PathBuf>,
+    /// Whether Studio listens on its control socket, for `psf-studio-mcp`.
+    pub control: bool,
 }
 
 impl Default for Options {
     fn default() -> Self {
         Self {
+            control: true,
             bench_output: None,
             bench_frames: 600,
             vsync: true,
@@ -60,7 +66,7 @@ impl Default for Options {
             document: None,
             psf_guard: None,
             output: String::new(),
-            working_profile: None,
+            parity_report: None,
         }
     }
 }
@@ -75,6 +81,8 @@ enum Tool {
     Heal,
     /// Draws the rectangle the picture keeps.
     Crop,
+    /// Draws a region the selected background extraction keeps out.
+    Protect,
 }
 
 /// A slider in a pane.
@@ -93,9 +101,41 @@ enum SliderId {
     Amount,
     /// The selected adjustment layer's amount.
     LayerAmount,
+    /// How much the selected layer's or group's stars are reduced.
+    StarReduction,
     /// One setting of one processing tool of the selected input, by its
     /// place in the list of the input's tool settings.
     ToolParam(usize),
+    /// One control of the selected Tone and color step, by its place in
+    /// [`seiza_compose::tone::CONTROLS`].
+    FinishParam(usize),
+    /// One setting of the narrowband balance, by its place in
+    /// [`panes::BALANCE_CONTROLS`].
+    BalanceParam(usize),
+    /// The picture's HDR headroom.
+    Headroom,
+    /// Where an HDR picture's stretches continue into the headroom.
+    HdrKnee,
+    /// The selected stretch step's sky floor, for a stretch with none of
+    /// its own.
+    SkyFloor,
+    /// How much of a bright core's range the selected stretch step's core
+    /// compression takes out.
+    CoreAmount,
+    /// Where it starts, in noise sigmas above the background.
+    CoreThreshold,
+    /// The size of the structure it compresses, in pixels.
+    CoreScale,
+    /// One setting of the view stretch, by its place in the list of that
+    /// stretch's settings.
+    ViewStretchParam(usize),
+    /// The lowest brightness the selected layer's or step's range mask
+    /// selects in full.
+    RangeLow,
+    /// The highest; the far end selects up to the brightest.
+    RangeHigh,
+    /// How far beyond its edges the range mask fades.
+    RangeFeather,
     /// The selected shared mask's reach.
     Reach,
     /// How far the selected shared mask is smoothed.
@@ -110,20 +150,6 @@ enum SliderId {
     /// The saturation of one layer, by its place in the stack, in the
     /// palette's list of tones.
     ToneSaturation(usize),
-}
-
-impl SliderId {
-    const ALL: [SliderId; 9] = [
-        SliderId::Opacity,
-        SliderId::Hue,
-        SliderId::Saturation,
-        SliderId::Amount,
-        SliderId::LayerAmount,
-        SliderId::Reach,
-        SliderId::Smoothing,
-        SliderId::BrushSize,
-        SliderId::MaskBlur,
-    ];
 }
 
 #[derive(Clone, Copy)]
@@ -147,6 +173,8 @@ pub struct CanvasState {
     pub document_size: (u32, u32),
     /// The number of bands in the document.
     pub band_count: usize,
+    /// Where each tile channel is on the GPU, for Seiza's compositor.
+    pub inputs: Arc<Vec<GpuInput>>,
     /// What the document asks the canvas to draw: one scene per pane, left
     /// to right.
     scenes: Arc<Vec<Scene>>,
@@ -167,9 +195,71 @@ pub struct CanvasState {
     fitted: bool,
     /// The name of a capture to take on the next frame.
     pub capture: Option<String>,
+    /// A capture the control socket asked for, by its number.
+    pub control_capture: Option<u64>,
+    /// Whether pixels at the peak are marked with stripes.
+    pub show_clipping: bool,
     /// Set to measure the GPU's cost of the next frame with no display.
     pub measure_gpu: bool,
     pub gpu_frame_ms: Option<f32>,
+    /// The combined picture to sample for the output stretches that Seiza
+    /// resolves from the picture, when the document has one.
+    probe: Option<Arc<PictureRequest>>,
+    /// The final picture to sample for the histogram: the same patches,
+    /// with every Finish step drawn by the GPU.
+    final_probe: Option<Arc<PictureRequest>>,
+    /// A small picture of the whole final picture to draw, for the list of
+    /// a server's documents.
+    pub preview: Option<Arc<PreviewRequest>>,
+}
+
+/// A preview of the final picture that the UI asks the render thread for.
+pub struct PreviewRequest {
+    pub id: u64,
+    pub picture: Picture,
+    /// The part of the document the picture keeps, or `None` for all of it.
+    pub crop: Option<[f32; 4]>,
+}
+
+/// A preview the render thread drew: red, green and blue interleaved in the
+/// working space.
+pub struct PreviewImage {
+    pub width: u32,
+    pub height: u32,
+    pub rgb: Vec<f32>,
+}
+
+/// A sampling of the combined picture that the UI asks the render thread
+/// for: the scene of the whole picture, and where its patches are.
+pub struct PictureRequest {
+    /// Changes when anything that changes the combined picture does.
+    id: u64,
+    scene: Scene,
+    /// The top-left corner of each patch, in document pixels.
+    patches: Vec<[u32; 2]>,
+    /// Each patch's width and height, in document pixels.
+    size: u32,
+}
+
+/// How many patches a sampling of the picture reads: an eight by eight grid.
+pub(super) const PICTURE_PATCHES: usize = 64;
+
+/// Patches of the combined picture sampled for its stretch: an eight by
+/// eight grid of squares spread across `rect`, as each input is sampled.
+pub(super) fn picture_patches(rect: [f32; 4]) -> (Vec<[u32; 2]>, u32) {
+    let [left, top, right, bottom] = rect.map(|value| value.max(0.0) as u32);
+    let (width, height) = (right.saturating_sub(left), bottom.saturating_sub(top));
+    let size = 128.min(width).min(height).max(1);
+    let mut patches = Vec::with_capacity(PICTURE_PATCHES);
+    for row in 0..8 {
+        for column in 0..8 {
+            patches.push([
+                left + (width.saturating_sub(size)) * column / 7,
+                top + (height.saturating_sub(size)) * row / 7,
+            ]);
+        }
+    }
+    (patches, size)
 }
 
 impl CanvasState {
@@ -183,6 +273,7 @@ impl CanvasState {
             sliders: [1.0 / 3.0; MAX_LAYERS],
             document_size: (1, 1),
             band_count: 0,
+            inputs: Arc::default(),
             scenes: Arc::new(vec![Scene::default()]),
             wipe: None,
             strokes: Vec::new(),
@@ -191,8 +282,13 @@ impl CanvasState {
             crop: None,
             fitted: false,
             capture: None,
+            control_capture: None,
+            show_clipping: false,
             measure_gpu: false,
             gpu_frame_ms: None,
+            probe: None,
+            final_probe: None,
+            preview: None,
         }
     }
 
@@ -256,31 +352,26 @@ impl CanvasState {
         };
     }
 
-    /// Each pane's stretch tables, one per layer that shows a band:
-    /// Seiza's stretch of the layer's band, with the background placed
-    /// where the scene says.
-    fn stretch_tables(&self) -> Vec<Vec<Vec<f32>>> {
+    /// Each pane's scene packed for the GPU, with its stretches: Seiza's
+    /// stretch of each layer's band, with the background placed where the
+    /// scene says.
+    /// Each scene packed for the GPU, with its picture's peak.
+    fn gpu_scenes(&self) -> Vec<(GpuScene, f32)> {
         self.scenes
             .iter()
             .map(|scene| {
-                scene
-                    .layer_bands
-                    .iter()
-                    .zip(&scene.layer_stretches)
-                    .filter_map(|(band, stages)| {
-                        // The benchmark moves a band's slider to time a
-                        // stretch change. A slider at rest, a third of the
-                        // way, adds nothing.
-                        let moved =
-                            f64::from(self.sliders[(*band).min(MAX_LAYERS - 1)] - 1.0 / 3.0);
-                        if *band == panes::DISPLAY_ROW {
-                            return Some(crate::store_tiles::identity_table());
-                        }
-                        Some(scene.stretches.get(*band)?.table(stages, 0.45 * moved))
-                    })
-                    .collect()
+                let picture = scene.picture(&self.nudges());
+                (GpuScene::new(&picture, &self.inputs), picture.peak())
             })
             .collect()
+    }
+
+    /// What the benchmark adds to each band's background target, to time a
+    /// stretch change: nothing while its slider is at rest, a third of the
+    /// way.
+    fn nudges(&self) -> [f64; MAX_LAYERS] {
+        self.sliders
+            .map(|slider| 0.45 * f64::from(slider - 1.0 / 3.0))
     }
 }
 
@@ -289,24 +380,206 @@ impl CanvasState {
 #[derive(Default)]
 pub struct Scene {
     layers: Vec<Layer>,
-    /// The document band each layer shows, for its stretch.
+    /// The document band each stretch is of, in order: one per layer that
+    /// shows a band, then the ones only computed masks read.
     layer_bands: Vec<usize>,
-    /// The stretches of each row of the stretch tables, in order. None is
-    /// a preview stretch.
-    layer_stretches: Vec<Vec<seiza_stretch::StretchModel>>,
+    /// The stretches, in the same order. None is the view stretch.
+    layer_stretches: Vec<Vec<crate::store_tiles::Stretch>>,
     finish: Vec<FinishStep>,
+    /// How many of `finish`, from the first, are steps at the top of the
+    /// stack drawn as Finish steps: part of the combined picture.
+    stacked_finish: usize,
+    /// What each layer marked as a step does: a Finish step that changes
+    /// only the layers beneath it.
+    steps: Vec<seiza_compose::picture::FinishKind>,
+    /// The narrowband balance: each band matched to H-alpha, with the
+    /// background and midtone of its curve.
+    balance: Vec<(usize, f32, f32)>,
     /// Heals of single layers and inputs.
     heals: Vec<LayerHeal>,
     /// The masks computed from inputs that the layers refer to.
     computed: Vec<ComputedMask>,
     masks: Vec<Vec<Segment>>,
-    /// What the scene leaves out because one frame cannot draw more.
+    /// What the canvas cannot draw of the document, by name.
     omitted: Vec<String>,
     /// Each band's stretch analysis, at the background strength this scene
     /// draws the band with.
     stretches: Arc<Vec<BandStretch>>,
     /// Different for every scene, so the renderer uploads masks once.
     version: u64,
+    /// The picture's headroom above SDR white, in stops: 0 for SDR.
+    headroom: f32,
+    /// Where each stretch continues into the headroom, as its output.
+    knee: f32,
+    /// The planes worked out from the store, and their tile channels.
+    planes: Arc<Vec<(crate::derived::DerivedKey, usize)>>,
+    /// Planes worked out from the whole image that the layers read, such as
+    /// reduced stars, that are not done yet. The layers draw without them
+    /// until they are.
+    wanted_planes: Vec<crate::derived::DerivedKey>,
+    /// The pane's place the scene was built for, so its label says what
+    /// the pane draws while a newer scene is built.
+    place: Option<crate::studio_model::Place>,
+}
+
+impl Scene {
+    /// The scene's stretches as Seiza transfers, in order, with `nudges`
+    /// added to each band's background target. A stretch whose band has
+    /// no analysis yet draws nothing.
+    fn transfers(&self, nudges: &[f64]) -> Vec<Transfer> {
+        self.transfers_missing(nudges, &mut Vec::new())
+    }
+
+    /// The planes worked out from the whole image that the scene's
+    /// stretches read and that are not done yet.
+    pub(super) fn missing_planes(&self) -> Vec<crate::derived::DerivedKey> {
+        let mut missing = self.wanted_planes.clone();
+        self.transfers_missing(&[], &mut missing);
+        missing
+    }
+
+    fn transfers_missing(
+        &self,
+        nudges: &[f64],
+        missing: &mut Vec<crate::derived::DerivedKey>,
+    ) -> Vec<Transfer> {
+        let planes = |key: &crate::derived::DerivedKey| {
+            self.planes
+                .iter()
+                .find(|(known, _)| known == key)
+                .map(|(_, channel)| *channel)
+        };
+        self.layer_bands
+            .iter()
+            .zip(&self.layer_stretches)
+            .map(|(row, stages)| {
+                let band = panes::band_of_row(*row);
+                // A plane the store stretched is shown as it is.
+                let mut transfer = if *row >= panes::DISPLAY_FLOOR {
+                    Transfer::identity()
+                } else {
+                    self.stretch_of(*row, stages, nudges, &planes, missing)
+                };
+                // A narrowband channel matched to H-alpha ends with its
+                // balance.
+                if let Some((_, background, midtone)) = self
+                    .balance
+                    .iter()
+                    .find(|(known, _, _)| Some(*known) == band)
+                {
+                    transfer
+                        .stages
+                        .push(seiza_compose::picture::TransferStage::Balance {
+                            background: *background,
+                            midtone: *midtone,
+                        });
+                }
+                transfer
+            })
+            .collect()
+    }
+
+    /// The transfer of row `band`'s stretch, moved by its nudge. A band
+    /// with no analysis yet draws nothing.
+    fn stretch_of(
+        &self,
+        band: usize,
+        stages: &[crate::store_tiles::Stretch],
+        nudges: &[f64],
+        planes: &dyn Fn(&crate::derived::DerivedKey) -> Option<usize>,
+        missing: &mut Vec<crate::derived::DerivedKey>,
+    ) -> Transfer {
+        let nudge = nudges.get(band).copied().unwrap_or(0.0);
+        self.stretches.get(band).map_or_else(
+            || Transfer::of([seiza_compose::picture::TransferStage::Scale(0.0)]),
+            |stretch| {
+                stretch.transfer(
+                    stages,
+                    nudge,
+                    (f64::from(self.headroom), f64::from(self.knee)),
+                    planes,
+                    missing,
+                )
+            },
+        )
+    }
+
+    /// The Finish steps as text, for an id of what the scene draws that
+    /// counts them: [`Self::picture_id`] counts only what they act on.
+    pub(super) fn finish_words(&self) -> String {
+        format!("{:?}", self.finish)
+    }
+
+    /// The scene as the Seiza picture the canvas draws, with each band's
+    /// stretch moved by `nudges`.
+    pub(super) fn picture(&self, nudges: &[f64]) -> Picture {
+        Picture {
+            headroom: self.headroom,
+            ..crate::canvas::picture(
+                &SceneParts {
+                    layers: &self.layers,
+                    computed: &self.computed,
+                    masks: &self.masks,
+                    heals: &self.heals,
+                    finish: &self.finish,
+                    steps: &self.steps,
+                },
+                &self.transfers(nudges),
+            )
+        }
+    }
+
+    /// The combined picture, before the Finish steps: what the canvas
+    /// samples for the output stretches resolved from it.
+    pub(super) fn combined(&self, nudges: &[f64]) -> Picture {
+        let picture = self.picture(nudges);
+        Picture {
+            finish: picture
+                .finish
+                .iter()
+                .take(self.stacked_finish)
+                .cloned()
+                .collect(),
+            ..picture
+        }
+    }
+}
+
+/// Every tile channel's samples over the whole image, or why not.
+type WholeSamples = Result<Vec<Vec<f32>>, String>;
+
+/// Whether Studio prints where its time goes, for finding slow edits: set
+/// `PSF_STUDIO_TIMING` to see it.
+pub(super) fn timing() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("PSF_STUDIO_TIMING").is_some())
+}
+
+/// A task sampling every band over the whole image.
+pub(super) struct WholeSampling {
+    done: Arc<Mutex<Option<WholeSamples>>>,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    started: Instant,
+}
+
+impl WholeSampling {
+    fn start(store: Arc<crate::store_tiles::StoreTiles>, covered: Option<[u32; 4]>) -> Self {
+        let done = Arc::new(Mutex::new(None));
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (result, halt) = (done.clone(), stop.clone());
+        std::thread::Builder::new()
+            .name("whole-image samples".into())
+            .spawn(move || {
+                let samples = store.whole_samples(covered, &halt);
+                *result.lock().expect("whole-image samples") = Some(samples);
+            })
+            .expect("spawning a task");
+        Self {
+            done,
+            stop,
+            started: Instant::now(),
+        }
+    }
 }
 
 /// What the render thread reports back for the panel.
@@ -331,6 +604,30 @@ struct Shared {
     /// When the oldest input not yet drawn arrived.
     input_at: Option<Instant>,
     readout: Readout,
+    /// The samples of the combined picture last read, with the id of the
+    /// request they answer: set by the render thread, read by the UI.
+    picture: Option<(u64, Arc<Vec<f32>>)>,
+    /// The samples of the final picture last read, likewise.
+    final_picture: Option<(u64, Arc<Vec<f32>>)>,
+    /// The preview last drawn, with the id of the request it answers.
+    preview_image: Option<(u64, PreviewImage)>,
+    /// The frame copied for the control socket, with its capture's number.
+    control_captured: Option<(u64, psf_studio_render::Captured)>,
+    /// What the GPU could not draw of each pane's scene, as Seiza words it,
+    /// with the scene's version: set by the render thread, read by the UI.
+    gpu_left_out: Vec<(u64, Vec<String>)>,
+}
+
+impl Shared {
+    /// What the GPU could not draw of pane `index`'s scene as it is now.
+    fn gpu_left_out(&self, index: usize) -> Vec<String> {
+        let version = self.canvas.scenes.get(index).map(|scene| scene.version);
+        self.gpu_left_out
+            .get(index)
+            .filter(|(drawn, _)| Some(*drawn) == version)
+            .map(|(_, words)| words.clone())
+            .unwrap_or_default()
+    }
 }
 
 /// The UI thread's side of the canvas.
@@ -351,6 +648,11 @@ impl CanvasHandle {
     fn read<R>(&self, read: impl FnOnce(&Shared) -> R) -> R {
         read(&self.0 .0.lock().expect("canvas state"))
     }
+
+    /// Reads and changes what the render thread left, without waking it.
+    fn read_mut<R>(&self, read: impl FnOnce(&mut Shared) -> R) -> R {
+        read(&mut self.0 .0.lock().expect("canvas state"))
+    }
 }
 
 /// Draws frames until the process exits. wgpu waits for the display here, so
@@ -363,10 +665,18 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
         .is_some()
         .then(|| Bench::new(options.bench_frames));
     let mut last_frame: Option<Instant> = None;
-    let mut stretch_tables: Vec<Vec<Vec<f32>>> = Vec::new();
+    let mut gpu_scenes: Vec<(GpuScene, f32)> = Vec::new();
     let mut stretched_for = None;
     let mut stretches_version = 0u64;
     let mut animate = true;
+    // The sampling of the combined picture last delivered, and the scene
+    // of the one under way, packed for the GPU.
+    let mut sampled: Option<u64> = None;
+    let mut probe_scene: Option<(u64, GpuScene)> = None;
+    let mut final_scene: Option<(u64, GpuScene)> = None;
+    let mut final_sampled: Option<u64> = None;
+    let mut preview_scene: Option<(u64, GpuScene)> = None;
+    let mut previewed: Option<u64> = None;
     loop {
         let input_at = {
             let mut shared = lock.lock().expect("canvas state");
@@ -381,9 +691,15 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
             canvas.surface_size = shared.canvas.surface_size;
             canvas.document_size = shared.canvas.document_size;
             canvas.band_count = shared.canvas.band_count;
+            canvas.inputs = shared.canvas.inputs.clone();
             canvas.scenes = shared.canvas.scenes.clone();
+            canvas.probe = shared.canvas.probe.clone();
+            canvas.final_probe = shared.canvas.final_probe.clone();
+            canvas.preview = shared.canvas.preview.clone();
             canvas.wipe = shared.canvas.wipe;
             canvas.crop = shared.canvas.crop;
+            canvas.show_clipping = shared.canvas.show_clipping;
+            canvas.control_capture = shared.canvas.control_capture.take();
             if !shared.canvas.fitted && canvas.surface_size.0 > 1 {
                 canvas.fit();
                 shared.canvas.view = canvas.view;
@@ -418,28 +734,40 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
         if let Some(bench) = &mut bench {
             bench.before_frame(&mut canvas);
         }
-        // The tables change with a slider or with the scene's layers.
+        // The scenes are packed again when a slider or the scenes change.
         let version = canvas.scenes.first().map_or(0, |scene| scene.version);
         let stretch_inputs = (canvas.sliders, version);
         if stretched_for != Some(stretch_inputs) {
-            stretch_tables = canvas.stretch_tables();
+            let packing = Instant::now();
+            gpu_scenes = canvas.gpu_scenes();
+            lock.lock().expect("canvas state").gpu_left_out = canvas
+                .scenes
+                .iter()
+                .zip(&gpu_scenes)
+                .map(|(scene, (packed, _))| (scene.version, packed.left_out.clone()))
+                .collect();
+            if timing() {
+                eprintln!(
+                    "render: packed scenes in {:.1} ms",
+                    packing.elapsed().as_secs_f64() * 1e3
+                );
+            }
             stretched_for = Some(stretch_inputs);
             stretches_version += 1;
         }
-        let panes: Vec<Pane> = canvas
-            .scenes
+        let panes: Vec<Pane> = gpu_scenes
             .iter()
-            .zip(&stretch_tables)
             .enumerate()
-            .map(|(index, (scene, stretches))| {
+            .map(|(index, (scene, peak))| {
                 let (viewport, scissor) = canvas.pane_rects(index);
                 Pane {
-                    layers: &scene.layers,
-                    stretches,
-                    finish: &scene.finish,
-                    masks: &scene.masks,
-                    heals: &scene.heals,
-                    computed: &scene.computed,
+                    scene,
+                    peak: *peak,
+                    // Each pane's packing is its own. The compositor keeps
+                    // one pane's tables and masks, so a single pane uploads
+                    // them only when they change; with several panes they
+                    // go up for each pane every frame.
+                    version: Some(stretches_version * 16 + index as u64),
                     viewport,
                     scissor,
                 }
@@ -448,16 +776,63 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
         let frame = Frame {
             view: canvas.view,
             panes: &panes,
-            stretches_version,
-            masks_version: version,
             overlay: &canvas.strokes,
             overlay_strength: 1.0,
             crop: canvas.crop,
+            show_clipping: canvas.show_clipping,
         };
         let capture = canvas.capture.take();
-        renderer.capture_next = capture.is_some() && options.capture_prefix.is_some();
+        let control_capture = canvas.control_capture.take();
+        renderer.capture_next =
+            (capture.is_some() && options.capture_prefix.is_some()) || control_capture.is_some();
         let result = renderer.render(&frame);
-        if let (Some(name), Some(prefix), Some((width, height, pixels))) =
+        // A preview is drawn even while the window shows nothing.
+        let mut preview_pending = false;
+        match canvas.preview.clone() {
+            Some(request) if previewed != Some(request.id) => {
+                if preview_scene
+                    .as_ref()
+                    .is_none_or(|(id, _)| *id != request.id)
+                {
+                    preview_scene =
+                        Some((request.id, GpuScene::new(&request.picture, &canvas.inputs)));
+                }
+                let scene = &preview_scene.as_ref().expect("the request's scene").1;
+                match renderer.preview_picture(
+                    request.id,
+                    scene,
+                    request.crop,
+                    export::PREVIEW_SIDE as u32,
+                ) {
+                    psf_studio_render::Previewed::Ready { width, height, rgb } => {
+                        previewed = Some(request.id);
+                        preview_scene = None;
+                        lock.lock().expect("canvas state").preview_image =
+                            Some((request.id, PreviewImage { width, height, rgb }));
+                    }
+                    psf_studio_render::Previewed::Pending => preview_pending = true,
+                }
+            }
+            Some(_) => {}
+            None => {
+                if preview_scene.take().is_some() {
+                    renderer.stop_preview();
+                }
+                previewed = None;
+            }
+        }
+        if let Some(id) = control_capture {
+            let mut shared = lock.lock().expect("canvas state");
+            match renderer.captured.take() {
+                Some(captured) => shared.control_captured = Some((id, captured)),
+                // A frame that was not drawn is captured on the next one.
+                None => {
+                    shared.canvas.control_capture.get_or_insert(id);
+                    shared.dirty = true;
+                }
+            }
+        }
+        if let (Some(name), Some(prefix), Some(captured)) =
             (capture, &options.capture_prefix, renderer.captured.take())
         {
             let name: String = name
@@ -465,7 +840,9 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
                 .filter(|character| character.is_ascii_alphanumeric())
                 .collect();
             let path = format!("{}-{name}.png", prefix.display());
-            if let Err(error) = write_png(&path, width, height, &pixels) {
+            let (width, height, rgb) =
+                captured.rgb8([0, 0, captured.width, captured.height], 1.0, 1);
+            if let Err(error) = write_png(&path, width, height, &rgb) {
                 eprintln!("could not write {path}: {error}");
             }
         }
@@ -482,11 +859,84 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
             Err(error) => {
                 // The surface has no texture while the window is covered.
                 lock.lock().expect("canvas state").readout.error = Some(error);
+                animate |= preview_pending;
                 std::thread::sleep(Duration::from_millis(16));
                 continue;
             }
         };
-        animate = stats.tiles_coarse > 0 || stats.tiles_in_flight > 0 || stats.tiles_uploaded > 0;
+        animate = stats.tiles_coarse > 0
+            || stats.tiles_in_flight > 0
+            || stats.tiles_uploaded > 0
+            || preview_pending;
+        // A sampling no document asks for any more is stopped.
+        if canvas.probe.is_none() && probe_scene.take().is_some() {
+            renderer.stop_sampling(ProbeSlot::First);
+            sampled = None;
+        }
+        if canvas.final_probe.is_none() && final_scene.take().is_some() {
+            renderer.stop_sampling(ProbeSlot::Second);
+            final_sampled = None;
+        }
+        // The final picture, every Finish step drawn by the GPU, is sampled
+        // the same way for the histogram.
+        if let Some(request) = canvas.final_probe.clone()
+            && final_sampled != Some(request.id)
+        {
+            if final_scene.as_ref().is_none_or(|(id, _)| *id != request.id) {
+                let picture = request.scene.picture(&canvas.nudges());
+                final_scene = Some((request.id, GpuScene::new(&picture, &canvas.inputs)));
+            }
+            let scene = &final_scene.as_ref().expect("the request's scene").1;
+            let sampling = Instant::now();
+            let result = renderer.sample_picture(
+                ProbeSlot::Second,
+                request.id,
+                scene,
+                canvas.crop,
+                &request.patches,
+                request.size,
+            );
+            if timing() {
+                eprintln!(
+                    "render: sampled the final picture in {:.1} ms",
+                    sampling.elapsed().as_secs_f64() * 1e3
+                );
+            }
+            match result {
+                Sampled::Ready(samples) => {
+                    final_sampled = Some(request.id);
+                    lock.lock().expect("canvas state").final_picture =
+                        Some((request.id, Arc::new(samples)));
+                }
+                Sampled::Pending { .. } => animate = true,
+            }
+        }
+        // The combined picture is sampled between frames, a few patches at
+        // a time, until every patch is read.
+        if let Some(request) = canvas.probe.clone()
+            && sampled != Some(request.id)
+        {
+            if probe_scene.as_ref().is_none_or(|(id, _)| *id != request.id) {
+                let combined = request.scene.combined(&canvas.nudges());
+                probe_scene = Some((request.id, GpuScene::new(&combined, &canvas.inputs)));
+            }
+            let scene = &probe_scene.as_ref().expect("the request's scene").1;
+            match renderer.sample_picture(
+                ProbeSlot::First,
+                request.id,
+                scene,
+                canvas.crop,
+                &request.patches,
+                request.size,
+            ) {
+                Sampled::Ready(samples) => {
+                    sampled = Some(request.id);
+                    lock.lock().expect("canvas state").picture =
+                        Some((request.id, Arc::new(samples)));
+                }
+                Sampled::Pending { .. } => animate = true,
+            }
+        }
         if let Some(bench) = &mut bench {
             bench.after_frame(&mut canvas, &stats);
             animate = true;
@@ -535,7 +985,8 @@ pub struct Studio {
     _ns_view: Retained<AnyObject>,
     canvas: CanvasHandle,
     canvas_bounds: Rc<Cell<Bounds<Pixels>>>,
-    slider_bounds: HashMap<SliderId, Rc<Cell<Bounds<Pixels>>>>,
+    /// Where each slider was last drawn, made as a slider is first drawn.
+    slider_bounds: RefCell<HashMap<SliderId, Rc<Cell<Bounds<Pixels>>>>>,
     tool: Tool,
     drag: Option<Drag>,
     scale_factor: f32,
@@ -550,10 +1001,19 @@ pub struct Studio {
     mask_shown: bool,
     /// Whether the brush takes away from a mask, in place of adding to it.
     brush_removes: bool,
+    /// Where the next heal stroke copies from, in document pixels: set by
+    /// an Option-click with the Heal tool.
+    heal_source: Option<[f64; 2]>,
+    /// How far heal strokes copy from, once a source was set: the source
+    /// less the first stroke's start, kept for later strokes as a clone
+    /// brush keeps it.
+    heal_offset: Option<[i64; 2]>,
     /// The brush's radius on screen, in points.
     brush_size: f32,
     /// Where a crop being drawn started, in document pixels.
     crop_from: Option<[f64; 2]>,
+    /// Where a protected region being drawn is centred.
+    protect_from: Option<[f64; 2]>,
     /// Whether the canvas shows the final picture while a mask is selected,
     /// in place of the mask itself.
     mask_shows_picture: bool,
@@ -577,18 +1037,108 @@ pub struct Studio {
     stroke: Option<Stroke>,
     /// Counts the scenes sent to the canvas.
     scene_version: u64,
+    /// The thread that builds the canvas's scenes.
+    scene_worker: scene_worker::SceneWorker,
+    /// The control socket `psf-studio-mcp` drives Studio through.
+    control: Option<control::Control>,
+    /// Counts the changes to the bands' samples, so the scene worker makes
+    /// its stretch analyses again.
+    bands_generation: u64,
     /// Where each band is in a tile, and its samples for the stretch.
     band_info: Arc<Bands>,
+    /// The store's bands as opened, without the planes worked out from it.
+    base_bands: Arc<Bands>,
+    /// Planes worked out from the whole image, and the tasks working out
+    /// more.
+    derived: Vec<Arc<crate::derived::DerivedPlane>>,
+    derive_tasks: Vec<crate::derived::DeriveTask>,
+    /// The task that samples every band over the whole image, for the
+    /// stretches, while it runs.
+    whole_samples: Option<WholeSampling>,
+    /// The store being opened, while it is.
+    store_opening: Option<tools::StoreOpening>,
     /// Stretch analyses already made, by each band's background strength.
     analysed: Vec<(Vec<BandState>, Arc<Vec<BandStretch>>)>,
+    /// The latest samples of the combined picture, with the id of the
+    /// sampling they came from, for the output stretches Seiza resolves
+    /// from the picture.
+    picture_samples: Option<(u64, Arc<Vec<f32>>)>,
+    /// The id of the sampling last asked for.
+    picture_wanted: Option<u64>,
+    /// Counts the stores shown, so a sampling of the picture follows a store
+    /// that is prepared again.
+    source_generation: u64,
+    /// Output stretches resolved lately.
+    resolved_chains: crate::output_stretch::ResolvedChains,
+    /// The histogram of the final picture, while the inspector shows it.
+    histogram: Option<Arc<crate::histogram::Histogram>>,
+    /// The final picture's samples last read for the histogram, with the
+    /// id of the sampling, and the id of the sampling asked for.
+    final_samples: Option<(u64, Arc<Vec<f32>>)>,
+    final_wanted: Option<u64>,
+    /// The brightest value the final picture asked for shows.
+    final_peak: f32,
+    /// The export of the final picture under way, if any.
+    export: Option<Arc<export::ExportRun>>,
+    /// The file an editor saved, while it is read.
+    editor_reading: Option<editor::EditorReading>,
+    /// When the file out with an editor was last looked at.
+    editor_looked: Option<Instant>,
+    /// The PSF Guard panel: servers Studio is connected to, and browsing
+    /// them.
+    servers: server_panel::ServerPanel,
+    /// The open picture's document on a server, when it has one.
+    server_save: server_documents::ServerSave,
+    /// What the last export said: how far it has got, or how it ended.
+    export_line: String,
+    /// The name being typed while the picture is renamed, and the field's
+    /// focus.
+    renaming: Option<String>,
+    /// Whether Setup covers the canvas.
+    setup_open: bool,
+    rename_focus: Option<gpui::FocusHandle>,
+    /// Whether a TIFF export holds 32-bit floats, in place of 16 bits.
+    tiff_float: bool,
+    /// The export's format, by extension; `None` is AVIF for an HDR picture
+    /// and TIFF otherwise.
+    export_format: Option<&'static str>,
+    /// The headroom HDR comes back with when it is turned on again.
+    last_headroom: f32,
+    /// The view stretch: Seiza's stretch, as its settings, that draws a
+    /// channel nothing in the view stretches yet. It is for looking only,
+    /// so the document does not keep it and no export uses it.
+    view_stretch: serde_json::Value,
+    /// Whether the inspector shows the view stretch's settings.
+    view_stretch_open: bool,
+    /// Where to write the parity report, until it is written.
+    parity_report: Option<PathBuf>,
     /// The levels in the document's pyramid.
     levels: u8,
     /// The processing tools: which this computer has, and the run in hand.
     tools: tools::Tools,
+    /// The document before each edit, for Undo and Redo.
+    history: history::History,
+    /// While a layer is dragged: the layer row under the pointer, and
+    /// whether the pointer is over its lower half, where a drop places the
+    /// dragged layer below it.
+    drop_lower: Option<(uuid::Uuid, bool)>,
+    /// The window's own focus, so Undo, Redo and other keys reach it when
+    /// no control has the keyboard.
+    focus: gpui::FocusHandle,
+    /// The results of tool steps on layers and the picture the canvas has.
+    late: late_tools::Late,
 }
 
 impl Studio {
     fn new(options: Options, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        // Closing the window quits, once the document is saved here and on
+        // its server.
+        window.on_window_should_close(cx, |_, cx| {
+            server_documents::quit_after_saving(cx);
+            false
+        });
+        let control_wanted = options.control;
+        let parity_report = options.parity_report.clone();
         // SAFETY: `NSView` is an AppKit class, windows are opened on the main
         // thread, and the new view is in no other view hierarchy.
         let (native_view, ns_view) = unsafe {
@@ -607,6 +1157,11 @@ impl Studio {
                 dirty: true,
                 input_at: None,
                 readout: Readout::default(),
+                picture: None,
+                final_picture: None,
+                preview_image: None,
+                control_captured: None,
+                gpu_left_out: Vec::new(),
             }),
             Condvar::new(),
         )));
@@ -632,7 +1187,44 @@ impl Studio {
             .clone()
             .or_else(|| Some(options.open.as_ref()?.with_extension("json")));
         let tools = tools::Tools::new(&options);
-        let source = crate::store_tiles::source(options.open.as_deref());
+        // A document that cannot be read is reported and the default flow
+        // opens in its place, unsaved, so the file is left as it is. A
+        // picture with no document yet gets one.
+        let mut unreadable = None;
+        let opened = document_path.as_ref().and_then(|path| {
+            if !path.exists() {
+                return None;
+            }
+            std::fs::read_to_string(path)
+                .map_err(|error| error.to_string())
+                .and_then(|text| Document::from_json(&text).map_err(|error| error.to_string()))
+                .map_err(|error| unreadable = Some(format!("{}: {error}", path.display())))
+                .ok()
+        });
+        // A store with a readable document beside it opens on a thread of
+        // its own, after the window shows: the document's steps show at
+        // once, and the canvas draws the store once it is open. A store
+        // with no document needs its inputs' names for the default flow
+        // first, so it opens before.
+        let deferred = options
+            .open
+            .clone()
+            .zip(document_path.clone())
+            .filter(|_| opened.is_some());
+        let opening = Instant::now();
+        let source = match &deferred {
+            Some(_) => Ok((
+                Arc::new(crate::store_tiles::Blank) as Arc<dyn psf_studio_render::TileSource>,
+                Bands::default(),
+            )),
+            None => crate::store_tiles::source(options.open.as_deref()),
+        };
+        if timing() && deferred.is_none() {
+            eprintln!(
+                "store: opened in {:.1} ms before the window",
+                opening.elapsed().as_secs_f64() * 1e3
+            );
+        }
         let (source, band_info) = match source {
             Ok((source, bands)) => (Ok(source), Arc::new(bands)),
             Err(error) => (Err(error), Arc::<Bands>::default()),
@@ -660,6 +1252,7 @@ impl Studio {
                     let mut shared = canvas.0 .0.lock().expect("canvas state");
                     shared.canvas.document_size = (pyramid.width, pyramid.height);
                     shared.canvas.band_count = bands;
+                    shared.canvas.inputs = Arc::new(band_info.gpu_inputs());
                 }
                 let handle = canvas.clone();
                 std::thread::Builder::new()
@@ -670,6 +1263,24 @@ impl Studio {
             Err(error) => canvas.0 .0.lock().expect("canvas state").readout.error = Some(error),
         }
 
+        // Requests from the control socket are answered within a few
+        // frames, as a person's clicks are.
+        cx.spawn(async move |this, cx| loop {
+            cx.background_executor()
+                .timer(Duration::from_millis(25))
+                .await;
+            let updated = this.update(cx, |this, cx| {
+                if this.control.is_some() {
+                    this.follow_control();
+                    cx.notify();
+                }
+            });
+            if updated.is_err() {
+                break;
+            }
+        })
+        .detach();
+
         // The render thread draws on its own; the panel's numbers follow it.
         cx.spawn(async move |this, cx| loop {
             cx.background_executor()
@@ -678,6 +1289,16 @@ impl Studio {
             let updated = this.update(cx, |this, cx| {
                 this.follow_tools();
                 this.follow_links();
+                this.follow_picture();
+                this.follow_scenes();
+                this.follow_export();
+                this.follow_editor();
+                this.follow_servers();
+                this.follow_server_save();
+                this.follow_quit(cx);
+                this.follow_derived();
+                this.follow_store_opening();
+                this.follow_late();
                 // Every change is kept: the document is saved as soon as it
                 // differs from the file.
                 this.save_document();
@@ -692,63 +1313,83 @@ impl Studio {
         })
         .detach();
 
-        // A document that cannot be read is reported and the default flow
-        // opens in its place, unsaved, so the file is left as it is. A
-        // picture with no document yet gets one.
-        let mut unreadable = None;
-        let opened = document_path.as_ref().and_then(|path| {
-            if !path.exists() {
-                return None;
-            }
-            std::fs::read_to_string(path)
-                .map_err(|error| error.to_string())
-                .and_then(|text| Document::from_json(&text).map_err(|error| error.to_string()))
-                .map_err(|error| unreadable = Some(format!("{}: {error}", path.display())))
-                .ok()
-        });
         let was_opened = opened.is_some();
-        let document = opened.unwrap_or_else(|| panes::flow_document(&band_info.names));
-        let mut studio =
-            Self {
-                native_view,
-                _ns_view: ns_view,
-                canvas,
-                canvas_bounds: Rc::default(),
-                slider_bounds: SliderId::ALL
-                    .into_iter()
-                    .chain((0..MAX_LAYERS).flat_map(|layer| {
-                        [SliderId::ToneHue(layer), SliderId::ToneSaturation(layer)]
-                    }))
-                    .chain((0..8).map(SliderId::StretchParam))
-                    .chain((0..tools::MAX_TOOL_SETTINGS).map(SliderId::ToolParam))
-                    .map(|id| (id, Rc::default()))
-                    .collect(),
-                tool: Tool::Pan,
-                drag: None,
-                scale_factor: window.scale_factor(),
-                document,
-                selected: Row::Combined,
-                alone: false,
-                mask_shown: false,
-                brush_removes: false,
-                brush_size: 24.0,
-                crop_from: None,
-                mask_shows_picture: false,
-                wipe: 0.5,
-                split: Split::WithPicture,
-                pins: Vec::new(),
-                places: Vec::new(),
-                unfolded: HashSet::new(),
-                open_menu: None,
-                window_title: String::new(),
-                toggled: HashSet::new(),
-                stroke: None,
-                scene_version: 0,
-                band_info,
-                analysed: Vec::new(),
-                levels,
-                tools,
-            };
+        let mut document = opened.unwrap_or_else(|| panes::flow_document(&band_info.names));
+        adopt(&mut document);
+        let scene_worker = scene_worker::SceneWorker::start(canvas.clone());
+        let mut studio = Self {
+            native_view,
+            _ns_view: ns_view,
+            canvas,
+            canvas_bounds: Rc::default(),
+            slider_bounds: RefCell::default(),
+            tool: Tool::Pan,
+            drag: None,
+            scale_factor: window.scale_factor(),
+            document,
+            selected: Row::Combined,
+            alone: false,
+            mask_shown: false,
+            brush_removes: false,
+            heal_source: None,
+            heal_offset: None,
+            brush_size: 24.0,
+            crop_from: None,
+            protect_from: None,
+            mask_shows_picture: false,
+            wipe: 0.5,
+            split: Split::WithPicture,
+            pins: Vec::new(),
+            places: Vec::new(),
+            unfolded: HashSet::new(),
+            open_menu: None,
+            window_title: String::new(),
+            toggled: HashSet::new(),
+            stroke: None,
+            scene_version: 0,
+            scene_worker,
+            control: control_wanted.then(control::Control::start).flatten(),
+            bands_generation: 0,
+            base_bands: band_info.clone(),
+            band_info,
+            analysed: Vec::new(),
+            derived: Vec::new(),
+            derive_tasks: Vec::new(),
+            whole_samples: None,
+            store_opening: None,
+            picture_samples: None,
+            picture_wanted: None,
+            source_generation: 0,
+            resolved_chains: Default::default(),
+            histogram: None,
+            final_samples: None,
+            final_wanted: None,
+            final_peak: 1.0,
+            export: None,
+            editor_reading: None,
+            editor_looked: None,
+            servers: Default::default(),
+            server_save: server_documents::ServerSave::new(),
+            export_line: String::new(),
+            renaming: None,
+            setup_open: false,
+            rename_focus: None,
+            tiff_float: false,
+            export_format: None,
+            last_headroom: crate::tone_step::DEFAULT_HEADROOM,
+            view_stretch: panes::new_stretch("auto-mtf"),
+            view_stretch_open: false,
+            parity_report,
+            levels,
+            tools,
+            history: history::History::default(),
+            drop_lower: None,
+            focus: cx.focus_handle(),
+            late: late_tools::Late::default(),
+        };
+        // The patches read as the store opened stand in until every band
+        // is sampled over the whole image.
+        studio.start_whole_samples();
         // The store was prepared for the document it is opened with, and
         // may hold inputs the document has not listed yet.
         if was_opened {
@@ -760,8 +1401,15 @@ impl Studio {
             ));
         }
         studio.take_in_new_inputs();
-        studio.tools_are_prepared();
+        studio.tools_are_prepared(None);
+        // Undo goes back no further than the document as it opened.
+        studio.history.reset(studio.document.to_json());
+        window.focus(&studio.focus, cx);
         studio.refresh_canvas();
+        if let Some((store, document_path)) = deferred {
+            let document = studio.document.clone();
+            studio.open_store(store, Some((document_path, document)), None);
+        }
         studio
     }
 
@@ -790,7 +1438,14 @@ impl Studio {
     }
 
     fn set_slider(&mut self, id: SliderId, x: Pixels) {
-        let bounds = self.slider_bounds[&id].get();
+        let Some(bounds) = self
+            .slider_bounds
+            .borrow()
+            .get(&id)
+            .map(|bounds| bounds.get())
+        else {
+            return;
+        };
         let value = (f32::from(x - bounds.origin.x) / f32::from(bounds.size.width).max(1.0))
             .clamp(0.0, 1.0);
         self.slider_moved(id, value);
@@ -809,7 +1464,7 @@ impl Studio {
         f32::from(position.x - bounds.origin.x) / f32::from(bounds.size.width).max(1.0)
     }
 
-    fn canvas_down(&mut self, event: &MouseDownEvent, _: &mut Window, _: &mut Context<Self>) {
+    fn canvas_down(&mut self, event: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
         // A press on a wipe's divider moves the divider.
         let on_divider = self.split == Split::Wipe && {
             let reach = 8.0 / f32::from(self.canvas_bounds.get().size.width).max(1.0);
@@ -824,8 +1479,32 @@ impl Studio {
             self.crop_from = Some(self.to_document(event.position));
             return;
         }
+        if self.tool == Tool::Protect {
+            if self.selected_background_step().is_some() {
+                self.protect_from = Some(self.to_document(event.position));
+            }
+            return;
+        }
+        if self.tool == Tool::Heal && event.modifiers.alt {
+            // Option-click: where the next heal copies from.
+            self.heal_source = Some(self.to_document(event.position));
+            self.heal_offset = None;
+            self.drag = None;
+            // The canvas marks the source.
+            self.refresh_canvas();
+            cx.notify();
+            return;
+        }
         if self.tool != Tool::Pan {
             let at = self.to_document(event.position);
+            if self.tool == Tool::Heal
+                && let Some(source) = self.heal_source.take()
+            {
+                self.heal_offset = Some([
+                    (source[0] - at[0]).round() as i64,
+                    (source[1] - at[1]).round() as i64,
+                ]);
+            }
             self.stroke = Some(Stroke {
                 points: vec![[at[0] as f32, at[1] as f32]],
                 radius: self.brush_radius(),
@@ -855,6 +1534,28 @@ impl Studio {
                 let from = self.to_document(last);
                 let to = self.to_document(event.position);
                 let (tool, radius) = (self.tool, self.brush_radius());
+                // The region being drawn shows as its outline, with the
+                // step's others.
+                if let (Tool::Protect, Some(center)) = (tool, self.protect_from) {
+                    let zoom = self.canvas.read(|shared| shared.canvas.view.zoom);
+                    let line = (1.5 * self.scale_factor as f64 / zoom) as f32;
+                    let (width, height) = self.canvas.read(|shared| shared.canvas.document_size);
+                    let (width, height) = (width.max(2) as f32, height.max(2) as f32);
+                    let drawn = serde_json::json!({
+                        "kind": "ellipse",
+                        "center": [center[0] / f64::from(width - 1.0), center[1] / f64::from(height - 1.0)],
+                        "radii": [(to[0] - center[0]).abs() / f64::from(width), (to[1] - center[1]).abs() / f64::from(height)],
+                    });
+                    let mut outlines = self.protected_outlines(line);
+                    outlines.extend(protect::outline_of(&drawn, width, height, line));
+                    self.canvas.edit(|canvas| {
+                        canvas.strokes_replaced += 1;
+                        canvas.strokes = outlines;
+                    });
+                    self.drag = Some(Drag::Canvas(event.position));
+                    cx.notify();
+                    return;
+                }
                 // The crop being drawn shows as its outline.
                 if let (Tool::Crop, Some(start)) = (tool, self.crop_from) {
                     let zoom = self.canvas.read(|shared| shared.canvas.view.zoom);
@@ -870,7 +1571,6 @@ impl Studio {
                                 radius: line,
                                 hardness: 1.0,
                                 value: 1.0,
-                                _pad: 0.0,
                             })
                             .collect();
                     });
@@ -885,14 +1585,13 @@ impl Studio {
                     }
                     // The canvas shows a stroke as mask coverage while it is
                     // drawn, for the brush and for healing alike.
-                    Tool::Crop => {}
+                    Tool::Crop | Tool::Protect => {}
                     Tool::Brush | Tool::Heal => canvas.strokes.push(Segment {
                         from: [from[0] as f32, from[1] as f32],
                         to: [to[0] as f32, to[1] as f32],
                         radius,
                         hardness: 0.6,
                         value: 1.0,
-                        _pad: 0.0,
                     }),
                 });
                 if let Some(stroke) = &mut self.stroke {
@@ -906,6 +1605,13 @@ impl Studio {
 
     fn mouse_up(&mut self, event: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.drag = None;
+        if let Some(center) = self.protect_from.take() {
+            let edge = self.to_document(event.position);
+            self.add_protected_ellipse(center, edge);
+            self.refresh_canvas();
+            cx.notify();
+            return;
+        }
         if let Some(start) = self.crop_from.take() {
             let end = self.to_document(event.position);
             let size = self.canvas.read(|shared| shared.canvas.document_size);
@@ -1081,52 +1787,41 @@ unsafe fn layer_description(view: &AnyObject) -> Option<String> {
 
 /// The surface and display transform the options ask for.
 fn output(options: &Options) -> Result<Output, String> {
+    use psf_studio_render::WorkingSpace;
     use wgpu::{SurfaceColorSpace, TextureFormat};
-    let (format, color_space, target) = match options.output.as_str() {
-        "" | "srgb8" => (None, SurfaceColorSpace::Auto, "sRGB Profile.icc"),
-        "p3-8" => (None, SurfaceColorSpace::DisplayP3, "Display P3.icc"),
+    let (format, color_space, display) = match options.output.as_str() {
+        "" | "srgb8" => (None, SurfaceColorSpace::Auto, WorkingSpace::Srgb),
+        "p3-8" => (None, SurfaceColorSpace::DisplayP3, WorkingSpace::DisplayP3),
         "p3-float" => (
             Some(TextureFormat::Rgba16Float),
             SurfaceColorSpace::DisplayP3,
-            "Display P3.icc",
+            WorkingSpace::DisplayP3,
         ),
         "p3-extended" => (
             Some(TextureFormat::Rgba16Float),
             SurfaceColorSpace::ExtendedDisplayP3,
-            "Display P3.icc",
+            WorkingSpace::DisplayP3,
         ),
         other => return Err(format!("unknown output: {other}")),
     };
-    let curves = options
-        .working_profile
-        .as_ref()
-        .map(|working| {
-            let target = std::path::Path::new(psf_studio_color::SYSTEM_PROFILES).join(target);
-            psf_studio_color::curves_between(working, &target)
-        })
-        .transpose()?;
     Ok(Output {
         format,
         color_space,
-        curves,
+        working: crate::canvas::WORKING_SPACE,
+        display,
         vsync: options.vsync,
     })
 }
 
-fn write_png(path: &str, width: u32, height: u32, bgra: &[u8]) -> Result<(), String> {
+/// Writes red, green and blue bytes to an 8-bit PNG file.
+fn write_png(path: &str, width: u32, height: u32, rgb: &[u8]) -> Result<(), String> {
     let file = std::fs::File::create(path).map_err(|error| error.to_string())?;
     let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), width, height);
     encoder.set_color(png::ColorType::Rgb);
     encoder.set_depth(png::BitDepth::Eight);
-    let rgb: Vec<u8> = bgra
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .flat_map(|pixel| [pixel[2], pixel[1], pixel[0]])
-        .collect();
     encoder
         .write_header()
-        .and_then(|mut writer| writer.write_image_data(&rgb))
+        .and_then(|mut writer| writer.write_image_data(rgb))
         .map_err(|error| error.to_string())
 }
 
@@ -1143,6 +1838,29 @@ pub fn run(options: Options) {
     // reaches it while it runs.
     application.on_open_urls(open::keep_links);
     application.run(move |cx: &mut App| {
+        // Undo and Redo, from the keyboard and the Edit menu.
+        cx.bind_keys([
+            KeyBinding::new("cmd-z", Undo, None),
+            KeyBinding::new("cmd-shift-z", Redo, None),
+            KeyBinding::new("cmd-q", Quit, None),
+        ]);
+        // The document is saved here and on its server first.
+        cx.on_action(|_: &Quit, cx| server_documents::quit_after_saving(cx));
+        cx.set_menus(vec![
+            Menu {
+                name: "PSF Studio".into(),
+                items: vec![MenuItem::action("Quit PSF Studio", Quit)],
+                disabled: false,
+            },
+            Menu {
+                name: "Edit".into(),
+                items: vec![
+                    MenuItem::action("Undo", Undo),
+                    MenuItem::action("Redo", Redo),
+                ],
+                disabled: false,
+            },
+        ]);
         // The canvas is 1920 x 1080 points: a 4K surface on a 2x display.
         let bounds = Bounds::centered(
             None,
@@ -1161,14 +1879,45 @@ pub fn run(options: Options) {
     });
 }
 
+/// Brings a document saved by an earlier build up to date as it opens: its
+/// HDR headroom on the picture, and its palettes' layers read top down.
+fn adopt(document: &mut Document) {
+    crate::tone_step::adopt_headroom(document);
+    document.list_palette_layers_top_down();
+}
+
+#[path = "control.rs"]
+mod control;
+#[path = "editor.rs"]
+mod editor;
+#[path = "export.rs"]
+mod export;
+#[path = "heal.rs"]
+mod heal;
+#[path = "history.rs"]
+mod history;
 #[path = "inspector.rs"]
 mod inspector;
+#[path = "late_tools.rs"]
+mod late_tools;
 #[path = "open.rs"]
 mod open;
 #[path = "panes.rs"]
 mod panes;
 #[path = "parts.rs"]
 mod parts;
+#[path = "protect.rs"]
+mod protect;
+#[path = "scene_worker.rs"]
+mod scene_worker;
+#[path = "server_documents.rs"]
+mod server_documents;
+#[path = "server_panel.rs"]
+mod server_panel;
+#[path = "servers.rs"]
+pub(crate) mod servers;
+#[path = "setup.rs"]
+mod setup;
 #[path = "tools.rs"]
 mod tools;
 #[path = "tree.rs"]

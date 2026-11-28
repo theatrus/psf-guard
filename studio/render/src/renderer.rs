@@ -1,29 +1,30 @@
-use crate::display::{DisplayCurves, TableFormat};
+//! The canvas: Seiza's GPU compositor drawing a picture from the tiles in
+//! view, then a present pass that applies the display transform.
+//!
+//! What a picture is and how it is drawn belong to Seiza
+//! (`seiza_compose::gpu`), whose CPU render is the reference an export uses.
+//! This file chooses and uploads tiles, lays panes out on the surface,
+//! presents the finished picture, and samples it for the stretches resolved
+//! from it.
+
 use crate::synth::{TileKey, TILE};
 use crate::tiles::{TileCache, TileProducer};
 use crate::{Pyramid, TileSource};
 use bytemuck::{Pod, Zeroable};
-use std::sync::atomic::{AtomicU8, Ordering};
+use seiza_compose::gpu::{
+    DisplayMapping, DrawArea, GpuCompositor, GpuScene, GpuTargets, GpuView, TileDraw,
+};
+use seiza_compose::picture::Segment;
+pub use seiza_compose::space::WorkingSpace;
 use std::sync::Arc;
 use std::time::Instant;
 
-/// The most layers one frame combines.
-pub const MAX_LAYERS: usize = 24;
-/// The most Finish steps one frame applies.
-pub const MAX_FINISH_STEPS: usize = 8;
-/// The most masks one frame draws, besides the stroke overlay.
-pub const MAX_MASKS: usize = 15;
-/// The most heals of single layers one frame draws.
-pub const MAX_HEALS: usize = 16;
-/// The most layers with heals of their own one frame draws. Each needs the
-/// layer's samples as a surface-sized image, to copy from.
-pub const MAX_HEALED_LAYERS: usize = 4;
-/// The most masks computed from bands one frame draws.
-pub const MAX_COMPUTED_MASKS: usize = 8;
-/// A computed mask while it is smoothed, from 0 to 1.
-const SMOOTHED_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R8Unorm;
-/// The mask layer that holds the stroke overlay.
-const OVERLAY_LAYER: u32 = MAX_MASKS as u32;
+/// The compositor's finished picture: float, so the working space's range
+/// reaches the present pass and the sampling unclipped.
+const FINISHED_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+
+/// The most input tiles one draw reads.
+const MAX_TILE_DRAWS: usize = 4096;
 
 /// Where the document sits in the surface.
 #[derive(Clone, Copy, Debug)]
@@ -34,201 +35,28 @@ pub struct View {
     pub zoom: f64,
 }
 
-/// How a layer combines with the layers beneath it. The order matches the
-/// shader's `blend`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Blend {
-    Normal,
-    Screen,
-    Add,
-    Multiply,
-    Lighten,
-    Darken,
-    /// The layer's brightness with the color beneath it.
-    Luminance,
-}
-
-/// What an entry in a pane's list of layers is.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Mark {
-    /// A layer: one that shows a band, or an adjustment.
-    #[default]
-    Layer,
-    /// The start of a group. The entries up to the group's end blend
-    /// together on their own, starting from nothing. Only its place in the
-    /// list is used.
-    GroupBegin,
-    /// The end of a group: the members' blend becomes one layer with this
-    /// entry's opacity, blend and mask. Adjustments of the entry's own
-    /// follow it, as they follow a layer.
-    GroupEnd,
-    /// A layer of one color everywhere, with no band: what a mask is drawn
-    /// with, so the mask itself shows.
-    Solid,
-}
-
-/// One layer of the Combine stage: a band, stretched, colored and blended.
-#[derive(Clone, Copy, Debug)]
-pub struct Layer {
-    /// Whether the entry is a layer or one end of a group. Groups do not
-    /// hold groups.
-    pub mark: Mark,
-    /// A second mask that limits the layer: the mask of the layer it is
-    /// clipped to. `None` is not clipped.
-    pub clip: Option<usize>,
-    /// A mask computed from bands that limits the layer, as an index into
-    /// [`Pane::computed`]. `None` is no such mask.
-    pub computed: Option<usize>,
-    /// The band the layer shows.
-    pub band: usize,
-    pub color: [f32; 3],
-    /// From 0 to 1. A hidden layer has 0.
-    pub opacity: f32,
-    pub blend: Blend,
-    /// The layer's own contrast curve, from -1 to 1. 0 is none.
-    pub curve: f32,
-    /// A second band to blend into the first before the stretch, and how
-    /// much of it, from 0 to 1. A document uses it for a correction whose
-    /// strength a person moves: the band uncorrected and corrected in full.
-    pub blended: Option<(usize, f32)>,
-    /// The mask that limits where the layer applies. `None` is everywhere.
-    pub mask: Option<usize>,
-    /// For an adjustment: what it does, and by how much. An adjustment has
-    /// no pixels: `band`, `color`, `blend`, `curve` and `blended` are not
-    /// used. `None` is a layer that shows a band.
-    pub adjustment: Option<(Adjustment, f32)>,
-    /// For an adjustment: whether it changes only the band layer before it
-    /// in the list, before that layer is blended. Otherwise it changes the
-    /// blend of every layer before it.
-    pub own: bool,
-}
-
-/// What an adjustment layer does.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Adjustment {
-    /// Brightens or darkens by the amount in stops.
-    Exposure = 1,
-    /// A contrast curve. The amount runs from -1 to 1.
-    Curves = 2,
-    /// Saturation. 1 leaves the color unchanged.
-    Saturation = 3,
-}
-
-/// The entries in one layer's stretch table.
-pub const STRETCH_TABLE_WIDTH: usize = 4096;
-
-/// What a Finish step does.
-#[derive(Clone, Copy, Debug)]
-pub enum FinishKind {
-    /// A contrast curve. The amount runs from -1 to 1.
-    Curves,
-    /// Saturation. An amount of 1 leaves the image as it is.
-    Saturation,
-    /// A heal: the masked area is replaced by the area `offset` document
-    /// pixels away, with `shift` added.
-    Heal { offset: [f32; 2], shift: [f32; 3] },
-}
-
-/// One step of the Finish stage, applied to the combined image.
-#[derive(Clone, Copy, Debug)]
-pub struct FinishStep {
-    pub kind: FinishKind,
-    pub amount: f32,
-    /// How strongly the step applies, from 0 to 1.
-    pub opacity: f32,
-    /// The mask that limits the step, as an index into [`Pane::masks`].
-    /// `None` is everywhere. A heal's mask is its stroke.
-    pub mask: Option<usize>,
-}
-
-/// One band a computed mask reads, stretched.
-#[derive(Clone, Copy, Debug)]
-pub struct MaskBand {
-    pub band: usize,
-    /// A second band blended into the first before the stretch, and how
-    /// much of it, as for a layer.
-    pub blended: Option<(usize, f32)>,
-    /// The row of the pane's stretch tables that holds the band's stretch.
-    pub stretch_row: usize,
-}
-
-/// A mask computed at each pixel from the stretched samples of one or two
-/// bands: their product, shaped.
-#[derive(Clone, Copy, Debug)]
-pub struct ComputedMask {
-    pub bands: [Option<MaskBand>; 2],
-    /// Whether the product is raised to the power of 1 minus itself.
-    pub power_of_inverse: bool,
-    /// The power the shaped product is raised to. 1 leaves it as it is.
-    pub reach: f32,
-    /// How far the mask is smoothed before the strokes: the standard
-    /// deviation of a Gaussian blur, in document pixels. 0 is not at all.
-    pub smoothing: f32,
-    /// Strokes that set the mask to 1 under them, as an index into
-    /// [`Pane::masks`].
-    pub added: Option<usize>,
-    /// Strokes that set the mask to 0 under them, as an index into
-    /// [`Pane::masks`].
-    pub removed: Option<usize>,
-    /// Whether the mask is 1 minus all of the above.
-    pub inverted: bool,
-}
-
-/// A heal of one layer: the masked area takes the layer's own samples from
-/// `offset` document pixels away.
-#[derive(Clone, Copy, Debug)]
-pub struct LayerHeal {
-    /// The layer healed, as an index into [`Pane::layers`].
-    pub layer: usize,
-    /// Whether the heal changes the band's samples before the stretch, as
-    /// a heal of an input does. Otherwise it changes the stretched layer.
-    pub before_stretch: bool,
-    pub offset: [f32; 2],
-    /// The brightness added to the copied samples.
-    pub shift: f32,
-    /// The heal's stroke, as an index into [`Pane::masks`].
-    pub mask: usize,
-}
-
-/// One segment of a brush stroke, in document pixels.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Pod, Zeroable)]
-pub struct Segment {
-    pub from: [f32; 2],
-    pub to: [f32; 2],
-    pub radius: f32,
-    pub hardness: f32,
-    /// 1 adds to the mask, 0 subtracts from it.
-    pub value: f32,
-    pub _pad: f32,
-}
-
-/// What one pane of the canvas draws.
+/// One pane of the canvas: a picture packed for the GPU, and where it is
+/// drawn.
 pub struct Pane<'a> {
-    /// The layers, bottom first. At most [`MAX_LAYERS`].
-    pub layers: &'a [Layer],
-    /// Each layer's stretch, in the layers' order: [`STRETCH_TABLE_WIDTH`]
-    /// outputs from 0 to 1. Entry `i` is the stretch of the band sample
-    /// `(i / (width - 1))²`, where a band's samples run from 0 to 1.
-    pub stretches: &'a [Vec<f32>],
-    /// The Finish steps, in order. At most [`MAX_FINISH_STEPS`].
-    pub finish: &'a [FinishStep],
-    /// The masks the layers and the Finish steps refer to. At most
-    /// [`MAX_MASKS`].
-    pub masks: &'a [Vec<Segment>],
-    /// The masks computed from bands that the layers refer to. At most
-    /// [`MAX_COMPUTED_MASKS`].
-    pub computed: &'a [ComputedMask],
-    /// Heals of single layers, in order. At most [`MAX_HEALS`], on at most
-    /// [`MAX_HEALED_LAYERS`] layers.
-    pub heals: &'a [LayerHeal],
-    /// Where the pane's image is laid out in the surface: x, y, width and
+    pub scene: &'a GpuScene,
+    /// Changes whenever the scene's tables or masks do, so a pane drawn
+    /// again unchanged is not uploaded again. `None` uploads every frame.
+    pub version: Option<u64>,
+    /// Where the pane's picture is laid out in the surface: x, y, width and
     /// height in pixels. The view's center is at its middle.
     pub viewport: [u32; 4],
     /// The part of the surface the pane draws to. It is the viewport for a
     /// pane of its own, and a part of it for one side of a wipe.
     pub scissor: [u32; 4],
+    /// The brightest value the pane's picture shows, its
+    /// `seiza_compose::picture::Picture::peak`: 1 for SDR. The present pass
+    /// clips the pane's values there.
+    pub peak: f32,
 }
+
+/// The most panes whose peaks the present pass keeps apart. A surface with
+/// more clips every pane at the brightest of their peaks.
+const PRESENT_PANES: usize = 8;
 
 pub struct Frame<'a> {
     /// Where the document sits in each pane. The panes share it, so they
@@ -236,12 +64,6 @@ pub struct Frame<'a> {
     pub view: View,
     /// The panes, each with a viewport of the same size. At least one.
     pub panes: &'a [Pane<'a>],
-    /// Changes whenever a pane's stretches do, so a single pane's unchanged
-    /// tables are not uploaded again.
-    pub stretches_version: u64,
-    /// Changes whenever a pane's masks do, so a single pane's unchanged
-    /// masks are not uploaded again.
-    pub masks_version: u64,
     /// Strokes shown over the image: a stroke being drawn.
     pub overlay: &'a [Segment],
     /// How strongly the overlay shows, from 0 to 1.
@@ -250,6 +72,9 @@ pub struct Frame<'a> {
     /// bottom in document pixels. Nothing outside it is drawn. `None` keeps
     /// the whole document.
     pub crop: Option<[f32; 4]>,
+    /// Whether pixels at their pane's peak are marked with stripes, so
+    /// clipped areas show however small they are.
+    pub show_clipping: bool,
 }
 
 /// The pixels between two panes.
@@ -289,9 +114,6 @@ pub struct FrameStats {
     pub acquire_ms: f32,
     /// Time spent choosing tiles, uploading, encoding and submitting.
     pub encode_ms: f32,
-    /// GPU time of the frame's passes, from the most recent frame whose
-    /// timestamps have come back.
-    pub gpu_ms: Option<f32>,
     pub level: u8,
     pub tiles_drawn: u32,
     /// Visible tiles drawn from a coarser level because theirs is not loaded.
@@ -304,21 +126,6 @@ pub struct FrameStats {
     pub cache_bytes: u64,
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct Globals {
-    view: [f32; 4],
-    screen: [f32; 4],
-    counts: [f32; 4],
-    layers: [[f32; 20]; MAX_LAYERS],
-    finish: [[f32; 12]; MAX_FINISH_STEPS],
-    healed: [[f32; 4]; MAX_HEALED_LAYERS],
-    heals: [[f32; 8]; MAX_HEALS],
-    computed: [[f32; 16]; MAX_COMPUTED_MASKS],
-    display_matrix: [f32; 12],
-    display: [f32; 4],
-}
-
 /// What the canvas presents to: the surface's format and color space, and
 /// the transform from the document's working space to that target.
 pub struct Output {
@@ -326,8 +133,11 @@ pub struct Output {
     pub format: Option<wgpu::TextureFormat>,
     /// The color space to set on the surface when the surface offers it.
     pub color_space: wgpu::SurfaceColorSpace,
-    /// The display transform. `None` presents the working space unchanged.
-    pub curves: Option<DisplayCurves>,
+    /// The working space the picture is composed in.
+    pub working: WorkingSpace,
+    /// The primaries of the surface's color space: the display transform
+    /// maps the picture into them.
+    pub display: WorkingSpace,
     /// Whether presenting waits for the display's refresh.
     pub vsync: bool,
 }
@@ -337,72 +147,49 @@ impl Default for Output {
         Self {
             format: None,
             color_space: wgpu::SurfaceColorSpace::Auto,
-            curves: None,
+            working: WorkingSpace::Srgb,
+            display: WorkingSpace::Srgb,
             vsync: true,
         }
     }
 }
 
+/// What the present pass reads besides the finished picture.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
-struct TileInstance {
+struct PresentUniform {
+    /// Linear working-space RGB to linear target RGB, as a std140
+    /// `mat3x3f`.
+    to_display: DisplayMapping,
+    /// x: 1 when pixels at their pane's peak are marked.
+    /// y: 1 when the surface takes values above SDR white (EDR).
+    /// z: how many of `panes` are in use. w: the peak outside them.
+    display: [f32; 4],
+    /// Each pane's scissor: x, y, width and height in surface pixels.
+    panes: [[f32; 4]; PRESENT_PANES],
+    /// Each pane's peak, four to an entry.
+    peaks: [[f32; 4]; PRESENT_PANES / 4],
+}
+
+/// One input tile chosen for a draw: the tile whose textures are read, and
+/// the rectangle drawn from them.
+#[derive(Clone, Copy, Debug)]
+struct ChosenTile {
+    source: TileKey,
     rect: [f32; 4],
     uv_rect: [f32; 4],
 }
 
-const MAX_TILE_INSTANCES: u64 = 4096;
-const MASK_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R8Unorm;
-/// The combined image, before the Finish steps. Float, so a layer's sum is
-/// not clipped before a step that would bring it back into range.
-const COMBINED_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
-/// A healed layer's samples, as they are in a tile.
-const HEALED_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
-
-/// The textures that are the size of the surface.
-struct Targets {
-    combined: wgpu::TextureView,
-    /// One view per mask layer, to draw strokes into.
-    mask_layers: Vec<wgpu::TextureView>,
-    /// The combined image, the masks and the display curves, for the finish
-    /// pass.
-    finish_inputs: wgpu::BindGroup,
-    /// The masks and the healed layers' samples, for the layers pass.
-    layer_masks: wgpu::BindGroup,
-    /// One view per healed layer, to draw its samples into.
-    healed_layers: Vec<wgpu::TextureView>,
-    /// One view per computed mask, to draw the mask into and to hold it
-    /// smoothed; and a second set, for the pass between the two blurs.
-    smoothed: [Vec<wgpu::TextureView>; 2],
-    /// Each set as what a blur pass reads.
-    smoothed_sources: [wgpu::BindGroup; 2],
-}
-
-/// A growable buffer of stroke segments.
-struct StrokeBuffer {
-    buffer: wgpu::Buffer,
-    capacity: usize,
-}
-
-impl StrokeBuffer {
-    fn new(device: &wgpu::Device, capacity: usize) -> Self {
-        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("stroke instances"),
-            size: (capacity * size_of::<Segment>()) as u64,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        Self { buffer, capacity }
-    }
-
-    /// Makes room for `count` segments. Returns whether the buffer was
-    /// replaced, which loses what it held.
-    fn reserve(&mut self, device: &wgpu::Device, count: usize) -> bool {
-        if count <= self.capacity {
-            return false;
-        }
-        *self = Self::new(device, count.next_power_of_two());
-        true
-    }
+/// What the last frame drew, for [`Renderer::offscreen_frame_ms`].
+#[derive(Default)]
+struct LastFrame {
+    scene: Option<GpuScene>,
+    /// The first pane's version, so an unchanged scene is not copied again.
+    version: Option<u64>,
+    view: Option<View>,
+    tiles: Vec<ChosenTile>,
+    overlay: Vec<Segment>,
+    overlay_strength: f32,
 }
 
 pub struct Renderer {
@@ -410,40 +197,19 @@ pub struct Renderer {
     queue: wgpu::Queue,
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
-    globals: wgpu::Buffer,
-    common: wgpu::BindGroup,
-    stretch_table: wgpu::Texture,
-    stretches_version: Option<u64>,
-    finish_layout: wgpu::BindGroupLayout,
-    masks_layout: wgpu::BindGroupLayout,
-    targets: Targets,
-    display_curves: wgpu::TextureView,
-    display_uniform: Option<([f32; 12], [f32; 4])>,
+    compositor: GpuCompositor,
+    /// The compositor's textures, the size of the surface.
+    targets: GpuTargets,
+    present_pipeline: wgpu::RenderPipeline,
+    present_layout: wgpu::BindGroupLayout,
+    present_uniform: wgpu::Buffer,
+    /// The present uniform's display transform; each frame adds its panes.
+    present_base: PresentUniform,
+    sampler: wgpu::Sampler,
+    /// The finished picture, the uniform and the display curves, for the
+    /// present pass. Made again with the targets.
+    present_inputs: wgpu::BindGroup,
     surface_offers: String,
-    tile_layout: wgpu::BindGroupLayout,
-    tile_pipeline: wgpu::RenderPipeline,
-    /// Draws the samples of the layers that have heals of their own.
-    healed_pipeline: wgpu::RenderPipeline,
-    /// The healed layers the pane being drawn has.
-    healed_count: usize,
-    /// Draws the computed masks that are smoothed, before the blurs.
-    smoothed_pipeline: wgpu::RenderPipeline,
-    /// The blur across, then the blur down.
-    blur_pipelines: [wgpu::RenderPipeline; 2],
-    /// Whether the pane being drawn has a mask to smooth.
-    smooths: bool,
-    stroke_pipeline: wgpu::RenderPipeline,
-    finish_pipeline: wgpu::RenderPipeline,
-    tile_instances: wgpu::Buffer,
-    /// The stroke being drawn. It only grows or resets, so only its new tail
-    /// is uploaded.
-    overlay: StrokeBuffer,
-    overlay_uploaded: usize,
-    /// Every mask's segments, one mask after another.
-    masks: StrokeBuffer,
-    /// Where each mask's segments are in `masks`: first index and count.
-    mask_ranges: Vec<(u32, u32)>,
-    masks_version: Option<u64>,
     cache: TileCache,
     /// The most bytes of tiles kept on the GPU.
     cache_budget_bytes: u64,
@@ -452,19 +218,265 @@ pub struct Renderer {
     workers: usize,
     /// The document's size and levels.
     pyramid: Pyramid,
-    /// The bands in the document.
-    bands: usize,
-    timing: Option<GpuTiming>,
     frame: u64,
     /// The most tiles uploaded in one frame. Each is 4 MB.
     pub uploads_per_frame: u32,
-    /// What the last frame drew, for [`Self::offscreen_frame_ms`].
-    last_sources: Vec<TileKey>,
-    last_overlay: u32,
+    last: LastFrame,
     /// Set to copy the next frame into [`Self::captured`].
     pub capture_next: bool,
-    /// The last captured frame: width, height, and BGRA bytes.
-    pub captured: Option<(u32, u32, Vec<u8>)>,
+    /// The last captured frame.
+    pub captured: Option<Captured>,
+    /// The samplings of the picture under way, one per [`ProbeSlot`].
+    probes: [Option<PictureProbe>; 2],
+    /// The tiles each sampling still needs, asked for after the view's.
+    probe_wanted: [Vec<TileKey>; 2],
+    /// A small picture of the whole document under way.
+    preview: Option<PreviewRender>,
+    /// The tiles the preview still needs, asked for after the view's.
+    preview_wanted: Vec<TileKey>,
+    /// The tiles the last frame asked for, so a preview drawn while the
+    /// window shows nothing keeps them when it asks for its own.
+    last_wanted: Vec<TileKey>,
+}
+
+/// Which of two samplings of the picture a call is about, so a host can
+/// sample two scenes at once: the combined picture and the final one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProbeSlot {
+    First,
+    Second,
+}
+
+impl ProbeSlot {
+    fn index(self) -> usize {
+        match self {
+            Self::First => 0,
+            Self::Second => 1,
+        }
+    }
+}
+
+/// How far [`Renderer::sample_picture`] has got.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Sampled {
+    /// Some patches still wait for their tiles.
+    Pending { done: usize, of: usize },
+    /// The picture's samples, red, green and blue interleaved, patch after
+    /// patch.
+    Ready(Vec<f32>),
+}
+
+/// How far [`Renderer::preview_picture`] has got.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Previewed {
+    /// Its tiles are being computed, or the GPU is drawing it.
+    Pending,
+    /// The picture, `width` by `height`, red, green and blue interleaved, in
+    /// the working space. A pixel nothing covers is 0.
+    Ready {
+        width: u32,
+        height: u32,
+        rgb: Vec<f32>,
+    },
+}
+
+/// A preview being drawn: its size and, once drawn, the copy being read.
+struct PreviewRender {
+    id: u64,
+    width: u32,
+    height: u32,
+    targets: GpuTargets,
+    reading: Option<PreviewReading>,
+}
+
+struct PreviewReading {
+    buffer: wgpu::Buffer,
+    mapped: Arc<std::sync::Mutex<Option<Result<(), wgpu::BufferAsyncError>>>>,
+    row_bytes: u32,
+}
+
+/// Marks a preview's scene version, apart from the samplings' and the
+/// canvas panes'.
+const PREVIEW_VERSION: u64 = 1 << 62;
+
+/// A frame copied from the surface, as the display was given it.
+#[derive(Clone, Debug)]
+pub struct Captured {
+    pub width: u32,
+    pub height: u32,
+    pub pixels: CapturedPixels,
+}
+
+/// A captured frame's samples, in the surface's own format.
+#[derive(Clone, Debug)]
+pub enum CapturedPixels {
+    /// Blue, green, red and alpha bytes of an 8-bit surface.
+    Bgra8(Vec<u8>),
+    /// Red, green, blue and alpha halves of an extended surface: values on
+    /// the display's curve, above 1 where the picture is brighter than SDR
+    /// white.
+    Rgba16Float(Vec<u16>),
+}
+
+impl Captured {
+    /// The frame's red, green and blue as bytes, over `region` (x, y,
+    /// width, height, kept within the frame), with a half-float frame's
+    /// values divided by `divide` first so values above SDR white can be
+    /// seen, and every `step`-th pixel kept.
+    pub fn rgb8(&self, region: [u32; 4], divide: f32, step: u32) -> (u32, u32, Vec<u8>) {
+        let x0 = region[0].min(self.width.saturating_sub(1));
+        let y0 = region[1].min(self.height.saturating_sub(1));
+        let width = region[2].clamp(1, self.width - x0);
+        let height = region[3].clamp(1, self.height - y0);
+        let step = step.max(1);
+        let (out_width, out_height) = (width.div_ceil(step), height.div_ceil(step));
+        let mut out = Vec::with_capacity((out_width * out_height * 3) as usize);
+        let divide = if divide > 0.0 { divide } else { 1.0 };
+        for y in (y0..y0 + height).step_by(step as usize) {
+            for x in (x0..x0 + width).step_by(step as usize) {
+                let at = (y * self.width + x) as usize * 4;
+                match &self.pixels {
+                    CapturedPixels::Bgra8(bytes) => {
+                        out.extend([bytes[at + 2], bytes[at + 1], bytes[at]]);
+                    }
+                    CapturedPixels::Rgba16Float(halves) => {
+                        out.extend(halves[at..at + 3].iter().map(|bits| {
+                            let value = half::f16::from_bits(*bits).to_f32() / divide;
+                            (value.clamp(0.0, 1.0) * 255.0).round() as u8
+                        }));
+                    }
+                }
+            }
+        }
+        (out_width, out_height, out)
+    }
+
+    /// The largest value of a half-float frame over `region`: how far above
+    /// SDR white the brightest pixel is drawn. 1 for an 8-bit frame.
+    pub fn brightest(&self, region: [u32; 4]) -> f32 {
+        let CapturedPixels::Rgba16Float(halves) = &self.pixels else {
+            return 1.0;
+        };
+        let mut brightest = 0.0_f32;
+        let x1 = (region[0] + region[2]).min(self.width);
+        let y1 = (region[1] + region[3]).min(self.height);
+        for y in region[1].min(y1)..y1 {
+            for x in region[0].min(x1)..x1 {
+                let at = (y * self.width + x) as usize * 4;
+                for bits in &halves[at..at + 3] {
+                    brightest = brightest.max(half::f16::from_bits(*bits).to_f32());
+                }
+            }
+        }
+        brightest
+    }
+}
+
+/// A sampling of the picture: the patches read so far, and the targets the
+/// patches are drawn into.
+struct PictureProbe {
+    id: u64,
+    size: u32,
+    samples: Vec<Option<Vec<f32>>>,
+    targets: GpuTargets,
+    /// Patches drawn and copied out, while the GPU finishes them.
+    reading: Option<ProbeReading>,
+}
+
+/// Patches copied into a buffer that is being mapped for reading. The
+/// render thread draws on and takes the samples once the buffer is mapped,
+/// so it never waits for the GPU.
+struct ProbeReading {
+    buffer: wgpu::Buffer,
+    /// The patch each part of the buffer holds, in order.
+    drawn: Vec<usize>,
+    /// Set once the buffer is mapped, or failed to map.
+    mapped: Arc<std::sync::Mutex<Option<Result<(), wgpu::BufferAsyncError>>>>,
+    row_bytes: u32,
+    patch_bytes: u64,
+}
+
+/// The patches one call of [`Renderer::sample_picture`] draws, at most, so a
+/// frame is not held up.
+const PROBE_PATCHES_PER_CALL: usize = 8;
+/// Marks a sampling's scene version, so it differs from the canvas panes'
+/// versions, which count up from 0.
+const PROBE_VERSION: u64 = 1 << 63;
+/// The tiles the sampling asks for at once, at most.
+const PROBE_TILES_WANTED: usize = 16;
+
+/// Takes the samples of the patches `reading` copied out, from its mapped
+/// buffer, into `probe`.
+fn take_patches(probe: &mut PictureProbe, reading: &ProbeReading, size: u32) {
+    {
+        let Ok(mapped) = reading.buffer.slice(..).get_mapped_range() else {
+            return;
+        };
+        let patch_bytes = reading.patch_bytes as usize;
+        for (place, index) in reading.drawn.iter().enumerate() {
+            let Some(slot) = probe.samples.get_mut(*index) else {
+                continue;
+            };
+            let start = place * patch_bytes;
+            let patch = &mapped[start..start + patch_bytes];
+            let mut samples = Vec::with_capacity(size as usize * size as usize * 3);
+            for row in patch.chunks(reading.row_bytes as usize) {
+                let pixels: &[u16] = bytemuck::cast_slice(&row[..size as usize * 8]);
+                for pixel in pixels.as_chunks::<4>().0 {
+                    samples.extend(
+                        pixel[..3]
+                            .iter()
+                            .map(|bits| half::f16::from_bits(*bits).to_f32()),
+                    );
+                }
+            }
+            *slot = Some(samples);
+        }
+    }
+    reading.buffer.unmap();
+}
+
+/// How a preview of `rect` (left, top, right, bottom in document pixels)
+/// fits in `long_side` pixels: the zoom, the image's width and height, and
+/// the pyramid level its tiles come from, as the canvas would choose for a
+/// view at that zoom. A region smaller than the preview is drawn at full
+/// size, not enlarged.
+fn preview_fit(rect: [f64; 4], long_side: u32, max_level: u8) -> (f64, u32, u32, u8) {
+    let (width, height) = ((rect[2] - rect[0]).max(1.0), (rect[3] - rect[1]).max(1.0));
+    let zoom = (f64::from(long_side.max(1)) / width.max(height)).min(1.0);
+    let level = ((1.0 / zoom).log2().floor().clamp(0.0, f64::from(max_level))) as u8;
+    (
+        zoom,
+        ((width * zoom).round() as u32).max(1),
+        ((height * zoom).round() as u32).max(1),
+        level,
+    )
+}
+
+/// A drawn preview's red, green and blue from its mapped buffer, as
+/// floats; a pixel nothing covers is 0.
+fn read_preview(reading: &PreviewReading, width: u32, height: u32) -> Vec<f32> {
+    let mut rgb = Vec::with_capacity(width as usize * height as usize * 3);
+    let Ok(mapped) = reading.buffer.slice(..).get_mapped_range() else {
+        return vec![0.0; width as usize * height as usize * 3];
+    };
+    for row in mapped
+        .chunks(reading.row_bytes as usize)
+        .take(height as usize)
+    {
+        let pixels: &[u16] = bytemuck::cast_slice(&row[..width as usize * 8]);
+        for pixel in pixels.as_chunks::<4>().0 {
+            rgb.extend(pixel[..3].iter().map(|bits| {
+                let value = half::f16::from_bits(*bits).to_f32();
+                if value.is_finite() {
+                    value
+                } else {
+                    0.0
+                }
+            }));
+        }
+    }
+    rgb
 }
 
 impl Renderer {
@@ -485,12 +497,10 @@ impl Renderer {
             })
             .await
             .map_err(|error| format!("no GPU adapter: {error}"))?;
-        let timestamps = adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY);
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("studio canvas"),
-                required_features: adapter.features()
-                    & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::FLOAT32_FILTERABLE),
+                required_features: adapter.features() & wgpu::Features::FLOAT32_FILTERABLE,
                 // The adapter's own limits: the default caps a texture at
                 // 8192 pixels, which a window across two large displays
                 // passes.
@@ -501,8 +511,8 @@ impl Renderer {
             .map_err(|error| format!("no GPU device: {error}"))?;
 
         let capabilities = surface.get_capabilities(&adapter);
-        // The shader writes display-referred values, so the surface must not
-        // apply the sRGB curve a second time.
+        // The present pass writes display-referred values, so the surface
+        // must not apply the sRGB curve a second time.
         let format = output
             .format
             .filter(|format| capabilities.formats.contains(format))
@@ -542,45 +552,25 @@ impl Renderer {
         };
         surface.configure(&device, &config);
 
-        let module = |label: &str, body: &str| {
-            device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some(label),
-                source: wgpu::ShaderSource::Wgsl(
-                    format!(
-                        "{}\n{}\n{body}",
-                        crate::display::SHADER,
-                        include_str!("globals.wgsl")
-                    )
-                    .into(),
-                ),
-            })
-        };
-        let layers_shader = module("layers", include_str!("layers.wgsl"));
-        let finish_shader = module("finish", include_str!("finish.wgsl"));
+        let compositor = GpuCompositor::new(&device, &queue, FINISHED_FORMAT);
+        let targets = compositor.targets(config.width, config.height);
 
-        let globals = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("globals"),
-            size: size_of::<Globals>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let texture_entry =
-            |binding: u32, view_dimension: wgpu::TextureViewDimension| wgpu::BindGroupLayoutEntry {
-                binding,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension,
-                    multisampled: false,
-                },
-                count: None,
-            };
-        let common_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("globals and sampler"),
+        let texture_entry = |binding: u32| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        };
+        let present_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("present"),
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
@@ -594,319 +584,141 @@ impl Renderer {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
-                texture_entry(2, wgpu::TextureViewDimension::D2),
+                texture_entry(2),
             ],
         });
-        let tile_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("tile"),
-            entries: &[texture_entry(0, wgpu::TextureViewDimension::D2Array)],
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("present"),
+            source: wgpu::ShaderSource::Wgsl(present_source().into()),
         });
-        let masks_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("layer masks"),
-            entries: &[
-                texture_entry(0, wgpu::TextureViewDimension::D2Array),
-                texture_entry(1, wgpu::TextureViewDimension::D2Array),
-                texture_entry(2, wgpu::TextureViewDimension::D2Array),
-            ],
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("present"),
+            bind_group_layouts: &[Some(&present_layout)],
+            ..Default::default()
         });
-        let finish_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("finish inputs"),
-            entries: &[
-                texture_entry(0, wgpu::TextureViewDimension::D2),
-                texture_entry(1, wgpu::TextureViewDimension::D2Array),
-                texture_entry(2, wgpu::TextureViewDimension::D2),
-            ],
-        });
-
-        const INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 2] =
-            wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4];
-        let pipeline = |label: &str,
-                        shader: &wgpu::ShaderModule,
-                        second: Option<&wgpu::BindGroupLayout>,
-                        third: Option<&wgpu::BindGroupLayout>,
-                        entries: (&str, &str),
-                        instanced: bool,
-                        targets: &[Option<wgpu::ColorTargetState>]| {
-            let groups = [Some(&common_layout), second, third];
-            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some(label),
-                bind_group_layouts: &groups[..if third.is_some() { 3 } else { 2 }],
+        let present_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("present"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("present_vertex"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("present_fragment"),
+                targets: &[Some(format.into())],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
                 ..Default::default()
-            });
-            let instances = [Some(wgpu::VertexBufferLayout {
-                array_stride: 32,
-                step_mode: wgpu::VertexStepMode::Instance,
-                attributes: &INSTANCE_ATTRIBUTES,
-            })];
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(&layout),
-                vertex: wgpu::VertexState {
-                    module: shader,
-                    entry_point: Some(entries.0),
-                    buffers: if instanced { &instances } else { &[] },
-                    compilation_options: Default::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: shader,
-                    entry_point: Some(entries.1),
-                    targets,
-                    compilation_options: Default::default(),
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleStrip,
-                    ..Default::default()
-                },
-                depth_stencil: None,
-                multisample: Default::default(),
-                multiview_mask: None,
-                cache: None,
-            })
-        };
-        let tile_pipeline = pipeline(
-            "layers",
-            &layers_shader,
-            Some(&tile_layout),
-            Some(&masks_layout),
-            ("tile_vertex", "tile_fragment"),
-            true,
-            &[Some(COMBINED_FORMAT.into())],
-        );
-        let healed_pipeline = pipeline(
-            "healed layers",
-            &layers_shader,
-            Some(&tile_layout),
-            None,
-            ("tile_vertex", "healed_fragment"),
-            true,
-            &std::array::from_fn::<_, MAX_HEALED_LAYERS, _>(|_| Some(HEALED_FORMAT.into())),
-        );
-        let smoothed_targets =
-            std::array::from_fn::<_, MAX_COMPUTED_MASKS, _>(|_| Some(SMOOTHED_FORMAT.into()));
-        let smoothed_pipeline = pipeline(
-            "computed masks",
-            &layers_shader,
-            Some(&tile_layout),
-            None,
-            ("tile_vertex", "computed_fragment"),
-            true,
-            &smoothed_targets,
-        );
-        // A blur reads the masks through the tile binding: both are arrays
-        // of single-channel images.
-        let blur_pipelines = ["blur_across_fragment", "blur_down_fragment"].map(|fragment| {
-            pipeline(
-                "mask blur",
-                &layers_shader,
-                Some(&tile_layout),
-                None,
-                ("whole_vertex", fragment),
-                false,
-                &smoothed_targets,
-            )
+            },
+            depth_stencil: None,
+            multisample: Default::default(),
+            multiview_mask: None,
+            cache: None,
         });
-        let stroke_pipeline = pipeline(
-            "strokes",
-            &layers_shader,
-            None,
-            None,
-            ("stroke_vertex", "stroke_fragment"),
-            true,
-            &[Some(wgpu::ColorTargetState {
-                format: MASK_FORMAT,
-                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                write_mask: wgpu::ColorWrites::RED,
-            })],
-        );
-        let finish_pipeline = pipeline(
-            "finish",
-            &finish_shader,
-            Some(&finish_layout),
-            None,
-            ("finish_vertex", "finish_fragment"),
-            false,
-            &[Some(format.into())],
-        );
-
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("linear"),
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
-        let stretch_table = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("stretch table"),
-            size: wgpu::Extent3d {
-                width: STRETCH_TABLE_WIDTH as u32,
-                height: MAX_LAYERS as u32,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R16Float,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        let stretch_view = stretch_table.create_view(&wgpu::TextureViewDescriptor::default());
-        let common = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("globals and sampler"),
-            layout: &common_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: globals.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&stretch_view),
-                },
-            ],
-        });
-        // With no transform the shader skips the lookup, and this table is
-        // only there to fill the binding.
-        let identity = DisplayCurves {
-            width: 2,
-            decode: vec![[0.0; 3], [1.0; 3]],
-            encode: vec![[0.0; 3], [1.0; 3]],
-            to_target: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
-        };
-        let table_format = if device
-            .features()
-            .contains(wgpu::Features::FLOAT32_FILTERABLE)
-        {
-            TableFormat::Full
+        // An extended surface takes values above SDR white (EDR).
+        let extended = if matches!(
+            color_space,
+            wgpu::SurfaceColorSpace::ExtendedSrgb | wgpu::SurfaceColorSpace::ExtendedDisplayP3
+        ) {
+            1.0
         } else {
-            TableFormat::Half
+            0.0
         };
-        let display_curves =
-            output
-                .curves
-                .as_ref()
-                .unwrap_or(&identity)
-                .upload(&device, &queue, table_format);
-        let display_uniform = output.curves.as_ref().map(|curves| {
-            (
-                curves.matrix_uniform(),
-                [curves.width as f32, 0.0, 0.0, 0.0],
-            )
-        });
-        let targets = create_targets(
-            &device,
-            &finish_layout,
-            &masks_layout,
-            &tile_layout,
-            &display_curves,
-            config.width,
-            config.height,
-        );
-
-        let tile_instances = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tile instances"),
-            size: MAX_TILE_INSTANCES * size_of::<TileInstance>() as u64,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        let uniform = PresentUniform {
+            to_display: DisplayMapping::new(output.working, output.display),
+            display: [0.0, extended, 0.0, 1.0],
+            ..PresentUniform::zeroed()
+        };
+        let present_uniform = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("present"),
+            size: size_of::<PresentUniform>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        queue.write_buffer(&present_uniform, 0, bytemuck::bytes_of(&uniform));
+        let present_inputs = present_bind_group(
+            &device,
+            &present_layout,
+            &present_uniform,
+            &sampler,
+            targets.finished_view(),
+        );
 
-        // The coarsest level is always loaded, so a view never shows a hole.
         let pyramid = source.pyramid();
         let bands = source.bands().max(1);
         let mut cache = TileCache::new(cache_budget_bytes, bands);
-        let (across, down) = pyramid.tiles_across(pyramid.max_level());
-        for y in 0..down as u16 {
-            for x in 0..across as u16 {
-                let key = TileKey {
-                    level: pyramid.max_level(),
-                    x,
-                    y,
-                };
-                cache.insert(&device, &queue, &tile_layout, key, &source.tile(key), 0);
-                cache.pin(key);
-            }
-        }
-
-        let timing = timestamps.then(|| GpuTiming::new(&device, queue.get_timestamp_period()));
+        load_coarsest(
+            &mut cache,
+            &device,
+            &queue,
+            compositor.tile_layout(),
+            source.as_ref(),
+            0,
+        );
         Ok(Self {
-            overlay: StrokeBuffer::new(&device, 4096),
-            masks: StrokeBuffer::new(&device, 4096),
             device,
             queue,
             surface,
             config,
-            globals,
-            common,
-            stretch_table,
-            stretches_version: None,
-            finish_layout,
-            masks_layout,
+            compositor,
             targets,
-            display_curves,
-            display_uniform,
+            present_pipeline,
+            present_layout,
+            present_uniform,
+            present_base: uniform,
+            sampler,
+            present_inputs,
             surface_offers,
-            tile_layout,
-            tile_pipeline,
-            healed_pipeline,
-            healed_count: 0,
-            smoothed_pipeline,
-            blur_pipelines,
-            smooths: false,
-            stroke_pipeline,
-            finish_pipeline,
-            tile_instances,
-            overlay_uploaded: 0,
-            mask_ranges: Vec::new(),
-            masks_version: None,
             cache,
             cache_budget_bytes,
-            workers,
             producer: TileProducer::new(workers, source),
+            workers,
             pyramid,
-            bands,
-            timing,
             frame: 0,
             uploads_per_frame: 6,
-            last_sources: Vec::new(),
-            last_overlay: 0,
+            last: LastFrame::default(),
             capture_next: false,
             captured: None,
+            probes: [None, None],
+            preview: None,
+            preview_wanted: Vec::new(),
+            last_wanted: Vec::new(),
+            probe_wanted: [Vec::new(), Vec::new()],
         })
     }
 
     /// Draws another document from now on, such as a store that was
     /// prepared again. Every tile of the document before is dropped.
     pub fn replace_source(&mut self, source: Arc<dyn TileSource>) {
+        // A sampling of the old document's picture is of no use now.
+        self.stop_sampling(ProbeSlot::First);
+        self.stop_sampling(ProbeSlot::Second);
         let pyramid = source.pyramid();
         let bands = source.bands().max(1);
         let mut cache = TileCache::new(self.cache_budget_bytes, bands);
-        // The coarsest level is always loaded, so a view never shows a hole.
-        let (across, down) = pyramid.tiles_across(pyramid.max_level());
-        for y in 0..down as u16 {
-            for x in 0..across as u16 {
-                let key = TileKey {
-                    level: pyramid.max_level(),
-                    x,
-                    y,
-                };
-                cache.insert(
-                    &self.device,
-                    &self.queue,
-                    &self.tile_layout,
-                    key,
-                    &source.tile(key),
-                    self.frame,
-                );
-                cache.pin(key);
-            }
-        }
+        load_coarsest(
+            &mut cache,
+            &self.device,
+            &self.queue,
+            self.compositor.tile_layout(),
+            source.as_ref(),
+            self.frame,
+        );
         self.cache = cache;
         self.producer = TileProducer::new(self.workers, source);
         self.pyramid = pyramid;
-        self.bands = bands;
-        self.last_sources.clear();
+        self.last = LastFrame::default();
     }
 
     pub fn size(&self) -> (u32, u32) {
@@ -935,14 +747,13 @@ impl Renderer {
         self.config.width = width;
         self.config.height = height;
         self.surface.configure(&self.device, &self.config);
-        self.targets = create_targets(
+        self.targets = self.compositor.targets(width, height);
+        self.present_inputs = present_bind_group(
             &self.device,
-            &self.finish_layout,
-            &self.masks_layout,
-            &self.tile_layout,
-            &self.display_curves,
-            width,
-            height,
+            &self.present_layout,
+            &self.present_uniform,
+            &self.sampler,
+            self.targets.finished_view(),
         );
     }
 
@@ -951,24 +762,29 @@ impl Renderer {
         self.frame += 1;
         let mut stats = FrameStats::default();
         let _ = self.device.poll(wgpu::PollType::Poll);
-        if let Some(timing) = &mut self.timing {
-            timing.collect();
-        }
 
         let acquire_started = Instant::now();
-        let target = match self.surface.get_current_texture() {
+        // A covered window's surface has no texture. A frame someone asked
+        // to capture is drawn into one of the surface's size instead, and not
+        // shown.
+        let (target, offscreen) = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(texture)
-            | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
+            | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => (Some(texture), None),
             other => {
                 self.surface.configure(&self.device, &self.config);
-                return Err(format!("the surface had no texture: {other:?}"));
+                if !self.capture_next {
+                    return Err(format!("the surface had no texture: {other:?}"));
+                }
+                (
+                    None,
+                    Some(self.surface_sized("offscreen frame", wgpu::TextureUsages::empty())),
+                )
             }
         };
         stats.acquire_ms = acquire_started.elapsed().as_secs_f32() * 1000.0;
         let encode_started = Instant::now();
 
         let surface = (self.config.width, self.config.height);
-        let pane_count = frame.panes.len().max(1);
         // Every pane's viewport is the size of the first.
         let first_rect = frame
             .panes
@@ -980,21 +796,7 @@ impl Renderer {
         let view = frame.view;
 
         // Tiles: upload what the workers finished, then choose what to draw.
-        while stats.tiles_uploaded < self.uploads_per_frame {
-            let Some((key, samples)) = self.producer.take_finished() else {
-                break;
-            };
-            self.cache.insert(
-                &self.device,
-                &self.queue,
-                &self.tile_layout,
-                key,
-                &samples,
-                self.frame,
-            );
-            self.producer.uploaded(key);
-            stats.tiles_uploaded += 1;
-        }
+        stats.tiles_uploaded = self.upload_finished();
 
         let level = ((1.0 / view.zoom)
             .log2()
@@ -1029,12 +831,29 @@ impl Renderer {
                 .into_iter()
                 .filter(|key| !visible_keys.contains(key)),
         );
+        // The tiles a sampling of the picture waits for come after the
+        // view's.
+        wanted.extend(
+            self.probe_wanted
+                .iter()
+                .flatten()
+                .filter(|key| !wanted.contains(key))
+                .copied()
+                .collect::<Vec<_>>(),
+        );
+        wanted.extend(
+            self.preview_wanted
+                .iter()
+                .filter(|key| !wanted.contains(key))
+                .copied()
+                .collect::<Vec<_>>(),
+        );
         wanted.retain(|key| !self.cache.contains(*key));
+        self.last_wanted.clone_from(&wanted);
         self.producer.set_wanted(wanted);
 
-        let mut instances: Vec<TileInstance> = Vec::with_capacity(visible_keys.len());
-        let mut sources: Vec<TileKey> = Vec::with_capacity(visible_keys.len());
-        for key in visible_keys.iter().take(MAX_TILE_INSTANCES as usize) {
+        let mut chosen: Vec<ChosenTile> = Vec::with_capacity(visible_keys.len());
+        for key in visible_keys.iter().take(MAX_TILE_DRAWS) {
             let mut source = *key;
             while !self.cache.contains(source) {
                 match self.pyramid.parent(source) {
@@ -1049,90 +868,81 @@ impl Renderer {
             if source != *key {
                 stats.tiles_coarse += 1;
             }
-            let mut rect = self.pyramid.doc_rect(*key);
-            // A tile is drawn only where it is inside the crop.
-            if let Some(crop) = frame.crop {
-                rect = [
-                    rect[0].max(crop[0]),
-                    rect[1].max(crop[1]),
-                    rect[2].min(crop[2]),
-                    rect[3].min(crop[3]),
-                ];
-                if rect[0] >= rect[2] || rect[1] >= rect[3] {
-                    continue;
-                }
+            if let Some(tile) = chosen_tile(&self.pyramid, *key, source, frame.crop) {
+                chosen.push(tile);
             }
-            let span = (TILE << source.level) as f32;
-            let origin = [source.x as f32 * span, source.y as f32 * span];
-            instances.push(TileInstance {
-                rect,
-                uv_rect: [
-                    (rect[0] - origin[0]) / span,
-                    (rect[1] - origin[1]) / span,
-                    (rect[2] - origin[0]) / span,
-                    (rect[3] - origin[1]) / span,
-                ],
-            });
-            sources.push(source);
         }
-        stats.tiles_drawn = instances.len() as u32;
-        self.queue
-            .write_buffer(&self.tile_instances, 0, bytemuck::cast_slice(&instances));
+        stats.tiles_drawn = chosen.len() as u32;
 
-        self.upload_overlay(frame);
-
-        let target_view = target
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-        let timed = self.timing.as_mut().and_then(GpuTiming::begin);
-        let overlay = frame.overlay.len() as u32;
-        // Captures are written as 8-bit PNG files, so only an 8-bit surface
-        // is captured.
-        let eight_bit = self.config.format == wgpu::TextureFormat::Bgra8Unorm;
-        let capture_texture = (std::mem::take(&mut self.capture_next) && eight_bit)
-            .then(|| self.surface_sized("capture", wgpu::TextureUsages::COPY_SRC));
-        let capture_view = capture_texture
-            .as_ref()
-            .map(|texture| texture.create_view(&wgpu::TextureViewDescriptor::default()));
-        // Several panes share the uniform buffer, the stretch table and the
-        // mask textures, so each pane is written and submitted in turn.
-        let alone = pane_count == 1;
-        if !alone {
-            self.stretches_version = None;
-            self.masks_version = None;
-        }
         for (index, pane) in frame.panes.iter().enumerate() {
             let rect = within_surface(pane.viewport, surface);
             let scissor = within_surface(pane.scissor, surface);
-            self.write_globals(frame, pane, rect);
-            self.upload_stretches(pane, alone.then_some(frame.stretches_version));
-            self.upload_masks(pane, alone.then_some(frame.masks_version));
-            let mut encoder = self
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-            let timed = timed.filter(|_| index == 0);
-            self.passes(
-                &mut encoder,
-                &target_view,
-                &sources,
-                overlay,
-                timed.is_some(),
-                (rect, scissor),
+            let draws = tile_draws(&self.cache, &chosen);
+            self.compositor.draw(
+                pane.scene,
+                pane.version,
+                &self.targets,
+                GpuView {
+                    center: view.center,
+                    zoom: view.zoom,
+                },
+                DrawArea {
+                    viewport: rect,
+                    scissor,
+                },
+                &draws,
+                frame.overlay,
+                frame.overlay_strength,
                 index == 0,
             );
-            if let Some(view) = &capture_view {
-                self.finish_pass(&mut encoder, view, false, (rect, scissor), index == 0);
-            }
-            if let (Some(slot), Some(timing)) = (timed, &self.timing) {
-                timing.resolve(&mut encoder, slot);
-            }
-            self.queue.submit([encoder.finish()]);
         }
+
+        // Each pane's values are clipped at its picture's peak.
+        let mut uniform = self.present_base;
+        let brightest = frame
+            .panes
+            .iter()
+            .map(|pane| pane.peak)
+            .fold(1.0_f32, f32::max);
+        let kept = if frame.panes.len() <= PRESENT_PANES {
+            frame.panes.len()
+        } else {
+            0
+        };
+        for (index, pane) in frame.panes.iter().take(kept).enumerate() {
+            uniform.panes[index] = within_surface(pane.scissor, surface).map(|value| value as f32);
+            uniform.peaks[index / 4][index % 4] = pane.peak.max(1.0);
+        }
+        uniform.display[0] = if frame.show_clipping { 1.0 } else { 0.0 };
+        uniform.display[2] = kept as f32;
+        uniform.display[3] = brightest;
+        self.queue
+            .write_buffer(&self.present_uniform, 0, bytemuck::bytes_of(&uniform));
+
+        let target_view = target
+            .as_ref()
+            .map(|target| &target.texture)
+            .or(offscreen.as_ref())
+            .expect("a surface texture or an offscreen one")
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        // An 8-bit surface is captured as BGRA bytes, a half-float one as
+        // its RGBA halves; another format is not captured.
+        let pixel_bytes = match self.config.format {
+            wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb => Some(4),
+            wgpu::TextureFormat::Rgba16Float => Some(8),
+            _ => None,
+        };
+        let capture_texture = (std::mem::take(&mut self.capture_next) && pixel_bytes.is_some())
+            .then(|| self.surface_sized("capture", wgpu::TextureUsages::COPY_SRC));
+        let pixel_bytes = pixel_bytes.unwrap_or(4);
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        self.present(&mut encoder, &target_view);
         let capture = capture_texture.map(|texture| {
-            let row_bytes = (self.config.width * 4).next_multiple_of(256);
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            self.present(&mut encoder, &view);
+            let row_bytes = (self.config.width * pixel_bytes).next_multiple_of(256);
             let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("capture"),
                 size: row_bytes as u64 * self.config.height as u64,
@@ -1154,297 +964,76 @@ impl Renderer {
             (buffer, row_bytes as usize)
         });
         self.queue.submit([encoder.finish()]);
-        if let (Some(slot), Some(timing)) = (timed, &self.timing) {
-            timing.read_back(slot);
+        if let Some(target) = target {
+            self.queue.present(target);
         }
-        self.queue.present(target);
         if let Some((buffer, row_bytes)) = capture {
             buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
             let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
             if let Ok(mapped) = buffer.slice(..).get_mapped_range() {
                 let width = self.config.width as usize;
-                let mut pixels = Vec::with_capacity(width * 4 * self.config.height as usize);
+                let line = width * pixel_bytes as usize;
+                let mut bytes = Vec::with_capacity(line * self.config.height as usize);
                 for row in mapped.chunks(row_bytes) {
-                    pixels.extend_from_slice(&row[..width * 4]);
+                    bytes.extend_from_slice(&row[..line]);
                 }
-                self.captured = Some((self.config.width, self.config.height, pixels));
+                let pixels = if pixel_bytes == 8 {
+                    CapturedPixels::Rgba16Float(bytemuck::pod_collect_to_vec(&bytes))
+                } else {
+                    CapturedPixels::Bgra8(bytes)
+                };
+                self.captured = Some(Captured {
+                    width: self.config.width,
+                    height: self.config.height,
+                    pixels,
+                });
             }
         }
 
-        self.last_sources = sources;
-        self.last_overlay = overlay;
+        // The first pane's scene is copied only when it changed.
+        let first = frame.panes.first();
+        let kept = first.and_then(|pane| pane.version).is_some()
+            && first.map(|pane| pane.version) == Some(self.last.version);
+        let scene = if kept {
+            self.last.scene.take()
+        } else {
+            first.map(|pane| pane.scene.clone())
+        };
+        self.last = LastFrame {
+            scene,
+            version: first.and_then(|pane| pane.version),
+            view: Some(view),
+            tiles: chosen,
+            overlay: frame.overlay.to_vec(),
+            overlay_strength: frame.overlay_strength,
+        };
         self.cache.evict(self.frame);
         stats.encode_ms = encode_started.elapsed().as_secs_f32() * 1000.0;
-        stats.gpu_ms = self.timing.as_ref().and_then(|timing| timing.latest_ms);
         stats.tiles_in_flight = self.producer.in_flight() as u32;
         stats.cache_tiles = self.cache.len() as u32;
         stats.cache_bytes = self.cache.bytes();
         Ok(stats)
     }
 
-    /// Writes what the shaders read for one pane. `rect` is the pane's place
-    /// in the surface.
-    fn write_globals(&mut self, frame: &Frame, pane: &Pane, rect: [u32; 4]) {
-        let (width, height) = (rect[2] as f64, rect[3] as f64);
-        let view = frame.view;
-        let scale = [2.0 * view.zoom / width, -2.0 * view.zoom / height];
-        let layers = &pane.layers[..pane.layers.len().min(MAX_LAYERS)];
-        let finish = &pane.finish[..pane.finish.len().min(MAX_FINISH_STEPS)];
-        let mut globals = Globals {
-            view: [
-                scale[0] as f32,
-                scale[1] as f32,
-                (-view.center[0] * scale[0]) as f32,
-                (-view.center[1] * scale[1]) as f32,
-            ],
-            // Passes read the masks and the combined image by surface
-            // pixel, so this is the surface's size, not the pane's.
-            screen: [
-                self.config.width as f32,
-                self.config.height as f32,
-                frame.overlay_strength,
-                OVERLAY_LAYER as f32,
-            ],
-            counts: [layers.len() as f32, finish.len() as f32, 0.0, 0.0],
-            layers: [[0.0; 20]; MAX_LAYERS],
-            computed: [[0.0; 16]; MAX_COMPUTED_MASKS],
-            finish: [[0.0; 12]; MAX_FINISH_STEPS],
-            healed: [[-1.0, -1.0, 0.0, 0.0]; MAX_HEALED_LAYERS],
-            heals: [[0.0; 8]; MAX_HEALS],
-            display_matrix: self.display_uniform.map_or([0.0; 12], |display| display.0),
-            display: self.display_uniform.map_or([0.0; 4], |display| display.1),
-        };
-        // A band layer's stretch is the next row of the stretch table; an
-        // adjustment layer has none.
-        let mut row = 0;
-        for (slot, layer) in globals.layers.iter_mut().zip(layers) {
-            // A mask the frame does not hold limits nothing.
-            let mask = layer
-                .mask
-                .filter(|mask| *mask < pane.masks.len().min(MAX_MASKS))
-                .map_or(-1.0, |mask| mask as f32);
-            let (kind, amount) = match layer.mark {
-                Mark::GroupBegin => (10.0, 0.0),
-                Mark::GroupEnd => (11.0, 0.0),
-                Mark::Solid => (12.0, 0.0),
-                Mark::Layer => layer
-                    .adjustment
-                    .map_or((0.0, 0.0), |(kind, amount)| (kind as u32 as f32, amount)),
-            };
-            let clip = layer
-                .clip
-                .filter(|mask| *mask < pane.masks.len().min(MAX_MASKS))
-                .map_or(-1.0, |mask| mask as f32);
-            let shows_band = layer.mark == Mark::Layer && layer.adjustment.is_none();
-            *slot = [
-                layer.color[0],
-                layer.color[1],
-                layer.color[2],
-                layer.opacity.clamp(0.0, 1.0),
-                row as f32,
-                // The layer's place among the healed layers; none yet.
-                -1.0,
-                clip,
-                layer.curve.clamp(-1.0, 1.0),
-                layer.band.min(self.bands - 1) as f32,
-                layer.blend as u32 as f32,
-                layer
-                    .blended
-                    .map_or(-1.0, |(band, _)| band.min(self.bands - 1) as f32),
-                layer
-                    .blended
-                    .map_or(0.0, |(_, amount)| amount.clamp(0.0, 1.0)),
-                kind,
-                amount,
-                mask,
-                if layer.own { 1.0 } else { 0.0 },
-                layer
-                    .computed
-                    .filter(|mask| *mask < pane.computed.len().min(MAX_COMPUTED_MASKS))
-                    .map_or(-1.0, |mask| mask as f32),
-                0.0,
-                0.0,
-                0.0,
-            ];
-            if shows_band {
-                row += 1;
-            }
-        }
-        for (slot, mask) in globals.computed.iter_mut().zip(pane.computed) {
-            let band = |band: Option<MaskBand>| match band {
-                Some(band) => [
-                    band.band.min(self.bands - 1) as f32,
-                    band.blended
-                        .map_or(-1.0, |(other, _)| other.min(self.bands - 1) as f32),
-                    band.blended
-                        .map_or(0.0, |(_, amount)| amount.clamp(0.0, 1.0)),
-                    band.stretch_row.min(MAX_LAYERS - 1) as f32,
-                ],
-                None => [-1.0, -1.0, 0.0, 0.0],
-            };
-            let (first, second) = (band(mask.bands[0]), band(mask.bands[1]));
-            slot[..4].copy_from_slice(&first);
-            slot[4..8].copy_from_slice(&second);
-            let strokes = |mask: Option<usize>| {
-                mask.filter(|mask| *mask < pane.masks.len().min(MAX_MASKS))
-                    .map_or(-1.0, |mask| mask as f32)
-            };
-            slot[8] = if mask.power_of_inverse { 1.0 } else { 0.0 };
-            slot[9] = if mask.inverted { 1.0 } else { 0.0 };
-            slot[10] = mask.reach.clamp(0.05, 20.0);
-            slot[12] = strokes(mask.added);
-            slot[13] = strokes(mask.removed);
-            // The blur's reach in surface pixels.
-            slot[14] = (f64::from(mask.smoothing.max(0.0)) * view.zoom) as f32;
-        }
-        self.smooths = pane
-            .computed
-            .iter()
-            .take(MAX_COMPUTED_MASKS)
-            .any(|mask| mask.smoothing > 0.0);
-        // Each layer with heals of its own gets a place among the healed
-        // layers. A heal on a layer with no place left is not drawn.
-        let mut healed: Vec<usize> = Vec::new();
-        let mut heal_count = 0;
-        for heal in pane.heals {
-            let known = healed.iter().position(|layer| *layer == heal.layer);
-            let Some(layer) = layers
-                .get(heal.layer)
-                .filter(|layer| layer.mark == Mark::Layer && layer.adjustment.is_none())
-            else {
-                continue;
-            };
-            if heal_count == MAX_HEALS
-                || heal.mask >= pane.masks.len().min(MAX_MASKS)
-                || (known.is_none() && healed.len() == MAX_HEALED_LAYERS)
-            {
-                continue;
-            }
-            let place = known.unwrap_or_else(|| {
-                healed.push(heal.layer);
-                healed.len() - 1
-            });
-            globals.layers[heal.layer][5] = place as f32;
-            globals.healed[place] = [
-                layer.band.min(self.bands - 1) as f32,
-                layer
-                    .blended
-                    .map_or(-1.0, |(band, _)| band.min(self.bands - 1) as f32),
-                layer
-                    .blended
-                    .map_or(0.0, |(_, amount)| amount.clamp(0.0, 1.0)),
-                0.0,
-            ];
-            globals.heals[heal_count] = [
-                heal.layer as f32,
-                if heal.before_stretch { 0.0 } else { 1.0 },
-                heal.mask as f32,
-                heal.shift,
-                // The offset in whole surface pixels.
-                (heal.offset[0] as f64 * view.zoom).round() as f32,
-                (heal.offset[1] as f64 * view.zoom).round() as f32,
-                0.0,
-                0.0,
-            ];
-            heal_count += 1;
-        }
-        globals.counts[2] = heal_count as f32;
-        self.healed_count = healed.len();
-        for (slot, step) in globals.finish.iter_mut().zip(finish) {
-            // A mask the frame does not hold limits nothing.
-            let mask = step
-                .mask
-                .filter(|mask| *mask < pane.masks.len().min(MAX_MASKS))
-                .map_or(-1.0, |mask| mask as f32);
-            let (kind, offset, shift) = match step.kind {
-                FinishKind::Curves => (1.0, [0.0; 2], [0.0; 3]),
-                FinishKind::Saturation => (2.0, [0.0; 2], [0.0; 3]),
-                FinishKind::Heal { offset, shift } => (3.0, offset, shift),
-            };
-            *slot = [
-                kind,
-                step.amount,
-                mask,
-                step.opacity.clamp(0.0, 1.0),
-                // The offset in whole surface pixels.
-                (offset[0] as f64 * view.zoom).round() as f32,
-                (offset[1] as f64 * view.zoom).round() as f32,
-                0.0,
-                0.0,
-                shift[0],
-                shift[1],
-                shift[2],
-                0.0,
-            ];
-        }
-        self.queue
-            .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
-    }
-
-    /// Uploads a pane's stretch tables. With a `version`, tables of a
-    /// version already uploaded are left as they are.
-    fn upload_stretches(&mut self, pane: &Pane, version: Option<u64>) {
-        if version.is_some() && self.stretches_version == version {
-            return;
-        }
-        let mut bits = vec![0u16; STRETCH_TABLE_WIDTH * MAX_LAYERS];
-        for (row, table) in pane.stretches.iter().take(MAX_LAYERS).enumerate() {
-            let target = &mut bits[row * STRETCH_TABLE_WIDTH..(row + 1) * STRETCH_TABLE_WIDTH];
-            for (bits, value) in target.iter_mut().zip(table) {
-                *bits = half::f16::from_f32(*value).to_bits();
-            }
-        }
-        self.queue.write_texture(
-            self.stretch_table.as_image_copy(),
-            bytemuck::cast_slice(&bits),
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(STRETCH_TABLE_WIDTH as u32 * 2),
-                rows_per_image: None,
-            },
-            self.stretch_table.size(),
-        );
-        self.stretches_version = version;
-    }
-
-    fn upload_overlay(&mut self, frame: &Frame) {
-        // The overlay only grows or resets, so upload its new tail.
-        if frame.overlay.len() < self.overlay_uploaded
-            || self.overlay.reserve(&self.device, frame.overlay.len())
-        {
-            self.overlay_uploaded = 0;
-        }
-        if frame.overlay.len() > self.overlay_uploaded {
-            self.queue.write_buffer(
-                &self.overlay.buffer,
-                (self.overlay_uploaded * size_of::<Segment>()) as u64,
-                bytemuck::cast_slice(&frame.overlay[self.overlay_uploaded..]),
-            );
-            self.overlay_uploaded = frame.overlay.len();
-        }
-    }
-
-    /// Uploads a pane's masks. With a `version`, masks of a version already
-    /// uploaded are left as they are.
-    fn upload_masks(&mut self, pane: &Pane, version: Option<u64>) {
-        if version.is_some() && self.masks_version == version {
-            return;
-        }
-        let masks = &pane.masks[..pane.masks.len().min(MAX_MASKS)];
-        let all: Vec<Segment> = masks.iter().flatten().copied().collect();
-        self.masks.reserve(&self.device, all.len());
-        self.queue
-            .write_buffer(&self.masks.buffer, 0, bytemuck::cast_slice(&all));
-        let mut first = 0;
-        self.mask_ranges = masks
-            .iter()
-            .map(|mask| {
-                let range = (first, mask.len() as u32);
-                first += mask.len() as u32;
-                range
-            })
-            .collect();
-        self.masks_version = version;
+    /// The present pass: the finished picture through the display
+    /// transform, over the whole of `target`.
+    fn present(&self, encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView) {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("present"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+        pass.set_pipeline(&self.present_pipeline);
+        pass.set_bind_group(0, &self.present_inputs, &[]);
+        pass.draw(0..3, 0..1);
     }
 
     /// A texture of the surface's size and format that can be drawn to.
@@ -1465,248 +1054,390 @@ impl Renderer {
         })
     }
 
-    /// Every pass of one pane: the masks, the layers, then the finish steps
-    /// into `rect` of `target`. `first` clears the target; later panes keep
-    /// what the panes before them drew.
-    #[allow(clippy::too_many_arguments)]
-    fn passes(
-        &self,
-        encoder: &mut wgpu::CommandEncoder,
-        target: &wgpu::TextureView,
-        sources: &[TileKey],
-        overlay: u32,
-        timed: bool,
-        (rect, scissor): ([u32; 4], [u32; 4]),
-        first: bool,
-    ) {
-        let within = |pass: &mut wgpu::RenderPass| {
-            pass.set_viewport(
-                rect[0] as f32,
-                rect[1] as f32,
-                rect[2] as f32,
-                rect[3] as f32,
-                0.0,
-                1.0,
-            );
-            pass.set_scissor_rect(scissor[0], scissor[1], scissor[2], scissor[3]);
-        };
-        let timestamps = |begin: Option<u32>, end: Option<u32>| {
-            timed.then(|| wgpu::RenderPassTimestampWrites {
-                query_set: &self.timing.as_ref().expect("timing").set,
-                beginning_of_pass_write_index: begin,
-                end_of_pass_write_index: end,
-            })
-        };
-
-        // Each mask into its own layer, and the overlay into the last one.
-        let strokes = self
-            .mask_ranges
-            .iter()
-            .enumerate()
-            .map(|(layer, range)| (layer, &self.masks.buffer, *range))
-            .chain([(OVERLAY_LAYER as usize, &self.overlay.buffer, (0, overlay))]);
-        for (index, (layer, buffer, (first, count))) in strokes.enumerate() {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("mask"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.targets.mask_layers[layer],
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                timestamp_writes: if index == 0 {
-                    timestamps(Some(0), None)
-                } else {
-                    None
-                },
-                ..Default::default()
-            });
-            within(&mut pass);
-            if count > 0 {
-                pass.set_pipeline(&self.stroke_pipeline);
-                pass.set_bind_group(0, &self.common, &[]);
-                pass.set_vertex_buffer(0, buffer.slice(..));
-                pass.draw(0..4, first..first + count);
-            }
-        }
-
-        // The samples of each layer with heals of its own, so a heal can
-        // copy them from another place.
-        if self.healed_count > 0 {
-            let attachments: Vec<_> = self
-                .targets
-                .healed_layers
-                .iter()
-                .map(|view| {
-                    Some(wgpu::RenderPassColorAttachment {
-                        view,
-                        depth_slice: None,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })
-                })
-                .collect();
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("healed layers"),
-                color_attachments: &attachments,
-                ..Default::default()
-            });
-            within(&mut pass);
-            pass.set_pipeline(&self.healed_pipeline);
-            pass.set_bind_group(0, &self.common, &[]);
-            pass.set_vertex_buffer(0, self.tile_instances.slice(..));
-            for (index, source) in sources.iter().enumerate() {
-                let tile = self.cache.get(*source).expect("a chosen tile");
-                pass.set_bind_group(1, &tile.bind_group, &[]);
-                pass.draw(0..4, index as u32..index as u32 + 1);
-            }
-        }
-
-        // The computed masks that are smoothed: drawn, blurred across into
-        // the second set, then blurred down back into the first, which the
-        // layers read.
-        if self.smooths {
-            fn attachments(
-                views: &[wgpu::TextureView],
-            ) -> Vec<Option<wgpu::RenderPassColorAttachment<'_>>> {
-                views
-                    .iter()
-                    .map(|view| {
-                        Some(wgpu::RenderPassColorAttachment {
-                            view,
-                            depth_slice: None,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                                store: wgpu::StoreOp::Store,
-                            },
-                        })
-                    })
-                    .collect()
-            }
-            {
-                let targets = attachments(&self.targets.smoothed[0]);
-                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("computed masks"),
-                    color_attachments: &targets,
-                    ..Default::default()
-                });
-                within(&mut pass);
-                pass.set_pipeline(&self.smoothed_pipeline);
-                pass.set_bind_group(0, &self.common, &[]);
-                pass.set_vertex_buffer(0, self.tile_instances.slice(..));
-                for (index, source) in sources.iter().enumerate() {
-                    let tile = self.cache.get(*source).expect("a chosen tile");
-                    pass.set_bind_group(1, &tile.bind_group, &[]);
-                    pass.draw(0..4, index as u32..index as u32 + 1);
-                }
-            }
-            for (blur, pipeline) in self.blur_pipelines.iter().enumerate() {
-                let targets = attachments(&self.targets.smoothed[1 - blur]);
-                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("mask blur"),
-                    color_attachments: &targets,
-                    ..Default::default()
-                });
-                within(&mut pass);
-                pass.set_pipeline(pipeline);
-                pass.set_bind_group(0, &self.common, &[]);
-                pass.set_bind_group(1, &self.targets.smoothed_sources[blur], &[]);
-                pass.draw(0..3, 0..1);
-            }
-        }
-
+    /// Samples the picture `scene` draws, from square patches of `size`
+    /// document pixels at full resolution whose top-left corners are
+    /// `patches`. A scene with no Finish steps gives the combined picture.
+    ///
+    /// Full resolution, not a reduced level: a reduced level's samples are
+    /// means, so its noise is lower than the image's and a stretch resolved
+    /// from it would clip the shadows in the wrong place.
+    ///
+    /// Each call draws the patches whose tiles are loaded, a few at a time,
+    /// and asks for the tiles of the others. Calls with the same `id` carry
+    /// on one sampling; a new `id` starts again.
+    pub fn sample_picture(
+        &mut self,
+        slot: ProbeSlot,
+        id: u64,
+        scene: &GpuScene,
+        crop: Option<[f32; 4]>,
+        patches: &[[u32; 2]],
+        size: u32,
+    ) -> Sampled {
+        let size = size.max(1);
+        let at = slot.index();
+        if self.probes[at]
+            .as_ref()
+            .is_none_or(|probe| probe.id != id || probe.size != size)
         {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("layers"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.targets.combined,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.03,
-                            g: 0.03,
-                            b: 0.035,
-                            a: 1.0,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                ..Default::default()
+            self.probes[at] = Some(PictureProbe {
+                id,
+                size,
+                samples: vec![None; patches.len()],
+                targets: self.compositor.targets(size, size),
+                reading: None,
             });
-            within(&mut pass);
-            pass.set_pipeline(&self.tile_pipeline);
-            pass.set_bind_group(0, &self.common, &[]);
-            pass.set_bind_group(2, &self.targets.layer_masks, &[]);
-            pass.set_vertex_buffer(0, self.tile_instances.slice(..));
-            for (index, source) in sources.iter().enumerate() {
-                let tile = self.cache.get(*source).expect("a chosen tile");
-                pass.set_bind_group(1, &tile.bind_group, &[]);
-                pass.draw(0..4, index as u32..index as u32 + 1);
+        }
+        let mut probe = self.probes[at].take().expect("a sampling");
+        probe.samples.resize(patches.len(), None);
+        // Patches already drawn are taken once the GPU has finished them;
+        // until then nothing more is drawn.
+        if let Some(reading) = probe.reading.take() {
+            let _ = self.device.poll(wgpu::PollType::Poll);
+            let mapped = reading.mapped.lock().expect("probe mapping").take();
+            match mapped {
+                None => {
+                    probe.reading = Some(reading);
+                    let done = probe
+                        .samples
+                        .iter()
+                        .filter(|samples| samples.is_some())
+                        .count();
+                    self.probes[at] = Some(probe);
+                    return Sampled::Pending {
+                        done,
+                        of: patches.len(),
+                    };
+                }
+                Some(Ok(())) => take_patches(&mut probe, &reading, size),
+                // A buffer that could not be mapped is drawn again.
+                Some(Err(_)) => {}
             }
         }
-        self.finish_pass(encoder, target, timed, (rect, scissor), first);
-    }
-
-    fn finish_pass(
-        &self,
-        encoder: &mut wgpu::CommandEncoder,
-        target: &wgpu::TextureView,
-        timed: bool,
-        (rect, scissor): ([u32; 4], [u32; 4]),
-        first: bool,
-    ) {
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("finish"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: target,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: if first {
-                        wgpu::LoadOp::Clear(wgpu::Color::BLACK)
-                    } else {
-                        wgpu::LoadOp::Load
-                    },
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            timestamp_writes: timed.then(|| wgpu::RenderPassTimestampWrites {
-                query_set: &self.timing.as_ref().expect("timing").set,
-                beginning_of_pass_write_index: None,
-                end_of_pass_write_index: Some(1),
-            }),
-            ..Default::default()
+        self.probe_wanted[at].clear();
+        // The patches drawn in this call are copied into one buffer, which
+        // is mapped while the render thread draws on.
+        let row_bytes = (size * 8).next_multiple_of(256);
+        let patch_bytes = u64::from(row_bytes) * u64::from(size);
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("picture samples"),
+            size: patch_bytes * PROBE_PATCHES_PER_CALL as u64,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
-        pass.set_viewport(
-            rect[0] as f32,
-            rect[1] as f32,
-            rect[2] as f32,
-            rect[3] as f32,
-            0.0,
-            1.0,
-        );
-        pass.set_scissor_rect(scissor[0], scissor[1], scissor[2], scissor[3]);
-        pass.set_pipeline(&self.finish_pipeline);
-        pass.set_bind_group(0, &self.common, &[]);
-        pass.set_bind_group(1, &self.targets.finish_inputs, &[]);
-        pass.draw(0..3, 0..1);
+        let mut drawn: Vec<usize> = Vec::new();
+        for (index, origin) in patches.iter().enumerate() {
+            if probe.samples[index].is_some() {
+                continue;
+            }
+            let rect = [
+                f64::from(origin[0]),
+                f64::from(origin[1]),
+                f64::from(origin[0] + size),
+                f64::from(origin[1] + size),
+            ];
+            let keys = keys_in(&self.pyramid, 0, rect, 0);
+            let missing: Vec<TileKey> = keys
+                .iter()
+                .filter(|key| !self.cache.contains(**key))
+                .copied()
+                .collect();
+            if !missing.is_empty() {
+                let room = PROBE_TILES_WANTED.saturating_sub(self.probe_wanted[at].len());
+                self.probe_wanted[at].extend(missing.into_iter().take(room));
+                continue;
+            }
+            for key in &keys {
+                self.cache.touch(*key, self.frame);
+            }
+            if drawn.len() == PROBE_PATCHES_PER_CALL {
+                continue;
+            }
+            let chosen: Vec<ChosenTile> = keys
+                .iter()
+                .filter_map(|key| chosen_tile(&self.pyramid, *key, *key, crop))
+                .collect();
+            let half = f64::from(size) / 2.0;
+            let whole = [0, 0, size, size];
+            let draws = tile_draws(&self.cache, &chosen);
+            // The sampling's tables and masks go up once for all its
+            // patches; they are the same at every place. The canvas's next
+            // frame, of another version, puts its own back.
+            self.compositor.draw(
+                scene,
+                Some(id ^ PROBE_VERSION),
+                &probe.targets,
+                GpuView {
+                    center: [f64::from(origin[0]) + half, f64::from(origin[1]) + half],
+                    zoom: 1.0,
+                },
+                DrawArea {
+                    viewport: whole,
+                    scissor: whole,
+                },
+                &draws,
+                &[],
+                0.0,
+                true,
+            );
+            let mut encoder = self
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+            encoder.copy_texture_to_buffer(
+                probe.targets.finished.as_image_copy(),
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &buffer,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: patch_bytes * drawn.len() as u64,
+                        bytes_per_row: Some(row_bytes),
+                        rows_per_image: None,
+                    },
+                },
+                wgpu::Extent3d {
+                    width: size,
+                    height: size,
+                    depth_or_array_layers: 1,
+                },
+            );
+            self.queue.submit([encoder.finish()]);
+            drawn.push(index);
+        }
+        if !drawn.is_empty() {
+            let mapped = Arc::new(std::sync::Mutex::new(None));
+            let flag = mapped.clone();
+            buffer
+                .slice(..)
+                .map_async(wgpu::MapMode::Read, move |result| {
+                    *flag.lock().expect("probe mapping") = Some(result);
+                });
+            let _ = self.device.poll(wgpu::PollType::Poll);
+            probe.reading = Some(ProbeReading {
+                buffer,
+                drawn,
+                mapped,
+                row_bytes,
+                patch_bytes,
+            });
+        }
+        let done = probe
+            .samples
+            .iter()
+            .filter(|samples| samples.is_some())
+            .count();
+        let result = if done == patches.len() && probe.reading.is_none() {
+            self.probe_wanted[at].clear();
+            Sampled::Ready(probe.samples.iter().flatten().flatten().copied().collect())
+        } else {
+            Sampled::Pending {
+                done,
+                of: patches.len(),
+            }
+        };
+        self.probes[at] = Some(probe);
+        result
     }
 
-    /// Draws the last frame again `frames` times into a texture of the
-    /// surface's size and waits for the GPU to finish, five times over.
-    /// Returns the time per frame of the fastest batch, which is the GPU's
-    /// cost with no display to wait for.
-    pub fn offscreen_frame_ms(&self, frames: u32) -> f32 {
+    /// Uploads the tiles the workers finished, as many as a frame may.
+    /// Returns how many.
+    fn upload_finished(&mut self) -> u32 {
+        let mut uploaded = 0;
+        while uploaded < self.uploads_per_frame {
+            let Some((key, samples)) = self.producer.take_finished() else {
+                break;
+            };
+            self.cache.insert(
+                &self.device,
+                &self.queue,
+                self.compositor.tile_layout(),
+                key,
+                &samples,
+                self.frame,
+            );
+            self.producer.uploaded(key);
+            uploaded += 1;
+        }
+        uploaded
+    }
+
+    /// Draws the picture `scene` draws, the whole of `crop` (or of the
+    /// document), into a small image whose long side is `long_side` pixels
+    /// at most, and reads it back. It is drawn from the pyramid level the
+    /// size calls for, as the canvas draws a fitted view.
+    ///
+    /// Each call asks for the tiles still missing or takes the image once
+    /// the GPU has drawn it; it never waits for the GPU. It works while the
+    /// window shows nothing, so a covered window still gets its preview.
+    /// Calls with the same `id` carry on one preview; a new `id` starts
+    /// again.
+    pub fn preview_picture(
+        &mut self,
+        id: u64,
+        scene: &GpuScene,
+        crop: Option<[f32; 4]>,
+        long_side: u32,
+    ) -> Previewed {
+        let (document_width, document_height) = (
+            f64::from(self.pyramid.width),
+            f64::from(self.pyramid.height),
+        );
+        let rect = crop.map_or([0.0, 0.0, document_width, document_height], |crop| {
+            [
+                f64::from(crop[0]).clamp(0.0, document_width),
+                f64::from(crop[1]).clamp(0.0, document_height),
+                f64::from(crop[2]).clamp(0.0, document_width),
+                f64::from(crop[3]).clamp(0.0, document_height),
+            ]
+        });
+        let (zoom, width, height, level) = preview_fit(rect, long_side, self.pyramid.max_level());
+        if self.preview.as_ref().is_none_or(|preview| {
+            preview.id != id || (preview.width, preview.height) != (width, height)
+        }) {
+            self.preview = Some(PreviewRender {
+                id,
+                width,
+                height,
+                targets: self.compositor.targets(width, height),
+                reading: None,
+            });
+        }
+        let mut preview = self.preview.take().expect("a preview");
+        if let Some(reading) = preview.reading.take() {
+            let _ = self.device.poll(wgpu::PollType::Poll);
+            let mapped = reading.mapped.lock().expect("preview mapping").take();
+            match mapped {
+                None => {
+                    preview.reading = Some(reading);
+                    self.preview = Some(preview);
+                    return Previewed::Pending;
+                }
+                Some(Ok(())) => {
+                    let rgb = read_preview(&reading, width, height);
+                    reading.buffer.unmap();
+                    self.preview_wanted.clear();
+                    return Previewed::Ready { width, height, rgb };
+                }
+                // A buffer that could not be mapped is drawn again.
+                Some(Err(_)) => {}
+            }
+        }
+        let keys = keys_in(&self.pyramid, level, rect, 0);
+        // The window may show nothing, and then no frame uploads tiles.
+        self.upload_finished();
+        let missing: Vec<TileKey> = keys
+            .iter()
+            .filter(|key| !self.cache.contains(**key))
+            .copied()
+            .collect();
+        if !missing.is_empty() {
+            let mut wanted = self.last_wanted.clone();
+            let more: Vec<TileKey> = missing
+                .iter()
+                .filter(|key| !wanted.contains(key))
+                .copied()
+                .collect();
+            wanted.extend(more);
+            wanted.retain(|key| !self.cache.contains(*key));
+            self.producer.set_wanted(wanted);
+            self.preview_wanted = missing;
+            self.preview = Some(preview);
+            return Previewed::Pending;
+        }
+        self.preview_wanted.clear();
+        for key in &keys {
+            self.cache.touch(*key, self.frame);
+        }
+        let chosen: Vec<ChosenTile> = keys
+            .iter()
+            .filter_map(|key| chosen_tile(&self.pyramid, *key, *key, crop))
+            .collect();
+        let draws = tile_draws(&self.cache, &chosen);
+        let whole = [0, 0, width, height];
+        self.compositor.draw(
+            scene,
+            Some(id ^ PREVIEW_VERSION),
+            &preview.targets,
+            GpuView {
+                center: [(rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0],
+                zoom,
+            },
+            DrawArea {
+                viewport: whole,
+                scissor: whole,
+            },
+            &draws,
+            &[],
+            0.0,
+            true,
+        );
+        let row_bytes = (width * 8).next_multiple_of(256);
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("preview"),
+            size: u64::from(row_bytes) * u64::from(height),
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        encoder.copy_texture_to_buffer(
+            preview.targets.finished.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(row_bytes),
+                    rows_per_image: None,
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.queue.submit([encoder.finish()]);
+        let mapped = Arc::new(std::sync::Mutex::new(None));
+        let flag = mapped.clone();
+        buffer
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| {
+                *flag.lock().expect("preview mapping") = Some(result);
+            });
+        let _ = self.device.poll(wgpu::PollType::Poll);
+        preview.reading = Some(PreviewReading {
+            buffer,
+            mapped,
+            row_bytes,
+        });
+        self.preview = Some(preview);
+        Previewed::Pending
+    }
+
+    /// Stops a preview: asks for no more of its tiles.
+    pub fn stop_preview(&mut self) {
+        self.preview = None;
+        self.preview_wanted.clear();
+    }
+
+    /// Stops a sampling of the picture: forgets the patches read and asks
+    /// for no more of its tiles.
+    pub fn stop_sampling(&mut self, slot: ProbeSlot) {
+        self.probes[slot.index()] = None;
+        self.probe_wanted[slot.index()].clear();
+    }
+
+    /// Draws the last frame's first pane again `frames` times over the whole
+    /// surface, into a texture of the surface's size, and waits for the GPU
+    /// to finish, five times over. Returns the time per frame of the fastest
+    /// batch, which is the GPU's cost with no display to wait for. 0 when
+    /// no frame has been drawn.
+    pub fn offscreen_frame_ms(&mut self, frames: u32) -> f32 {
+        let (Some(scene), Some(view)) = (self.last.scene.take(), self.last.view) else {
+            return 0.0;
+        };
         let texture = self.surface_sized("offscreen", wgpu::TextureUsages::empty());
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let target = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let whole = [0, 0, self.config.width, self.config.height];
         // Other programs use the GPU too. The fastest of several batches is
         // the one they disturbed least.
         let mut best = f32::INFINITY;
@@ -1714,26 +1445,34 @@ impl Renderer {
             let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
             let started = Instant::now();
             for _ in 0..frames {
+                let draws = tile_draws(&self.cache, &self.last.tiles);
+                self.compositor.draw(
+                    &scene,
+                    None,
+                    &self.targets,
+                    GpuView {
+                        center: view.center,
+                        zoom: view.zoom,
+                    },
+                    DrawArea {
+                        viewport: whole,
+                        scissor: whole,
+                    },
+                    &draws,
+                    &self.last.overlay,
+                    self.last.overlay_strength,
+                    true,
+                );
                 let mut encoder = self
                     .device
                     .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-                self.passes(
-                    &mut encoder,
-                    &view,
-                    &self.last_sources,
-                    self.last_overlay,
-                    false,
-                    (
-                        [0, 0, self.config.width, self.config.height],
-                        [0, 0, self.config.width, self.config.height],
-                    ),
-                    true,
-                );
+                self.present(&mut encoder, &target);
                 self.queue.submit([encoder.finish()]);
             }
             let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
             best = best.min(started.elapsed().as_secs_f32() * 1000.0 / frames.max(1) as f32);
         }
+        self.last.scene = Some(scene);
         best
     }
 
@@ -1746,6 +1485,118 @@ impl Renderer {
     pub fn mean_tile_ms(&self) -> f32 {
         self.producer.mean_tile_ms()
     }
+}
+
+/// Loads every tile of the coarsest level and keeps it, so a view never
+/// shows a hole.
+fn load_coarsest(
+    cache: &mut TileCache,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    layout: &wgpu::BindGroupLayout,
+    source: &dyn TileSource,
+    frame: u64,
+) {
+    let pyramid = source.pyramid();
+    let (across, down) = pyramid.tiles_across(pyramid.max_level());
+    for y in 0..down as u16 {
+        for x in 0..across as u16 {
+            let key = TileKey {
+                level: pyramid.max_level(),
+                x,
+                y,
+            };
+            cache.insert(device, queue, layout, key, &source.tile(key), frame);
+            cache.pin(key);
+        }
+    }
+}
+
+/// The part of `key`'s rectangle inside the crop, drawn from the textures
+/// of `source`, which is `key` or a coarser tile that covers it. `None`
+/// when no part of it is inside the crop.
+fn chosen_tile(
+    pyramid: &Pyramid,
+    key: TileKey,
+    source: TileKey,
+    crop: Option<[f32; 4]>,
+) -> Option<ChosenTile> {
+    let mut rect = pyramid.doc_rect(key);
+    if let Some(crop) = crop {
+        rect = [
+            rect[0].max(crop[0]),
+            rect[1].max(crop[1]),
+            rect[2].min(crop[2]),
+            rect[3].min(crop[3]),
+        ];
+        if rect[0] >= rect[2] || rect[1] >= rect[3] {
+            return None;
+        }
+    }
+    let span = (TILE << source.level) as f32;
+    let origin = [source.x as f32 * span, source.y as f32 * span];
+    Some(ChosenTile {
+        source,
+        rect,
+        uv_rect: [
+            (rect[0] - origin[0]) / span,
+            (rect[1] - origin[1]) / span,
+            (rect[2] - origin[0]) / span,
+            (rect[3] - origin[1]) / span,
+        ],
+    })
+}
+
+/// The chosen tiles as the compositor draws them. A tile evicted since it
+/// was chosen is left out.
+fn tile_draws<'a>(cache: &'a TileCache, chosen: &[ChosenTile]) -> Vec<TileDraw<'a>> {
+    chosen
+        .iter()
+        .filter_map(|tile| {
+            Some(TileDraw {
+                inputs: &cache.get(tile.source)?.bind_group,
+                rect: tile.rect,
+                uv_rect: tile.uv_rect,
+            })
+        })
+        .collect()
+}
+
+fn present_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    uniform: &wgpu::Buffer,
+    sampler: &wgpu::Sampler,
+    finished: &wgpu::TextureView,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("present"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(finished),
+            },
+        ],
+    })
+}
+
+/// The present shader's whole source: Seiza's display mapping, then the
+/// pass.
+fn present_source() -> String {
+    format!(
+        "{}\n{}",
+        seiza_compose::gpu::DISPLAY_SHADER,
+        include_str!("present.wgsl")
+    )
 }
 
 /// The tiles of `level` that touch `rect`, grown by `ring` tiles on each side.
@@ -1776,244 +1627,41 @@ fn center_distance(pyramid: &Pyramid, key: TileKey, center: [f64; 2]) -> f64 {
     dx * dx + dy * dy
 }
 
-fn create_targets(
-    device: &wgpu::Device,
-    finish_layout: &wgpu::BindGroupLayout,
-    masks_layout: &wgpu::BindGroupLayout,
-    tile_layout: &wgpu::BindGroupLayout,
-    display_curves: &wgpu::TextureView,
-    width: u32,
-    height: u32,
-) -> Targets {
-    let texture = |label: &str, format: wgpu::TextureFormat, layers: u32| {
-        device.create_texture(&wgpu::TextureDescriptor {
-            label: Some(label),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: layers,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        })
-    };
-    let combined = texture("combined", COMBINED_FORMAT, 1)
-        .create_view(&wgpu::TextureViewDescriptor::default());
-    let masks = texture("masks", MASK_FORMAT, MAX_MASKS as u32 + 1);
-    let mask_layers = (0..=MAX_MASKS as u32)
-        .map(|layer| {
-            masks.create_view(&wgpu::TextureViewDescriptor {
-                dimension: Some(wgpu::TextureViewDimension::D2),
-                base_array_layer: layer,
-                array_layer_count: Some(1),
-                ..Default::default()
-            })
-        })
-        .collect();
-    let all_masks = masks.create_view(&wgpu::TextureViewDescriptor {
-        dimension: Some(wgpu::TextureViewDimension::D2Array),
-        ..Default::default()
-    });
-    let finish_inputs = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("finish inputs"),
-        layout: finish_layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(&combined),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::TextureView(&all_masks),
-            },
-            wgpu::BindGroupEntry {
-                binding: 2,
-                resource: wgpu::BindingResource::TextureView(display_curves),
-            },
-        ],
-    });
-    let healed = texture("healed layers", HEALED_FORMAT, MAX_HEALED_LAYERS as u32);
-    let healed_layers = (0..MAX_HEALED_LAYERS as u32)
-        .map(|layer| {
-            healed.create_view(&wgpu::TextureViewDescriptor {
-                dimension: Some(wgpu::TextureViewDimension::D2),
-                base_array_layer: layer,
-                array_layer_count: Some(1),
-                ..Default::default()
-            })
-        })
-        .collect();
-    let all_healed = healed.create_view(&wgpu::TextureViewDescriptor {
-        dimension: Some(wgpu::TextureViewDimension::D2Array),
-        ..Default::default()
-    });
-    // Two sets of images for the computed masks: one to draw and to end
-    // in, one for the pass between the two blurs.
-    let smoothed_sets = ["smoothed masks", "masks half blurred"].map(|label| {
-        let texture = texture(label, SMOOTHED_FORMAT, MAX_COMPUTED_MASKS as u32);
-        let layers: Vec<wgpu::TextureView> = (0..MAX_COMPUTED_MASKS as u32)
-            .map(|layer| {
-                texture.create_view(&wgpu::TextureViewDescriptor {
-                    dimension: Some(wgpu::TextureViewDimension::D2),
-                    base_array_layer: layer,
-                    array_layer_count: Some(1),
-                    ..Default::default()
-                })
-            })
-            .collect();
-        let all = texture.create_view(&wgpu::TextureViewDescriptor {
-            dimension: Some(wgpu::TextureViewDimension::D2Array),
-            ..Default::default()
-        });
-        (layers, all)
-    });
-    let smoothed_sources = [0, 1].map(|set: usize| {
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("masks to blur"),
-            layout: tile_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(&smoothed_sets[set].1),
-            }],
-        })
-    });
-    let layer_masks = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("layer masks"),
-        layout: masks_layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(&all_masks),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::TextureView(&all_healed),
-            },
-            wgpu::BindGroupEntry {
-                binding: 2,
-                resource: wgpu::BindingResource::TextureView(&smoothed_sets[0].1),
-            },
-        ],
-    });
-    let [(first, _), (second, _)] = smoothed_sets;
-    Targets {
-        combined,
-        mask_layers,
-        finish_inputs,
-        layer_masks,
-        healed_layers,
-        smoothed: [first, second],
-        smoothed_sources,
-    }
-}
+#[cfg(test)]
+mod shader_tests {
+    use super::{present_source, preview_fit};
 
-const READBACK_FREE: u8 = 0;
-const READBACK_PENDING: u8 = 1;
-const READBACK_MAPPED: u8 = 2;
-
-struct Readback {
-    buffer: wgpu::Buffer,
-    state: Arc<AtomicU8>,
-}
-
-/// GPU pass timing from timestamp queries. A result arrives a few frames
-/// after its frame, so a small set of buffers takes turns.
-struct GpuTiming {
-    set: wgpu::QuerySet,
-    resolved: wgpu::Buffer,
-    readbacks: Vec<Readback>,
-    period_ns: f32,
-    latest_ms: Option<f32>,
-}
-
-impl GpuTiming {
-    fn new(device: &wgpu::Device, period_ns: f32) -> Self {
-        let set = device.create_query_set(&wgpu::QuerySetDescriptor {
-            label: Some("frame timing"),
-            ty: wgpu::QueryType::Timestamp,
-            count: 2,
-        });
-        let resolved = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("frame timing"),
-            size: 16,
-            usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        let readbacks = (0..4)
-            .map(|_| Readback {
-                buffer: device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("frame timing readback"),
-                    size: 16,
-                    usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                }),
-                state: Arc::new(AtomicU8::new(READBACK_FREE)),
-            })
-            .collect();
-        Self {
-            set,
-            resolved,
-            readbacks,
-            period_ns,
-            latest_ms: None,
-        }
+    /// The present shader parses and validates, so a mistake in it is found
+    /// by the tests rather than when the canvas starts. Seiza tests its
+    /// compositor's shaders.
+    #[test]
+    fn a_preview_fits_its_long_side_and_draws_from_the_matching_level() {
+        // 6000 by 4000 into 1024: a zoom of about 0.17, so level 2.
+        let (zoom, width, height, level) = preview_fit([0.0, 0.0, 6000.0, 4000.0], 1024, 6);
+        assert!((zoom - 1024.0 / 6000.0).abs() < 1e-9);
+        assert_eq!((width, height, level), (1024, 683, 2));
+        // A crop is fitted, not the document.
+        let (_, width, height, _) = preview_fit([1000.0, 500.0, 2000.0, 3500.0], 1024, 6);
+        assert_eq!((width, height), (341, 1024));
+        // A small picture is not enlarged.
+        assert_eq!(
+            preview_fit([0.0, 0.0, 800.0, 600.0], 1024, 6),
+            (1.0, 800, 600, 0)
+        );
+        // The level stops at the pyramid's coarsest.
+        assert_eq!(preview_fit([0.0, 0.0, 100_000.0, 100.0], 1024, 3).3, 3);
     }
 
-    fn collect(&mut self) {
-        for readback in &self.readbacks {
-            if readback.state.load(Ordering::Acquire) != READBACK_MAPPED {
-                continue;
-            }
-            {
-                let bytes = readback
-                    .buffer
-                    .slice(..)
-                    .get_mapped_range()
-                    .expect("a mapped readback");
-                let ticks: &[u64] = bytemuck::cast_slice(&bytes);
-                let elapsed = ticks[1].saturating_sub(ticks[0]) as f32 * self.period_ns;
-                self.latest_ms = Some(elapsed / 1.0e6);
-            }
-            readback.buffer.unmap();
-            readback.state.store(READBACK_FREE, Ordering::Release);
-        }
-    }
-
-    /// Claims a readback buffer for this frame, if one is free.
-    fn begin(&mut self) -> Option<usize> {
-        let slot = self
-            .readbacks
-            .iter()
-            .position(|readback| readback.state.load(Ordering::Acquire) == READBACK_FREE)?;
-        self.readbacks[slot]
-            .state
-            .store(READBACK_PENDING, Ordering::Release);
-        Some(slot)
-    }
-
-    fn resolve(&self, encoder: &mut wgpu::CommandEncoder, slot: usize) {
-        encoder.resolve_query_set(&self.set, 0..2, &self.resolved, 0);
-        encoder.copy_buffer_to_buffer(&self.resolved, 0, &self.readbacks[slot].buffer, 0, 16);
-    }
-
-    fn read_back(&self, slot: usize) {
-        let state = self.readbacks[slot].state.clone();
-        self.readbacks[slot]
-            .buffer
-            .slice(..)
-            .map_async(wgpu::MapMode::Read, move |result| {
-                state.store(
-                    if result.is_ok() {
-                        READBACK_MAPPED
-                    } else {
-                        READBACK_FREE
-                    },
-                    Ordering::Release,
-                );
-            });
+    #[test]
+    fn the_present_shader_compiles() {
+        let source = present_source();
+        let module = naga::front::wgsl::parse_str(&source)
+            .unwrap_or_else(|error| panic!("{}", error.emit_to_string(&source)));
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .unwrap_or_else(|error| panic!("{error:?}"));
     }
 }

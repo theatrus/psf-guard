@@ -92,8 +92,8 @@ belong in Seiza crates, following the rule in the contributor guide.
 A document is a versioned graph of typed nodes.
 
 - **Sources.** A stack from a PSF Guard catalog, or an imported master (FITS,
-  XISF, TIFF, read through `src/image_io.rs`). Imported masters are
-  registered onto one reference grid with Seiza.
+  XISF, TIFF, read through `crates/psf-studio-core/src/image_io.rs`). Imported
+  masters are registered onto one reference grid with Seiza.
 - **Chains.** An ordered list of steps on a source. A person can insert,
   reorder, turn off or remove a step at any position.
 - **Layers.** A layer has a source, a stretch, adjustments, a mask, a blend
@@ -260,27 +260,395 @@ opens a dialog with two actions: **Open in PSF-Studio**, and
 its file association. The dialog also links to the Studio download.
 
 From Studio, a person can sign in to a PSF Guard server, browse its projects
-and stacks, and open one without a link.
+and stacks, and open one without a link. “Connecting Studio to a PSF Guard
+server” proposes how.
 
-#### Follow-up: PSF Guard records Studio documents (asked for 2026-11-25)
+#### Connecting Studio to a PSF Guard server (built 2026-11-27)
 
-The owner asked for this as its own piece of work: PSF Guard records the
-documents Studio makes for a project, and a person opens Studio from PSF
-Guard with one click. What that needs, on top of the steps listed in
-“Launching Studio from PSF Guard”:
+**Today.** Studio reaches a server only through the `psf-studio://` link or
+`psf-guard studio --server … --token`. The link carries no credential, so
+PSF Guard shows **Open in PSF-Studio** only on servers without sign-in. On a
+server with sign-in, a person has to create an API token in Settings and
+pass it on the command line, where every user of the computer can read it
+in `ps`.
 
-- **A record per document in PSF Guard,** below the database slug like
-  other derived data: the document, the color card it started from
-  (project, target, kind, palette, crop and star settings), and the build
-  it last ran. `studio-run` takes the card as options today because the
-  document has no place for it.
-- **A list of a project's Studio documents** on the project's stack page,
-  each with **Open in PSF-Studio**.
-- **Save from Studio** writes the document back to that record. A document
-  whose steps are all PSF Guard's can also be saved as a Color processing
-  setup, since it reads back as one.
-- **One click on the desktop app** starts the bundled Studio with the
-  record. In a browser the link and the link file do the same.
+**Goal.** A person adds a server in Studio once and signs in once. After
+that, Studio lists the server's databases, projects, targets and stacks,
+opens one, and saves the document and its output back to the project (see
+“Saving Studio documents to PSF Guard”). **Open in PSF-Studio** works on
+every server and uses the same connection.
+
+##### What a person does
+
+1. In Studio, choose **File › Connect to PSF Guard…** and enter the server's
+   address. The start page has the same action.
+2. Studio checks the server's sign-in status.
+   - On a server without sign-in, Studio connects at once.
+   - On a server with sign-in, Studio shows a short code such as `KQ7-M4P`
+     and opens the server's **Connect PSF Studio** page in the default
+     browser.
+3. In the browser, the person signs in if they are not already, checks that
+   the page shows the same code, and clicks **Allow**. The page then says the
+   browser tab can be closed.
+4. Studio stores its token in the system keychain and lists the server's
+   databases.
+
+**Sign out** in Studio revokes the token on the server and deletes it from
+the keychain. Settings › **API tokens** in PSF Guard lists each connection as
+“PSF Studio on <computer>”, with when it was last used. **Revoke** there
+signs that Studio out; Studio then shows the server as signed out and offers
+**Connect again**.
+
+##### Why approval in the browser
+
+| Option | For | Against |
+|---|---|---|
+| Approve in the browser with a code (proposed) | Studio never handles a password. It keeps working if the server adds another sign-in method. The person approves on the server's own page. | A new page and three endpoints. |
+| Username and password in Studio | No browser step. | Studio handles passwords, then has to mint a token from the session. |
+| Paste an API token | Works today. | Secrets copied by hand. An editor's token is easy to paste where a read-only one would do. |
+
+Pasting a token stays as an advanced option in the connect window, for
+servers whose browser page cannot be reached from the Studio computer.
+
+Studio's credential is a user's API token, not a paired client (`psfrc_`).
+A paired client belongs to one catalog and may call only the sync API.
+Studio needs what the signed-in person can see, in every database, with
+that person's role.
+
+##### What PSF Guard adds
+
+- `POST /api/auth/studio/connect`, open without sign-in and rate-limited
+  like `/api/auth/login`. Studio sends its computer name. The server returns
+  a secret connect id, a short user code, the approval page's address, an
+  expiry ten minutes away and a polling interval. The server keeps pending
+  connects in memory, as it keeps pairing codes.
+- The **Connect PSF Studio** page at `/studio/connect?code=…`, in the React
+  app. It needs a signed-in session. It shows the computer name, the code
+  and what Studio may do: “Read projects, targets and stacks. Save Studio
+  documents and their output to projects.” It has **Allow** and **Deny**.
+  **Allow** posts the code to `POST /api/auth/studio/approve` over the
+  session.
+- `POST /api/auth/studio/token`, which Studio polls with the connect id. It
+  answers pending, denied or expired, or returns the token once with the
+  approving person's username and role. The connect id stops working after
+  that answer.
+- The token is a `psfg_` API token owned by the approving person, labeled
+  “PSF Studio on <computer>”, with a new **Studio** scope. **API tokens**
+  shows it as a Studio connection. The scope allows every read the person's
+  role allows, and the Studio document writes when the person is an editor.
+  Nothing else: a Studio token cannot grade frames, change plans, sync,
+  import or manage databases, so a token lost with a laptop cannot either.
+  The server checks the scope per route, as it checks `read_only` now.
+- A person with a read-only account can still connect. Studio then opens
+  targets and saves documents on this computer only, and says so in the
+  document's title bar.
+- `psf-guard studio` reads the token from `PSF_GUARD_TOKEN` before
+  `--token`, as `psf-guard sync` reads `PSF_GUARD_SYNC_TOKEN`.
+
+##### What Studio adds
+
+- **A server list** in Studio's settings file: address, display name,
+  username, role and when it last connected. The file holds no secrets.
+- **The token in the system keychain**: the macOS Keychain, Windows
+  Credential Manager, or the Secret Service on Linux, through the `keyring`
+  crate, one entry per server address. Where no keychain is available,
+  Studio keeps the token for the session only and asks again at the next
+  launch.
+- **An Open from server window**: server, then database, project and
+  target, then the target's stacks by channel, with the date, the frame
+  count and whether the stack is ready. It reads `GET /api/databases`,
+  `GET /api/db/{db}/projects`, `GET /api/db/{db}/projects/{id}/targets`,
+  and the color stack list that `psf-guard studio` already reads. A target
+  without built stacks explains that and opens its stack page in PSF Guard.
+- **Opening** runs `psf-guard studio --server --db --project --target
+  --folder --name --no-open` as **Open in PSF-Studio** does now, with the
+  token in `PSF_GUARD_TOKEN` rather than on the command line.
+- **Recent targets** from servers on the start page.
+
+##### The link on servers with sign-in
+
+- When Studio already has a connection to the link's server, it opens the
+  target with that connection. The link needs nothing more.
+- Otherwise the link carries a ticket. PSF Guard mints it over the session
+  when the person clicks the button: one use, about a minute. Studio trades
+  the ticket at `/api/auth/studio/token` for a token, as if the person had
+  approved a code.
+- Before Studio stores a token from a link, it asks “Connect to <server> as
+  <username>?”. A link can come from anywhere, and a ticket from someone
+  else's server would otherwise connect Studio to that server without the
+  person choosing it.
+
+##### When something goes wrong
+
+- **The server answers 401**: the token was revoked or has expired. Studio
+  shows the server as signed out, keeps open documents open, and offers
+  **Connect again**.
+- **The server answers 403**: the person's account is read-only, or the
+  role changed since connecting. Studio keeps the document on this computer
+  and explains that saving to the server needs an editor's account.
+- **The server cannot be reached**: the server list keeps the last listing
+  and offers **Try again**.
+- **The code expires** before approval: Studio offers a new code.
+- **The wrong account approved**: Studio shows the username it connected
+  as, so the person can sign out and connect again.
+
+##### Security
+
+- No long-lived secret appears in a URL or on a command line. The connect
+  id never leaves Studio, and the user code alone cannot collect the token.
+- Approval needs a signed-in session and a same-origin request, like other
+  session requests.
+- A user code has about 40 bits and lasts ten minutes. The server limits
+  wrong codes per session and new connects per address.
+- PSF Guard records each connect, approval, denial and revocation in the
+  remote audit log.
+- For an `http://` address other than this computer, Studio warns that the
+  token travels unencrypted.
+
+##### Order of work
+
+1. PSF Guard: the Studio token scope, the connect endpoints, the approval
+   page, and Studio connections in **API tokens**. Tests cover approval,
+   denial, expiry, single use, rate limits, revocation, and a Studio token
+   refused on routes outside its scope.
+2. `psf-guard studio` reads `PSF_GUARD_TOKEN`.
+3. Studio: the connect window, the keychain, the server list and the
+   signed-out state.
+4. Studio: the Open from server window and opening a target.
+5. Saving to the server, in the order “Saving Studio documents to PSF
+   Guard” gives.
+6. Tickets in the link, and the button on servers with sign-in.
+
+##### Decided (2026-11-27)
+
+- **A Studio token renews while it is used:** each use moves its expiry to
+  90 days later, so a connection in use does not lapse. One left unused for
+  90 days expires.
+- **A target without stacks:** Studio says the target has no channel stacks
+  and offers **Build stacks in PSF Guard**, rather than failing when it
+  prepares the picture. Built: Open and links check for stacks before
+  fetching and show the offer; the button opens the target's Stacks page
+  (`#/stacks?db=&project=&target=`). The server has no request that builds
+  a target's channels from defaults alone (the page and automatic refreshes
+  assemble one), so Studio does not start the build itself.
+
+##### Open questions
+
+- Does the desktop app's bundled Studio need a connection? Proposed: no.
+  The desktop app passes cache files on disk, as it does now, and the
+  bundled Studio saves documents through the desktop app's own store, the
+  one a server uses.
+
+#### Saving Studio documents to PSF Guard (built 2026-11-27)
+
+This replaces the follow-up asked for on 2026-11-25, “PSF Guard records
+Studio documents”, and covers what it listed.
+
+**Goal.** A person's work in Studio belongs to the project. Another computer
+that opens the project's document shows the same picture, and the project
+page shows what Studio made. PSF Guard keeps the person's edits and the
+output. It does not keep what Studio can compute again.
+
+##### What PSF Guard keeps, and what it does not
+
+| Kept on the server | Not kept: Studio computes it again |
+|---|---|
+| The document: stages, steps and settings, layers, groups, palettes, crop, headroom and recipe | The tile store (`.pgtiles`) and its pyramid |
+| Painted masks, heals and shared masks, which the document already holds as strokes | Downloaded channel stacks and clipped maps |
+| The file an external editor saved at the Finish junction (`.edit.tif`) | Tool results: star removal, Seiza models, deconvolution |
+| Exports a person saves to the project, each with the document revision it came from | Derived planes, stretched stars and the GPU's textures |
+| A preview image for lists | Prepared-store records and partial files |
+| What the document was made from: the target, its channel stacks and their source fingerprints | Analysis and histogram samples |
+
+The external editor's file is kept because nothing else holds that work:
+Studio cannot make it again. Tool results are not kept even though some take
+minutes, because the document holds every setting they need. Another
+computer runs them again when it opens the document, as Studio does now when
+it opens a document beside a new store.
+
+##### What a person does
+
+- **Opening a target** from the Open from server window, or with **Open in
+  PSF-Studio**, lists the target's documents first: name, who last saved it,
+  when, and its preview. **New document** starts one from the default flow,
+  as now. Opening the most recent document is the default.
+- **Studio saves to the server as it saves to disk now**: a few seconds
+  after edits stop, and when the document closes. The title bar shows
+  “Saved to <server>”, “Saving…”, or “Saved on this computer only” with the
+  reason.
+- **Export** has **Save to the project** beside **Save to this computer**.
+  The project page lists saved exports with the document revision they came
+  from.
+- **Open in external editor** works as now. When the editor saves, Studio
+  reads the file and also uploads it, so the document opens with the edit on
+  another computer.
+- **File › Save to PSF Guard…** puts a document opened from files on a
+  project and target the person chooses.
+
+On PSF Guard's side, the project's stack page lists the project's Studio
+documents, each with its preview, **Open in PSF-Studio**, and its saved
+exports. **Delete** removes a document, its revisions and the files only it
+uses, after a confirmation that lists them. A document whose steps are all
+PSF Guard's can also be saved as a Color processing setup, because it reads
+back as one.
+
+##### How the server stores a document
+
+- **Where.** A folder per document below the database slug:
+  `studio/<db slug>/<document id>/`. The folder sits next to PSF Guard's
+  other owned data, not in a cache directory, so cache cleanup never removes
+  it. Nothing is written to the Target Scheduler database.
+- **The record**: the document id, its name, the project and target, the
+  channel stacks it was made from with their source fingerprints, the
+  current revision, who saved each revision and when, and the color card it
+  started from (kind, palette, crop and star settings). `studio-run` takes
+  the card as options today because the document has no place for it.
+- **Revisions.** Each save writes the document JSON as a new revision. The
+  server keeps the last 50 revisions and every revision an export or an
+  edited file refers to. A person can open an earlier revision from the
+  document list.
+- **Files** are stored once by content hash (SHA-256): the edited file,
+  exports and previews. A revision names the files it uses. Uploading a file
+  the server already has costs one request.
+- **Writes** go to a temporary file and are renamed into place, as other
+  generated files are.
+
+##### Endpoints
+
+All below `/api/db/{db}/studio-documents`, which the Studio token scope
+allows:
+
+- `GET ?project=&target=`: the documents of a project or target.
+- `POST`: a new document, with its first revision.
+- `GET /{id}` and `GET /{id}/revisions/{revision}`: the record and a
+  revision's JSON.
+- `PUT /{id}` with the revision the save started from. When another save
+  arrived first, the server answers 409 with the newer revision.
+- `HEAD` and `PUT /files/{sha256}`: check for a file, and upload it. The
+  server checks the hash and limits the size.
+- `GET /files/{sha256}`: download a file.
+- `POST /{id}/exports`: record an uploaded export against a revision.
+- `DELETE /{id}`: delete a document, only with a session or an editor's
+  Studio token.
+
+##### Two computers, one document
+
+- **A save that started from an older revision** gets 409. Studio keeps the
+  person's edits and offers **Save as a copy** or **Open the newer version**,
+  which discards this computer's unsaved changes after a confirmation.
+- The document list shows when a document was saved from another computer in
+  the last few minutes, so two people see that they are both editing it.
+  The server does not lock documents.
+
+##### Offline and failures
+
+- When the server cannot be reached, Studio keeps saving on this computer
+  and uploads the newest revision when the server answers again. It uploads
+  only the newest, not every save in between.
+- A file upload that fails is tried again. The revision that names it is
+  saved only after the file is on the server, so a revision never refers to
+  a missing file.
+
+##### When the stacks change
+
+The server may build a target's stacks again with more frames. When Studio
+opens a document whose stacks' fingerprints differ from the record's:
+
+- **The stacks are the same size and registration**: Studio opens the
+  document with the new stacks and says that they changed.
+- **The size or registration differs**: masks, heals and the crop are in
+  document pixels and would be misplaced. Studio explains that, and offers
+  **Open with the new stacks** or **Cancel**. Studio cannot offer the old
+  stacks, because the server does not promise to keep a stack after it is
+  built again.
+
+##### Order of work
+
+1. The document store, its record and revisions, with tests for atomic
+   writes, revision conflicts, retention and deletion.
+2. Files by hash, with tests for a wrong hash, the size limit and a file
+   kept while a revision uses it.
+3. Studio: save to the server and open from it, the title bar's save state,
+   and offline uploads.
+4. The edited file and exports, and the project page's document list.
+5. Stack fingerprints and the changed-stacks message.
+6. Save as a Color processing setup.
+
+##### Open questions
+
+- Are 50 revisions per document right, and should the server also limit the
+  space one document's files use?
+- Should **Save to the project** be the default for exports on a document
+  that came from a server?
+- Should the preview be rendered at every save, or only at close and export?
+  Proposed: at close and export, from the canvas, so a save stays small.
+
+#### What is built, and how it differs (2026-11-27)
+
+Built as proposed, with these differences:
+
+- **Where to connect.** **PSF Guard** in Studio's top bar opens a panel over
+  the canvas, not a File menu item: servers and the address field, then
+  databases, projects, targets and the target's documents in columns.
+  **Save this picture to the target** in the panel stands for **File › Save
+  to PSF Guard…**.
+- **Signing out.** A Studio token cannot reach token management, so
+  `POST /api/auth/studio/disconnect` lets it revoke itself.
+- **Records of connects.** Connects, approvals and sign-outs go to the
+  server's log, not the remote audit log, which is per database and about
+  sync. **API tokens** shows a connection as “PSF Studio connection”, without
+  when it was last used: recording each use would write the registry on
+  every request.
+- **The token** renews as it is used: once a day at most, the server moves
+  its expiry to 90 days later in memory at once and writes the registry
+  beside the request (`studio_renewal`, `ServerAuth::keep_token_expiry`).
+- **Saving** happens five seconds after edits stop. Quitting or closing the
+  window saves at once and waits up to 15 seconds for the server; GPUI
+  gives a quit handler only 200 ms, so Studio's own loop holds the quit.
+  Opening a revision saves nothing: the link marks it as opened, and the
+  text Studio reads it as counts as sent.
+- **The preview** is 1024 pixels on its long side, with HDR highlights
+  rolled off above 0.8. An export's is made from the export's pixels and
+  stored with the revision the export came from. A save sends one at most
+  every ten minutes, and always on quitting: the GPU draws the final
+  picture once from the pyramid level a fitted view would use and reads it
+  back (`Renderer::preview_picture`), because the CPU renderer has no
+  reduced-resolution mode. The save waits up to five seconds for it, then
+  goes without one. It is drawn even while the window shows nothing.
+- **Earlier revisions.** Choosing a document in the panel lists up to 12
+  earlier revisions under it. One opens as a picture of its own
+  (`<target>-<id>-r<n>`), linked to the newest revision, so its edits save as
+  a new revision after the newest and edits to the newest copy stay put.
+- **Two computers.** Each save sends the computer's name; the revision
+  keeps it (`saved_from`, at most 64 characters). Studio's list says a
+  document may still be open on another computer when that computer saved
+  it in the last ten minutes. The web list shows the computer too.
+- **Names.** A picture from stack files is named from OBJECT, never from a
+  file's hash (`is_generated_name`: 16 or more hex digits, perhaps with
+  " (copy)"); a hash name shows as “Untitled picture” and takes the
+  target's name when the picture is put on or opened from a target.
+  Studio renames in the top bar as an edit, and a save sends the name only
+  when it differs from the server's name as the link last saw it
+  (`ServerLink::name`), so a rename on the project page
+  (`PATCH /studio-documents/{id}`, no revision) is kept and taken in.
+- **Changed stacks.** A record's stacks keep the frame they were
+  registered to and their size. Opening compares them with the target's
+  stacks: the same frame and size open with a note; another frame or size
+  asks first.
+- **The project's document list** sits under **Stacks** on the stacks page,
+  with previews, exports to download, **Open in PSF Studio** (the link
+  names the document), **Save as a Color setup** and **Delete**. Saving as
+  a setup reads `GET /studio-documents/{id}/processing` and saves through the
+  existing setups API, so the editor check stays where it was.
+- **Exports** go to the project when **Also save to the project** is on,
+  which it is for every picture from a server.
+- **The control socket and `psf-studio-mcp`** can connect, browse, open,
+  save a picture to a target, resolve a conflict and sign out.
+
+Found while testing: macOS ties a Keychain item to the program that wrote
+it. A Studio build that is not signed with the same identity, such as each
+development build, asks for Keychain access to the token the last build
+kept. Signed releases keep access.
 
 ### Remote use
 
@@ -638,8 +1006,8 @@ the result.
 
 ### 5. Tile format (2026-11-25, first result)
 
-The code is `src/studio/store.rs`, with a measurement program in the spike
-(`crop/src/bin/store_bench.rs`).
+The code is `crates/psf-studio-core/src/studio/store.rs`, with a measurement
+program in the spike (`crop/src/bin/store_bench.rs`).
 
 **Result so far: a plain, uncompressed tiled file with a pyramid is fast
 enough and holds almost nothing in memory. Compression and mapping tiles
@@ -708,7 +1076,9 @@ a cold disk was not measured.
 
 The code is the `color` crate and the `--output` and `--working` options of
 the app in
-[`studio`](../../studio/README.md).
+[`studio`](../../studio/README.md). Studio has since fixed its working space
+to Rec. 2020 and dropped `--working`; see **Working space** under the
+Finish stage.
 
 **Result so far: the canvas can present a wide-gamut, floating-point,
 color-managed surface on macOS at no cost in frame rate, and a shader step
@@ -1093,7 +1463,7 @@ result, applied to the visible region plus padding.
 
 ### What is built
 
-In `src/studio/`, with tests:
+In `crates/psf-studio-core/src/studio/`, with tests:
 
 - the document, its stages and step records, saved as versioned JSON;
 - region readers, steps as readers, the price of a read, tiling within a
@@ -1123,8 +1493,14 @@ The spike's canvas draws from the document in three passes, all on the GPU:
 
 With eight layers and two Finish steps at 3840 × 2160 the three passes take
 0.8 to 1.1 ms of GPU time on the M4 Max, against 0.4 to 0.6 ms for the
-earlier single pass. The limits are eight layers, eight Finish steps and
-seven masks per frame.
+earlier single pass. One draw holds 24 layers, 8 Finish steps, 15 painted
+masks, 8 computed masks and 16 heals. Since 2026-11-27 Seiza draws a
+picture with more than that in batches: its Finish steps become steps on
+top of the stack, and each batch of layers starts from the picture the
+batch before it drew, so a group can span batches. Studio passes every
+layer, mask and step to Seiza and leaves nothing out for the picture's
+size. What the GPU cannot draw at all, such as a computed mask of more
+than two inputs, is still listed as left out.
 
 Not drawn yet: Linear-stage steps, which are heavy steps for the tile path;
 a layer whose source is an earlier step's result; a heal whose source is
@@ -1196,9 +1572,9 @@ Guard's color previews already use (`StackColorProcessing`).
 | `background_extraction` | Linear | Background extraction |
 | `input_processing` | Linear | Inputs follow their channel cards |
 | `input_deconvolutions` | Linear | Deconvolution, one per channel |
-| `input_rc_astro` | Linear | Processing tools, one per channel |
+| `input_rc_astro` | Linear | One tool step per tool of each channel's chain: Sharpening, Noise reduction, Star removal |
 | `emission` | Linear | Subtract continuum |
-| `color_rc_astro` | Linear | Processing tools on color |
+| `color_rc_astro` | Linear | One tool step per tool, with the band of the color group it runs on (`rgb`, or `lines` without red, green and blue) |
 | `color_calibration` | Linear | Color calibration |
 | `input_stretches` | Stretch | Stretch, one per channel per stretch, in order |
 | `narrowband` | Stretch | Narrowband balance and stars |
@@ -1311,8 +1687,9 @@ A person moves the strength of Background extraction and the canvas
 follows at once, with no refit:
 
 - Preparation keeps two planes per channel on the reference grid: the
-  channel uncorrected, and corrected in full. The tile store names them,
-  such as `red` and `red@background`.
+  channel before the step, and corrected in full. The tile store names the
+  corrected plane after the step, such as `red@step-<id>` (see “Each tool
+  is a step”).
 - Seiza's correction changes each sample in proportion to the strength,
   in Subtract and in Divide, and resampling keeps proportions. So the
   channel at any strength is a blend of its two planes. A test compares
@@ -1340,14 +1717,14 @@ draw buttons and hand the result to the canvas.
 
 A person picks three things. Each is a row of buttons under the stages,
 and a sentence under them says what is on screen, such as “green on its
-own, after the Linear stage, drawn with a preview stretch, not saved,
+own, after the Linear stage, drawn with the view stretch, not saved,
 because the view stops before the stretch.”
 
 | Choice | Options | What it means |
 |---|---|---|
 | Show | One tab per channel, and Combined | A channel is drawn on its own, in gray. Combined blends the layers as the Combine stage does |
 | Up to | Start of stage, Selected step, End of stage, Final | The last step the view applies. This is how a person sees an intermediate result. Changing stage moves it to the end of that stage |
-| Stretch | Document's, Preview | The document's stretch is each channel's own Stretch steps. The preview stretch is automatic, per channel, for looking only, and is never saved. A channel the view has not stretched yet is drawn with the preview stretch, and the sentence says so |
+| Stretch | Document's, Preview | The document's stretch is each channel's own Stretch steps. The view stretch is for looking only and is never saved or exported. A channel the view has not stretched yet is drawn with the view stretch, and the sentence says so |
 
 `studio::plan(document, view)` returns what a canvas draws: for each
 channel the background step that applies and the stretch to use, whether
@@ -1396,8 +1773,12 @@ Not done in the view:
 - **A step's result in the middle of a channel's chain** is shown only for
   the steps the canvas can apply: the background strength, the stretch
   and the Finish steps. Other steps are recorded and not drawn.
-- **The preview stretch has no controls,** and cannot be linked across
-  channels.
+- **The view stretch** is set with **View stretch** in the View toolbar:
+  any of Seiza's stretches but the layered ones, Automatic midtones to
+  start. Studio keeps it while it runs; the document does not, and an
+  export leaves a channel nothing stretches linear. It is used only where
+  nothing stretches a channel, never in place of a document's stretch. It
+  cannot be linked across channels.
 - **Brushes are offered in the Finish stage only,** where the canvas draws
   masks and heals. They were shown in every stage and did nothing there.
 - **A channel's own Background step changes its strength only.** The fit
@@ -1593,13 +1974,13 @@ as [pipeline parity](#what-to-investigate-first) requires.
 ## One tree, palettes and split panes (2026-11-25)
 
 The first panes had five separate choices that each changed the canvas: a
-stage rail, a selected step, and three button groups for what to show, up
-to where and with which stretch. Layers were the inputs themselves, named
-by how many bands a store had, so a narrowband store was labelled R, G, B.
-This section records what replaced that. The rules live in
-`src/studio/place.rs` and `src/studio/palette.rs`, which know of no
-toolkit, so a web canvas would lay out the same tree and draw the same
-panes.
+stage rail, a selected step, and three button groups for what to show, up to
+where and with which stretch. Layers were the inputs themselves, named by how
+many bands a store had, so a narrowband store was labelled R, G, B. This
+section records what replaced that. The rules live in
+`crates/psf-studio-core/src/studio/place.rs` and
+`crates/psf-studio-core/src/studio/palette.rs`, which know of no toolkit, so a
+web canvas would lay out the same tree and draw the same panes.
 
 Photoshop's and Affinity's layer panels are the guide where they agree:
 the top layer is listed first, each row has its own switch, an edit that
@@ -1776,6 +2157,15 @@ marks where a group's members start and end (`StackEntry::GroupBegin`,
 `GroupEnd`). A view that stops inside a group shows the group as far as it
 goes; one member alone is shown as it is, not as its group blends it.
 
+A palette's layers read top down in the palette's order, as the rest of
+the flow does: R, G, B and Ha, OIII from the top. The palette lists them
+bottom first, so each run of added layers is stacked in reverse; adding is
+the same in any order, and a layer of another blend, such as luminance,
+keeps its place on top. A document saved before stacks them the other
+way; Studio turns such a run over as it opens the document
+(`Document::list_palette_layers_top_down`) when the run is still in the
+palette's order, all added, none clipped and with no clipped layer above.
+
 A layer may be **clipped to the layer beneath it** (`LayerRecord::clipped`).
 It then shows only inside that layer's mask, and not at all while that
 layer is hidden. The layer beneath is the nearest one in the same group
@@ -1801,8 +2191,8 @@ to make, not one for what to edit and another for what to look at.
   edits up to and including that one (`Place::LayerEdit`). The row before
   it is the same layer without the edit, so a before and after of one edit
   compares like with like.
-- A place before an input's stretch is drawn with a preview stretch, and
-  the pane's label says so: “Ha · as stacked · preview stretch, not saved.”
+- A place before an input's stretch is drawn with the view stretch, and
+  the pane's label says so: “Ha · as stacked · view stretch, not saved.”
   There is no separate stretch choice.
 
 `Place::view` gives the `View` that `plan` already turned into what a
@@ -1910,17 +2300,261 @@ by two GHS steps.
 - A shared mask reads each input through its whole chain.
 
 Not built: the layered stretch, which needs the image and not samples of
-it, so only the engine can draw it; a row says so. The stretches of the
-combined picture (`output_stretches`) are recorded and not drawn. A GHS
-slider covers stretch factors up to 10, where Seiza allows 20.
+it, so only the engine can draw it; a row says so. A GHS slider covers
+stretch factors up to 10, where Seiza allows 20.
+
+### Output stretches (2026-11-26)
+
+PSF Guard's output stretches stretch the combined picture, after the
+layers are blended. Studio draws them as Finish steps, in their place among
+the other Finish steps. **Add step › Output stretch** adds one, a
+generalized hyperbolic stretch to start with, and its controls are those of
+an input's Stretch step with one more choice, **Channels**:
+
+- **Linked:** one curve for red, green and blue.
+- **Each channel:** a curve resolved for each channel, which neutralizes a
+  colored background.
+- **Luminance:** one curve for the Rec. 709 luminance; each pixel is scaled
+  by one factor, kept in gamut, so its color holds.
+
+These are Seiza's three color strategies. Seiza resolves each stretch; the
+canvas draws the result as three rows of the stretch table, and the Finish
+pass applies them. The luminance strategy's per-pixel scaling is the only
+part the shader does itself, as Seiza's `map_luminance_pixel` does.
+
+A stretch with explicit settings (generalized hyperbolic, linear, asinh,
+midtones, PixInsight's histogram transformation, or none) is resolved
+without the picture. One that Seiza resolves from the picture's statistics
+(automatic midtones, median anchor, asinh by percentiles) needs samples of
+the combined picture. The render thread draws an eight-by-eight grid of
+128-pixel patches of the combined picture at full resolution into
+offscreen targets, up to eight patches per frame as their tiles load, and
+reads each frame's patches back with one wait for the GPU. Full resolution matters for the same reason as for an input: a
+reduced level's samples are means, and a stretch resolved from them would
+clip the shadows in the wrong place. Each output stretch after the first is
+resolved from the samples as the stretches before it left them, as Seiza's
+stretch stack does.
+
+The picture is sampled again when anything that changes it does: the
+store, a layer, a stretch, a mask, a heal, an input's state or the crop.
+A refresh that changes no output stretch and no samples reuses the
+stretches already resolved, and a sampling no longer needed stops. Until the
+new samples are read, the old ones stand in, so the stretch keeps its place
+while the picture changes. The first time, the picture shows without the
+stretch until the samples arrive.
+
+Limits:
+
+- The samples are of the combined picture before the Finish steps. Curves,
+  Saturation and heals placed before an output stretch are left out of
+  what that stretch is resolved from.
+- A smoothed mask in a patch is blurred within the patch, so near a
+  patch's edge it can differ slightly from the canvas. A heal whose source
+  lies outside its patch copies nothing there.
+- The layered stretch needs the whole image, so the canvas does not draw it
+  as an output stretch either.
+
+### Final adjustments, histogram and 16-bit export (2026-11-26)
+
+Asked for: final adjustments of the picture such as a stretch, the tone
+and color controls Adobe Camera Raw has around its histogram, and saving
+the final picture as FITS or TIFF without leaving 16-bit precision.
+
+**Tone.** A Finish step, **Tone and color**, has Camera Raw's Basic
+controls, in its order:
+
+| Control | Range | What it does |
+|---|---|---|
+| Exposure | −3 to +3 stops | Multiplies the picture by 2^exposure. |
+| Contrast | −1 to +1 | An S-curve around the middle, or a flattening one. |
+| Highlights | −1 to +1 | Raises or lowers the bright areas' tones, most at two thirds of the way up, keeping the detail in them. |
+| Shadows | −1 to +1 | Raises or lowers the dark areas' tones, most at a third of the way up, keeping the detail in them. |
+| Whites | −1 to +1 | Moves the white point: up clips more of the brightest tones to white. |
+| Blacks | −1 to +1 | Moves the black point: down clips more of the darkest tones to black. |
+| Texture | −1 to +1 | Raises or lowers fine detail, over a few pixels. |
+| Clarity | −1 to +1 | Raises or lowers the contrast of larger structures, most in the midtones. |
+| Dehaze | −1 to +1 | Takes away a gray veil such as sky glow, keeping colored nebulae; negative adds one. |
+| Vibrance | −1 to +1 | Saturation that changes muted colors more than vivid ones. |
+| Saturation | −1 to +1 | Saturation of every color alike. |
+
+Seiza's `seiza_compose::tone::Tone` does the work, on the canvas and in an
+export. Each pixel's luminance changes with its color kept, scaled by one
+factor and kept in gamut. Highlights, Shadows, Texture, Clarity and Dehaze
+read the pixel's neighborhood, 97 pixels across for the area and 7 for
+fine detail, through an edge-preserving base, so a star gets no halo; see
+Seiza's compositor design record. On the canvas the windows are measured in
+screen pixels, so zoomed out they cover the same part of the picture at the
+canvas's resolution.
+
+**HDR.** HDR belongs to the whole picture: the View toolbar and the Final
+picture's inspector have an HDR switch and a Headroom, 0 to 4 stops (2 to
+start), and the inspector a Knee, which the document keeps. With HDR on, every stage may be brighter than
+SDR white up to the headroom: the stretches, the combined picture and every
+Finish step, and every view of the picture shows it so (Seiza's
+`Picture::headroom`). HDR is a mode of the picture, not of one stretch:
+every input's stretch follows it. Layered, HDR puts the brightest structure
+there with its core compression; plain Layered becomes Layered, HDR
+without core compression; any other stretch continues above the picture's
+knee, three quarters of its output unless the Knee moves it, along Seiza's
+`HdrTail`, up to the peak at the band's brightest sample. That brightest
+sample is the scale the canvas draws the band with (bands stretched
+together share theirs). It is usually far above the 1 of the stretch's
+range, which a percentile sets: a tail that ended at that 1 put every
+brighter pixel at the peak, flat. On the Iris with automatic midtones,
+55 to 86% of a 256-pixel square of the core, by channel, sat at the peak
+that way, with no spread between its median and its 99th percentile; with
+the tail reaching to the brightest sample, none does. (An earlier note here
+gave a quarter to two fifths: that run's switch to automatic midtones had
+not taken, and the canvas drew the inputs unstretched.) A lower knee gives the core
+more of the headroom: from a knee of 0.75 to 0.35, the core's spread from
+its median to its 99th percentile grew from 0.57 to 0.66. While HDR is on,
+each Stretch step but Layered, HDR shows the Knee too. A stretch after an HDR one shapes the range up to white and
+keeps what is above it (`TransferStage::BelowWhite`). Tone and color keeps
+the headroom, and Exposure and Whites put more there; the **Clipping**
+toggle in the View toolbar marks what reaches the peak. A document from when HDR was a switch of the Tone and color step
+opens with that step's headroom as the picture's.
+
+Above SDR white a value continues on the extended sRGB curve that macOS's
+extended color spaces use, so two stops of headroom peaks at the value
+whose light is four times SDR white's, about 1.82. Seiza's `Picture::peak`
+gives the picture's peak. The canvas, the histogram and every export clip
+values at the peak, so an SDR picture never shows above white, whatever
+its blends or Saturation give. On an EDR
+surface (`--output p3-extended`, as on a Pro Display XDR) the canvas shows
+values above 1 brighter than white.
+Export to a name ending `.avif` writes an HDR AVIF: the picture in linear
+Rec. 2020 through the working space's ICC profile, PQ, 10 bits, with its
+content light levels. A 32-bit float TIFF keeps the values above 1 as
+they are. The histogram of an HDR picture counts clipping at the peak and
+gives the share above SDR white apart. Tried on the Cat's Eye (NGC 6543)
+from the C925: with Exposure +1.5 and a 2-stop headroom, the AVIF's
+brightest light is 808 cd/m², within the 812 cd/m² the headroom allows,
+and the float TIFF's brightest value is 1.825.
+
+**Working space.** Studio composes every picture in Rec. 2020's primaries
+on the sRGB curve (Seiza's `WorkingSpace::Rec2020`), so no color a display
+can show is lost before the picture reaches it: Saturation, Vibrance and
+narrowband hues may go past sRGB and Display P3. A layer's color is given
+in Display P3, the gamut of the displays Studio is used on, and converted
+into the working space by the matrix alone: a layer's color multiplies its
+band's stretched values and the layers add, so layers whose colors add up
+to white still do, and a calibrated picture keeps its balance. The canvas maps the picture into the surface's
+primaries with Seiza's `DISPLAY_SHADER`: sRGB for `--output srgb8`, Display
+P3 for the others. A color the display cannot show is desaturated toward
+the gray of its own luminance until it fits, so it keeps its luminance and
+hue. A TIFF keeps the working space and embeds its ICC profile, which
+Studio makes with Little CMS; a PNG is mapped to Display P3 the same way
+and embeds that profile; an AVIF is Rec. 2020 already.
+
+**Texture and noise.** Studio measures the picture's noise from its
+samples, as the Finish steps before Tone leave them, and gives it to Tone,
+so Texture leaves noise alone and raises detail above it. On the Sh2-157
+stack, Texture +0.4 raises the sky's noise by 7%. A Finish step with a
+mask shows the histogram of its area.
+
+**Histogram.** The inspector of the Final picture, of a Tone step and of an
+output stretch shows the histogram of the final picture: red, green, blue
+and luminance, with the share of pixels clipped to black and to white.
+The render thread samples the final picture on the GPU, every Finish step
+drawn as the canvas draws it, at the same full-resolution patches the
+combined picture is sampled at, and Studio only counts the samples. It
+used to work the Finish steps out again on the CPU, which took about a
+second on the main thread for each slider move; counting now takes a few
+milliseconds. The render thread draws up to 8 patches between frames and
+copies them to a buffer it maps without waiting; it takes the samples on a
+later frame, once the GPU has finished. All patches of one sampling share
+one upload of the scene's tables and masks. On the Cat's Eye each call
+takes about 8 ms on the render thread, down from about 64 ms when every
+patch uploaded them again and the thread waited for the copy. Set
+`PSF_STUDIO_TIMING` to print where an edit's time goes.
+
+**Scenes off the UI thread.** An edit hands a copy of the document to the
+scene thread and returns at once. That thread makes each band's stretch
+analysis, a layered stretch's maps, Texture's noise measure and the output
+stretches resolved from the picture, then writes the scenes for the render
+thread to draw. A newer edit replaces one the thread has not started, and
+scenes a newer edit replaces before they are written are dropped. On the
+Cat's Eye, an analysis takes 60–100 ms on that thread; the UI thread spends
+under 0.1 ms per slider move. Export and the parity check still build their
+scene on the UI thread, once per click. Each scene records the place it was
+built for, and a pane's label names that place, so the label matches the
+picture while a newer scene is built; a line under it names the place on
+its way (“Drawing OIII · after Processing tools on color…”).
+
+A store a tool run prepared opens on a thread of its own as well, with
+**Opening the store** in the status line. The canvas shows the picture it
+had until the store is open, then the new document and store together. A
+store that cannot be opened leaves the picture as it was. The store given
+when Studio starts opens before the window appears, in about 260 ms for the
+Cat's Eye.
+
+**Export.** **Export** in the Final picture's inspector writes the whole
+picture, cropped, at full resolution: TIFF at 16 bits per channel or as
+32-bit floats in the working space, PNG at 16 bits in Display P3, AVIF as
+HDR, or FITS or XISF as 32-bit floats in the working space, through Seiza's
+`seiza_image_io`, which replaces the destination only once the file is
+complete.
+
+The canvas cannot make that file. Its tiles hold half floats, about three
+significant digits, and so do its stretch tables. An export is rendered by
+Seiza's compositor on the CPU, `seiza_compose::render`, from the store's
+32-bit samples. That render is the reference the canvas's GPU render
+follows; see “Where the code lives”. It works in tiles with a margin wide
+enough for mask smoothing and heals, so unlike the canvas's patches it has
+no seams. A cropped picture ends at the crop: smoothing and heals near
+its edge see the picture reflected there, not the document beyond it,
+which the automatic crop leaves out because some input does not cover it.
+
+The two renders of one picture must agree. Seiza's tests hold its GPU
+render to its CPU render. `psf-studio --parity-report <file>` also checks
+them on a real store: once the canvas has sampled the picture, it writes
+how far Seiza's CPU render of the combined picture is from the canvas's
+samples of the same 64 patches. On the Sh2-157 store (six inputs, three
+groups, screened stars, a layered stretch) the 3.1 million samples
+differed by 9e-5 on average, 4e-4 at the 99.9th percentile and 7e-4 at
+most: half-float rounding, since a half float's step at 0.5 is 4.9e-4.
+
+Built and tried on that store: Tone and color with every control, the
+histogram following each change, and an export of the whole 6135 × 4038
+picture to a 16-bit TIFF of 148.6 MB. With no control that reads a
+neighborhood, that export differs from Studio's earlier CPU render by at
+most 6 16-bit steps, and by at most one in 99.9% of samples. On that
+noisy stack, Texture also raises the sky's noise: the noise is stronger
+than the detail Texture leaves alone. Not built: a histogram limited to a
+masked step's area; choosing an ICC profile for an export, which holds the
+canvas's working-space values without one.
+
+**Where the code lives.** Seiza draws the picture. `seiza-compose` holds
+the description of a picture (`Picture`: layers reading inputs through
+transfers, masks, heals and Finish steps), its tiled CPU render, and its
+GPU render with the shaders. PSF Studio keeps its own view of a document
+(`studio/app/src/canvas.rs`): layers that name a band and a stretch the
+document resolves later. Once each band's stretch is known, Studio turns
+that view into a Seiza `Picture`, with each stretch as a Seiza transfer.
+The canvas (`studio/render`) chooses and uploads tiles, draws each pane
+with Seiza's `GpuCompositor`, and applies the display transform as it
+presents. An export and the parity report render the same `Picture` with
+Seiza's CPU render. Studio has no shaders or CPU render of its own. Until
+a Seiza release has `seiza-compose`, Studio's workspace pins Seiza to the
+pull request's commit.
+
+**One renderer, not two.** PSF Guard's color previews and PSF Studio must
+end up drawing a picture the same way. Seiza's `combine_*` functions now
+build their pictures with the same compositor, with their output
+unchanged. The next step is for PSF Guard, once it moves to a Seiza
+release with `seiza-compose`, to render a color preview from its document
+(the setup maps to one; see “The default document”) through that
+compositor, keyed on `seiza_compose::OUTPUT_VERSION`.
 
 ## Processing tools in Studio (2026-11-25, first part)
 
 The tools are the ones PSF Guard's color processing runs: sharpening,
 noise reduction and star removal, each by a provider. The providers today
 are RC-Astro's BlurXTerminator, NoiseXTerminator and StarXTerminator, and
-Seiza's built-in noise model. A document keeps them as PSF Guard does: one
-chain per input, in the step “Processing tools” of that input.
+Seiza's built-in noise model. Each tool is a step of its own in the Linear
+stage (see “Each tool is a step”); this section first described one chain
+per input in one “Processing tools” step, which documents opened now are
+split from.
 
 A tool takes seconds to minutes on a whole stack, so it is not live.
 Studio runs the tools when a document's store is prepared, and keeps each
@@ -1932,12 +2566,12 @@ result.
   function; their behavior is unchanged. A provider is chosen by its key,
   so a Seiza model and an RC-Astro tool go the same way.
 - **Preparing a store.** `psf-guard studio-sources --apply <document>`
-  runs each input's chain on its stack as it came, then fits the
-  background on the tools' result, as the color pipeline does.
-- **What the store keeps.** Per input: the stack as it came; the tools'
-  result (`<input>@tools`); the stars a star removal kept
-  (`<input>@stars`); and the result with its background corrected
-  (`<input>@background`).
+  runs the Linear steps that change the inputs in the document's order.
+  PSF Guard's own color setups put the tools before the background, as
+  the color pipeline runs them.
+- **What the store keeps.** Per input: the stack as it came; the input
+  after each step that changed it (`<input>@step-<id>`); and the stars a
+  star removal kept (`<input>@stars`).
 - **Cache.** Each step's result is kept beside the downloaded stacks, so
   a chain that grew by one tool runs only that tool.
 
@@ -1951,13 +2585,9 @@ on the same three stacks through the same step in 87 seconds
 (noise-v1-d33 on the GPU through Core ML). Nothing in Studio is particular
 to a provider: the chain names `noise-model` where it named `nxt`.
 
-In Studio an input's tools are one step of the input, listed before the
-background step, which is the order the pipeline runs them. With a store
-prepared for the document, the canvas shows the input as stacked before
-that step and the tools' result after it, so Before and after and Wipe
-compare the two. The store's corrected channel is the tools' result
-corrected, so a view that leaves the tools out shows the input without
-background correction, and the pane's label says so.
+With a store prepared for the document, the canvas shows an input after
+each of its steps: selecting a tool step shows the input after that tool,
+so Before and after and Wipe compare the input before and after it.
 
 ### Choosing and running tools from Studio
 
@@ -1980,8 +2610,8 @@ In the app, started with `--psf-guard <path>`:
   computer has. A tool this computer cannot run is listed with the reason.
 - Each chosen tool's settings follow, as sliders and switches from the
   tool's own list.
-- The choice is kept in the document as PSF Guard keeps it
-  (`input_rc_astro`), in the input's Processing tools step.
+- Each choice is a tool step of the input, which PSF Guard's settings
+  read back as the input's chain (`input_rc_astro`).
 - **Run the tools** saves the document, runs `studio-prepare`, shows the
   tool and its progress as it goes, and has the canvas draw the new store
   when it ends, without a restart. A note says when the tools have changed
@@ -1989,6 +2619,177 @@ In the app, started with `--psf-guard <path>`:
 
 A tool that ran with the same settings before is not run again: each
 step's result is kept beside the stacks.
+
+#### Each tool is a step (2026-11-27)
+
+Every processing tool is a step of its own in the Linear stage, as every
+other operation is: Sharpening, Noise reduction and Star removal, each
+with a provider and its settings, and the band of an input or of a color
+group. A step can be turned off, moved and removed like any other, and an
+input can have a tool before the background extraction and another after
+it. Until this change an input's tools were one “Processing tools” step
+holding a chain, and preparation ran a fixed order (every tool, then
+every background), because the store was built from PSF Guard's color
+setup, which has that shape. That fixed order is gone.
+
+- **Opening older documents.** A “Processing tools” or “Processing tools
+  on color” step is split into one tool step per tool, in its place and in
+  the chain's order. The first keeps the old step's id. PSF Guard's color
+  tools, which had no band, take the color group they run on.
+- **Order.** **Move earlier** and **Move later** on a tool, a
+  deconvolution or a background extraction move it past the step before or
+  after it in the input's list. A step shared by every input, such as
+  Background extraction, moves for every input. A new tool goes after the
+  input's tools of an earlier kind, and else before Background extraction.
+- **Preparing.** `studio-prepare` reads the document's Linear steps and
+  runs each one that is on and changes an input
+  (`studio::changes_input`), in order: a tool on its input in the input's
+  own frame, a color group's tool on the group's inputs registered and
+  combined, a deconvolution, and each Background extraction, fitted with
+  one model across the inputs it is for. A step after a background
+  extraction takes its input at the step's strength.
+- **What the store keeps.** For each input, its plane after each step
+  (`<input>@step-<id>`, a background extraction corrected in full), and
+  its record lists them in order (`"states"`) with the steps it ran
+  (`"program"`, `studio::input_program`).
+- **Canvas.** An input is drawn after the last step the view reached that
+  the store holds. A background extraction there is blended into the
+  state before it by its strength, at once. A step the store was prepared
+  without is listed as left out, and the toolbar lists the inputs Run
+  tools would update. A store prepared before this change keeps its
+  `@tools` and `@background` planes, which stand for every tool step and
+  for the background extraction.
+- **Cache.** Tool steps that follow one another in a chain's order on one
+  input (sharpening, then noise reduction, then star removal) run as one
+  chain, so each tool's result is kept by the chain so far, as PSF Guard
+  keeps a chain's. A tool after another kind of step is kept by that
+  step's result. So a store prepared again from an older document finds
+  every tool's result it ran before.
+- **PSF Guard's settings.** An input's tool steps read back as its chain
+  and a color group's as the color tools, one of each kind, in the
+  document's order; PSF Guard runs them before the background. A color
+  group's star removal stays Studio's.
+
+#### Tools on a layer or the picture (2026-11-27)
+
+A tool step can go anywhere, not only in the Linear stage. **Run a tool on
+this** on a layer adds one among the layer's own steps, and **Add tool** in
+the Finish stage adds one to the picture; `studio_add_step` does either.
+Such a step runs on what Studio draws there:
+
+- **What it runs on.** A layer's tool runs on the layer alone, in gray, as
+  its stretch and its own steps before the tool leave it. A Finish tool
+  runs on the picture as the layers and the Finish steps before it leave
+  it, in the working space.
+- **Running.** **Run tools** prepares the store first when an input's steps
+  changed, then runs these steps in order, each layer's first, then the
+  Finish steps: it renders the step's image at full resolution with
+  Seiza's CPU render, as an export does, and has `psf-guard studio-tool`
+  run the tool on it (with the shifted second pass when asked). The
+  results are kept in `<store>.late/`, named by a digest of the store's
+  version, the document up to the step and the tool, so an edit after the
+  step keeps the result and an edit before it asks for a new one. A
+  later step's image is rendered with the earlier steps' results.
+- **Drawing.** A layer whose tool has run is drawn from the result, which
+  holds its stretch and its own steps before the tool; its steps after
+  the tool apply on it. A Finish tool that has run replaces the picture
+  before it: the canvas draws the result, a channel at a time in the
+  working space, and the Finish steps after it. A step that has not run
+  for the document as it is, is left out and listed in the pane, and the
+  toolbar lists it under “Tools to run”.
+- **New images.** A star removal's stars are a new image. In the Linear
+  stage they become an input, “Ha stars”, with a layer of their own. On a
+  layer or the picture they are kept beside the result and screened back
+  right after the step: the tree shows them as “Stars it took out” under
+  the step, with a switch that leaves them out, so the steps after it work
+  on a starless picture.
+- **HDR.** The tools clip at 1, so an image of an HDR picture goes to them
+  scaled into 0 to 1 by its brightest sample and comes back at its own
+  scale; NoiseXTerminator on one channel of the Iris reaching 1.2 came back
+  at 1.0 before this.
+- **Memory.** Each result is held whole, with its pyramid: about 0.3 GB a
+  channel for the Iris.
+- **Tried** on a copy of the Iris through `psf-studio-mcp`: Noise reduction
+  and Star removal on the picture ran in 48 s; the sky's 99th percentile
+  went from 0.46 to 0.43 with the stars added back and 0.15 without them,
+  and the switch runs nothing again. Noise reduction on the luminance
+  layer then flagged it and the two Finish steps after it, and the three
+  ran in 70 s. Found on the way: a result read before its stars file was
+  written showed no stars (`studio-tool` now writes the stars first), and
+  results read before a deferred store opened were dropped and not read
+  again.
+
+Still open: a layer's result follows changes to that layer's opacity and
+blend, which do not change what the tool ran on.
+
+#### Steps on the picture are adjustment layers (2026-11-27)
+
+A Finish step was a step on the whole picture after every layer. It is now
+an adjustment layer like Exposure or Curves, which changes the layers
+beneath it and can be dragged anywhere in the stack:
+
+- **The model.** `LayerSource::Adjust { step }` is an adjustment layer
+  that holds one step: Exposure, Curves and Saturation as before, and also
+  an output stretch, Tone and color, a heal or a tool. The layer's
+  visibility, opacity and mask are the step's switch, opacity and mask;
+  `set_step_enabled`, `set_step_opacity` and `clear_step_mask` change the
+  layer for such a step. `Document::add_picture_step` adds one on top, and
+  a star removal also gets a layer above it, “Stars it took out”
+  (`LayerSource::Step`), with the screen blend. The old adjustment layer,
+  which held an operation's name and settings, is still read.
+- **Documents from before.** On open, each Finish step becomes an
+  adjustment layer on top, in order, with its switch, opacity and mask; a
+  star removal's “stars shown” becomes its stars layer's visibility. The
+  ids are derived from the step's, so opening a document twice gives the
+  same layers. A new document's output stretches, Curves and Saturation
+  are layers too, so the Finish stage is empty; the tree shows it only
+  for a document that still has Finish steps.
+- **Drawing.** Seiza's picture has `LayerKind::Step`, a Finish step in the
+  stack. The CPU render blends the layers up to each such step and
+  applies it over the area it reads; steps on top of the stack draw
+  exactly as Finish steps. The canvas gives Seiza the steps on top of the
+  stack as Finish steps, and the others as step layers. The GPU applies a
+  step layer that maps each pixel alone inside the layer pass. A heal or
+  Tone's local contrast beneath other layers ends a stage: the GPU draws
+  the layers beneath it to a texture, the step reads it around each pixel,
+  and the layers above start from what the step made. Inside a group the
+  step works on the group's members alone. A heal with a mask of its layer
+  is listed as not drawn.
+- **Healing blemishes.** With the Heal tool, Option-click sets where the
+  next stroke copies from; later strokes keep that distance until the next
+  Option-click, and a heal's inspector says how far it copies from. A heal
+  goes where the selection is: on an input, on a layer alone (a stars
+  layer's heals fix its stars inside its group, before they are screened
+  over the picture), right above a selected adjustment layer as a Heal
+  layer on the picture as that layer leaves it (above Star removal, it
+  heals the starless picture beneath the stars), or on top of the picture.
+  The control server's `heal` method and `studio_heal` paint the same
+  stroke. Tried on the Iris copy: a heal on the stars layer took a star
+  out (the square's brightest red from 0.91 to the next star's 0.86), and
+  a heal above Star removal changed the starless picture only; the parity
+  check gave the same figures with both heals as with none.
+- **Checked** on a copy of the Iris with a heal beneath the stars layer:
+  Studio's parity check (Seiza's CPU render against the canvas's patches)
+  gave the same figures with the heal shown and hidden (mean 6.2e-5,
+  99.9th percentile 8.5e-4). A heal whose source is outside a 128-pixel
+  patch reads pixels the patch does not draw, so the check differs there
+  (99.9th percentile 3.2e-2); a full view of the canvas draws the
+  source, as it does for a heal on top.
+- **Output stretches.** The stretches are resolved in the order the
+  picture is made, from samples of the combined picture without the
+  stretches that read them. A stretch beneath other layers is resolved
+  from the same samples, which include the layers above it.
+- **Tools.** A tool layer runs on the stack beneath it, rendered at full
+  resolution (`LateOn::Beneath`); its result's name follows those layers
+  only. At full opacity with no mask the result covers every layer
+  beneath; otherwise it is blended over them as a group with the layer's
+  opacity and mask. A tool in a group is listed as not drawn.
+- **Editing.** Selecting such a layer shows the step's controls, the
+  histogram of the final picture (of the masked area when the layer has a
+  painted mask), the layer's mask, and **Add step** and **Add tool**,
+  which add another layer on top. Dragging Exposure, Curves, Saturation
+  or a tool onto a layer makes it that layer's own; any other step layer
+  moves like a layer.
 
 ### Stars
 
@@ -2005,6 +2806,33 @@ picture.
 - PSF Guard's settings have no place for a stars input, so it stays out
   of them.
 
+#### A stretch of their own, and star reduction (2026-11-27)
+
+A stars input can have a stretch of its own: in the stars input's
+inspector, **Stretch on their own** copies its input's Stretch step for
+`<input>@stars`, and **Follow the input's stretch** removes it again.
+
+**Star reduction** on a stars layer, or on a group of stars layers such as
+RGB stars, makes the stars smaller. Each star is blended toward a one-pixel
+cross erosion of itself, Seiza's `cross_erosion`, which its RGB star
+reduction also uses. A group's stars are reduced together: the erosion is
+measured on the brightest of its stars inputs at each pixel, and every
+input is scaled by the same amount, so the stars keep their colors. A
+layer's own amount, above 0%, is used in place of its group's.
+
+The reduced stars are planes worked out from the whole image, as the
+luminance of a layered stretch is: the first change works them out, one
+plane per stars input, and the canvas draws the stars as they are until
+then. The amount only blends between the two, so moving the slider draws
+at once. The planes are made before the stretch; for stars the store
+keeps stretched for display, that matches Seiza's reduction, and for
+linear stars it matches it at 0% and 100%. A stars layer whose background
+correction is blended in cannot be reduced too, and its pane says so.
+
+On the Cat's Eye, full reduction left 85 of 148 star pixels above a
+display value of 96 in a 400-pixel square of sky, and took a quarter of
+the square's star light.
+
 #### Star removal on a color group (2026-11-25)
 
 Star removal runs on each input alone, or on a color group together:
@@ -2014,15 +2842,15 @@ person chooses. In the Tools block of an input with a star removal tool,
 choice moves the tool and its settings between each input's Processing
 tools step and one step for the group.
 
-- The group's step is “Processing tools on color” with the group's band,
-  `rgb` or `lines`. That step with no band is still PSF Guard's color
-  tools (`color_rc_astro`).
-- When the store is prepared, each input's own tools run first. Then the
-  group's registered inputs are combined into one color image, the
-  group's chain runs on it, and the result is split back into each
-  input's `@tools` and `@stars`. A group of two inputs repeats the last
-  one to make three channels. The background is fitted after that, on the
-  reference grid.
+- The group's step is a Star removal step with the group's band, `rgb` or
+  `lines`.
+- When the store is prepared, the group's step runs where it is in the
+  document: the group's registered inputs, as the steps before it left
+  them, are combined into one color image, the tool runs on it, and the
+  result is split back into each input's plane after the step and its
+  `@stars`. A group of two inputs repeats the last one to make three
+  channels. The steps after it on those inputs run on the reference
+  grid.
 - PSF Guard refuses star removal among its color tools (“Star removal runs
   on channel stacks, not on the color channels together”), so the group
   steps stay out of the exported color setup. A setup exported from such a
@@ -2049,12 +2877,11 @@ On the Sh2-157 stacks on this Mac:
 
 ### Not built yet
 
-- Tools on the combined color image (`color_rc_astro`) and the narrowband
-  star steps. Both run after the channels are resampled and normalized
-  together, which Studio's preparation does not do yet.
+- The narrowband star steps, which run after the channels are resampled
+  and normalized together, which Studio's preparation does not do yet.
+  PSF Guard's color tools (`color_rc_astro`) now run as color group tool
+  steps.
 - A run cannot be stopped from the app, and a second cannot be queued.
-- The stars follow their input's stretch and have no stretch of their
-  own.
 - The app saves the document only when the tools are run.
 
 ## Setup and workspace: one flow for every kind of picture (2026-11-25)
@@ -2097,8 +2924,9 @@ The rules that keep it so:
 
 - **Setup is part of the workspace, not a page.** A separate Setup page
   was built first and dropped the same day: it hid the tree, so a person
-  lost sight of what they were building. What goes where is now shown in
-  the tree and the inspector.
+  lost sight of what they were building. What goes where is shown in the
+  tree and the inspector, and since 2026-11-27 also in Setup, the first
+  row of the tree, which covers the canvas but leaves the tree in view.
 - **Routes are read from the layers.** Where an input goes is read from
   the layers as they are (`Document::routes`), however they were made.
   No plan is stored beside them, so there is no state in which a document
@@ -2216,15 +3044,39 @@ Setup's routing table and part cards follow the same rules.
 ### The layered stretch
 
 Seiza's layered stretch treats large and fine structure apart, so it
-needs the image and cannot be one curve per input. It is offered with the
-other stretches. The canvas draws it from a result computed when the
-store is prepared, as it does for a tool, and shows the input with a
-preview stretch until then.
+needs more than each pixel. The canvas draws it live, through Seiza's
+compositor: when Studio opens a store it reads every band at a quarter of
+the resolution from the store's pyramid, and a layered stretch measures
+its maps from that copy (the HDR core compression's base and the contrast
+recovery's large-scale layer), again only when a setting that moves them
+changes. The curve, the core compression, the HDR tail and the detail gain
+are worked out per pixel, on the GPU for the canvas and on the CPU for an
+export, so moving Black point, Background or Core compression redraws at
+once. The HDR layered stretch reaches as far as the picture's headroom;
+in an SDR picture it rolls off to white. Each band is stretched on its
+own, so calibrated red, green and blue keep their balance through their
+shared statistics. Two things a layered stretch reads need the whole
+image at full resolution, so Studio works them out as tasks while a
+person edits, with their progress in the status line: the fine blur that
+star-core compression measures detail against, and, for red, green and
+blue calibrated together, their luminance, which the stretch reads and
+each channel then follows. Until a plane is done the canvas draws without
+it; when it is, the canvas draws from a source that adds it to the
+store's channels, its tiles load again, and exports read it too. On the
+Cat's Eye store a band's fine blur takes under half a second.
+
+A band's stretch is resolved from samples of the band. When Studio opens a
+store it reads patches spread across the image, which are fast but can
+miss a small bright object, and then samples every band evenly over the
+whole region every input covers as a task (0.2 s on the Cat's Eye store).
+When that is done the stretches are resolved again from it and the canvas
+redraws.
 
 ### What is built
 
-In `src/studio/recipe.rs` and `src/studio/palette.rs`, with tests in
-`src/studio/recipe_tests.rs`:
+In `crates/psf-studio-core/src/studio/recipe.rs` and
+`crates/psf-studio-core/src/studio/palette.rs`, with tests in
+`crates/psf-studio-core/src/studio/recipe_tests.rs`:
 
 - parts of seven kinds (Nebula, Color, Luminance, Stars, RGB stars,
   Emission lines, Empty) and seven recipes made of them;
@@ -2251,6 +3103,16 @@ own stars”, then Ha added to the Nebula part) and on the RGB stacks.
 Also tried on a store of Ha, OIII, SII, R, G and B with star removal on
 all six: the recipe “Narrowband with RGB stars” gives a starless SHO
 nebula with the stars of R, G and B screened over it.
+
+A recipe or part that shows stars apart (RGB stars, Stars) needs them
+separated, so choosing one sees to it: every input the picture shows gets
+the first star removal tool this computer has, a color group's inputs
+together so the stars keep their colors, and `psf-guard` prepares the
+store again, with its progress in the status line. Before, the recipe only
+made the layers; the nebula kept its stars and the stars layers read
+channels the store did not have. A document whose stars layers show no
+stars says so under the Recipe menu. Without a star removal tool the
+status line says what is missing.
 
 **Gaia calibration of R, G and B** runs in the store preparation
 (`calibrate_colors` in `src/commands/studio_sources.rs`, on the shared step
@@ -2283,6 +3145,23 @@ those planes as stretched for display, and the spike draws them as they
 are. A change of the amount is applied by preparing the store again
 (“Run tools”). PSF Guard's star reduction and its saving of the amount in
 the `narrowband` settings are not carried over yet.
+
+**Tools not run yet.** Studio compares each input's tools, deconvolution,
+color group tools and continuum subtraction with the ones the store was
+prepared with. When they differ, the toolbar shows “Tools changed for Ha,
+OIII, SII” and a **Run tools** button, and each affected input's row says
+“tools not run”. A color group's tools count for each of its inputs, and
+continuum subtraction for each line. The tools a store was prepared with
+are kept beside it, in `<store>.tools.json`, with the store's size and
+modification time, so the flag is still there after Studio restarts. A
+record of another version of the store, such as one prepared outside
+Studio, is not read; the document's tools are then taken as prepared.
+
+A star removal in Studio always keeps the stars it removes, linear, with
+Unscreen Stars off: `psf-guard` sets those settings itself
+(`rc_astro::keep_linear_stars`), and Studio does not show them. A store's
+new stars become inputs; they get a layer of their own only when the
+picture has no stars layer yet, so the stars are not added twice.
 
 **The layered stretch** is Studio's default in place of the automatic
 midtones stretch: a new document's stretches are changed by
@@ -2343,10 +3222,27 @@ opening.
 **Opening from inside Studio and from PSF Guard.** Studio lives in
 `studio/`, a workspace of its own, and its program is `psf-studio`.
 
-- **Open** in Studio's top bar asks for stack files and opens them. Studio
-  passes the files to `psf-guard studio --file …`, which reads each file's
-  channel from its `FILTER` header with PSF Guard's own filter classifier,
-  or from the file's name.
+- **Open** in Studio's top bar asks for stack files and opens them. Each
+  file's channel comes from its `FILTER` header with PSF Guard's filter
+  classifier, or from the file's name. When the `psf-guard` program is on
+  the computer, Studio passes the files to `psf-guard studio --file …`,
+  which also runs the processing tools and calibrates colors against Gaia.
+  Without it (built 2026-11-27), Studio prepares the files itself with
+  `psf_studio_core::prepare`, the code `psf-guard` runs: registration,
+  background extraction, continuum subtraction and the layered stretches.
+  The tool and deconvolution steps are left out of the picture's record,
+  so Studio lists them as still to run, and the colors stay uncalibrated,
+  with a note that says why.
+- **Shared code.** `crates/psf-studio-core` holds what both programs run:
+  the document model and tile store, image steps, frame reading
+  (`image_io`), the color steps (registration, background extraction,
+  display stretches, continuum fits, the filter classifier), registered
+  channels with their Linear steps, and preparing a store. Processing
+  tools run behind the `LinearTools` trait; PSF Guard implements it on its
+  workers. PSF Guard keeps downloading from a server, plate solving and
+  Gaia color calibration, which it passes to `prepare_store` as a hook.
+  Next: open a server's target without `psf-guard`, then run the tools
+  through Seiza's own runners (`seiza_stacking::external`).
 - PSF Guard's color stacks show **Open *target* in PSF Studio**, a link of
   the form `psf-studio://open?server=…&db=…&project=…&target=…`. The
   application registers that scheme (`studio/bundle-macos.sh` writes the
@@ -2443,6 +3339,246 @@ Order: the layout first, since every later piece adds controls. Then 1 to
 narrowband into RGB). Then 4, for RGB stars, and the layered stretch. Then
 5.
 
+## Protected background regions (2026-11-27)
+
+A Background extraction step keeps regions out of the sky it measures, so a
+nebula's faint halo is not taken for sky and subtracted. With the step
+selected, the canvas outlines its regions and its inspector lists them,
+each with **Remove**. **Protect**, among the tools while the step is
+selected, draws an ellipse: press at its centre and drag out to set its
+width and height. Regions are stored as Seiza takes them,
+`config.protected_regions`, in fractions of the image; the fit keeps them
+and adds the catalog's when catalog protection is on. The background is
+worked out when the store is prepared, so each input's background settings,
+but for the strength the canvas applies, join the tools the toolbar compares
+with the prepared record. A record written before then takes them as they
+are when Studio opens the store.
+
+## Driving Studio from an assistant (2026-11-26)
+
+An assistant working on Studio needs to see what Studio shows, not what a
+screenshot of a covered window or an SDR capture leaves of it. Each window
+listens on a control socket, `$TMPDIR/psf-studio/<pid>.sock`, made by
+`studio/app/src/control.rs`, which only its user can open
+(`--no-control` turns it off). A request is a line of JSON; Studio answers
+it on the UI thread, within a few frames, as it does a click.
+`psf-studio-mcp` (`studio/mcp`) is a Model Context Protocol server over
+standard input and output that forwards its tools to these sockets.
+
+- **State.** The rows a person can select, with their ids and settings;
+  the selection; each pane's label, the place wanted, the place drawn and
+  what the pane leaves out;
+  the status line; the inputs whose tools changed since the store was
+  prepared; the histogram's clipping; and what Studio is still busy with.
+- **Edits.** Select a row, divide the canvas, merge settings into a step
+  or a layer, run the tools. In a merge a `null` removes its key, and a
+  stretch switched to another kind starts from that kind's settings. Edits go through the document as a person's
+  do, and are saved the same way.
+- **Waiting.** Busy lists what keeps the canvas from showing the document
+  as it is: scenes being built or not yet drawn in their panes, a frame
+  to draw, tiles loading, tasks and tool runs, and samplings not read.
+  The server waits until it has been empty twice.
+- **Seeing.** A capture copies the next frame the render thread draws, as
+  the display was given it: 8-bit, or half floats on an extended surface,
+  which the request may divide by a value (such as the HDR peak) before
+  it is encoded. A covered window's surface has no texture, so a frame to
+  capture is then drawn into one of the surface's size. A sample renders
+  a region of the final picture on the CPU at full resolution, as an
+  export does, and returns each channel's values with the shares above
+  SDR white and at the peak, and an image of the region.
+
+The server opens a window on a copy of a document unless asked not to,
+and closes only windows it opened: a window a person works in is theirs.
+
+## Status and gaps (2026-11-27)
+
+What works end to end, on the Cat's Eye (NGC 6543, C925 HOO and RGB) and
+the Iris (NGC 7023, UltraCat 131 LRGB, `studio/experiments/iris-hdr/run.py`):
+
+- HDR as a mode of the picture, through every stretch, Tone and export
+  (AVIF HDR, float TIFF, FITS, XISF), with a Format choice on Export.
+- BlurXTerminator, NoiseXTerminator and StarXTerminator per input or per
+  color group, the removed stars kept as inputs and screened back up to the
+  HDR peak, and a flag in the toolbar when tools changed since the store
+  was prepared.
+- Background extraction with regions drawn on the canvas, and a sky floor
+  on the layered stretches for what it leaves.
+- Seiza's Gaia color calibration, when the Gaia photometry set is
+  installed.
+- Image work off the UI thread, and `psf-studio-mcp` to drive and see a
+  window.
+
+Gaps to fix, roughly in the order they got in the way:
+
+- [x] **BlurXTerminator's tile grid.** A soft pattern of seams between
+  BlurXTerminator's tiles appears in its output and becomes the strongest
+  structure in a dark narrowband sky once noise reduction and background
+  extraction remove the rest. An overlap of 0.5 did not remove it. A
+  sharpening step now has **Second pass, shifted** (`shifted_pass`): the
+  tool runs again on the input moved 192 pixels down and right, its edges
+  mirrored, and the two results are averaged, so the seams fall in
+  different places. On the Cat's Eye's OIII the difference of the two
+  passes showed the seams clearly (7 to 9 times the power around them, at
+  an RMS of 2 × 10⁻⁴), 446 pixels apart across and 348 down, so the
+  average keeps 22% and 16% of their fundamental: about 80% of the pattern
+  goes. It doubles the tool's time, and the second pass is cached on its
+  own. Since 2026-11-27 the spacing is measured from the difference of the
+  two passes (the autocorrelation of its profile across and down, the
+  shortest strong lag), and when half of it is more than 24 pixels from the
+  move, a third pass moved by half the spacing on each axis is averaged
+  with the first in place of the second. A synthetic image with seams 446
+  and 348 pixels apart is measured exactly.
+- [x] **Sky floor on every stretch kind.** An input's stretch of any other
+  kind has a **Sky floor** too, kept beside its model as `sky_floor` and
+  drawn as PixInsight's histogram transformation after it, with shadows at
+  the floor and midtones at the middle: `(x − floor) / (1 − floor)`, the
+  layered stretches' floor in an SDR picture. After an HDR stretch it
+  shapes the range below white and keeps the headroom. On the Iris's
+  luminance under the automatic midtones stretch, a floor of 0.15 took
+  the sky's median from 0.16 to 0.01. PSF Guard's settings leave it out.
+- [x] **A knee for every stretch in HDR mode.** The picture's Knee moves
+  where every stretch continues into the headroom, and the tail reaches the
+  peak at the band's brightest sample, so no core is left flat at the peak.
+  Core compression for any stretch was built later on 2026-11-27 (Seiza
+  #527 at 545a1257): Seiza's `ResolvedCore` takes the HDR layered
+  stretch's compression on its own (the formula is shared, so Layered,
+  HDR is unchanged), and `TransferStage::Core` applies it before whatever
+  stretch follows, reading a map of the blurred log measured from the
+  band's quarter-resolution copy. On the GPU it rides the layered
+  machinery with a core-only flag, and the stretch is the row after it. A
+  Stretch step that is not layered has **Core compression** (Amount,
+  Threshold in sigmas, Size in pixels), kept beside its model as
+  `core_compression`; with HDR the tail reaches the peak at the brightest
+  value after the compression. Found on the way: Seiza's GPU stretch-row
+  cache returned a key's place in its list as the row, which went wrong
+  once a layered stretch had a row after itself; each key keeps its row
+  now. The knee is the picture's, not each stretch's.
+- [x] **Stars' own stretch and star reduction.** A stars input can take a
+  stretch of its own, and a stars layer or group a Star reduction (see
+  “A stretch of their own, and star reduction”). Since 2026-11-27 the star
+  stretch of RGB stars is drawn on the canvas: Studio stores keep the stars
+  linear, and the canvas works out the stretched stars from the whole image
+  in the background (Seiza's RGB star stretch: each star sample over the
+  range of the three channels with their stars, then the midtones curve
+  `1 / (1 + 3^amount)`), keyed by the amount, with the stars reduced in
+  full as a second plane a layer blends toward. A store prepared before
+  keeps its stretched stars.
+- [x] **Frame limits.** A frame now draws up to 24 layers, 15 masks and 12
+  layered stretches. Past those a layer is still left out or drawn with its
+  curve alone, and the pane says so.
+- [x] **Inputs whose stars a layer shows.** An input was listed as not used
+  when only its stars were in the picture; it now shows where its stars go,
+  such as “→ RGB stars (stars)”.
+- [x] **Tools after the background.** Each tool is a step of its own, in
+  any order with the background extraction, per input (see “Each tool is
+  a step”).
+- [x] **Undo history.** **Undo** and **Redo** in the toolbar and the Edit
+  menu (⌘Z, ⇧⌘Z, and `studio_undo` and `studio_redo` through
+  `psf-studio-mcp`) go back through up to 200 edits of the document. Edits
+  less than 0.7 seconds apart, such as one slider drag, are one edit.
+  Opening another picture starts the history again. A run of the tools is
+  not undone: undoing its edits flags the inputs to run again.
+- [x] **Tool runs.** **Run tools** during a run queues one more run, which
+  starts with the document as it is once the store the first run prepared
+  is open; the toolbar says “Changed since this run started” and offers
+  **Run again after**. A stopped or failed run drops the queued one. PSF
+  Guard's color tools (`color_rc_astro`) run as a color group's tool
+  steps. Since 2026-11-27 the narrowband settings that act after the
+  channels are mapped are drawn live: the balance (the Narrowband step's
+  inspector turns it on and moves its shadow protection and boosts), which
+  the scene worker resolves in the background from H-alpha, OIII and SII at
+  a quarter of the resolution through their stretches, with Seiza's
+  `balance_narrowband`, and which each balanced channel's stretch ends with
+  (`TransferStage::Balance`); and the green reduction, an adjustment layer
+  (`Adjustment::GreenReduction`) made from a setup's settings and written
+  back to them. Star separation, star processing, the star stretch and
+  star reduction are Studio's own steps already. Tried on a copy of the
+  Cat's Eye: the balance took OIII's teal down to H-alpha, the green median
+  of a 1024-pixel square from 0.211 to 0.154.
+- [x] **Layers.** Done 2026-11-27: groups nest up to four deep (Seiza's
+  `MAX_GROUP_DEPTH`; deeper ones are flattened by Seiza and refused by the
+  document); a group's layers can pass through, each blending straight onto
+  what is beneath with the group's opacity and masks; a group can be
+  clipped and healed (the heal is its top member); a layer's own adjustment
+  can be behind a shared mask; a layer behind a shared mask keeps a painted
+  mask (`painted_too`), which limits it as well; and a layer clipped to one
+  behind a shared mask is behind it too. An entry behind two shared masks
+  is listed as not drawn. Range masks were built later on 2026-11-27
+  (Seiza #527 at 3de8a5b3, `RangeMask`): **Mask by brightness** on a
+  layer, an adjustment layer or a step on the layers or the picture sets
+  From, To (the far end is “the brightest”, for HDR) and Softness. A layer
+  that shows an input reads its own value; an adjustment, a step or a
+  group's end reads the luminance of what it changes. CPU and GPU agree
+  (`range_masks_match_the_cpu`). An input's own steps take none, since they
+  are baked into the input. Layers and
+  parts move with Move up and Move down, and a part dragged moves whole. A layer dragged within its part goes above the
+  row it is dropped on, or below it when dropped on the row's lower half
+  (tried in the window on the Iris's RGB stars), so it no longer needs the
+  thin gap between two rows.
+- [x] **One way to adjust.** Done 2026-11-27: steps on the picture are
+  adjustment layers (“Steps on the picture are adjustment layers”), drawn
+  by Seiza's compositor, which draws a heal and Tone's local contrast
+  beneath other layers, in a group or not, in stages.
+- [x] **History panel.** Done 2026-11-27: the tree ends with History, the
+  document as opened and each edit in a few words (`describe_edit`
+  compares the document before and after: a layer added, removed or moved,
+  a setting with its value before and after, the first two changes named
+  and the rest counted), with the edits undone dimmed. Clicking an edit
+  undoes or redoes up to it; the later ones stay to redo. Tried on the Iris
+  copy: going back two edits put both opacities back and left Redo on.
+- [x] **Setup and hand-off.** Done 2026-11-27: the document records the
+  recipe its layers were made with; the Combined picture's inspector
+  starts with Tools by input, every input's tools in order with the inputs
+  a run is due for; and Open in external editor writes the final picture
+  as a 16-bit TIFF beside the document, opens it in its default app, and
+  reads the file back when the app saves it, through the Finish stage's
+  junction, until Use Studio's result. Choosing a server target and
+  signing in from Studio were built later the same day (“What is built,
+  and how it differs”). Setup was built the same evening as the user
+  chose: **Setup** is the first row of the tree, and choosing it covers
+  the canvas, not the tree, with the recipes that fit (the one the layers
+  started from marked), each input's tools and where it goes (with **Add
+  to**), and a card per top-level part with its blend, palette slots,
+  **Move up**, **Move down** and **Remove part**, then **Add part**. It
+  stores nothing: every line is read from the layers and every control
+  edits them, so Undo covers it. Any other row of the tree shows the canvas
+  again (`studio/app/src/setup.rs`).
+- [x] **Heals.** Done 2026-11-27: a heal is matched to its surroundings,
+  its shift measured when it is made from the ring around the stroke and
+  the ring around its source, on the picture the heal reads (rendered on
+  the CPU); Option-click sets the source, which the canvas marks, and a
+  selected heal shows where it copies from; a heal with an adjustment
+  layer selected is a Heal layer right above it, so above Star removal it
+  fixes the starless picture; a stars layer's heals fix its stars inside
+  its group. Seiza stages a heal or Tone's local contrast in the stack, in
+  a group or not, with its clip and computed mask. Tried on the Iris copy:
+  a heal above Star removal measured a shift of (0.019, 0.012, 0.005).
+- [x] **Tools and stretches beneath other layers.** Done 2026-11-27: a
+  tool layer in a group runs on its group's members beneath it and its
+  result goes back in their place; an output stretch resolved from the
+  picture's statistics beneath other layers reads samples of what is
+  beneath it, rendered on the CPU in the background at the canvas's
+  patches. What the scene worker resolves in the background (these
+  samples and the narrowband balance) is published, so samplings, exports,
+  heal measurements and tools' images draw it too.
+- [x] **UI thread.** A store given at start with a readable document
+  beside it opens on a thread of its own after the window shows: the
+  window answers with the document's steps while the canvas draws one
+  black pixel, then the store (the Iris answered in 0.8 s and drew its
+  picture at 4.5 s). A store with no document still opens first, since the
+  default flow needs its inputs' names. Export and the parity check build
+  their scene on their own threads; a full-resolution TIFF of the Iris
+  took 3.7 s.
+- [x] **Tried in the app** on the Iris (`psf-studio-mcp`, with its new
+  `studio_add_step`): two Tone and color steps with painted masks draw
+  together; selecting each shows the histogram of its area (18.5% above
+  SDR white in the brightened core, none in the darkened corner); and a
+  midtones stretch after the HDR layered stretch keeps the headroom (the
+  core's brightest 1.09 at one stop). A Finish step or a layer's own
+  adjustment with a range mask or a shared mask was drawn over the whole
+  picture; it is now left out, and the pane lists it, until the canvas
+  draws such masks on steps.
+
 ## Suggested order of work
 
 1. The investigations listed in the previous section.
@@ -2464,7 +3600,15 @@ narrowband into RGB). Then 4, for RGB stars, and the layered stretch. Then
 - How does a saved processing setup map to a document template, so setups
   from earlier releases keep their results and cache keys?
 - How are Studio releases versioned and updated next to PSF Guard, when both
-  ship in one installer?
+  ship in one installer? Decided 2026-11-27 for macOS: Studio ships inside
+  the desktop app, at `PSF Guard.app/Contents/Helpers/PSF Studio.app`, with
+  the app's version. The Tauri updater replaces the whole app, so Studio
+  updates with it; Studio has no updater of its own. The desktop app
+  registers its Studio for `psf-studio://` links each time it starts. See
+  [App and server updates](../UPDATES.md). Windows and Linux installers do
+  not include Studio yet. Each release also has PSF Studio's own disk
+  image, the same app, for a Mac whose PSF Guard runs on a server; it does
+  not update itself yet.
 - What is the smallest useful set of adjustments for the first Studio
   release?
 - Are clone and heal tools wanted among the manual tweaks? They can be stored

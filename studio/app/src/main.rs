@@ -6,24 +6,32 @@
 //! Run with `--bench <file>` to play the scripted measurement and write its
 //! results as JSON.
 
-// The document model lives in PSF Guard's main crate. The spike compiles the
-// same source files, so the panes are written against the real model
-// without building all of PSF Guard under GPUI's toolchain.
+// The document model, shared with PSF Guard through `psf-studio-core`, so
+// the two programs read and write the same documents and stores.
 #[cfg(target_os = "macos")]
-#[allow(dead_code, unused_imports)]
-#[path = "../../../src/image_steps/mod.rs"]
-mod image_steps;
-#[cfg(target_os = "macos")]
-#[allow(dead_code, unused_imports)]
-#[path = "../../../src/studio/mod.rs"]
-mod studio_model;
+use psf_studio_core::{image_steps, studio as studio_model};
 
 #[cfg(target_os = "macos")]
 mod bench;
+/// What the canvas draws, and the Seiza picture it becomes.
+#[cfg(target_os = "macos")]
+mod canvas;
+/// Planes worked out from the whole image while a person edits.
+#[cfg(target_os = "macos")]
+mod derived;
+/// The histogram of the finished picture.
+#[cfg(target_os = "macos")]
+mod histogram;
+/// The output stretches of the combined picture.
+#[cfg(target_os = "macos")]
+mod output_stretch;
 #[cfg(target_os = "macos")]
 mod store_tiles;
 #[cfg(target_os = "macos")]
 mod studio;
+/// The Tone and color step's settings.
+#[cfg(target_os = "macos")]
+mod tone_step;
 
 #[cfg(target_os = "macos")]
 fn main() {
@@ -33,6 +41,7 @@ fn main() {
         match argument.as_str() {
             "--bench" => options.bench_output = arguments.next().map(Into::into),
             "--no-vsync" => options.vsync = false,
+            "--no-control" => options.control = false,
             "--open" => options.open = arguments.next().map(Into::into),
             "--document" => options.document = arguments.next().map(Into::into),
             "--psf-guard" => options.psf_guard = arguments.next().map(Into::into),
@@ -62,8 +71,8 @@ fn main() {
                 return;
             }
             "--output" => options.output = arguments.next().unwrap_or_default(),
-            "--working" => options.working_profile = arguments.next().map(Into::into),
             "--capture" => options.capture_prefix = arguments.next().map(Into::into),
+            "--parity-report" => options.parity_report = arguments.next().map(Into::into),
             "--frames" => {
                 options.bench_frames = arguments
                     .next()

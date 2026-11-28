@@ -1,0 +1,10 @@
+[package]
+name = "psf-studio-mcp"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+description = "An MCP server that drives running PSF Studio windows through their control sockets"
+
+[dependencies]
+serde_json = "1"

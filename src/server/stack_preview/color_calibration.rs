@@ -1,17 +1,17 @@
 //! Photometric color calibration of RGB and LRGB previews against Gaia.
 //!
-//! Seiza does the work (`seiza_stacking::calibrate_and_stretch` and its
+//! Seiza does the work (`seiza_compose::calibrate_and_stretch` and its
 //! calibration half, `calibrate_color_image`). This module plans it and
 //! gives Seiza the solution of the image it calibrates: the reference
 //! frame's fresh pixel solve, or a solve of the generated mosaic canvas,
 //! carried through the stack's recorded layout and composition crop with
-//! `seiza_stacking::transform_wcs`.
+//! `seiza_compose::transform_wcs`.
 //!
 //! Narrowband palettes are false color and never calibrate.
 
-use seiza_stacking::{
-    AffineTransform, ColorCalibrationOptions, GaiaColors, LinearImage, ReferenceRegion, SOLAR_BP_RP,
-};
+pub(crate) use psf_studio_core::color::interleave;
+use seiza_compose::{ColorCalibrationOptions, GaiaColors, SOLAR_BP_RP};
+use seiza_stacking::{AffineTransform, LinearImage, ReferenceRegion};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fmt::Write as _;
@@ -101,6 +101,11 @@ pub struct StackColorCalibrationBasis {
     pub solution_fingerprint: Option<String>,
     /// The Gaia photometry file, when one is installed.
     pub catalog: Option<AstrometryCatalogFileSignature>,
+    /// The release of Seiza's color composition that calibrates,
+    /// `seiza_compose::OUTPUT_VERSION`. Empty in a record from before PSF
+    /// Guard recorded it, which is then out of date.
+    #[serde(default)]
+    pub compose_version: String,
 }
 
 /// Why a preview was not color calibrated.
@@ -146,8 +151,8 @@ pub struct StackColorFit {
     pub stars: usize,
 }
 
-impl From<seiza_stacking::ColorFit> for StackColorFit {
-    fn from(fit: seiza_stacking::ColorFit) -> Self {
+impl From<seiza_compose::ColorFit> for StackColorFit {
+    fn from(fit: seiza_compose::ColorFit) -> Self {
         Self {
             intercept: fit.intercept,
             slope: fit.slope,
@@ -225,6 +230,7 @@ pub(super) fn plan(
         reference_image_id,
         solution_fingerprint,
         catalog: catalog.clone(),
+        compose_version: super::SEIZA_COMPOSE_OUTPUT_VERSION.into(),
     };
     let placement = match (solution, orientation) {
         (None, Some(orientation)) if super::canvas_astrometry::is_mosaic(Some(orientation)) => {
@@ -278,11 +284,11 @@ fn solution_fingerprint(solution: &AstrometrySolutionResponse) -> String {
     fingerprint
 }
 
-impl From<seiza_stacking::ColorCalibrationOutcome> for StackColorCalibrationOutcome {
-    fn from(outcome: seiza_stacking::ColorCalibrationOutcome) -> Self {
-        use seiza_stacking::ColorCalibrationSkipReason as Seiza;
+impl From<seiza_compose::ColorCalibrationOutcome> for StackColorCalibrationOutcome {
+    fn from(outcome: seiza_compose::ColorCalibrationOutcome) -> Self {
+        use seiza_compose::ColorCalibrationSkipReason as Seiza;
         match outcome {
-            seiza_stacking::ColorCalibrationOutcome::Calibrated(calibration) => {
+            seiza_compose::ColorCalibrationOutcome::Calibrated(calibration) => {
                 Self::Calibrated(StackColorCalibrationReport {
                     gains: calibration.gains,
                     offsets: calibration.offsets,
@@ -297,7 +303,7 @@ impl From<seiza_stacking::ColorCalibrationOutcome> for StackColorCalibrationOutc
                     stretched_separately: false,
                 })
             }
-            seiza_stacking::ColorCalibrationOutcome::Skipped(skip) => {
+            seiza_compose::ColorCalibrationOutcome::Skipped(skip) => {
                 let reason = match skip.reason {
                     Seiza::NoSolution => StackColorCalibrationSkipReason::NoPlateSolve,
                     Seiza::NoCatalog => StackColorCalibrationSkipReason::NoGaiaCatalog,
@@ -341,7 +347,7 @@ impl StarPlacement {
                 ..AffineTransform::IDENTITY
             });
         }
-        seiza_stacking::transform_wcs(&self.wcs, source_to_image)
+        seiza_compose::transform_wcs(&self.wcs, source_to_image)
             .map_err(|error| format!("The reference solve does not carry to the stack: {error}"))
     }
 }
@@ -366,7 +372,7 @@ pub(crate) fn calibrate_channels(
             )
         }
     };
-    let outcome = seiza_stacking::calibrate_color_image(
+    let outcome = seiza_compose::calibrate_color_image(
         &mut rgb,
         Some(wcs),
         GaiaColors::Catalog(catalog),
@@ -405,6 +411,7 @@ impl StackCalibrationSource {
             reference_image_id: self.reference_image_id,
             solution_fingerprint: self.solution.as_ref().map(solution_fingerprint),
             catalog: self.catalog.clone(),
+            compose_version: super::SEIZA_COMPOSE_OUTPUT_VERSION.into(),
         }
     }
 
@@ -478,12 +485,15 @@ pub(super) fn calibration_outdated(
         return Some("Out of date — the reference frame changed");
     }
     match (&recorded.solution_fingerprint, &now.solution_fingerprint) {
-        (None, Some(_)) => Some("Out of date — the reference frame is now plate solved"),
+        (None, Some(_)) => return Some("Out of date — the reference frame is now plate solved"),
         (then, now) if then != now => {
-            Some("Out of date — the reference frame's plate solve changed")
+            return Some("Out of date — the reference frame's plate solve changed");
         }
-        _ => None,
+        _ => {}
     }
+    // Last, so a change the person can act on is named first.
+    (recorded.compose_version != now.compose_version)
+        .then_some("Out of date — Seiza's color calibration changed")
 }
 
 /// Calibrate a linear RGB stack, as a one-shot-color camera made it, on its
@@ -545,7 +555,7 @@ pub(super) fn calibrate_stack(
         }
     };
     let mut calibrated = image.clone();
-    let outcome: StackColorCalibrationOutcome = seiza_stacking::calibrate_color_image(
+    let outcome: StackColorCalibrationOutcome = seiza_compose::calibrate_color_image(
         &mut calibrated,
         Some(&wcs),
         GaiaColors::Catalog(&catalog),
@@ -566,7 +576,7 @@ pub(super) fn calibrate_stack(
 /// stays calibrated, only its clipped cores keep the gains' tint.
 pub(super) fn neutralize_clipped(image: &mut LinearImage, clipped: Option<&LinearImage>) {
     if let Some(clipped) = clipped
-        && let Err(error) = seiza_stacking::neutralize_clipped(image, clipped)
+        && let Err(error) = seiza_compose::neutralize_clipped(image, clipped)
     {
         tracing::warn!("Not rendering clipped pixels neutral: {error}");
     }
@@ -581,25 +591,6 @@ pub(super) fn mark_stretched_separately(outcome: &mut StackColorCalibrationOutco
 }
 
 /// Interleave three mono channels on one grid into an RGB image.
-pub(crate) fn interleave(
-    red: &LinearImage,
-    green: &LinearImage,
-    blue: &LinearImage,
-) -> Result<LinearImage, String> {
-    let channels = [red, green, blue];
-    if channels
-        .iter()
-        .any(|image| image.channels != 1 || image.width != red.width || image.height != red.height)
-    {
-        return Err("Color calibration needs three mono channels on one grid".into());
-    }
-    let mut data = Vec::with_capacity(red.data.len() * 3);
-    for index in 0..red.data.len() {
-        data.extend(channels.iter().map(|image| image.data[index]));
-    }
-    LinearImage::new(red.width, red.height, 3, data).map_err(|error| error.to_string())
-}
-
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
@@ -742,7 +733,7 @@ pub(super) mod tests {
             Some("Out of date — Gaia colors were installed")
         );
     }
-    use seiza_stacking::GaiaColorSource;
+    use seiza_compose::GaiaColorSource;
 
     fn orientation(width: usize, height: usize) -> StackSkyOrientation {
         StackSkyOrientation {
@@ -1105,6 +1096,23 @@ pub(super) mod tests {
             calibration_outdated(Some(&recorded), None, &source(true, None)),
             Some("Out of date — Gaia colors were removed")
         );
+        // Calibrated by another release of Seiza's color composition, or
+        // recorded before PSF Guard noted which.
+        for version in ["0.0.0", ""] {
+            let older = StackColorCalibrationBasis {
+                compose_version: version.into(),
+                ..recorded.clone()
+            };
+            assert_eq!(
+                calibration_outdated(Some(&older), None, &ready),
+                Some("Out of date — Seiza's color calibration changed")
+            );
+            // A change the person can act on is named first.
+            assert_eq!(
+                calibration_outdated(Some(&older), None, &source(true, None)),
+                Some("Out of date — Gaia colors were removed")
+            );
+        }
         // A solve made since, or a different one.
         let unsolved = source(false, Some(10)).basis();
         assert_eq!(
@@ -1149,7 +1157,7 @@ pub(super) mod tests {
 
     #[test]
     fn seiza_skips_map_onto_the_reasons_the_card_gives() {
-        use seiza_stacking::{ColorCalibrationSkip, ColorCalibrationSkipReason as Seiza};
+        use seiza_compose::{ColorCalibrationSkip, ColorCalibrationSkipReason as Seiza};
         for (reason, expected) in [
             (
                 Seiza::NoSolution,
@@ -1172,7 +1180,7 @@ pub(super) mod tests {
             (Seiza::FitFailed, StackColorCalibrationSkipReason::Failed),
         ] {
             let outcome: StackColorCalibrationOutcome =
-                seiza_stacking::ColorCalibrationOutcome::Skipped(ColorCalibrationSkip {
+                seiza_compose::ColorCalibrationOutcome::Skipped(ColorCalibrationSkip {
                     reason,
                     detail: "detail".into(),
                 })

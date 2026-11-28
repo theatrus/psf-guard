@@ -2,9 +2,13 @@
 //!
 //! A picture is opened from stack files a person picks, or from a link a
 //! PSF Guard page sends: `psf-studio://open?server=…&db=…&project=…&target=…`.
-//! Either way Studio runs `psf-guard studio`, the command a person can run
-//! by hand, so the stacks are fetched, registered and prepared by the same
-//! code, and then shows the picture it prepared.
+//! Studio runs `psf-guard studio`, the command a person can run by hand,
+//! when PSF Guard is on the computer: it fetches, registers and prepares
+//! the stacks, runs the processing tools and calibrates colors against
+//! Gaia. Without PSF Guard, Studio prepares stack files itself with the
+//! same code, from `psf-studio-core`; their tools wait for PSF Guard and
+//! their colors stay uncalibrated. Either way Studio then shows the picture
+//! it prepared.
 //!
 //! Pictures are kept in Studio's own folder, never beside a person's
 //! stacks: a store and a document per picture. Opening the same target or
@@ -28,7 +32,7 @@ pub fn keep_links(links: Vec<String>) {
 }
 
 /// The folder Studio keeps its pictures in.
-fn pictures_folder() -> PathBuf {
+pub(super) fn pictures_folder() -> PathBuf {
     let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("."), PathBuf::from);
     if cfg!(target_os = "macos") {
         home.join("Library/Application Support/psf-studio/pictures")
@@ -81,12 +85,17 @@ fn field(query: &str, name: &str) -> Option<String> {
 }
 
 /// What a link asks Studio to open.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(super) struct TargetLink {
     pub server: String,
     pub database: String,
     pub project: i32,
     pub target: i32,
+    /// A one-time ticket from a signed-in click, which Studio trades for a
+    /// token when it is not connected to the server yet.
+    pub ticket: Option<String>,
+    /// The Studio document to open; the target's latest when there is none.
+    pub document: Option<String>,
 }
 
 /// Reads a `psf-studio://open?…` link. `None` for any other text.
@@ -102,13 +111,40 @@ pub(super) fn target_link(link: &str) -> Option<TargetLink> {
         database: field(query, "db")?,
         project: field(query, "project")?.parse().ok()?,
         target: field(query, "target")?.parse().ok()?,
+        ticket: field(query, "ticket").filter(|ticket| !ticket.is_empty()),
+        document: field(query, "document").filter(|document| !document.is_empty()),
     })
+}
+
+/// The name of a server target's picture: the server and the database as
+/// given are part of it, so two servers' targets never share one picture.
+pub(super) fn target_picture_name(link: &TargetLink) -> String {
+    let identity = {
+        use sha2::{Digest, Sha256};
+        let hash = Sha256::digest(format!("{}\0{}", link.server, link.database));
+        hash.iter()
+            .take(4)
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    };
+    file_name(&format!(
+        "{}-p{}-t{}-{identity}",
+        link.database, link.project, link.target
+    ))
 }
 
 impl Studio {
     /// Starts `psf-guard studio` for one picture and opens it when the
     /// run ends.
-    fn prepare_and_open(&mut self, name: &str, arguments: Vec<std::ffi::OsString>) {
+    ///
+    /// A server's token goes to `psf-guard` in `PSF_GUARD_TOKEN`, not as an
+    /// argument, which every process on the computer can read.
+    fn prepare_and_open(
+        &mut self,
+        name: &str,
+        arguments: Vec<std::ffi::OsString>,
+        token: Option<String>,
+    ) {
         let Some(binary) = self.psf_guard() else {
             return;
         };
@@ -123,29 +159,25 @@ impl Studio {
             .arg("--name")
             .arg(&name)
             .arg("--no-open");
+        match token {
+            Some(token) => command.env("PSF_GUARD_TOKEN", token),
+            None => command.env_remove("PSF_GUARD_TOKEN"),
+        };
         let store = folder.join(format!("{name}.pgtiles"));
         let document = folder.join(format!("{name}.json"));
         self.start_run(command, Some((store, document)));
     }
 
-    /// Opens a target's channel stacks from a PSF Guard server.
-    pub(super) fn open_target(&mut self, link: &TargetLink) {
-        // The server and the database as given are part of the picture's
-        // identity, so two servers' targets never share one picture.
-        let identity = {
-            use sha2::{Digest, Sha256};
-            let hash = Sha256::digest(format!("{}\0{}", link.server, link.database));
-            hash.iter()
-                .take(4)
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<String>()
-        };
-        let name = format!(
-            "{}-p{}-t{}-{identity}",
-            link.database, link.project, link.target
-        );
+    /// Opens a target's channel stacks from a PSF Guard server as the
+    /// picture `name`, with the server's token when it signs people in.
+    pub(super) fn open_target_named(
+        &mut self,
+        link: &TargetLink,
+        token: Option<String>,
+        name: &str,
+    ) {
         self.prepare_and_open(
-            &name,
+            name,
             vec![
                 "--server".into(),
                 link.server.clone().into(),
@@ -156,11 +188,12 @@ impl Studio {
                 "--target".into(),
                 link.target.to_string().into(),
             ],
+            token,
         );
     }
 
-    /// Opens stack files, one per channel. `psf-guard` reads each file's
-    /// channel from its FILTER header or its name.
+    /// Opens stack files, one per channel, each file's channel read from
+    /// its FILTER header or its name.
     pub(super) fn open_files(&mut self, mut files: Vec<PathBuf>) {
         if files.is_empty() {
             return;
@@ -184,12 +217,37 @@ impl Studio {
             || "picture".into(),
             |stem| stem.to_string_lossy().into_owned(),
         );
+        let name = format!("{stem}-{identity}");
+        if !self.psf_guard_installed() {
+            self.prepare_files_here(&name, files);
+            return;
+        }
         let mut arguments = Vec::new();
         for file in files {
             arguments.push("--file".into());
             arguments.push(file.into());
         }
-        self.prepare_and_open(&format!("{stem}-{identity}"), arguments);
+        self.prepare_and_open(&name, arguments, None);
+    }
+
+    /// Prepares the picture `name` from stack files in this program, on a
+    /// thread of its own, and opens it when it is ready.
+    fn prepare_files_here(&mut self, name: &str, files: Vec<PathBuf>) {
+        let folder = pictures_folder();
+        let name = file_name(name);
+        let store = folder.join(format!("{name}.pgtiles"));
+        let document = folder.join(format!("{name}.json"));
+        let opens = Some((store.clone(), document.clone()));
+        self.start_job(opens, move |run| {
+            prepare_files(
+                &files,
+                &store,
+                &document,
+                &|line| super::tools::set_line(run, line),
+                &|| super::tools::is_stopped(run),
+            )
+            .map_err(|error| format!("{error:#}"))
+        });
     }
 
     /// Asks which stack files to open, then opens them.
@@ -229,10 +287,111 @@ impl Studio {
             return;
         };
         match target_link(&link) {
-            Some(target) => self.open_target(&target),
+            Some(target) => self.open_link(target),
             None => self.say("Not opened: the link does not name a target on a server"),
         }
     }
+}
+
+/// Prepares a picture from stack files: its store at `store`, and its
+/// document at `document`, which is kept when it is there already. Each
+/// file's channel comes from its FILTER header or its name. `line` is
+/// called with what is being done; `stopped` says whether a person stopped
+/// the run. The files are listed in the store's sources folder, so PSF
+/// Guard's Run tools can prepare the picture again once it is installed.
+fn prepare_files(
+    files: &[PathBuf],
+    store: &std::path::Path,
+    document: &std::path::Path,
+    line: &dyn Fn(&str),
+    stopped: &dyn Fn() -> bool,
+) -> anyhow::Result<()> {
+    use psf_studio_core::prepare::{
+        channel_of_file, picture_document, picture_title, prepare_store, write_atomically,
+        write_file_sources, Calibration, NoTools, Prepare, StackFile,
+    };
+    if let Some(folder) = store.parent() {
+        std::fs::create_dir_all(folder)?;
+    }
+    line("Reading the stack files");
+    let mut stacks: Vec<StackFile> = Vec::new();
+    for file in files {
+        let role = channel_of_file(file).map_err(|error| {
+            error.context(
+                "Rename the file to end in its filter, such as M42_Ha.fits, or set its FILTER header",
+            )
+        })?;
+        if let Some(other) = stacks.iter().find(|stack| stack.role == role) {
+            anyhow::bail!(
+                "{} and {} are both {}: open one file per channel",
+                other.path.display(),
+                file.display(),
+                role.label()
+            );
+        }
+        stacks.push(StackFile::new(role, file)?);
+    }
+    let Some(first) = stacks.first() else {
+        anyhow::bail!("no stack files were given");
+    };
+    let header = seiza_image_io::read_header(&first.path)?;
+    let title = picture_title(&header.cards, &first.path);
+    let roles: Vec<_> = stacks.iter().map(|stack| stack.role).collect();
+    let saved = document.is_file().then_some(document);
+    let picture = picture_document(&title, &roles, saved)?;
+    // Colors are calibrated against Gaia from a plate solve, which PSF
+    // Guard makes. A step that is off, or whose settings turn it off, asks
+    // for nothing.
+    let wants_calibration = {
+        use crate::studio_model::{flow_operations, StageKind, StepKind};
+        let rgb = ["red", "green", "blue"]
+            .iter()
+            .all(|channel| picture.channels().iter().any(|own| own == channel));
+        let step = picture
+            .stage(StageKind::Linear)
+            .steps
+            .iter()
+            .find(|step| step.kind.name() == flow_operations::COLOR_CALIBRATION);
+        let on = step.is_none_or(|step| {
+            step.enabled
+                && match &step.kind {
+                    StepKind::Operation { settings, .. } => {
+                        settings["enabled"].as_bool().unwrap_or(true)
+                    }
+                    _ => true,
+                }
+        });
+        rgb && on
+    };
+    let prepare_stacks: Vec<_> = stacks.iter().map(StackFile::stack).collect();
+    let folder = store.with_extension("sources");
+    let shape = prepare_store(Prepare {
+        stacks: &prepare_stacks,
+        document: &picture,
+        tools: None::<&NoTools>,
+        folder: &folder,
+        output: store,
+        calibrate: &|_| {
+            if wants_calibration {
+                Calibration::Skipped {
+                    why: "Gaia color calibration needs PSF Guard, which is not on this computer"
+                        .into(),
+                }
+            } else {
+                Calibration::NotAsked
+            }
+        },
+        report: &|text| line(text.trim()),
+        progress: &|channel, tool, fraction| {
+            line(&format!("{channel}: {tool} ({:.0}%)", fraction * 100.0))
+        },
+        stopped,
+    })?;
+    write_file_sources(&folder, &stacks, (shape.width, shape.height))?;
+    if saved.is_none() {
+        write_atomically(document, picture.to_json())?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -250,7 +409,16 @@ mod tests {
                 database: "my-db".to_string(),
                 project: 11,
                 target: 17,
+                ticket: None,
+                document: None,
             })
+        );
+        assert_eq!(
+            target_link(
+                "psf-studio://open?server=https%3A%2F%2Fguard&db=a&project=1&target=2&ticket=ab12"
+            )
+            .and_then(|link| link.ticket),
+            Some("ab12".to_string())
         );
         // A server that is not HTTP, a missing field and another scheme.
         assert_eq!(

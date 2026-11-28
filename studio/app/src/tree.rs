@@ -15,7 +15,7 @@ use crate::studio_model::{
     channel_label, input_steps, palettes_for, LayerRecord, LayerSource, Row, StageKind, StepKind,
     StepRecord,
 };
-use gpui::{div, prelude::*, px, rgb, AnyElement, Context, SharedString, Window};
+use gpui::{div, prelude::*, px, rgb, AnyElement, Context, DragMoveEvent, SharedString, Window};
 use uuid::Uuid;
 
 /// A layer being dragged in the tree.
@@ -76,7 +76,10 @@ impl Studio {
 
     /// A row's name, with a quiet line under it that says what the row
     /// applies to.
-    fn named(name: impl Into<SharedString>, applies_to: impl Into<SharedString>) -> gpui::Div {
+    pub(super) fn named(
+        name: impl Into<SharedString>,
+        applies_to: impl Into<SharedString>,
+    ) -> gpui::Div {
         div()
             .flex_1()
             .overflow_hidden()
@@ -113,6 +116,7 @@ impl Studio {
     /// The rows of the inputs, or of the stars the tools took out of them.
     fn input_rows(&self, stars: bool, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let mut rows = Vec::new();
+        let to_run = self.inputs_to_run();
         for (index, channel) in self.document.channels().into_iter().enumerate() {
             if channel.contains('@') != stars {
                 continue;
@@ -144,13 +148,17 @@ impl Studio {
             rows.push(
                 self.tree_row(("input", index), Row::Input(channel.clone()), 0.0, cx)
                     .child(fold)
-                    .child(Self::named(
-                        label.clone(),
-                        match self.goes_to(&channel) {
+                    .child(Self::named(label.clone(), {
+                        let mut words = match self.goes_to(&channel) {
                             Some(goes) => format!("{} {goes}", counted(steps.len(), "step")),
                             None => format!("{} · not used", counted(steps.len(), "step")),
-                        },
-                    ))
+                        };
+                        // Its tools changed since the store was prepared.
+                        if to_run.contains(&channel) {
+                            words.push_str(" · tools not run");
+                        }
+                        words
+                    }))
                     .into_any_element(),
             );
             if folded {
@@ -214,31 +222,46 @@ impl Studio {
     /// - An adjustment dropped on a layer or a group becomes that layer's
     ///   or that group's own.
     /// - Any other layer dropped on a group joins the group, on top.
-    /// - Any other layer dropped on a layer moves to just above it, in the
-    ///   same group as it.
+    /// - Any other layer dropped on a layer moves to just above it, or just
+    ///   below it when dropped on the row's lower half, in the same group as
+    ///   it: so a layer moves anywhere within its part.
     fn drop_layer_on(&mut self, dragged: Uuid, target: Uuid) {
+        let lower = self
+            .drop_lower
+            .take()
+            .is_some_and(|(over, lower)| over == target && lower);
         if dragged == target {
             return;
         }
         let source = |studio: &Self, id: Uuid| studio.layer(id).map(|layer| layer.source.clone());
-        let is_adjustment = matches!(source(self, dragged), Some(LayerSource::Adjustment { .. }));
+        let is_adjustment = source(self, dragged).is_some_and(|source| source.is_adjustment());
         let target_source = source(self, target);
-        let onto_adjustment = matches!(target_source, Some(LayerSource::Adjustment { .. }));
-        if is_adjustment && !onto_adjustment {
-            if let Ok(step) = self.document.attach_adjustment(dragged, target) {
-                self.selected = Row::LayerStep {
-                    layer: target,
-                    step,
-                };
-            }
+        let onto_adjustment = target_source
+            .as_ref()
+            .is_some_and(LayerSource::is_adjustment);
+        // An adjustment a layer can have as its own becomes that layer's;
+        // any other moves like a layer.
+        if is_adjustment
+            && !onto_adjustment
+            && let Ok(step) = self.document.attach_adjustment(dragged, target)
+        {
+            self.selected = Row::LayerStep {
+                layer: target,
+                step,
+            };
             return;
         }
         let layers = self.document.layers();
         let Some(at) = layers.iter().position(|layer| layer.id == target) else {
             return;
         };
+        // A group dropped on a group joins it, on top, and anywhere else
+        // goes as a layer would; the document refuses a group inside itself
+        // or deeper than groups go.
         let (position, group) = if target_source == Some(LayerSource::Group) {
             (at, Some(target))
+        } else if lower {
+            (at, layers[at].group)
         } else {
             (at + 1, layers[at].group)
         };
@@ -251,7 +274,7 @@ impl Studio {
     fn drop_step_on(&mut self, step: Uuid, target: Uuid) {
         let takes_edits = self
             .layer(target)
-            .is_some_and(|layer| !matches!(layer.source, LayerSource::Adjustment { .. }));
+            .is_some_and(|layer| !layer.source.is_adjustment());
         if !takes_edits || self.document.layer_of_step(step) == Some(target) {
             return;
         }
@@ -298,11 +321,13 @@ impl Studio {
         group: Option<Uuid>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let inside = group.is_some();
+        // Indented as the group's members are: once for each group it is
+        // inside.
+        let depth = group.map_or(0, |group| self.document.ancestors(group).len() + 1);
         div()
-            .id(("slot", position * 2 + usize::from(inside)))
-            .ml(px(if inside { CHILD_INDENT } else { 0.0 }))
-            .h(px(6.0))
+            .id(("slot", position * 8 + depth))
+            .ml(px(depth as f32 * CHILD_INDENT))
+            .h(px(10.0))
             .rounded_sm()
             .drag_over::<DragLayer>(|style, _, _, _| style.bg(rgb(SELECTED)))
             .drag_over::<DragStep>(|style, _, _, _| style.bg(rgb(SELECTED)))
@@ -329,13 +354,13 @@ impl Studio {
             .iter()
             .rev()
             .filter(|other| other.group == layer.group)
-            .find(|other| !other.clipped && !matches!(other.source, LayerSource::Adjustment { .. }))
+            .find(|other| !other.clipped && !other.source.is_adjustment())
     }
 
     fn layer_row(&self, index: usize, layer: &LayerRecord, cx: &mut Context<Self>) -> AnyElement {
         let id = layer.id;
         let visible = layer.visible;
-        let is_adjustment = matches!(layer.source, LayerSource::Adjustment { .. });
+        let is_adjustment = layer.source.is_adjustment();
         let is_group = layer.source == LayerSource::Group;
         let in_group = layer.group.is_some();
         let mut words = Vec::new();
@@ -358,7 +383,8 @@ impl Studio {
         words.extend(mask_words(&self.document, &layer.mask));
         let name = layer.name.clone();
         let label: SharedString = name.clone().into();
-        let indent = if in_group { CHILD_INDENT } else { 0.0 };
+        // A member is indented once for each group it is in.
+        let indent = self.document.ancestors(id).len() as f32 * CHILD_INDENT;
         self.tree_row(("layer", index), Row::Layer(id), indent, cx)
             .when(layer.source.shows_pixels(), |row| {
                 row.child(
@@ -396,6 +422,15 @@ impl Studio {
             })
             .drag_over::<DragLayer>(|style, _, _, _| style.bg(rgb(SELECTED)))
             .drag_over::<DragStep>(|style, _, _, _| style.bg(rgb(SELECTED)))
+            // Which half of the row the pointer is over, for the drop.
+            .on_drag_move(
+                cx.listener(move |this, event: &DragMoveEvent<DragLayer>, _, _| {
+                    let position = event.event.position;
+                    if event.bounds.contains(&position) {
+                        this.drop_lower = Some((id, position.y > event.bounds.center().y));
+                    }
+                }),
+            )
             .on_drop(cx.listener(move |this, dragged: &DragLayer, _, cx| {
                 this.drop_layer_on(dragged.0, id);
                 this.refresh_canvas();
@@ -407,6 +442,56 @@ impl Studio {
                 cx.notify();
             }))
             .into_any_element()
+    }
+
+    /// For a star removal on a layer or the picture, a row under it for the
+    /// stars it takes out, which go back right after it: what a person sees
+    /// of the new image a tool makes, with a switch that leaves them out.
+    fn stars_row(
+        &self,
+        step: &StepRecord,
+        indent: f32,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        if step.kind.name() != crate::studio_model::flow_operations::STAR_REMOVAL {
+            return None;
+        }
+        let id = step.id;
+        let shown = super::late_tools::stars_shown(step);
+        let words = match (shown, self.late.has(id)) {
+            (_, false) => "made when the tools run",
+            (true, true) => "screened back after it",
+            (false, true) => "left out",
+        };
+        Some(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .px_2()
+                .py_1()
+                .ml(px(indent))
+                .child(Self::child_mark())
+                .child(Self::named("Stars it took out", words))
+                .child(Self::switch(
+                    ("stars-shown", index),
+                    shown,
+                    ("shown", "hidden"),
+                    cx,
+                    move |this| {
+                        let Some((_, step)) = this.document.step(id) else {
+                            return;
+                        };
+                        let mut tool = crate::studio_model::tool_of(step)
+                            .cloned()
+                            .unwrap_or_default();
+                        tool[crate::studio_model::STARS_SHOWN_KEY] = (!shown).into();
+                        this.document.set_step_settings(id, tool);
+                    },
+                ))
+                .into_any_element(),
+        )
     }
 
     /// A row for an edit that belongs to one layer, indented under it.
@@ -425,11 +510,7 @@ impl Studio {
         };
         let label: SharedString = step.kind.name().to_string().into();
         let draggable = matches!(step.kind, StepKind::Operation { .. });
-        let indent = if layer.group.is_some() {
-            2.0 * CHILD_INDENT
-        } else {
-            CHILD_INDENT
-        };
+        let indent = (self.document.ancestors(layer.id).len() + 1) as f32 * CHILD_INDENT;
         self.tree_row(("layer-step", index), row, indent, cx)
             .child(Self::child_mark())
             .child(Self::named(
@@ -462,25 +543,31 @@ impl Studio {
             rows.push(self.layer_row(index, layer, cx));
             for (at, step) in layer.steps.iter().enumerate() {
                 rows.push(self.layer_step_row(index * 64 + at, layer, step, cx));
+                let indent = (self.document.ancestors(layer.id).len() + 2) as f32 * CHILD_INDENT;
+                rows.extend(self.stars_row(step, indent, 1000 + index * 64 + at, cx));
             }
-            let is_group = layer.source == LayerSource::Group;
-            // The group this row is in, or is.
-            let around = if is_group {
-                Some(layer.id)
-            } else {
-                layer.group
-            };
-            // Whether the layer beneath is in the same group.
-            let goes_on = around.is_some()
-                && index
-                    .checked_sub(1)
-                    .is_some_and(|below| layers[below].group == around);
-            if around.is_some() {
-                // Beneath this row, inside the group.
-                rows.push(self.drop_slot(index, around, cx));
+            // The groups this row is in, or is, outermost first.
+            let mut around = self.document.ancestors(layer.id);
+            if layer.source == LayerSource::Group {
+                around.push(layer.id);
             }
-            if !goes_on {
-                // Beneath this row, or beneath its whole group, outside it.
+            // The groups the layer beneath is in too.
+            let below: Vec<Uuid> = index
+                .checked_sub(1)
+                .map(|below| self.document.ancestors(layers[below].id))
+                .unwrap_or_default();
+            // Beneath this row, inside each group it closes, innermost
+            // first, and outside them all at the bottom of the stack or of
+            // a top-level group.
+            let mut outside = true;
+            for group in around.iter().rev() {
+                rows.push(self.drop_slot(index, Some(*group), cx));
+                if below.contains(group) {
+                    outside = false;
+                    break;
+                }
+            }
+            if outside {
                 rows.push(self.drop_slot(index, None, cx));
             }
         }
@@ -528,10 +615,11 @@ impl Studio {
             .steps
             .iter()
             .enumerate()
-            .map(|(index, step)| {
+            .flat_map(|(index, step)| {
                 let id = step.id;
                 let enabled = step.enabled;
-                self.tree_row(("finish", index), Row::Finish(id), 0.0, cx)
+                let row = self
+                    .tree_row(("finish", index), Row::Finish(id), 0.0, cx)
                     .child(Self::named(
                         step.kind.name().to_string(),
                         self.step_words(StageKind::Finish, step, "the whole picture".to_string()),
@@ -545,7 +633,8 @@ impl Studio {
                             this.document.set_step_enabled(id, !enabled);
                         },
                     ))
-                    .into_any_element()
+                    .into_any_element();
+                std::iter::once(row).chain(self.stars_row(step, CHILD_INDENT, index, cx))
             })
             .collect::<Vec<_>>();
         div()
@@ -559,6 +648,7 @@ impl Studio {
             .gap_1()
             .p_3()
             .bg(rgb(PANE))
+            .child(self.setup_row(cx))
             .child(Self::heading("Inputs"))
             .children(self.input_rows(false, cx))
             .when(
@@ -581,13 +671,64 @@ impl Studio {
             .children(self.mask_rows(cx))
             .child(
                 self.tree_row("combined", Row::Combined, 0.0, cx)
-                    .child(Self::named("Combined", "every layer, before Finish")),
+                    .child(Self::named(
+                        "Combined",
+                        if finish.is_empty() {
+                            "every layer"
+                        } else {
+                            "every layer, before Finish"
+                        },
+                    )),
             )
-            .child(Self::heading("Finish"))
-            .children(finish)
+            // Steps on the picture are adjustment layers; a document from
+            // before them may still have Finish steps.
+            .when(!finish.is_empty(), |tree| {
+                tree.child(Self::heading("Finish")).children(finish)
+            })
             .child(
                 self.tree_row("final", Row::Final, 0.0, cx)
                     .child(Self::named("Final picture", "every step")),
             )
+            .child(self.section("history", "History", true, cx, |this, cx| {
+                this.history_rows(cx)
+            }))
+    }
+
+    /// The document's edits, oldest first, as the History panel lists them:
+    /// the document as opened, each edit done, and the edits undone, which
+    /// are dimmed. Clicking one goes to the document after it.
+    fn history_rows(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let (done, undone) = self.history.words();
+        let current = done.len();
+        let rows = std::iter::once("Opened")
+            .chain(done)
+            .chain(undone)
+            .map(str::to_string)
+            .enumerate()
+            .map(|(position, words)| {
+                div()
+                    .id(("history", position))
+                    .px_2()
+                    .py_0p5()
+                    .rounded_sm()
+                    .text_xs()
+                    .cursor_pointer()
+                    .when(position == current, |row| row.bg(rgb(SELECTED)))
+                    .text_color(rgb(if position > current { QUIET } else { TEXT }))
+                    .child(words)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.go_to_history(position);
+                        cx.notify();
+                    }))
+            })
+            .collect::<Vec<_>>();
+        div()
+            .flex()
+            .flex_col()
+            .gap_0p5()
+            .children(rows)
+            .children(Self::help(
+                "Click an edit to see the picture after it. The edits after it stay, dimmed, until you make a new one.",
+            ))
     }
 }

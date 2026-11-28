@@ -18,7 +18,7 @@ keywords = ["astronomy", "telescope", "imaging", "analysis", "nina"]
 categories = ["command-line-utilities", "science"]
 
 [workspace]
-members = ["crates/director-core", "crates/director-ffi", "crates/director-runtime", "crates/director-ledger", "crates/director-meta", "crates/director-interop", "crates/ts-planner"]
+members = ["crates/psf-studio-core", "crates/director-core", "crates/director-ffi", "crates/director-runtime", "crates/director-ledger", "crates/director-meta", "crates/director-interop", "crates/ts-planner"]
 default-members = ["."]
 resolver = "3"
 
@@ -63,7 +63,14 @@ seiza-fits = "=0.9.0"
 seiza-image-io = "0.14.0"
 seiza-satellites = { version = "0.26.0", features = ["serde"] }
 seiza-stacking = "0.65.0"
+# Color composition: palettes, LRGB, color calibration, star layers and the
+# compositor PSF Studio draws with. Pinned to the Seiza commit on main that
+# added it until a release has it; see [patch.crates-io].
+seiza-compose = { git = "https://github.com/theatrus/seiza", rev = "def5cc3785e1564f783d86cfe8998cc7e19043a6", default-features = false }
 seiza-stretch = "0.4.0"
+# The Studio document model, image steps and frame reading, shared with
+# PSF Studio.
+psf-studio-core = { path = "crates/psf-studio-core" }
 # XISF reading. Already in the tree through seiza-stacking, which decodes both
 # containers into the same `seiza_fits::FitsImage`.
 seiza-xisf = "0.10.0"
@@ -185,3 +192,24 @@ panic = "unwind"
 [build-dependencies]
 tauri-build = { version = "2.7.4", features = [] }
 toml_edit = "0.25"
+
+# Seiza from the commit on main that added seiza-compose, so every Seiza
+# crate agrees with it on its types. Remove once a Seiza release has
+# seiza-compose.
+[patch.crates-io]
+seiza = { git = "https://github.com/theatrus/seiza", rev = "def5cc3785e1564f783d86cfe8998cc7e19043a6" }
+seiza-background = { git = "https://github.com/theatrus/seiza", rev = "def5cc3785e1564f783d86cfe8998cc7e19043a6" }
+seiza-calibration = { git = "https://github.com/theatrus/seiza", rev = "def5cc3785e1564f783d86cfe8998cc7e19043a6" }
+seiza-core = { git = "https://github.com/theatrus/seiza", rev = "def5cc3785e1564f783d86cfe8998cc7e19043a6" }
+seiza-deconvolution = { git = "https://github.com/theatrus/seiza", rev = "def5cc3785e1564f783d86cfe8998cc7e19043a6" }
+seiza-download = { git = "https://github.com/theatrus/seiza", rev = "def5cc3785e1564f783d86cfe8998cc7e19043a6" }
+seiza-fits = { git = "https://github.com/theatrus/seiza", rev = "def5cc3785e1564f783d86cfe8998cc7e19043a6" }
+seiza-image-io = { git = "https://github.com/theatrus/seiza", rev = "def5cc3785e1564f783d86cfe8998cc7e19043a6" }
+seiza-imgproc = { git = "https://github.com/theatrus/seiza", rev = "def5cc3785e1564f783d86cfe8998cc7e19043a6" }
+seiza-model = { git = "https://github.com/theatrus/seiza", rev = "def5cc3785e1564f783d86cfe8998cc7e19043a6" }
+seiza-satellites = { git = "https://github.com/theatrus/seiza", rev = "def5cc3785e1564f783d86cfe8998cc7e19043a6" }
+seiza-stacking = { git = "https://github.com/theatrus/seiza", rev = "def5cc3785e1564f783d86cfe8998cc7e19043a6" }
+seiza-stars = { git = "https://github.com/theatrus/seiza", rev = "def5cc3785e1564f783d86cfe8998cc7e19043a6" }
+seiza-stats = { git = "https://github.com/theatrus/seiza", rev = "def5cc3785e1564f783d86cfe8998cc7e19043a6" }
+seiza-stretch = { git = "https://github.com/theatrus/seiza", rev = "def5cc3785e1564f783d86cfe8998cc7e19043a6" }
+seiza-xisf = { git = "https://github.com/theatrus/seiza", rev = "def5cc3785e1564f783d86cfe8998cc7e19043a6" }

@@ -1,0 +1,34 @@
+[package]
+name = "psf-studio-core"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+license = "MIT OR Apache-2.0"
+publish = false
+description = "What PSF Guard and PSF Studio share: the Studio document model, image steps, frame reading and tile stores"
+
+# PSF Guard builds this crate in its workspace, and PSF Studio builds it from
+# its own workspace by path, so both programs read and write the same
+# documents and stores with the same code.
+
+[dependencies]
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["float_roundtrip"] }
+thiserror = "2"
+half = "2"
+uuid = { version = "1", features = ["v4", "v5", "serde"] }
+sha2 = "0.11"
+seiza-background = "0.4.0"
+# Pinned to the Seiza commit on main that added it, as PSF Guard and PSF
+# Studio pin it, until a release has it.
+seiza-compose = { git = "https://github.com/theatrus/seiza", rev = "def5cc3785e1564f783d86cfe8998cc7e19043a6", default-features = false }
+seiza-deconvolution = "0.3.0"
+seiza-fits = "0.9.0"
+seiza-image-io = "0.14.0"
+seiza-stacking = "0.65.0"
+seiza-stretch = "0.4.0"
+seiza-xisf = "0.10.0"
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,6 +1,6 @@
-//! The render half of the PSF-Studio canvas spike: a tiled, eight-band
-//! document drawn with wgpu. It knows nothing about the window toolkit; the
-//! host hands it a `wgpu::Surface`.
+//! The render half of the PSF-Studio canvas: a tiled, many-band document
+//! drawn with Seiza's GPU compositor. It knows nothing about the window
+//! toolkit; the host hands it a `wgpu::Surface`.
 
 pub mod display;
 mod renderer;
@@ -9,8 +9,7 @@ pub mod synth;
 mod tiles;
 
 pub use renderer::{
-    pane_rect, Adjustment, Blend, ComputedMask, FinishKind, FinishStep, Frame, FrameStats, Layer,
-    LayerHeal, Mark, MaskBand, Output, Pane, Renderer, Segment, View, MAX_COMPUTED_MASKS,
-    MAX_FINISH_STEPS, MAX_HEALED_LAYERS, MAX_HEALS, MAX_LAYERS, MAX_MASKS, STRETCH_TABLE_WIDTH,
+    pane_rect, Captured, CapturedPixels, Frame, FrameStats, Output, Pane, Previewed, ProbeSlot,
+    Renderer, Sampled, View, WorkingSpace,
 };
 pub use source::{Pyramid, TileSource};

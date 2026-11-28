@@ -28,12 +28,8 @@ pub const CURRENT_SCHEMA_VERSION: u32 = 1;
 pub const MAX_SETUP_NAME_CHARS: usize = 64;
 pub const MAX_SETUPS: usize = 200;
 
-/// The built-in color pipeline, which the seeded "Default" setup starts with:
-/// background extraction, an automatic MTF stretch on every channel, solar
-/// color calibration, and inputs that follow their channel cards. The
-/// frontend's `defaultColorProcessing` must produce exactly this JSON; a test
-/// on each side checks it.
-pub const DEFAULT_COLOR_SETTINGS: &str = include_str!("processing_setups/default_color.json");
+/// The built-in color pipeline, which the seeded "Default" setup starts with.
+pub use psf_studio_core::DEFAULT_COLOR_SETTINGS;
 
 /// The name the seeded default Color setup gets when no setup uses it.
 pub const DEFAULT_COLOR_SETUP_NAME: &str = "Default";
