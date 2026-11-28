@@ -3,9 +3,9 @@
 #
 # This workspace stands apart from the PSF Guard workspace on purpose. GPUI
 # is a git dependency on Zed and needs a newer toolchain, and neither belongs
-# in PSF Guard's lock file. The document model and the tile store are
-# compiled from PSF Guard's source, under `src/studio` and `src/image_steps`,
-# so the two programs read and write the same documents.
+# in PSF Guard's lock file. The document model, the tile store and frame
+# reading come from `crates/psf-studio-core`, which both workspaces build, so
+# the two programs read and write the same documents.
 #
 # `experiments/` holds the measurements the design record cites: the crop
 # preview, the browser canvas, and their results.
@@ -34,6 +34,7 @@ seiza-fits = { git = "https://github.com/theatrus/seiza", rev = "a1dbe3d540140e1
 seiza-image-io = { git = "https://github.com/theatrus/seiza", rev = "a1dbe3d540140e1d778f5b182ab400b96f88e547" }
 seiza-imgproc = { git = "https://github.com/theatrus/seiza", rev = "a1dbe3d540140e1d778f5b182ab400b96f88e547" }
 seiza-stats = { git = "https://github.com/theatrus/seiza", rev = "a1dbe3d540140e1d778f5b182ab400b96f88e547" }
+seiza-stacking = { git = "https://github.com/theatrus/seiza", rev = "a1dbe3d540140e1d778f5b182ab400b96f88e547" }
 seiza-stretch = { git = "https://github.com/theatrus/seiza", rev = "a1dbe3d540140e1d778f5b182ab400b96f88e547" }
 seiza-xisf = { git = "https://github.com/theatrus/seiza", rev = "a1dbe3d540140e1d778f5b182ab400b96f88e547" }
 

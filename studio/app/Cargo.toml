@@ -23,7 +23,8 @@ seiza-stretch = "0.4.0"
 raw-window-handle = "0.6"
 serde_json = "1"
 png = "0.17"
-# For the document model compiled from PSF Guard's source.
+# The document model, image steps and frame reading, shared with PSF Guard.
+psf-studio-core = { path = "../../crates/psf-studio-core" }
 serde = { version = "1", features = ["derive"] }
 half = "2"
 sha2 = "0.11"

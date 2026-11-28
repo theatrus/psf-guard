@@ -4,7 +4,7 @@ use serde_json::{json, Map, Value};
 
 /// The settings of PSF Guard's built-in default color setup.
 fn default_settings() -> Value {
-    serde_json::from_str(include_str!("../processing_setups/default_color.json")).unwrap()
+    serde_json::from_str(crate::DEFAULT_COLOR_SETTINGS).unwrap()
 }
 
 /// A value that stands for "not set": absent, null, or an empty map or list.
@@ -273,8 +273,7 @@ fn settings_of_the_wrong_shape_are_refused() {
 
 #[test]
 fn studio_starts_from_the_layered_stretch_and_keeps_a_chosen_one() {
-    let settings: Value =
-        serde_json::from_str(include_str!("../processing_setups/default_color.json")).unwrap();
+    let settings: Value = serde_json::from_str(crate::DEFAULT_COLOR_SETTINGS).unwrap();
     let mut document = document_from_color_setup("Default", &settings, &["ha", "oiii"]).unwrap();
     let kinds = |document: &Document| -> Vec<String> {
         document

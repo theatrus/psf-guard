@@ -4,8 +4,7 @@ use uuid::Uuid;
 use super::*;
 
 fn document(channels: &[&str]) -> Document {
-    let settings: Value =
-        serde_json::from_str(include_str!("../processing_setups/default_color.json")).unwrap();
+    let settings: Value = serde_json::from_str(crate::DEFAULT_COLOR_SETTINGS).unwrap();
     document_from_color_setup("Default", &settings, channels).unwrap()
 }
 

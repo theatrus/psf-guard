@@ -1,0 +1,27 @@
+[package]
+name = "psf-studio-core"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+license = "MIT OR Apache-2.0"
+publish = false
+description = "What PSF Guard and PSF Studio share: the Studio document model, image steps, frame reading and tile stores"
+
+# PSF Guard builds this crate in its workspace, and PSF Studio builds it from
+# its own workspace by path, so both programs read and write the same
+# documents and stores with the same code.
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["float_roundtrip"] }
+thiserror = "2"
+half = "2"
+uuid = { version = "1", features = ["v4", "v5", "serde"] }
+sha2 = "0.11"
+seiza-fits = "0.9.0"
+seiza-image-io = "0.14.0"
+seiza-stacking = "0.65.0"
+seiza-xisf = "0.10.0"
+
+[dev-dependencies]
+tempfile = "3"

@@ -18,7 +18,7 @@ keywords = ["astronomy", "telescope", "imaging", "analysis", "nina"]
 categories = ["command-line-utilities", "science"]
 
 [workspace]
-members = ["crates/director-core", "crates/director-ffi", "crates/director-runtime", "crates/director-ledger", "crates/director-meta", "crates/director-interop", "crates/ts-planner"]
+members = ["crates/psf-studio-core", "crates/director-core", "crates/director-ffi", "crates/director-runtime", "crates/director-ledger", "crates/director-meta", "crates/director-interop", "crates/ts-planner"]
 default-members = ["."]
 resolver = "3"
 
@@ -68,6 +68,9 @@ seiza-stacking = "0.65.0"
 # adds it until a release has it; see [patch.crates-io].
 seiza-compose = { git = "https://github.com/theatrus/seiza", rev = "a1dbe3d540140e1d778f5b182ab400b96f88e547", default-features = false }
 seiza-stretch = "0.4.0"
+# The Studio document model, image steps and frame reading, shared with
+# PSF Studio.
+psf-studio-core = { path = "crates/psf-studio-core" }
 # XISF reading. Already in the tree through seiza-stacking, which decodes both
 # containers into the same `seiza_fits::FitsImage`.
 seiza-xisf = "0.10.0"

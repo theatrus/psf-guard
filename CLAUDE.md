@@ -205,6 +205,7 @@ catalog unless the task grants that access.
 | `src/astrometry.rs`, `src/acquisition_context.rs` | Solving, target context, and pointing evidence |
 | `src/satellites.rs` | Cached satellite prediction and trail alignment |
 | `src/calibration.rs` | Calibration catalog, matching, and master provenance |
+| `crates/psf-studio-core/` | What PSF Guard and PSF Studio share: the Studio document model, image steps, frame reading (`image_io`) and tile stores; PSF Guard re-exports its modules at their old paths |
 | `static/src/` | React application |
 | `static/e2e/` | Playwright coverage and real FITS fixture manifest |
 | `docs/` | Current user and engineering documentation |
@@ -264,7 +265,7 @@ Design records: [multi-database](docs/design/multi-database.md),
   pointing, cloud, obstruction, or tracking evidence.
 - Cross-frame background and flux comparisons must use physical ADU, not the
   per-frame normalized storage values. A PixInsight XISF frame declaring
-  `bounds="0:1"` has no ADU of its own; `src/image_io.rs` puts it on a 16-bit
+  `bounds="0:1"` has no ADU of its own; `crates/psf-studio-core/src/image_io.rs` (`crate::image_io` in PSF Guard) puts it on a 16-bit
   scale on the way in, so read every frame through there rather than reaching
   for `seiza_xisf` or `seiza_stacking::FitsFrame::open` directly.
 - N.I.N.A. Fast supplies comparable star count and HFR values for imported
@@ -316,7 +317,7 @@ Current behavior: [satellites](docs/SATELLITES.md) and
 
 ### Imports, files, and calibration
 
-- A frame is a FITS or an XISF file. Detect one with `src/image_io.rs` and read
+- A frame is a FITS or an XISF file. Detect one with `image_io` and read
   one through it; do not test extensions or call `seiza_fits` directly at a new
   site. Both containers decode to the same `seiza_fits::FitsImage`.
 - Initial import is header-first. Expensive star, photometry, spatial, and

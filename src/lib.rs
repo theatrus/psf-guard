@@ -25,8 +25,6 @@ pub mod frame_derivatives;
 pub mod grading;
 pub mod hocus_focus_star_detection;
 pub mod image_analysis;
-pub mod image_io;
-pub mod image_steps;
 pub mod imported_copies;
 pub mod models;
 pub mod nina_star_detection;
@@ -45,10 +43,8 @@ pub mod sky_maps;
 pub mod spatial_analysis;
 pub mod star_contours;
 pub mod star_detection;
-pub mod studio;
 pub mod studio_documents;
 pub mod studio_flow;
-pub mod studio_frames;
 pub mod studio_sources;
 pub mod sync_client;
 pub mod template_repeats;
@@ -74,6 +70,8 @@ mod test_star_detection;
 
 // Re-export commonly used items
 pub use image_analysis::{FitsImage, ImageStatistics};
+// Shared with PSF Studio; see the crate.
+pub use psf_studio_core::{image_io, image_steps, studio, studio_frames};
 // The server and the Director native host use this same decision implementation.
 pub use psf_guard_director_core as director;
 pub use psf_guard_director_interop as director_interop;

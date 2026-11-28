@@ -1,4 +1,4 @@
-//! Measures the tile store in `src/studio/store.rs`: how fast it writes and
+//! Measures the tile store in `crates/psf-studio-core/src/studio/store.rs`: how fast it writes and
 //! reads, and how large its files are.
 //!
 //! usage: store_bench <folder> <results.json> [width height channels]
@@ -6,12 +6,7 @@
 //! The source is computed as it is read, so the image is never in memory.
 //! Run it under `/usr/bin/time -l` to see the process's peak memory.
 
-#[allow(dead_code, unused_imports)]
-#[path = "../../../../../src/image_steps/mod.rs"]
-mod image_steps;
-#[allow(dead_code, unused_imports)]
-#[path = "../../../../../src/studio/mod.rs"]
-mod studio;
+use psf_studio_core::{image_steps, studio};
 
 use image_steps::{Domain, ImageShape, Region};
 use serde_json::json;

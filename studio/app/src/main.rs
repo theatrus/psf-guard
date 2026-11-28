@@ -6,17 +6,10 @@
 //! Run with `--bench <file>` to play the scripted measurement and write its
 //! results as JSON.
 
-// The document model lives in PSF Guard's main crate. The spike compiles the
-// same source files, so the panes are written against the real model
-// without building all of PSF Guard under GPUI's toolchain.
+// The document model, shared with PSF Guard through `psf-studio-core`, so
+// the two programs read and write the same documents and stores.
 #[cfg(target_os = "macos")]
-#[allow(dead_code, unused_imports)]
-#[path = "../../../src/image_steps/mod.rs"]
-mod image_steps;
-#[cfg(target_os = "macos")]
-#[allow(dead_code, unused_imports)]
-#[path = "../../../src/studio/mod.rs"]
-mod studio_model;
+use psf_studio_core::{image_steps, studio as studio_model};
 
 #[cfg(target_os = "macos")]
 mod bench;

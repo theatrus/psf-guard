@@ -9,7 +9,7 @@
 //! - **Right: the selected row's controls** (`inspector.rs`).
 //!
 //! What a row is, what a pane shows and how a split chooses its panes are
-//! decided in `src/studio/place.rs`, which knows of no toolkit. These files
+//! decided in `psf-studio-core`'s `studio/place.rs`, which knows of no toolkit. These files
 //! only lay that out with GPUI, and turn a place into what the canvas draws.
 
 use super::{picture_patches, Bands, Drag, Scene, SliderId, Studio, Tool};
@@ -88,7 +88,7 @@ pub(super) fn output_stretch_step() -> StepRecord {
 }
 
 /// PSF Guard's built-in default color setup.
-const DEFAULT_COLOR_SETUP: &str = include_str!("../../../src/processing_setups/default_color.json");
+const DEFAULT_COLOR_SETUP: &str = psf_studio_core::DEFAULT_COLOR_SETTINGS;
 
 /// A new document: PSF Guard's default color flow over the store's inputs.
 /// The steps and their settings are the ones PSF Guard's color previews

@@ -3866,6 +3866,7 @@ dependencies = [
  "png 0.17.16",
  "pollster 0.4.0",
  "psf-studio-color",
+ "psf-studio-core",
  "psf-studio-render",
  "raw-window-handle",
  "security-framework",
@@ -3894,6 +3895,22 @@ dependencies = [
  "psf-studio-render",
  "serde_json",
  "wgpu 30.0.2",
+]
+
+[[package]]
+name = "psf-studio-core"
+version = "0.1.0"
+dependencies = [
+ "half",
+ "seiza-fits",
+ "seiza-image-io",
+ "seiza-stacking",
+ "seiza-xisf",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "thiserror",
+ "uuid",
 ]
 
 [[package]]
@@ -5134,16 +5151,13 @@ name = "studio-crop-preview-spike"
 version = "0.0.0"
 dependencies = [
  "half",
+ "psf-studio-core",
  "psf-studio-render",
  "rayon",
  "seiza-deconvolution",
- "serde",
  "serde_json",
- "sha2 0.11.1",
  "tempfile",
- "thiserror",
  "tiny_http",
- "uuid",
 ]
 
 [[package]]

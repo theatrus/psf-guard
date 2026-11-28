@@ -2,8 +2,7 @@ use super::*;
 use serde_json::Value;
 
 fn document() -> Document {
-    let settings: Value =
-        serde_json::from_str(include_str!("../processing_setups/default_color.json")).unwrap();
+    let settings: Value = serde_json::from_str(crate::DEFAULT_COLOR_SETTINGS).unwrap();
     let mut document = document_from_color_setup("Test", &settings, &["red", "green"]).unwrap();
     // Only the input layers.
     let adjustments: Vec<uuid::Uuid> = document

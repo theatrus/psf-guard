@@ -7,8 +7,8 @@ built and what is not.
 
 PSF-Studio is its own Cargo workspace. It is not part of the PSF Guard
 build: GPUI is a git dependency on Zed and needs Rust 1.100. The document
-model and the tile store are compiled from PSF Guard's source, under
-`src/studio` and `src/image_steps`, so both programs read and write the same
+model, the tile store and frame reading come from `crates/psf-studio-core`,
+which both workspaces build, so both programs read and write the same
 documents.
 
 ## Build and open a picture
@@ -72,8 +72,8 @@ The experiments answer investigations 1, 3 and 9 of the design record.
 The app shows the staged workflow from the design record: a rail of six
 stages, the showing stage's steps or layers on the left, the canvas, and the
 stage's own controls on the right. The panes are written against the
-document model in PSF Guard's `src/studio/`. The app compiles those source
-files directly, so it needs no build of PSF Guard.
+document model in `crates/psf-studio-core/src/studio/`, which the app builds
+as a dependency, so it needs no build of PSF Guard.
 
 The canvas draws from the document:
 
@@ -102,7 +102,7 @@ to turn the band off.
 ## Open a tile store
 
 The canvas draws the synthetic document unless it is given a tile store, the
-file format of PSF Guard's `src/studio/store.rs`. Write part of the synthetic
+file format of `crates/psf-studio-core/src/studio/store.rs`. Write part of the synthetic
 document to a store, then open it. The default is 12,000 by 8,000 pixels in
 eight bands, which takes 4.1 GB.
 

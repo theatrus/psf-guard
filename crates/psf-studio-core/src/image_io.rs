@@ -350,10 +350,7 @@ fn header_number(headers: &[(String, HeaderValue)], wanted: &str) -> Option<f64>
         })
 }
 
-pub(crate) fn header_text<'a>(
-    headers: &'a [(String, HeaderValue)],
-    wanted: &str,
-) -> Option<&'a str> {
+pub fn header_text<'a>(headers: &'a [(String, HeaderValue)], wanted: &str) -> Option<&'a str> {
     headers
         .iter()
         .find(|(name, _)| name.eq_ignore_ascii_case(wanted))
@@ -875,20 +872,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn xisf_frames_reach_the_shared_astrometry_header_reader() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = write_sample_xisf(directory.path(), "light.xisf");
-        let headers = crate::astrometry_headers::FitsAstrometryHeaders::from_path(&path)
-            .expect("XISF headers should normalize");
-        assert_eq!(
-            headers.object_name.map(|value| value.value),
-            Some("M31".into())
-        );
-        assert_eq!(headers.width.map(|value| value.value), Some(4));
-        assert_eq!(headers.height.map(|value| value.value), Some(3));
-    }
-
     /// A remote upload streams into an extensionless temporary inside a
     /// scanned image root. The decoder has to come from the declared name, or
     /// the temporary would need a frame extension and a concurrent scan would
@@ -980,22 +963,6 @@ mod tests {
         assert_eq!(
             read_window(&normalized, 3, 2, 1, 1).unwrap().values,
             [65535.0]
-        );
-    }
-
-    /// The measured value the grader actually compares across frames. Before
-    /// the conversion this read about 0.01 against a camera frame's thousands.
-    #[test]
-    fn a_normalized_frame_reports_adu_a_camera_frame_can_be_compared_with() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = write_sample_xisf(directory.path(), "light.xisf");
-
-        let frame = crate::image_analysis::FitsImage::from_file(&path).unwrap();
-        let statistics = frame.calculate_basic_statistics();
-        let median_adu = frame.stored_to_adu(statistics.median);
-        assert!(
-            (1000.0..65536.0).contains(&median_adu),
-            "median should read as 16-bit ADU, got {median_adu}"
         );
     }
 

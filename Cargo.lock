@@ -4530,6 +4530,7 @@ dependencies = [
  "psf-guard-director-interop",
  "psf-guard-director-meta",
  "psf-guard-ts-planner",
+ "psf-studio-core",
  "quick-xml",
  "rand 0.10.3",
  "rayon",
@@ -4664,6 +4665,23 @@ dependencies = [
  "serde",
  "serde_json",
  "sofars",
+]
+
+[[package]]
+name = "psf-studio-core"
+version = "0.1.0"
+dependencies = [
+ "half",
+ "seiza-fits",
+ "seiza-image-io",
+ "seiza-stacking",
+ "seiza-xisf",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "tempfile",
+ "thiserror 2.0.21",
+ "uuid",
 ]
 
 [[package]]

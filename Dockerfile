@@ -33,7 +33,8 @@ COPY crates/director-ledger/Cargo.toml ./crates/director-ledger/Cargo.toml
 COPY crates/director-meta/Cargo.toml ./crates/director-meta/Cargo.toml
 COPY crates/director-interop/Cargo.toml ./crates/director-interop/Cargo.toml
 COPY crates/ts-planner/Cargo.toml ./crates/ts-planner/Cargo.toml
-RUN mkdir -p src/bin crates/director-core/src crates/director-ffi/src crates/director-runtime/src crates/director-ledger/src crates/director-meta/src crates/director-interop/src crates/ts-planner/src && \
+COPY crates/psf-studio-core/Cargo.toml ./crates/psf-studio-core/Cargo.toml
+RUN mkdir -p src/bin crates/director-core/src crates/director-ffi/src crates/director-runtime/src crates/director-ledger/src crates/director-meta/src crates/director-interop/src crates/ts-planner/src crates/psf-studio-core/src && \
     echo 'fn main() {}' > src/main.rs && \
     : > src/lib.rs && \
     : > crates/director-core/src/lib.rs && \
@@ -43,6 +44,7 @@ RUN mkdir -p src/bin crates/director-core/src crates/director-ffi/src crates/dir
     : > crates/director-meta/src/lib.rs && \
     : > crates/director-interop/src/lib.rs && \
     : > crates/ts-planner/src/lib.rs && \
+    : > crates/psf-studio-core/src/lib.rs && \
     echo 'fn main() {}' > crates/director-runtime/src/main.rs && \
     echo 'fn main() {}' > src/bin/psf-guard-cli.rs && \
     echo 'fn main() {}' > build.rs && \
@@ -63,10 +65,11 @@ COPY static ./static
 # sources that land on top of it: cargo concludes psf-guard is already built,
 # skips build.rs, never runs the frontend build, and the compile dies on
 # include_dir!("static/dist") with "is not a directory". Clearing only this
-# crate's fingerprints forces it and its build script to run again; every
+# crate's fingerprints, and those of psf-studio-core, whose stub was empty,
+# forces them and the build script to run again; every
 # compiled dependency in target/ is left alone, which is the point of the
 # layer above.
-RUN rm -rf target/release/.fingerprint/psf-guard-* && \
+RUN rm -rf target/release/.fingerprint/psf-guard-* target/release/.fingerprint/psf-studio-core-* && \
     cargo build --release --locked
 
 # Runtime stage - use trixie to match the build stage

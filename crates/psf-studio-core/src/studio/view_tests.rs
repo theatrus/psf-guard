@@ -6,8 +6,7 @@ use uuid::Uuid;
 const RGB: [&str; 3] = ["red", "green", "blue"];
 
 fn document() -> Document {
-    let settings: Value =
-        serde_json::from_str(include_str!("../processing_setups/default_color.json")).unwrap();
+    let settings: Value = serde_json::from_str(crate::DEFAULT_COLOR_SETTINGS).unwrap();
     document_from_color_setup("Default", &settings, &RGB).unwrap()
 }
 
@@ -406,8 +405,7 @@ fn a_layers_mask_is_painted_and_a_document_with_adjustments_round_trips() {
 
 #[test]
 fn an_input_is_shown_after_each_linear_step_that_changes_it() {
-    let settings: Value =
-        serde_json::from_str(include_str!("../processing_setups/default_color.json")).unwrap();
+    let settings: Value = serde_json::from_str(crate::DEFAULT_COLOR_SETTINGS).unwrap();
     let mut document = document_from_color_setup("Default", &settings, &["ha", "oiii"]).unwrap();
     let deconvolution = StepRecord::new(StepKind::Operation {
         operation: super::flow_operations::DECONVOLUTION.to_string(),
@@ -450,8 +448,7 @@ fn an_input_is_shown_after_each_linear_step_that_changes_it() {
 
 #[test]
 fn a_line_without_its_continuum_is_stretched_as_its_channel() {
-    let settings: Value =
-        serde_json::from_str(include_str!("../processing_setups/default_color.json")).unwrap();
+    let settings: Value = serde_json::from_str(crate::DEFAULT_COLOR_SETTINGS).unwrap();
     let document = document_from_color_setup("Default", &settings, &["ha", "oiii"]).unwrap();
     let stretch = |channel: &str| {
         let view = View {
