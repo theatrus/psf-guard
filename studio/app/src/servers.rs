@@ -729,6 +729,16 @@ impl Client {
     }
 }
 
+/// The Stacks page in PSF Guard for one target, where **Build stacks**
+/// makes its channel stacks.
+pub fn stacks_page_url(server: &str, database: &str, project: i32, target: i32) -> String {
+    format!(
+        "{}/#/stacks?db={}&project={project}&target={target}",
+        server.trim_end_matches('/'),
+        path_part(database)
+    )
+}
+
 /// A name as one part of a URL path: everything but letters, digits and
 /// `-_.~` escaped.
 fn path_part(text: &str) -> String {
@@ -746,6 +756,14 @@ fn path_part(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_stacks_page_opens_on_the_target() {
+        assert_eq!(
+            stacks_page_url("http://127.0.0.1:13178/", "db 1", 2, 7),
+            "http://127.0.0.1:13178/#/stacks?db=db%201&project=2&target=7"
+        );
+    }
 
     #[test]
     fn an_address_is_read_as_an_origin() {

@@ -572,6 +572,12 @@ minutes, the list says it may still be open there. Click **Open**. PSF
 Studio fetches the document and the target's current channel stacks,
 registers the stacks and opens the picture.
 
+PSF Studio opens a target from its channel stacks. When the target has none
+yet, the Documents column says so and shows **Build stacks in PSF Guard**,
+and **Open** or a link explains the same instead of failing. The button
+opens the target's Stacks page in your browser: click **Build stacks**
+there, then open the target in PSF Studio again once the stacks are ready.
+
 Click a document to list its earlier revisions beneath it, then choose one
 and click **Open** to open that revision. PSF Studio opens it as a picture
 of its own, so the newest revision on this computer keeps its edits. Your

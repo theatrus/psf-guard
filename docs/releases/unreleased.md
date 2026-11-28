@@ -67,6 +67,9 @@
 - PSF Studio's document list shows how long ago each document was saved and
   from which computer, and warns when another computer saved it in the last
   ten minutes. Click a document to list its earlier revisions and open one.
+- When a target has no channel stacks yet, PSF Studio says so and offers
+  **Build stacks in PSF Guard**, which opens the target's Stacks page,
+  instead of failing as it prepares the picture.
 - PSF Studio says when a document's stacks were built again since it was
   saved, and asks before opening one whose stacks were registered to
   another frame, where masks and heals may fall in the wrong place.

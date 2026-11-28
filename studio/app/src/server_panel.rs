@@ -28,6 +28,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+/// What a person reads about a target with no channel stacks.
+const NO_STACKS: &str = "PSF Studio opens a target from its channel stacks. Build stacks in PSF \
+     Guard opens the target's Stacks page in your browser: click Build stacks there, and open the \
+     target here again when the stacks are ready.";
+
 /// The earlier revisions a chosen document lists, at most.
 const EARLIER_SHOWN: usize = 12;
 
@@ -268,6 +273,9 @@ pub(super) struct ServerPanel {
     /// A document whose stacks were registered anew, waiting for the person
     /// to open it with the new stacks or not.
     pub reframed: Option<(super::open::TargetLink, Which, bool)>,
+    /// A target asked to open that has no channel stacks, waiting for the
+    /// person to build them in PSF Guard or not.
+    pub no_stacks: Option<super::open::TargetLink>,
     /// A link's ticket traded for a token, waiting for the person.
     pub link: Option<LinkConnect>,
     /// A link's ticket being traded.
@@ -296,6 +304,7 @@ impl Default for ServerPanel {
             revisions_of: None,
             fetching: None,
             reframed: None,
+            no_stacks: None,
             link: None,
             trading: None,
         }
@@ -926,6 +935,8 @@ impl Studio {
             self.link_card(cx)
         } else if self.servers.reframed.is_some() {
             self.reframed_card(cx)
+        } else if self.servers.no_stacks.is_some() {
+            self.no_stacks_card(cx)
         } else {
             self.browse_card(window, cx)
         };
@@ -985,6 +996,58 @@ impl Studio {
                         cx,
                         |this, _, _| {
                             this.servers.reframed = None;
+                        },
+                    )),
+            )
+            .into_any_element()
+    }
+
+    /// Asks the person to build a target's channel stacks in PSF Guard,
+    /// since Studio opens a target from them.
+    fn no_stacks_card(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        div()
+            .w(px(520.0))
+            .p_4()
+            .rounded_md()
+            .bg(rgb(PANE))
+            .text_color(rgb(TEXT))
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(
+                div()
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .child("This target has no channel stacks yet"),
+            )
+            .child(Self::note(NO_STACKS))
+            .child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .child(Self::panel_button(
+                        "Build stacks in PSF Guard",
+                        "no-stacks-build",
+                        true,
+                        cx,
+                        |this, _, _| {
+                            if let Some(target) = this.servers.no_stacks.take() {
+                                this.servers.open = false;
+                                open_in_browser(&servers::stacks_page_url(
+                                    &target.server,
+                                    &target.database,
+                                    target.project,
+                                    target.target,
+                                ));
+                            }
+                        },
+                    ))
+                    .child(Self::panel_button(
+                        "Cancel",
+                        "no-stacks-cancel",
+                        true,
+                        cx,
+                        |this, _, _| {
+                            this.servers.no_stacks = None;
                         },
                     )),
             )
@@ -1286,11 +1349,43 @@ impl Studio {
             let place = place.min(document_rows.len());
             document_rows.splice(place..place, rows);
         }
-        let can_open = chosen_target.is_some_and(|id| {
+        let target_has_stacks = chosen_target.is_some_and(|id| {
             stacked
                 .iter()
                 .any(|stacks| stacks.target_id == id && !stacks.source_candidates.is_empty())
-        }) && !self.is_running();
+        });
+        // A target without stacks lists how to make them first.
+        if !target_has_stacks
+            && panel.targets.done().is_some()
+            && let (Some(target), Some(server), Some(database), Some(project)) = (
+                chosen_target,
+                panel.server.clone(),
+                panel.database.clone(),
+                panel.project,
+            )
+        {
+            let url = servers::stacks_page_url(&server, &database, project, target);
+            document_rows.insert(
+                0,
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .pb_2()
+                    .child(Self::note(
+                        "No channel stacks yet. Studio opens a target from its stacks.".to_string(),
+                    ))
+                    .child(Self::panel_button(
+                        "Build stacks in PSF Guard",
+                        "documents-build-stacks",
+                        true,
+                        cx,
+                        move |_, _, _| open_in_browser(&url),
+                    ))
+                    .into_any_element(),
+            );
+        }
+        let can_open = target_has_stacks && !self.is_running();
         // A picture opened from files can go to the chosen target.
         let can_save_picture = chosen_target.is_some()
             && self.document_path().is_some()
@@ -1519,6 +1614,15 @@ impl Studio {
                         "saved_at": entry.saved_at,
                     }))
                     .collect::<Vec<_>>(),
+            })),
+            "no_stacks": panel.no_stacks.as_ref().map(|target| json!({
+                "target": target.target,
+                "build_url": servers::stacks_page_url(
+                    &target.server,
+                    &target.database,
+                    target.project,
+                    target.target,
+                ),
             })),
             "picture_on_server": self.server_save.linked(),
             "save_state": self.server_save_line(),

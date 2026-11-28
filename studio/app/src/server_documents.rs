@@ -919,6 +919,9 @@ pub enum Fetched {
     /// The target's stacks were registered anew since the document was
     /// saved: the person chooses whether to open it with them.
     Reframed(Which),
+    /// The target has no channel stacks, which Studio opens a target from:
+    /// the person is asked to build them in PSF Guard.
+    NoStacks,
 }
 
 /// A document of a target being made ready to open.
@@ -975,6 +978,18 @@ impl Studio {
             let outcome = (|| {
                 std::fs::create_dir_all(&folder)
                     .map_err(|error| Failure::Failed(error.to_string()))?;
+                // A target opens from its channel stacks; without them there
+                // is nothing to prepare.
+                let now = client
+                    .stacked_targets(&target.database, target.project)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .find(|stacked| stacked.target_id == target.target)
+                    .map(|stacked| stacked.source_candidates)
+                    .unwrap_or_default();
+                if now.is_empty() {
+                    return Ok(Fetched::NoStacks);
+                }
                 let asked = which.clone();
                 let mut at = None;
                 let id = match which {
@@ -1006,13 +1021,6 @@ impl Studio {
                     return Ok(Fetched::Ready { name, note: None });
                 };
                 let record = client.document_record(&target.database, &id)?;
-                let now = client
-                    .stacked_targets(&target.database, target.project)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .find(|stacked| stacked.target_id == target.target)
-                    .map(|stacked| stacked.source_candidates)
-                    .unwrap_or_default();
                 let latest = record.current().map_or(0, |current| current.revision);
                 let at = at.filter(|revision| *revision != latest);
                 let stacks_note = match stacks_changed(&record.stacks, &now) {
@@ -1080,6 +1088,11 @@ impl Studio {
             }
             Ok(Fetched::Reframed(which)) => {
                 self.servers.reframed = Some((target, which, discard));
+                self.servers.open = true;
+            }
+            Ok(Fetched::NoStacks) => {
+                self.say("Not opened: the target has no channel stacks yet");
+                self.servers.no_stacks = Some(target);
                 self.servers.open = true;
             }
             Err(failure) => self.say(&format!("The document was not fetched: {failure}")),

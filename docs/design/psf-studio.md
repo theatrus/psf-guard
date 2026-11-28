@@ -425,8 +425,12 @@ that person's role.
   90 days later, so a connection in use does not lapse. One left unused for
   90 days expires.
 - **A target without stacks:** Studio says the target has no channel stacks
-  and offers to build them, rather than failing when it prepares the
-  picture.
+  and offers **Build stacks in PSF Guard**, rather than failing when it
+  prepares the picture. Built: Open and links check for stacks before
+  fetching and show the offer; the button opens the target's Stacks page
+  (`#/stacks?db=&project=&target=`). The server has no request that builds
+  a target's channels from defaults alone (the page and automatic refreshes
+  assemble one), so Studio does not start the build itself.
 
 ##### Open questions
 
