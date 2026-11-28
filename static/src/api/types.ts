@@ -2767,6 +2767,36 @@ export interface AuthTokenSummary {
   expires_at?: number;
 }
 
+/** An export saved from a PSF Studio document to its project. */
+export interface StudioDocumentExport {
+  sha256: string;
+  /** The document revision the export was made from. */
+  revision: number;
+  name: string;
+  format: string;
+  /** Bytes. */
+  size: number;
+  /** Unix seconds. */
+  saved_at: number;
+  saved_by: string;
+}
+
+/** A PSF Studio document saved to a project, as the list shows it. */
+export interface StudioDocumentSummary {
+  id: string;
+  name: string;
+  project_id: number;
+  target_id?: number;
+  revision: number;
+  /** Unix seconds. */
+  saved_at: number;
+  saved_by: string;
+  /** SHA-256 of a small image of the picture, when one was saved. */
+  preview?: string;
+  /** Newest first. */
+  exports: StudioDocumentExport[];
+}
+
 /** A PSF Studio waiting for a person to approve its code. */
 export interface StudioConnectWaiting {
   user_code: string;

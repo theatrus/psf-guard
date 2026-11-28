@@ -116,6 +116,34 @@ pub async fn revision_route(
     }
 }
 
+/// `GET /studio-documents/{id}/processing`: the current revision as
+/// PSF Guard's color processing settings, which a Color processing setup
+/// keeps. A document with a step PSF Guard's pipeline does not run is
+/// refused, with the reason.
+pub async fn processing_route(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+    Path((_db, id)): Path<(String, String)>,
+) -> Result<Response, AppError> {
+    let store = store(&state, &ctx.id)?;
+    let text = blocking(&state, move || {
+        let Some(record) = store.record(&id)? else {
+            return Ok(None);
+        };
+        store.revision(&id, record.current().revision)
+    })
+    .await?
+    .ok_or(AppError::NotFound)?;
+    let document = crate::studio::Document::from_json(&text)
+        .map_err(|error| AppError::BadRequest(error.to_string()))?;
+    let processing = crate::studio_flow::processing_from_document(&document).map_err(|error| {
+        AppError::BadRequest(format!(
+            "This document cannot be a Color processing setup: {error}"
+        ))
+    })?;
+    Ok(Json(ApiResponse::success(processing)).into_response())
+}
+
 /// `PUT /studio-documents/{id}`: a new revision. When another save arrived
 /// first, 409 with the record as it is.
 pub async fn save_route(

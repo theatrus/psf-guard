@@ -294,6 +294,10 @@ pub fn api_router(state: Arc<AppState>) -> Router {
             "/studio-documents/{id}/exports",
             post(studio_documents::export_route),
         )
+        .route(
+            "/studio-documents/{id}/processing",
+            get(studio_documents::processing_route),
+        )
         .route("/refresh-cache", put(handlers::refresh_file_cache))
         .route("/cache-progress", get(handlers::get_cache_refresh_progress))
         .route(

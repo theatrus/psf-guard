@@ -42,6 +42,7 @@ import { withRetainedColorExposureSets } from './colorExposureCards';
 import { fetchDefaultColorFor } from './defaultColorSetup';
 import './StackColorSources.css';
 import { openStudioLink, studioLink, useServerOrigin } from '../utils/studioLink';
+import StudioDocuments from './StudioDocuments';
 import { useAccess } from '../auth/access';
 
 /** A channel's frame count, or that WBPP made it and recorded none. */
@@ -605,16 +606,20 @@ export default function StackColorPreviewPanel({
   const serverOrigin = useServerOrigin();
   // On a server with sign-in, a link to PSF Studio carries a one-time
   // ticket, minted when the person clicks it.
-  const { status: accessStatus } = useAccess();
+  const { status: accessStatus, canWrite: canWriteAccess } = useAccess();
   const studioNeedsTicket = accessStatus.authentication_required;
   const [studioError, setStudioError] = useState('');
-  const openInStudio = async (event: MouseEvent<HTMLAnchorElement>, targetId: number) => {
+  const openInStudio = async (
+    event: MouseEvent<HTMLAnchorElement>,
+    targetId: number,
+    documentId?: string,
+  ) => {
     if (!studioNeedsTicket) return;
     event.preventDefault();
     setStudioError('');
     try {
       const ticket = await apiClient.createStudioTicket();
-      openStudioLink(studioLink(serverOrigin, dbId, projectId, targetId, ticket));
+      openStudioLink(studioLink(serverOrigin, dbId, projectId, targetId, ticket, documentId));
     } catch (failure) {
       setStudioError(failure instanceof Error ? failure.message : String(failure));
     }
@@ -1142,6 +1147,14 @@ export default function StackColorPreviewPanel({
           {studioError && <span className="status-message error" role="alert">{studioError}</span>}
         </div>
       )}
+      <StudioDocuments
+        dbId={dbId}
+        projectId={projectId}
+        serverOrigin={serverOrigin}
+        targetNames={new Map(targets.map((target) => [target.target_id, target.target_name]))}
+        canWrite={canWriteAccess}
+        onOpen={(event, targetId, documentId) => void openInStudio(event, targetId, documentId)}
+      />
       <div className="stack-color-grid">
         {targets.flatMap((target) => {
           const targetJobs = (catalog.data?.jobs ?? []).filter((job) => job.target_id === target.target_id);

@@ -520,7 +520,7 @@ async fn studio_saves_revisions_files_and_exports_and_a_stale_save_conflicts() {
 
     let (_, listed) = call(Method::GET, format!("{base}?project=11"), Value::Null).await;
     assert_eq!(listed["data"][0]["revision"], 2);
-    assert_eq!(listed["data"][0]["exports"], 1);
+    assert_eq!(listed["data"][0]["exports"][0]["name"], "Iris.tif");
 
     // Delete removes it, and the files only it used.
     let (status, _) = call(Method::DELETE, format!("{base}/{id}"), Value::Null).await;
@@ -529,4 +529,46 @@ async fn studio_saves_revisions_files_and_exports_and_a_stale_save_conflicts() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     let (status, _) = call(Method::GET, format!("{base}/files/{sha}"), Value::Null).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn a_document_of_psf_guard_steps_reads_as_color_processing() {
+    use psf_guard::server::stack_preview::color::StackColorRole;
+    let directory = tempfile::tempdir().unwrap();
+    let app = app(&directory);
+    let (token, _) = connected(&app, "editor").await;
+    let processing: psf_guard::server::stack_preview::color::StackColorProcessing =
+        serde_json::from_str(psf_guard::processing_setups::DEFAULT_COLOR_SETTINGS).unwrap();
+    let document = psf_guard::studio_flow::document_from_processing(
+        "Iris",
+        &processing,
+        &[
+            StackColorRole::Red,
+            StackColorRole::Green,
+            StackColorRole::Blue,
+        ],
+    )
+    .unwrap();
+    let base = "/api/db/test/studio-documents";
+    let new = json!({
+        "name": "Iris", "project_id": 11, "target_id": 17,
+        "document": serde_json::from_str::<Value>(&document.to_json()).unwrap(),
+    });
+    let (_, created, _) = send(&app, Method::POST, base, new, None, Some(&token)).await;
+    let id = created["data"]["id"].as_str().unwrap().to_string();
+    let (status, read, _) = send(
+        &app,
+        Method::GET,
+        &format!("{base}/{id}/processing"),
+        Value::Null,
+        None,
+        Some(&token),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{read}");
+    assert_eq!(
+        read["data"],
+        serde_json::to_value(&processing).unwrap(),
+        "the setup the document came from"
+    );
 }

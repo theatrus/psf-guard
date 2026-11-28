@@ -64,6 +64,7 @@ import type { GuidFillReport, GuidReport, ImportedCopiesMerge, ImportedCopiesRep
   AuthStatus,
   AuthTokenSummary,
   StudioConnectWaiting,
+  StudioDocumentSummary,
   AuthUserSummary,
   CreateAuthTokenRequest,
   CreateAuthUserRequest,
@@ -1151,6 +1152,41 @@ export const apiClient = {
     });
     if (!data.success) throw new Error(data.error || 'The code could not be approved');
   },
+
+  /** A project's PSF Studio documents, most recently saved first. */
+  getStudioDocuments: async (dbId: string, projectId: number): Promise<StudioDocumentSummary[]> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<StudioDocumentSummary[]>>(
+      `/db/${encodeURIComponent(dbId)}/studio-documents`,
+      { params: { project: projectId } }
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to load the Studio documents');
+    return data.data;
+  },
+
+  /** Deletes a Studio document, its revisions, and the files no other
+   *  document uses. */
+  deleteStudioDocument: async (dbId: string, id: string): Promise<void> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.delete<ApiResponse<unknown>>(
+      `/db/${encodeURIComponent(dbId)}/studio-documents/${encodeURIComponent(id)}`
+    );
+    if (!data.success) throw new Error(data.error || 'The Studio document was not deleted');
+  },
+
+  /** A Studio document's current revision as color processing settings. */
+  getStudioDocumentProcessing: async (dbId: string, id: string): Promise<unknown> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<unknown>>(
+      `/db/${encodeURIComponent(dbId)}/studio-documents/${encodeURIComponent(id)}/processing`
+    );
+    if (!data.data) throw new Error(data.error || 'The document cannot be a Color processing setup');
+    return data.data;
+  },
+
+  /** Where a file a Studio document uses can be downloaded. */
+  studioFileUrl: (dbId: string, sha256: string): string =>
+    withServerUrl(`/api/db/${encodeURIComponent(dbId)}/studio-documents/files/${sha256}`),
 
   /** A one-time ticket for a link that opens PSF Studio, which lasts about
    *  a minute. */

@@ -16,8 +16,9 @@ export function useServerOrigin(): string {
   return origin;
 }
 
-/** The link that has PSF Studio open one target from this server: its
- *  latest Studio document, or a new one from the target's channel stacks.
+/** The link that has PSF Studio open one target from this server: the
+ *  Studio document `document`, or else the target's latest, or a new one
+ *  from the target's channel stacks.
  *  PSF Studio registers the `psf-studio` scheme. On a server with sign-in,
  *  `ticket` is a one-time ticket from `/api/auth/studio/ticket`, which PSF
  *  Studio trades for a connection when it has none to this server yet. The
@@ -28,6 +29,7 @@ export function studioLink(
   projectId: number,
   targetId: number,
   ticket?: string,
+  document?: string,
 ): string {
   const query = new URLSearchParams({
     server: origin,
@@ -35,6 +37,7 @@ export function studioLink(
     project: String(projectId),
     target: String(targetId),
   });
+  if (document) query.set('document', document);
   if (ticket) query.set('ticket', ticket);
   return `psf-studio://open?${query.toString()}`;
 }

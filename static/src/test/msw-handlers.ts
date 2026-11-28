@@ -85,6 +85,8 @@ export const handlers = [
   } })),
   ...scoringDefaultsHandlers,
   http.get('/api/ts-sync', () => HttpResponse.json({ success: true, data: [], error: null })),
+  // A project has no PSF Studio documents unless a test says so.
+  http.get('/api/db/:dbId/studio-documents', () => HttpResponse.json({ success: true, data: [], error: null })),
   emptyCollaborationActivation,
   emptyTransfers,
   // A whole-set build asks for one build per channel. A test that mocks only

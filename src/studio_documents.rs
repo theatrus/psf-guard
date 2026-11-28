@@ -46,6 +46,14 @@ pub struct StackFingerprint {
     pub job_id: String,
     pub group_index: usize,
     pub artifact_revision: String,
+    /// The frame the stack was registered to. Masks, heals and the crop
+    /// are in its pixels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference_image_id: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<usize>,
 }
 
 /// A file a revision uses, by what it is for.
@@ -140,7 +148,8 @@ pub struct DocumentSummary {
     pub saved_by: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preview: Option<String>,
-    pub exports: usize,
+    /// Exports saved to the project, newest first.
+    pub exports: Vec<ExportEntry>,
 }
 
 impl From<&DocumentRecord> for DocumentSummary {
@@ -159,7 +168,7 @@ impl From<&DocumentRecord> for DocumentSummary {
                 .iter()
                 .rev()
                 .find_map(|revision| revision.preview.clone()),
-            exports: record.exports.len(),
+            exports: record.exports.iter().rev().cloned().collect(),
         }
     }
 }
