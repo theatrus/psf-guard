@@ -104,7 +104,8 @@ function StudioConnect({ code }: { code: string }) {
             : 'PSF Studio will read projects, targets and stacks. Your account is read-only, so PSF Studio saves documents on its own computer only.'}
         </p>
         <p className="muted">
-          The connection lasts 90 days. Revoke it at any time in Settings › API tokens.
+          The connection stays while PSF Studio uses it, and ends after 90 days unused. Revoke
+          it at any time in Settings › API tokens.
         </p>
         {error && <p className="auth-error">{error}</p>}
         <div className="studio-connect-actions">

@@ -419,12 +419,17 @@ that person's role.
    Guard” gives.
 6. Tickets in the link, and the button on servers with sign-in.
 
+##### Decided (2026-11-27)
+
+- **A Studio token renews while it is used:** each use moves its expiry to
+  90 days later, so a connection in use does not lapse. One left unused for
+  90 days expires.
+- **A target without stacks:** Studio says the target has no channel stacks
+  and offers to build them, rather than failing when it prepares the
+  picture.
+
 ##### Open questions
 
-- How long should a Studio token last: a fixed 90 days, or renewed while it
-  is used?
-- Should Studio start a stack build for a target that has none, or only open
-  PSF Guard's stack page? Proposed: only open the page at first.
 - Does the desktop app's bundled Studio need a connection? Proposed: no.
   The desktop app passes cache files on disk, as it does now, and the
   bundled Studio saves documents through the desktop app's own store, the
@@ -590,7 +595,9 @@ Built as proposed, with these differences:
   sync. **API tokens** shows a connection as “PSF Studio connection”, without
   when it was last used: recording each use would write the registry on
   every request.
-- **The token** lasts a fixed 90 days.
+- **The token** renews as it is used: once a day at most, the server moves
+  its expiry to 90 days later in memory at once and writes the registry
+  beside the request (`studio_renewal`, `ServerAuth::keep_token_expiry`).
 - **Saving** happens five seconds after edits stop. Quitting or closing the
   window saves at once and waits up to 15 seconds for the server; GPUI
   gives a quit handler only 200 ms, so Studio's own loop holds the quit.

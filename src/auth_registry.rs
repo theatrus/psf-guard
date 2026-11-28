@@ -437,6 +437,19 @@ impl AuthRegistry {
 
     /// Drop one token by id. `owner` restricts the removal to that user's
     /// tokens; an editor passes `None`.
+    /// Moves a token's expiry to `expires_at`, as renewing a Studio token
+    /// in use does. A token that is gone, or never expires, is left alone.
+    pub fn set_token_expiry(&mut self, id: &str, expires_at: i64) -> Result<()> {
+        if let Some(token) = self
+            .tokens
+            .iter_mut()
+            .find(|token| token.id == id && token.expires_at.is_some())
+        {
+            token.expires_at = Some(expires_at);
+        }
+        Ok(())
+    }
+
     pub fn revoke_token(&mut self, id: &str, owner: Option<&str>) -> Result<AuthTokenRecord> {
         let index = self
             .tokens

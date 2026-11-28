@@ -50,7 +50,8 @@
   them, and **Open *target* in PSF Studio** works on servers with sign-in
   too. **API tokens** in Settings lists each connection; **Revoke** signs it
   out. A connection can read, and save Studio documents when your account is
-  an editor, and nothing else.
+  an editor, and nothing else. It stays while PSF Studio uses it and ends
+  after 90 days unused.
 - PSF Studio saves its documents to the project a few seconds after you stop
   editing, with the file an external editor saved and, unless you turn off
   **Also save to the project**, its exports. Another computer opens the same

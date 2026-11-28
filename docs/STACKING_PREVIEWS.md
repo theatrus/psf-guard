@@ -549,8 +549,10 @@ Install PSF Studio on the computer you browse from.
    **Connect PSF Studio** page in your browser. Sign in if you need to,
    check that the page shows the same code, and click **Allow**.
 
-PSF Studio keeps its connection in the macOS Keychain for 90 days. The
-connection can read projects, targets and stacks, and save Studio documents
+PSF Studio keeps its connection in the macOS Keychain. The connection stays
+while PSF Studio uses it: each day it is used, the server moves its expiry
+to 90 days later, so it ends only after 90 days unused. The connection can
+read projects, targets and stacks, and save Studio documents
 and their exports to projects. It cannot grade frames, change plans, sync or
 manage databases. With a read-only account, PSF Studio saves documents on
 its own computer only.

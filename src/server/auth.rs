@@ -121,6 +121,23 @@ pub(crate) struct TokenGrant {
     pub scope: TokenScope,
     /// The role of the token's user, which a Studio token's writes follow.
     pub user_role: AccessRole,
+    /// A Studio token this use renewed: its id and new expiry, which the
+    /// registry file still needs.
+    pub renewed: Option<(String, i64)>,
+}
+
+/// How long after its last renewal a Studio token in use is renewed again,
+/// so a busy connection writes the registry at most once a day.
+const STUDIO_RENEW_SECONDS: i64 = 86_400;
+
+/// The expiry a Studio token used at `now` moves to, when it is due for
+/// renewal: 90 days from now, once a day at most. `None` when it is not
+/// due, or never expires.
+fn studio_renewal(expires_at: Option<i64>, now: i64) -> Option<i64> {
+    let lifetime = i64::from(super::studio_connect::STUDIO_TOKEN_DAYS) * 86_400;
+    let renewed = now + lifetime;
+    expires_at.filter(|expires_at| renewed - *expires_at >= STUDIO_RENEW_SECONDS)?;
+    Some(renewed)
 }
 
 /// A freshly minted token. The `token` field is the only time the secret
@@ -415,15 +432,27 @@ impl ServerAuth {
 
     /// Resolve a bearer token to the user and role it grants now. An expired
     /// token, a token whose user is gone, or an unknown secret answer `None`.
+    ///
+    /// A Studio token renews as it is used: its expiry moves to 90 days from
+    /// now, once a day at most. The change is made here at once, so other
+    /// requests do not renew it again; [`Self::keep_token_expiry`] writes it
+    /// to the registry file.
     pub(crate) fn token_access(&self, secret: &str) -> Option<TokenGrant> {
         let now = crate::auth_registry::unix_now();
+        let mut renewed = None;
         let token = {
-            let tokens = self.tokens.read().unwrap();
-            tokens
-                .iter()
+            let mut tokens = self.tokens.write().unwrap();
+            let token = tokens
+                .iter_mut()
                 .find(|token| token.matches(secret))
-                .filter(|token| !token.is_expired_at(now))
-                .cloned()?
+                .filter(|token| !token.is_expired_at(now))?;
+            if token.scope == TokenScope::Studio
+                && let Some(expires_at) = studio_renewal(token.expires_at, now)
+            {
+                token.expires_at = Some(expires_at);
+                renewed = Some((token.id.clone(), expires_at));
+            }
+            token.clone()
         };
         let user_role = self
             .users
@@ -442,6 +471,19 @@ impl ServerAuth {
             role,
             scope: token.scope,
             user_role,
+            renewed,
+        })
+    }
+
+    /// Writes a renewed token's expiry to the registry file.
+    pub(crate) fn keep_token_expiry(
+        &self,
+        registry_path: &FilePath,
+        id: &str,
+        expires_at: i64,
+    ) -> anyhow::Result<()> {
+        self.update_users(registry_path, |registry| {
+            registry.set_token_expiry(id, expires_at)
         })
     }
 
@@ -784,6 +826,18 @@ pub async fn authorize_api(
                 TokenScope::All => grant.role == AccessRole::ReadWrite,
                 TokenScope::Studio => grant.user_role == AccessRole::ReadWrite,
             };
+            if let Some((id, expires_at)) = grant.renewed.clone()
+                && let Ok(path) = super::handlers::require_registry_path(&state)
+            {
+                // The request goes on; the registry is written beside it.
+                let path = crate::auth_registry::AuthRegistry::path_for_database_registry(&path);
+                let auth = auth.clone();
+                tokio::task::spawn_blocking(move || {
+                    if let Err(error) = auth.keep_token_expiry(&path, &id, expires_at) {
+                        tracing::warn!("A Studio connection's renewal was not saved: {error}");
+                    }
+                });
+            }
             (grant.username, grant.role, true, grant.scope, studio_writes)
         } else {
             let Some(session) = session_from_headers(&auth, request.headers()) else {
@@ -1635,5 +1689,73 @@ mod tests {
             AuthRegistry::load(&path).unwrap().users[0].role,
             AccessRole::ReadWrite
         );
+    }
+
+    #[test]
+    fn a_studio_token_renews_as_it_is_used_once_a_day() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("auth.json");
+        let mut registry = AuthRegistry::default();
+        registry
+            .add(
+                AuthUserRecord::new("editor", AccessRole::ReadWrite, "editor-password").unwrap(),
+                false,
+            )
+            .unwrap();
+        let now = crate::auth_registry::unix_now();
+        let (studio_secret, mut studio) = AuthTokenRecord::mint_scoped(
+            "editor",
+            "PSF Studio on a Mac",
+            true,
+            Some(90),
+            TokenScope::Studio,
+        )
+        .unwrap();
+        // Last renewed ten days ago.
+        studio.expires_at = Some(now + 80 * 86_400);
+        let studio_id = studio.id.clone();
+        registry.add_token(studio).unwrap();
+        let (api_secret, mut api) =
+            AuthTokenRecord::mint_scoped("editor", "script", false, Some(90), TokenScope::All)
+                .unwrap();
+        api.expires_at = Some(now + 80 * 86_400);
+        registry.add_token(api).unwrap();
+        registry.save(&path).unwrap();
+        let auth = ServerAuth::from_sources(None, &registry, 3000)
+            .unwrap()
+            .unwrap();
+
+        let (id, renewed) = auth.token_access(&studio_secret).unwrap().renewed.unwrap();
+        assert_eq!(id, studio_id);
+        assert!((renewed - (now + 90 * 86_400)).abs() <= 2);
+        // The next request the same day does not renew it again.
+        assert!(auth.token_access(&studio_secret).unwrap().renewed.is_none());
+        // Only a Studio connection renews.
+        assert!(auth.token_access(&api_secret).unwrap().renewed.is_none());
+
+        auth.keep_token_expiry(&path, &id, renewed).unwrap();
+        let kept = AuthRegistry::load(&path).unwrap();
+        let token = kept
+            .tokens
+            .iter()
+            .find(|token| token.id == studio_id)
+            .unwrap();
+        assert_eq!(token.expires_at, Some(renewed));
+    }
+
+    #[test]
+    fn renewal_is_due_a_day_after_the_last() {
+        let day = 86_400;
+        let lifetime = 90 * day;
+        assert_eq!(studio_renewal(Some(1_000 + lifetime), 1_000), None);
+        assert_eq!(
+            studio_renewal(Some(1_000 + lifetime - day + 1), 1_000),
+            None
+        );
+        assert_eq!(
+            studio_renewal(Some(1_000 + lifetime - day), 1_000),
+            Some(1_000 + lifetime)
+        );
+        assert_eq!(studio_renewal(None, 1_000), None);
     }
 }
