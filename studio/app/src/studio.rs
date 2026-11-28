@@ -3,12 +3,15 @@ use crate::canvas::{ComputedMask, Layer, SceneParts};
 use crate::store_tiles::{BandState, BandStretch, Bands};
 use crate::studio_model::{CropRecord, Document, Place, Row, Split, Stroke, StrokeMode};
 use gpui::{
-    actions, prelude::*, px, rgb, size, App, Bounds, Context, KeyBinding, Menu, MenuItem,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, NativeView, Pixels, Point,
-    ScrollDelta, ScrollEvent, Window, WindowBounds, WindowOptions,
+    actions, prelude::*, px, size, App, Bounds, Context, KeyBinding, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollDelta, ScrollEvent, Window, WindowBounds,
+    WindowOptions,
 };
 
 actions!(studio, [Undo, Redo, Quit]);
+#[cfg(target_os = "macos")]
+use gpui::{rgb, Menu, MenuItem, NativeView};
+#[cfg(target_os = "macos")]
 use objc2::{
     class, msg_send,
     rc::{Allocated, Retained},
@@ -17,6 +20,7 @@ use objc2::{
 use psf_studio_render::{
     pane_rect, Frame, FrameStats, Output, Pane, ProbeSlot, Renderer, Sampled, View,
 };
+#[cfg(target_os = "macos")]
 use raw_window_handle::{
     AppKitDisplayHandle, AppKitWindowHandle, RawDisplayHandle, RawWindowHandle,
 };
@@ -25,6 +29,7 @@ use seiza_compose::picture::{FinishStep, LayerHeal, Picture, Segment, Transfer};
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
+#[cfg(target_os = "macos")]
 use std::ptr::NonNull;
 use std::rc::Rc;
 use std::sync::{Arc, Condvar, Mutex};
@@ -50,6 +55,7 @@ pub struct Options {
     /// Where to write how far the CPU render of the picture's sampled
     /// patches is from the canvas's, once the canvas has sampled them.
     pub parity_report: Option<PathBuf>,
+    #[cfg(target_os = "macos")]
     /// Whether Studio listens on its control socket, for `psf-studio-mcp`.
     pub control: bool,
 }
@@ -57,6 +63,7 @@ pub struct Options {
 impl Default for Options {
     fn default() -> Self {
         Self {
+            #[cfg(target_os = "macos")]
             control: true,
             bench_output: None,
             bench_frames: 600,
@@ -195,6 +202,7 @@ pub struct CanvasState {
     fitted: bool,
     /// The name of a capture to take on the next frame.
     pub capture: Option<String>,
+    #[cfg(target_os = "macos")]
     /// A capture the control socket asked for, by its number.
     pub control_capture: Option<u64>,
     /// Whether pixels at the peak are marked with stripes.
@@ -235,10 +243,18 @@ pub struct PictureRequest {
     /// Changes when anything that changes the combined picture does.
     id: u64,
     scene: Scene,
+    source_generation: u64,
+    crop: Option<[f32; 4]>,
     /// The top-left corner of each patch, in document pixels.
     patches: Vec<[u32; 2]>,
     /// Each patch's width and height, in document pixels.
     size: u32,
+}
+
+struct PictureSamples {
+    request: Arc<PictureRequest>,
+    nudges: [f64; MAX_LAYERS],
+    values: Arc<Vec<f32>>,
 }
 
 /// How many patches a sampling of the picture reads: an eight by eight grid.
@@ -282,6 +298,7 @@ impl CanvasState {
             crop: None,
             fitted: false,
             capture: None,
+            #[cfg(target_os = "macos")]
             control_capture: None,
             show_clipping: false,
             measure_gpu: false,
@@ -606,13 +623,16 @@ struct Shared {
     readout: Readout,
     /// The samples of the combined picture last read, with the id of the
     /// request they answer: set by the render thread, read by the UI.
-    picture: Option<(u64, Arc<Vec<f32>>)>,
+    picture: Option<Arc<PictureSamples>>,
     /// The samples of the final picture last read, likewise.
     final_picture: Option<(u64, Arc<Vec<f32>>)>,
     /// The preview last drawn, with the id of the request it answers.
     preview_image: Option<(u64, PreviewImage)>,
+    #[cfg(target_os = "macos")]
     /// The frame copied for the control socket, with its capture's number.
     control_captured: Option<(u64, psf_studio_render::Captured)>,
+    #[cfg(windows)]
+    next_image: Option<Arc<gpui::RenderImage>>,
     /// What the GPU could not draw of each pane's scene, as Seiza words it,
     /// with the scene's version: set by the render thread, read by the UI.
     gpu_left_out: Vec<(u64, Vec<String>)>,
@@ -657,7 +677,12 @@ impl CanvasHandle {
 
 /// Draws frames until the process exits. wgpu waits for the display here, so
 /// the UI thread never does.
-fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options) {
+fn render_thread(
+    handle: CanvasHandle,
+    mut renderer: Renderer,
+    options: Options,
+    #[cfg(windows)] image_ready: async_channel::Sender<()>,
+) {
     let (lock, wake) = &*handle.0;
     let mut canvas = CanvasState::new();
     let mut bench = options
@@ -672,7 +697,7 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
     // The sampling of the combined picture last delivered, and the scene
     // of the one under way, packed for the GPU.
     let mut sampled: Option<u64> = None;
-    let mut probe_scene: Option<(u64, GpuScene)> = None;
+    let mut probe_scene: Option<(u64, GpuScene, [f64; MAX_LAYERS])> = None;
     let mut final_scene: Option<(u64, GpuScene)> = None;
     let mut final_sampled: Option<u64> = None;
     let mut preview_scene: Option<(u64, GpuScene)> = None;
@@ -699,7 +724,10 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
             canvas.wipe = shared.canvas.wipe;
             canvas.crop = shared.canvas.crop;
             canvas.show_clipping = shared.canvas.show_clipping;
-            canvas.control_capture = shared.canvas.control_capture.take();
+            #[cfg(target_os = "macos")]
+            {
+                canvas.control_capture = shared.canvas.control_capture.take();
+            }
             if !shared.canvas.fitted && canvas.surface_size.0 > 1 {
                 canvas.fit();
                 shared.canvas.view = canvas.view;
@@ -782,9 +810,13 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
             show_clipping: canvas.show_clipping,
         };
         let capture = canvas.capture.take();
+        renderer.capture_next = capture.is_some() && options.capture_prefix.is_some();
+        #[cfg(target_os = "macos")]
         let control_capture = canvas.control_capture.take();
-        renderer.capture_next =
-            (capture.is_some() && options.capture_prefix.is_some()) || control_capture.is_some();
+        #[cfg(target_os = "macos")]
+        {
+            renderer.capture_next |= control_capture.is_some();
+        }
         let result = renderer.render(&frame);
         // A preview is drawn even while the window shows nothing.
         let mut preview_pending = false;
@@ -821,6 +853,7 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
                 previewed = None;
             }
         }
+        #[cfg(target_os = "macos")]
         if let Some(id) = control_capture {
             let mut shared = lock.lock().expect("canvas state");
             match renderer.captured.take() {
@@ -832,8 +865,9 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
                 }
             }
         }
+        let rendered = renderer.captured.take();
         if let (Some(name), Some(prefix), Some(captured)) =
-            (capture, &options.capture_prefix, renderer.captured.take())
+            (capture, &options.capture_prefix, rendered.as_ref())
         {
             let name: String = name
                 .chars()
@@ -846,6 +880,12 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
                 eprintln!("could not write {path}: {error}");
             }
         }
+        #[cfg(windows)]
+        if let Some(image) = rendered.and_then(windows_canvas::image) {
+            lock.lock().expect("canvas state").next_image = Some(image);
+            let _ = image_ready.try_send(());
+        }
+
         if std::mem::take(&mut canvas.measure_gpu) {
             canvas.gpu_frame_ms = Some(renderer.offscreen_frame_ms(40));
         }
@@ -916,23 +956,30 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
         if let Some(request) = canvas.probe.clone()
             && sampled != Some(request.id)
         {
-            if probe_scene.as_ref().is_none_or(|(id, _)| *id != request.id) {
-                let combined = request.scene.combined(&canvas.nudges());
-                probe_scene = Some((request.id, GpuScene::new(&combined, &canvas.inputs)));
+            if probe_scene
+                .as_ref()
+                .is_none_or(|(id, _, _)| *id != request.id)
+            {
+                let nudges = canvas.nudges();
+                let combined = request.scene.combined(&nudges);
+                probe_scene = Some((request.id, GpuScene::new(&combined, &canvas.inputs), nudges));
             }
-            let scene = &probe_scene.as_ref().expect("the request's scene").1;
+            let (_, scene, nudges) = probe_scene.as_ref().expect("the request's scene");
             match renderer.sample_picture(
                 ProbeSlot::First,
                 request.id,
                 scene,
-                canvas.crop,
+                request.crop,
                 &request.patches,
                 request.size,
             ) {
                 Sampled::Ready(samples) => {
                     sampled = Some(request.id);
-                    lock.lock().expect("canvas state").picture =
-                        Some((request.id, Arc::new(samples)));
+                    lock.lock().expect("canvas state").picture = Some(Arc::new(PictureSamples {
+                        request,
+                        nudges: *nudges,
+                        values: Arc::new(samples),
+                    }));
                 }
                 Sampled::Pending { .. } => animate = true,
             }
@@ -980,9 +1027,13 @@ fn render_thread(handle: CanvasHandle, mut renderer: Renderer, options: Options)
 }
 
 pub struct Studio {
+    #[cfg(target_os = "macos")]
     native_view: NativeView,
+    #[cfg(target_os = "macos")]
     /// Keeps the `NSView` that wgpu draws into alive.
     _ns_view: Retained<AnyObject>,
+    #[cfg(windows)]
+    canvas_image: Option<Arc<gpui::RenderImage>>,
     canvas: CanvasHandle,
     canvas_bounds: Rc<Cell<Bounds<Pixels>>>,
     /// Where each slider was last drawn, made as a slider is first drawn.
@@ -1039,6 +1090,7 @@ pub struct Studio {
     scene_version: u64,
     /// The thread that builds the canvas's scenes.
     scene_worker: scene_worker::SceneWorker,
+    #[cfg(target_os = "macos")]
     /// The control socket `psf-studio-mcp` drives Studio through.
     control: Option<control::Control>,
     /// Counts the changes to the bands' samples, so the scene worker makes
@@ -1137,10 +1189,12 @@ impl Studio {
             server_documents::quit_after_saving(cx);
             false
         });
+        #[cfg(target_os = "macos")]
         let control_wanted = options.control;
         let parity_report = options.parity_report.clone();
         // SAFETY: `NSView` is an AppKit class, windows are opened on the main
         // thread, and the new view is in no other view hierarchy.
+        #[cfg(target_os = "macos")]
         let (native_view, ns_view) = unsafe {
             let view: Allocated<AnyObject> = msg_send![class!(NSView), alloc];
             let view: Retained<AnyObject> = msg_send![view, init];
@@ -1148,6 +1202,7 @@ impl Studio {
                 .expect("macOS windows composite native views");
             (native_view, view)
         };
+        #[cfg(target_os = "macos")]
         native_view.set_background(rgb(0x08080a), cx);
 
         let canvas = CanvasHandle(Arc::new((
@@ -1160,8 +1215,11 @@ impl Studio {
                 picture: None,
                 final_picture: None,
                 preview_image: None,
+                #[cfg(target_os = "macos")]
                 control_captured: None,
                 gpu_left_out: Vec::new(),
+                #[cfg(windows)]
+                next_image: None,
             }),
             Condvar::new(),
         )));
@@ -1169,6 +1227,7 @@ impl Studio {
         let instance = wgpu::Instance::default();
         // SAFETY: the view outlives the surface, because `Studio` holds both
         // and drops the renderer's owner, `canvas`, with itself.
+        #[cfg(target_os = "macos")]
         let surface = unsafe {
             instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
                 raw_display_handle: Some(RawDisplayHandle::AppKit(AppKitDisplayHandle::new())),
@@ -1176,7 +1235,13 @@ impl Studio {
                     NonNull::from(&*ns_view).cast(),
                 )),
             })
-        };
+        }
+        .map(Some)
+        .map_err(|error| error.to_string());
+        #[cfg(windows)]
+        let surface = Ok(None);
+        #[cfg(windows)]
+        let (image_ready, images) = async_channel::bounded(1);
         let workers = std::thread::available_parallelism()
             .map(|count| count.get().saturating_sub(4).max(2))
             .unwrap_or(4);
@@ -1232,7 +1297,6 @@ impl Studio {
         let bands = band_info.len();
         let mut levels = 1;
         let renderer = surface
-            .map_err(|error| error.to_string())
             .and_then(|surface| Ok((surface, output(&options)?, source?)))
             .and_then(|(surface, output, source)| {
                 pollster::block_on(Renderer::new(
@@ -1257,14 +1321,33 @@ impl Studio {
                 let handle = canvas.clone();
                 std::thread::Builder::new()
                     .name("canvas".into())
-                    .spawn(move || render_thread(handle, renderer, options))
+                    .spawn(move || {
+                        render_thread(
+                            handle,
+                            renderer,
+                            options,
+                            #[cfg(windows)]
+                            image_ready,
+                        )
+                    })
                     .expect("spawning the render thread");
             }
             Err(error) => canvas.0 .0.lock().expect("canvas state").readout.error = Some(error),
         }
 
+        #[cfg(windows)]
+        cx.spawn(async move |this, cx| {
+            while images.recv().await.is_ok() {
+                if this.update(cx, |_, cx| cx.notify()).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+
         // Requests from the control socket are answered within a few
         // frames, as a person's clicks are.
+        #[cfg(target_os = "macos")]
         cx.spawn(async move |this, cx| loop {
             cx.background_executor()
                 .timer(Duration::from_millis(25))
@@ -1302,9 +1385,12 @@ impl Studio {
                 // Every change is kept: the document is saved as soon as it
                 // differs from the file.
                 this.save_document();
-                // SAFETY: the view is alive and this runs on the main thread.
-                let layer = unsafe { layer_description(&this._ns_view) };
-                this.canvas.0 .0.lock().expect("canvas state").readout.layer = layer;
+                #[cfg(target_os = "macos")]
+                {
+                    // SAFETY: the view is alive and this runs on the main thread.
+                    let layer = unsafe { layer_description(&this._ns_view) };
+                    this.canvas.0 .0.lock().expect("canvas state").readout.layer = layer;
+                }
                 cx.notify();
             });
             if updated.is_err() {
@@ -1318,8 +1404,12 @@ impl Studio {
         adopt(&mut document);
         let scene_worker = scene_worker::SceneWorker::start(canvas.clone());
         let mut studio = Self {
+            #[cfg(target_os = "macos")]
             native_view,
+            #[cfg(target_os = "macos")]
             _ns_view: ns_view,
+            #[cfg(windows)]
+            canvas_image: None,
             canvas,
             canvas_bounds: Rc::default(),
             slider_bounds: RefCell::default(),
@@ -1348,6 +1438,7 @@ impl Studio {
             stroke: None,
             scene_version: 0,
             scene_worker,
+            #[cfg(target_os = "macos")]
             control: control_wanted.then(control::Control::start).flatten(),
             bands_generation: 0,
             base_bands: band_info.clone(),
@@ -1640,10 +1731,10 @@ impl Studio {
         }
     }
 
-    fn scroll(&mut self, event: &ScrollEvent, _: &mut Window, _: &mut Context<Self>) {
+    fn scroll(&mut self, event: &ScrollEvent, _: &mut Window, cx: &mut Context<Self>) {
         let anchor = self.to_document(event.position);
         let scale_factor = self.scale_factor as f64;
-        let (delta, zooms) = (event.delta, event.modifiers.platform);
+        let (delta, zooms) = (event.delta, event.modifiers.secondary(cx));
         self.canvas.edit(|canvas| match delta {
             // A trackpad scroll pans; with a modifier, or from a wheel, it zooms.
             ScrollDelta::Pixels(delta) if !zooms => {
@@ -1727,6 +1818,7 @@ impl Studio {
     }
 }
 
+#[cfg(target_os = "macos")]
 #[link(name = "CoreGraphics", kind = "framework")]
 unsafe extern "C" {
     fn CGColorSpaceCopyName(space: *const std::ffi::c_void) -> *mut AnyObject;
@@ -1738,6 +1830,7 @@ unsafe extern "C" {
 /// # Safety
 ///
 /// `view` must be a live `NSView`, and the call must be on the main thread.
+#[cfg(target_os = "macos")]
 unsafe fn layer_description(view: &AnyObject) -> Option<String> {
     unsafe {
         let root: *mut AnyObject = msg_send![view, layer];
@@ -1789,6 +1882,10 @@ unsafe fn layer_description(view: &AnyObject) -> Option<String> {
 fn output(options: &Options) -> Result<Output, String> {
     use psf_studio_render::WorkingSpace;
     use wgpu::{SurfaceColorSpace, TextureFormat};
+    #[cfg(windows)]
+    if !matches!(options.output.as_str(), "" | "srgb8") {
+        return Err("The Windows canvas uses sRGB. Use --output srgb8.".into());
+    }
     let (format, color_space, display) = match options.output.as_str() {
         "" | "srgb8" => (None, SurfaceColorSpace::Auto, WorkingSpace::Srgb),
         "p3-8" => (None, SurfaceColorSpace::DisplayP3, WorkingSpace::DisplayP3),
@@ -1832,6 +1929,11 @@ fn push(values: &mut VecDeque<f32>, value: f32) {
     values.push_back(value);
 }
 
+#[cfg(windows)]
+pub fn queue_link(link: String) {
+    open::keep_links(vec![link]);
+}
+
 pub fn run(options: Options) {
     let application = gpui_platform::application();
     // A link from a PSF Guard page, whether it starts the program or
@@ -1839,13 +1941,21 @@ pub fn run(options: Options) {
     application.on_open_urls(open::keep_links);
     application.run(move |cx: &mut App| {
         // Undo and Redo, from the keyboard and the Edit menu.
+        #[cfg(target_os = "macos")]
         cx.bind_keys([
             KeyBinding::new("cmd-z", Undo, None),
             KeyBinding::new("cmd-shift-z", Redo, None),
             KeyBinding::new("cmd-q", Quit, None),
         ]);
+        #[cfg(windows)]
+        cx.bind_keys([
+            KeyBinding::new("ctrl-z", Undo, None),
+            KeyBinding::new("ctrl-y", Redo, None),
+            KeyBinding::new("ctrl-shift-z", Redo, None),
+        ]);
         // The document is saved here and on its server first.
         cx.on_action(|_: &Quit, cx| server_documents::quit_after_saving(cx));
+        #[cfg(target_os = "macos")]
         cx.set_menus(vec![
             Menu {
                 name: "PSF Studio".into(),
@@ -1862,11 +1972,16 @@ pub fn run(options: Options) {
             },
         ]);
         // The canvas is 1920 x 1080 points: a 4K surface on a 2x display.
-        let bounds = Bounds::centered(
-            None,
-            size(px(1920.0 + PANEL_WIDTH + STEPS_WIDTH), px(1080.0 + 48.0)),
-            cx,
-        );
+        let dimensions = size(px(1920.0 + PANEL_WIDTH + STEPS_WIDTH), px(1080.0 + 48.0));
+        #[cfg(windows)]
+        let dimensions = cx.primary_display().map_or(dimensions, |display| {
+            let available = display.bounds().size;
+            size(
+                dimensions.width.min(available.width * 0.9),
+                dimensions.height.min(available.height * 0.9),
+            )
+        });
+        let bounds = Bounds::centered(None, dimensions, cx);
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -1886,6 +2001,7 @@ fn adopt(document: &mut Document) {
     document.list_palette_layers_top_down();
 }
 
+#[cfg(target_os = "macos")]
 #[path = "control.rs"]
 mod control;
 #[path = "editor.rs"]
@@ -1924,3 +2040,6 @@ mod tools;
 mod tree;
 #[path = "widgets.rs"]
 mod widgets;
+#[cfg(windows)]
+#[path = "windows_canvas.rs"]
+mod windows_canvas;

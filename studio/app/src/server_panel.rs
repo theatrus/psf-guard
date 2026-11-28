@@ -233,8 +233,28 @@ fn connect(
     }
 }
 
+#[cfg(target_os = "macos")]
 fn open_in_browser(url: &str) {
     let _ = std::process::Command::new("open").arg(url).spawn();
+}
+
+#[cfg(windows)]
+fn open_in_browser(url: &str) {
+    use std::ptr::null;
+    use windows_sys::Win32::UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL};
+
+    let url: Vec<u16> = url.encode_utf16().chain([0]).collect();
+    // SAFETY: the URL is a live NUL-terminated string and the other parameters are optional.
+    unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            null(),
+            url.as_ptr(),
+            null(),
+            null(),
+            SW_SHOWNORMAL,
+        )
+    };
 }
 
 /// A link's target, waiting for the person to accept the account its ticket
@@ -544,6 +564,7 @@ impl Studio {
 
     /// Resolves a conflict, as **Save as a copy** or **Open the newer
     /// version** does.
+    #[cfg(target_os = "macos")]
     pub(super) fn control_resolve_conflict(
         &mut self,
         params: &serde_json::Value,
@@ -902,14 +923,14 @@ impl Studio {
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
                 let keystroke = &event.keystroke;
                 let field = &mut this.servers.address;
-                if keystroke.modifiers.platform && keystroke.key == "v" {
+                if keystroke.modifiers.secondary(cx) && keystroke.key == "v" {
                     if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
                         field.push_str(text.trim());
                     }
-                } else if keystroke.modifiers.platform && keystroke.key == "c" {
+                } else if keystroke.modifiers.secondary(cx) && keystroke.key == "c" {
                     cx.write_to_clipboard(ClipboardItem::new_string(field.clone()));
                 } else if keystroke.key == "backspace" {
-                    if keystroke.modifiers.alt || keystroke.modifiers.platform {
+                    if keystroke.modifiers.alt || keystroke.modifiers.secondary(cx) {
                         field.clear();
                     } else {
                         field.pop();
@@ -920,7 +941,7 @@ impl Studio {
                     }
                 } else if keystroke.key == "escape" {
                     this.servers.open = false;
-                } else if !keystroke.modifiers.platform
+                } else if !keystroke.modifiers.secondary(cx)
                     && !keystroke.modifiers.control
                     && let Some(typed) = &keystroke.key_char
                 {
@@ -1534,6 +1555,7 @@ impl Studio {
 }
 
 /// The control socket's view of the panel, for `psf-studio-mcp`.
+#[cfg(target_os = "macos")]
 impl Studio {
     /// The servers, the connect under way, and what is chosen and listed.
     pub(super) fn control_servers(&self) -> serde_json::Value {

@@ -312,6 +312,7 @@ impl Late {
 impl Studio {
     /// Whether a tool's result is being read, or one the document has is
     /// waiting to be.
+    #[cfg(target_os = "macos")]
     pub(super) fn late_reading(&self) -> bool {
         if self.late.reading.is_some() {
             return true;

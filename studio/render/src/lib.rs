@@ -1,6 +1,6 @@
 //! The render half of the PSF-Studio canvas: a tiled, many-band document
 //! drawn with Seiza's GPU compositor. It knows nothing about the window
-//! toolkit; the host hands it a `wgpu::Surface`.
+//! toolkit. It draws either to a surface or to a captured image.
 
 pub mod display;
 mod renderer;

@@ -3860,9 +3860,12 @@ name = "psf-studio"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-channel",
+ "dirs",
  "gpui",
  "gpui_platform",
  "half",
+ "image",
  "objc2 0.6.5",
  "png 0.17.16",
  "pollster 0.4.0",
@@ -3878,11 +3881,13 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.1",
+ "smallvec",
  "tempfile",
  "thiserror",
  "ureq",
  "uuid",
  "wgpu 30.0.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

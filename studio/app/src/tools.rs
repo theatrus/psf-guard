@@ -146,6 +146,7 @@ pub(super) struct Tools {
 /// The program of the PSF Guard app this Studio ships inside: from
 /// `PSF Guard.app/Contents/Helpers/PSF Studio.app/Contents/MacOS/psf-studio`,
 /// `PSF Guard.app/Contents/MacOS/psf-guard`. `None` for a Studio on its own.
+#[cfg(any(target_os = "macos", test))]
 fn enclosing_psf_guard(executable: &std::path::Path) -> Option<PathBuf> {
     let studio_app = executable.parent()?.parent()?.parent()?;
     let helpers = studio_app.parent()?;
@@ -154,6 +155,70 @@ fn enclosing_psf_guard(executable: &std::path::Path) -> Option<PathBuf> {
     }
     let program = helpers.parent()?.join("MacOS").join("psf-guard");
     program.is_file().then_some(program)
+}
+
+#[cfg(windows)]
+fn windows_psf_guard(folder: &std::path::Path) -> Option<PathBuf> {
+    ["psf-guard-cli.exe", "psf-guard.exe"]
+        .into_iter()
+        .map(|name| folder.join(name))
+        .find(|path| path.is_file())
+}
+
+fn nearby_psf_guard(executable: &std::path::Path) -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        windows_psf_guard(executable.parent()?)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let beside = executable.with_file_name("psf-guard");
+        beside
+            .is_file()
+            .then_some(beside)
+            .or_else(|| enclosing_psf_guard(executable))
+    }
+}
+
+fn psf_guard_on_path() -> PathBuf {
+    #[cfg(windows)]
+    {
+        std::env::var_os("PATH")
+            .as_ref()
+            .and_then(|path| {
+                std::env::split_paths(path).find_map(|folder| windows_psf_guard(&folder))
+            })
+            .unwrap_or_else(|| PathBuf::from("psf-guard-cli.exe"))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        PathBuf::from("psf-guard")
+    }
+}
+
+#[cfg(windows)]
+fn hide_console(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+fn stop_process_tree(process: u32) {
+    #[cfg(unix)]
+    let _ = Command::new("kill")
+        .arg("-TERM")
+        .arg(format!("-{process}"))
+        .status();
+    #[cfg(windows)]
+    {
+        let mut command = Command::new("taskkill.exe");
+        hide_console(&mut command);
+        let _ = command
+            .args(["/F", "/T", "/PID", &process.to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
 }
 
 impl Tools {
@@ -167,17 +232,16 @@ impl Tools {
             .psf_guard
             .clone()
             .or_else(|| std::env::var_os("PSF_GUARD").map(PathBuf::from))
-            .or_else(|| {
-                let beside = std::env::current_exe().ok()?.with_file_name("psf-guard");
-                beside.is_file().then_some(beside)
-            })
-            .or_else(|| enclosing_psf_guard(&std::env::current_exe().ok()?))
-            .unwrap_or_else(|| PathBuf::from("psf-guard"));
+            .or_else(|| nearby_psf_guard(&std::env::current_exe().ok()?))
+            .unwrap_or_else(psf_guard_on_path);
         {
             let binary = binary_path.clone();
             let listing = listing.clone();
             std::thread::spawn(move || {
-                let listed = Command::new(&binary)
+                let mut command = Command::new(&binary);
+                #[cfg(windows)]
+                hide_console(&mut command);
+                let listed = command
                     .arg("studio-tools")
                     .output()
                     .map_err(|error| format!("{} did not start: {error}", binary.display()))
@@ -938,10 +1002,7 @@ impl Studio {
         if let Some(process) = run.process {
             // The program runs in a process group of its own, with the
             // tools it starts, so the whole group is stopped.
-            let _ = Command::new("kill")
-                .arg("-TERM")
-                .arg(format!("-{process}"))
-                .status();
+            stop_process_tree(process);
         }
     }
 
@@ -1644,6 +1705,8 @@ pub(super) fn run_program(run: &Arc<Mutex<Run>>, mut command: Command) -> Result
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
+    #[cfg(windows)]
+    hide_console(&mut command);
     let child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1656,10 +1719,7 @@ pub(super) fn run_program(run: &Arc<Mutex<Run>>, mut command: Command) -> Result
                 state.process = Some(child.id());
                 // A stop asked for before the program started.
                 if state.stopped {
-                    let _ = Command::new("kill")
-                        .arg("-TERM")
-                        .arg(format!("-{}", child.id()))
-                        .status();
+                    stop_process_tree(child.id());
                 }
             }
             // Both pipes are read at once: a program that fills one while
@@ -2085,6 +2145,20 @@ fn take_in_inputs(document: &mut crate::studio_model::Document, names: &[String]
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_studio_prefers_the_cli_next_to_it() {
+        let folder = tempfile::tempdir().unwrap();
+        let studio = folder.path().join("psf-studio.exe");
+        let app = folder.path().join("psf-guard.exe");
+        let cli = folder.path().join("psf-guard-cli.exe");
+        assert_eq!(nearby_psf_guard(&studio), None);
+        std::fs::write(&app, []).unwrap();
+        assert_eq!(nearby_psf_guard(&studio), Some(app));
+        std::fs::write(&cli, []).unwrap();
+        assert_eq!(nearby_psf_guard(&studio), Some(cli));
+    }
 
     #[test]
     fn a_studio_inside_psf_guard_runs_psf_guard_s_program() {

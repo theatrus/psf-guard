@@ -2733,20 +2733,29 @@ impl Studio {
             self.final_samples = Some((id, samples));
             self.update_histogram();
         }
-        let Some((id, samples)) = self.canvas.read(|shared| shared.picture.clone()) else {
+        let Some(samples) = self.canvas.read(|shared| shared.picture.clone()) else {
             return;
         };
+        let id = samples.request.id;
+        let report = if self.picture_wanted == Some(id)
+            && samples.request.source_generation == self.source_generation
+        {
+            self.parity_report.take()
+        } else {
+            None
+        };
+        if let Some(report) = &report {
+            self.write_parity_report(report.clone(), samples.clone());
+        }
         if self
             .picture_samples
             .as_ref()
             .is_some_and(|(known, _)| *known == id)
+            && report.is_none()
         {
             return;
         }
-        self.picture_samples = Some((id, samples.clone()));
-        if let Some(report) = self.parity_report.take() {
-            self.write_parity_report(report, samples);
-        }
+        self.picture_samples = Some((id, samples.values.clone()));
         self.refresh_canvas();
     }
 
@@ -2799,6 +2808,7 @@ impl Studio {
             picture_samples: self.picture_samples.clone(),
             scene_version: self.scene_version,
             histogram_wanted: self.histogram_wanted(),
+            parity_wanted: self.parity_report.is_some() && self.band_info.store.is_some(),
             source_generation: self.source_generation,
             crop: self.crop_rect(),
             document_size: (width, height),
@@ -3585,14 +3595,14 @@ impl Studio {
                         let Some(field) = this.renaming.as_mut() else {
                             return;
                         };
-                        if keystroke.modifiers.platform && keystroke.key == "v" {
+                        if keystroke.modifiers.secondary(cx) && keystroke.key == "v" {
                             if let Some(text) =
                                 cx.read_from_clipboard().and_then(|item| item.text())
                             {
                                 field.push_str(text.trim());
                             }
                         } else if keystroke.key == "backspace" {
-                            if keystroke.modifiers.alt || keystroke.modifiers.platform {
+                            if keystroke.modifiers.alt || keystroke.modifiers.secondary(cx) {
                                 field.clear();
                             } else {
                                 field.pop();
@@ -3605,7 +3615,7 @@ impl Studio {
                             }
                         } else if keystroke.key == "escape" {
                             this.renaming = None;
-                        } else if !keystroke.modifiers.platform
+                        } else if !keystroke.modifiers.secondary(cx)
                             && !keystroke.modifiers.control
                             && let Some(letters) = &keystroke.key_char
                         {
@@ -3991,6 +4001,10 @@ impl Render for Studio {
         let handle = self.canvas.clone();
         let canvas_bounds = self.canvas_bounds.clone();
 
+        #[cfg(target_os = "macos")]
+        let bitmap = Some(self.native_view.clone().into_any_element());
+        #[cfg(windows)]
+        let bitmap = self.windows_canvas(window);
         let server_panel = self.server_panel(window, cx);
         div()
             .size_full()
@@ -4026,9 +4040,9 @@ impl Render for Studio {
                                 .flex_1()
                                 .w_full()
                                 .relative()
-                                .child(self.native_view.clone())
+                                .children(bitmap)
                                 .child(
-                                    // In front of the native view, so
+                                    // In front of the picture, so
                                     // GPUI receives the mouse there. It
                                     // also reports the canvas's size.
                                     div()

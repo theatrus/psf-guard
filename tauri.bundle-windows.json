@@ -1,9 +1,22 @@
 {
   "$schema": "https://schema.tauri.app/config/2.0.0",
+  "build": {
+    "beforeBuildCommand": {
+      "script": "node scripts/build-studio-windows.mjs",
+      "cwd": "."
+    }
+  },
   "bundle": {
+    "resources": {
+      "studio/target/windows-bundle/psf-studio.exe": "psf-studio.exe"
+    },
     "windows": {
       "nsis": {
         "installerHooks": "nsis/hooks.nsh"
+      },
+      "wix": {
+        "fragmentPaths": ["packaging/windows/studio.wxs"],
+        "componentRefs": ["StudioProtocol", "StudioStartMenuShortcut"]
       }
     }
   }

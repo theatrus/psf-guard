@@ -675,18 +675,30 @@ pub enum StudioFrom {
     },
 }
 
-/// The PSF Studio that ships inside this PSF Guard app, at
-/// `PSF Guard.app/Contents/Helpers/PSF Studio.app`, when this program is
-/// that app's.
+/// The PSF Studio app inside PSF Guard on macOS, or the executable next to
+/// PSF Guard on Windows.
 pub fn bundled_studio() -> Option<PathBuf> {
     studio_beside(&std::env::current_exe().ok()?)
 }
 
 /// The Studio in the app whose program is `executable`.
-fn studio_beside(executable: &Path) -> Option<PathBuf> {
+#[cfg(any(not(windows), test))]
+fn macos_studio_in_app(executable: &Path) -> Option<PathBuf> {
     let contents = executable.parent()?.parent()?;
     let studio = contents.join("Helpers").join("PSF Studio.app");
     studio.is_dir().then_some(studio)
+}
+
+fn studio_beside(executable: &Path) -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        let studio = executable.with_file_name("psf-studio.exe");
+        studio.is_file().then_some(studio)
+    }
+    #[cfg(not(windows))]
+    {
+        macos_studio_in_app(executable)
+    }
 }
 
 /// Tells macOS that the bundled PSF Studio opens `psf-studio://` links, so
@@ -904,6 +916,17 @@ mod tests {
         assert_eq!(of("integration"), None);
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn studio_can_share_a_windows_folder_with_the_guard_cli() {
+        let folder = tempfile::tempdir().unwrap();
+        let guard = folder.path().join("psf-guard-cli.exe");
+        let studio = folder.path().join("psf-studio.exe");
+        assert_eq!(super::studio_beside(&guard), None);
+        std::fs::write(&studio, []).unwrap();
+        assert_eq!(super::studio_beside(&guard), Some(studio));
+    }
+
     #[test]
     fn the_bundled_studio_is_inside_the_app() {
         let folder = tempfile::tempdir().unwrap();
@@ -911,12 +934,12 @@ mod tests {
         std::fs::create_dir_all(contents.join("Helpers/PSF Studio.app")).unwrap();
         std::fs::create_dir_all(contents.join("MacOS")).unwrap();
         assert_eq!(
-            super::studio_beside(&contents.join("MacOS/psf-guard")),
+            super::macos_studio_in_app(&contents.join("MacOS/psf-guard")),
             Some(contents.join("Helpers/PSF Studio.app"))
         );
         // A program outside an app has none.
         assert_eq!(
-            super::studio_beside(&folder.path().join("bin/psf-guard")),
+            super::macos_studio_in_app(&folder.path().join("bin/psf-guard")),
             None
         );
     }
