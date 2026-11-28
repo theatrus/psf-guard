@@ -2733,20 +2733,29 @@ impl Studio {
             self.final_samples = Some((id, samples));
             self.update_histogram();
         }
-        let Some((id, samples)) = self.canvas.read(|shared| shared.picture.clone()) else {
+        let Some(samples) = self.canvas.read(|shared| shared.picture.clone()) else {
             return;
         };
+        let id = samples.request.id;
+        let report = if self.picture_wanted == Some(id)
+            && samples.request.source_generation == self.source_generation
+        {
+            self.parity_report.take()
+        } else {
+            None
+        };
+        if let Some(report) = &report {
+            self.write_parity_report(report.clone(), samples.clone());
+        }
         if self
             .picture_samples
             .as_ref()
             .is_some_and(|(known, _)| *known == id)
+            && report.is_none()
         {
             return;
         }
-        self.picture_samples = Some((id, samples.clone()));
-        if let Some(report) = self.parity_report.take() {
-            self.write_parity_report(report, samples);
-        }
+        self.picture_samples = Some((id, samples.values.clone()));
         self.refresh_canvas();
     }
 

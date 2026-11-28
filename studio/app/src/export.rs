@@ -511,21 +511,15 @@ impl Studio {
     /// Renders the patches the canvas sampled on the CPU, compares them with
     /// the canvas's samples, and writes how far apart they are to `report`,
     /// on a thread of its own.
-    pub(super) fn write_parity_report(&mut self, report: PathBuf, gpu: Arc<Vec<f32>>) {
+    pub(super) fn write_parity_report(&self, report: PathBuf, gpu: Arc<super::PictureSamples>) {
         let Some(store) = self.store_path().map(Path::to_path_buf) else {
             return;
         };
-        // The scene the canvas sampled, the final picture's layers, is
-        // built on the check's thread.
-        let document = self.document.clone();
-        let band_info = self.band_info.clone();
-        let view_stretch = self.view_stretch_stages();
-        let scene_version = self.scene_version;
         let (width, height) = self.canvas.read(|shared| shared.canvas.document_size);
-        let rect = self
-            .crop_rect()
+        let rect = gpu
+            .request
+            .crop
             .unwrap_or([0.0, 0.0, width as f32, height as f32]);
-        let (patches, size) = super::picture_patches(rect);
         let [left, top, right, bottom] = rect.map(|value| value.max(0.0) as u32);
         let region = within(
             [
@@ -537,21 +531,18 @@ impl Studio {
             (width, height),
         );
         let planes = self.derived.clone();
-        let resolved = self.scene_worker.resolved();
         std::thread::spawn(move || {
-            let (mut probe, states) = scene(
-                &document,
-                &band_info,
-                &Place::Final.view(),
-                scene_version,
-                None,
-                &mut crate::output_stretch::ResolvedChains::from_resolved(&resolved),
-                &view_stretch,
-            );
-            probe.stretches = Arc::new(band_info.stretches(&states).unwrap_or_default());
-            let combined = probe.combined(&[]);
-            let text = parity(&combined, &store, &planes, region, &patches, size, &gpu)
-                .unwrap_or_else(|error| format!("{{\"error\": {error:?}}}"));
+            let combined = gpu.request.scene.combined(&gpu.nudges);
+            let text = parity(
+                &combined,
+                &store,
+                &planes,
+                region,
+                &gpu.request.patches,
+                gpu.request.size,
+                &gpu.values,
+            )
+            .unwrap_or_else(|error| format!("{{\"error\": {error:?}}}"));
             if let Err(error) = std::fs::write(&report, text) {
                 eprintln!("could not write {}: {error}", report.display());
             }

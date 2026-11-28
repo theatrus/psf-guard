@@ -600,6 +600,8 @@ fn build(
             final_probe = Some(Some(Arc::new(PictureRequest {
                 id,
                 scene,
+                source_generation: job.source_generation,
+                crop: job.crop,
                 patches,
                 size,
             })));
@@ -669,6 +671,8 @@ fn picture_request(job: &SceneJob, caches: &mut Caches) -> Option<Option<Arc<Pic
     Some(Some(Arc::new(PictureRequest {
         id,
         scene,
+        source_generation: job.source_generation,
+        crop: job.crop,
         patches,
         size,
     })))

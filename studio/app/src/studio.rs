@@ -243,10 +243,18 @@ pub struct PictureRequest {
     /// Changes when anything that changes the combined picture does.
     id: u64,
     scene: Scene,
+    source_generation: u64,
+    crop: Option<[f32; 4]>,
     /// The top-left corner of each patch, in document pixels.
     patches: Vec<[u32; 2]>,
     /// Each patch's width and height, in document pixels.
     size: u32,
+}
+
+struct PictureSamples {
+    request: Arc<PictureRequest>,
+    nudges: [f64; MAX_LAYERS],
+    values: Arc<Vec<f32>>,
 }
 
 /// How many patches a sampling of the picture reads: an eight by eight grid.
@@ -615,7 +623,7 @@ struct Shared {
     readout: Readout,
     /// The samples of the combined picture last read, with the id of the
     /// request they answer: set by the render thread, read by the UI.
-    picture: Option<(u64, Arc<Vec<f32>>)>,
+    picture: Option<Arc<PictureSamples>>,
     /// The samples of the final picture last read, likewise.
     final_picture: Option<(u64, Arc<Vec<f32>>)>,
     /// The preview last drawn, with the id of the request it answers.
@@ -689,7 +697,7 @@ fn render_thread(
     // The sampling of the combined picture last delivered, and the scene
     // of the one under way, packed for the GPU.
     let mut sampled: Option<u64> = None;
-    let mut probe_scene: Option<(u64, GpuScene)> = None;
+    let mut probe_scene: Option<(u64, GpuScene, [f64; MAX_LAYERS])> = None;
     let mut final_scene: Option<(u64, GpuScene)> = None;
     let mut final_sampled: Option<u64> = None;
     let mut preview_scene: Option<(u64, GpuScene)> = None;
@@ -948,23 +956,30 @@ fn render_thread(
         if let Some(request) = canvas.probe.clone()
             && sampled != Some(request.id)
         {
-            if probe_scene.as_ref().is_none_or(|(id, _)| *id != request.id) {
-                let combined = request.scene.combined(&canvas.nudges());
-                probe_scene = Some((request.id, GpuScene::new(&combined, &canvas.inputs)));
+            if probe_scene
+                .as_ref()
+                .is_none_or(|(id, _, _)| *id != request.id)
+            {
+                let nudges = canvas.nudges();
+                let combined = request.scene.combined(&nudges);
+                probe_scene = Some((request.id, GpuScene::new(&combined, &canvas.inputs), nudges));
             }
-            let scene = &probe_scene.as_ref().expect("the request's scene").1;
+            let (_, scene, nudges) = probe_scene.as_ref().expect("the request's scene");
             match renderer.sample_picture(
                 ProbeSlot::First,
                 request.id,
                 scene,
-                canvas.crop,
+                request.crop,
                 &request.patches,
                 request.size,
             ) {
                 Sampled::Ready(samples) => {
                     sampled = Some(request.id);
-                    lock.lock().expect("canvas state").picture =
-                        Some((request.id, Arc::new(samples)));
+                    lock.lock().expect("canvas state").picture = Some(Arc::new(PictureSamples {
+                        request,
+                        nudges: *nudges,
+                        values: Arc::new(samples),
+                    }));
                 }
                 Sampled::Pending { .. } => animate = true,
             }
