@@ -103,6 +103,9 @@ pub struct Layer {
     /// Whether `color` is in the working space already: a channel of an
     /// image a tool made from the picture, which goes back as it came.
     pub working: bool,
+    /// A mask by brightness: of the band for a band layer, of what it
+    /// changes for an adjustment or a step, of what a group made.
+    pub range: Option<picture::RangeMask>,
 }
 
 /// One band a computed mask reads, stretched.
@@ -210,6 +213,7 @@ pub fn picture(parts: &SceneParts, stretches: &[Transfer]) -> Picture {
                 clip: layer.clip,
                 computed: layer.computed,
                 own: layer.own,
+                range: layer.range,
             }
         })
         .collect();
@@ -386,6 +390,7 @@ mod tests {
             adjustment: None,
             own: false,
             working: false,
+            range: None,
         }
     }
 
@@ -451,6 +456,7 @@ mod tests {
             opacity: 1.0,
             // A mask is left out: the histogram is of the picture's tones.
             mask: Some(0),
+            range: None,
         }];
         let finished = finished_samples(&brighter, 0.0, &rgb);
         assert!(finished[0] > rgb[0] * 1.5, "{finished:?}");

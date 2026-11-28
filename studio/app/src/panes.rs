@@ -830,17 +830,8 @@ fn push_step_layer(
     if !is_drawn(StageKind::Finish, step, bands) {
         return Pushed::Nothing;
     }
-    if !matches!(
-        layer.mask,
-        None | Some(MaskRecord::Painted(_)) | Some(MaskRecord::Shared { .. })
-    ) {
-        omitted.push(format!(
-            "{}, whose {} the canvas does not draw",
-            layer.name,
-            mask_kind(&layer.mask)
-        ));
-        return Pushed::Nothing;
-    }
+    // Every kind of mask on a layer is drawn: painted and shared here, a
+    // range mask on the entry once the stack is built.
     let before = parts.stacked.clone();
     let Some(kind) = finish_kind(step, stretches, context, &before, omitted) else {
         return Pushed::Nothing;
@@ -867,6 +858,7 @@ fn push_step_layer(
         kind: kind.clone(),
         opacity: layer.opacity,
         mask: None,
+        range: None,
     });
     parts.layers.push(Layer {
         mark: Mark::Step(parts.steps.len()),
@@ -916,11 +908,34 @@ fn push_tool_image(
     }
 }
 
-/// Whether the canvas draws a step's mask: none, or a painted one. A
-/// range mask or a shared mask on a step is kept in the document, and the
-/// step is left out rather than drawn over the whole picture.
+/// Whether the canvas draws a step's mask: none, a painted one or a range
+/// mask. A shared mask on a step is kept in the document, and the step is
+/// left out rather than drawn over the whole picture.
 fn draws_step_mask(mask: &Option<MaskRecord>) -> bool {
-    matches!(mask, None | Some(MaskRecord::Painted(_)))
+    matches!(
+        mask,
+        None | Some(MaskRecord::Painted(_)) | Some(MaskRecord::Range { .. })
+    )
+}
+
+/// The high end of a range mask that selects up to the brightest, however
+/// far above SDR white an HDR picture goes.
+pub(super) const RANGE_BRIGHTEST: f32 = 1.0e6;
+/// Where the To slider means the brightest.
+const RANGE_TOP_POSITION: f32 = 0.995;
+/// The widest feather the Softness slider gives.
+pub(super) const RANGE_MAX_FEATHER: f32 = 0.5;
+
+/// A record's range mask as Seiza draws it.
+fn range_of(mask: &Option<MaskRecord>) -> Option<seiza_compose::picture::RangeMask> {
+    match mask {
+        Some(MaskRecord::Range { low, high, feather }) => Some(seiza_compose::picture::RangeMask {
+            low: *low,
+            high: *high,
+            feather: *feather,
+        }),
+        _ => None,
+    }
 }
 
 /// The planes of the stars of red, green or blue stretched by the document's
@@ -1069,7 +1084,11 @@ pub(super) fn mask_words(document: &Document, mask: &Option<MaskRecord>) -> Opti
             "painted mask, {}",
             counted(mask.strokes.len(), "stroke")
         )),
-        Some(MaskRecord::Range { .. }) => Some("range mask".to_string()),
+        Some(MaskRecord::Range { low, high, .. }) => Some(if *high >= RANGE_BRIGHTEST {
+            format!("brightness above {low:.2}")
+        } else {
+            format!("brightness {low:.2} to {high:.2}")
+        }),
         Some(MaskRecord::Shared { mask, inverted }) => {
             let name = document
                 .mask(*mask)
@@ -1100,6 +1119,7 @@ fn plain_layer() -> Layer {
         adjustment: None,
         own: false,
         working: false,
+        range: None,
     }
 }
 
@@ -1153,6 +1173,7 @@ fn push_own_adjustments(
                     mask,
                     adjustment: Some((kind, amount(step))),
                     own: true,
+                    range: range_of(&step.mask),
                     ..plain_layer()
                 });
                 if let Some((mask, inverted)) = behind {
@@ -2170,6 +2191,7 @@ pub(super) fn scene(
             kind,
             opacity: step.opacity.clamp(0.0, 1.0),
             mask,
+            range: range_of(&step.mask),
         });
     }
     // The shared masks the entries are behind: the entry's place in
@@ -2258,6 +2280,13 @@ pub(super) fn scene(
                     group.name
                 ));
             }
+        }
+    }
+    // A layer's range mask limits its entry: a band layer by the band, an
+    // adjustment or a step by what it changes, a group by what it made.
+    for (at, layer) in &masked {
+        if let Some(range) = range_of(&layer.mask) {
+            layers[*at].range = Some(range);
         }
     }
     let mut wanted: Vec<(usize, Uuid, bool, String)> = masked
@@ -2412,6 +2441,7 @@ pub(super) fn scene(
             kind: steps[index].clone(),
             opacity: last.opacity,
             mask: last.mask,
+            range: last.range,
         });
         layers.pop();
     }
@@ -2454,6 +2484,18 @@ impl Studio {
     // ---- what the selection is ------------------------------------------
 
     /// The selected step: an input's, a layer's own, or a Finish step.
+    /// The mask the range controls change: the selected step's (an
+    /// adjustment layer's step's is its layer's), or the selected layer's.
+    pub(super) fn range_mask_mut(&mut self) -> Option<&mut Option<MaskRecord>> {
+        if let Some(step) = self.selected_step() {
+            return self.document.step_mask_mut(step);
+        }
+        match self.selected {
+            Row::Layer(id) => self.document.layer_mut(id).map(|layer| &mut layer.mask),
+            _ => None,
+        }
+    }
+
     pub(super) fn selected_step(&self) -> Option<Uuid> {
         match &self.selected {
             Row::InputStep { step, .. } | Row::LayerStep { step, .. } | Row::Finish(step) => {
@@ -3150,6 +3192,21 @@ impl Studio {
                 };
                 let changed = with_amount(operation, settings, low + (high - low) * position);
                 self.document.set_step_settings(id, changed);
+            }
+            SliderId::RangeLow | SliderId::RangeHigh | SliderId::RangeFeather => {
+                if let Some(Some(MaskRecord::Range { low, high, feather })) = self.range_mask_mut() {
+                    match slider {
+                        SliderId::RangeLow => *low = position,
+                        SliderId::RangeHigh => {
+                            *high = if position >= RANGE_TOP_POSITION {
+                                RANGE_BRIGHTEST
+                            } else {
+                                position
+                            };
+                        }
+                        _ => *feather = position * RANGE_MAX_FEATHER,
+                    }
+                }
             }
             SliderId::Reach => {
                 // The slider covers reaches from a quarter to four, evenly
@@ -4082,6 +4139,68 @@ mod tests {
             star_reduction(&document, &own),
             Some((0.25, vec!["red@stars".to_string()]))
         );
+    }
+
+    #[test]
+    fn range_masks_are_drawn_on_layers_and_on_picture_steps() {
+        use super::{flow_document, scene, Bands};
+        use crate::studio_model::{LayerSource, MaskRecord, Place, StepKind, StepRecord};
+        let inputs = ["ha".to_string(), "oiii".to_string()];
+        let mut document = flow_document(&inputs);
+        let adjustments: Vec<_> = document
+            .layers()
+            .iter()
+            .filter(|layer| layer.source.is_adjustment())
+            .map(|layer| layer.id)
+            .collect();
+        for id in adjustments {
+            document.remove_layer(id);
+        }
+        let range = MaskRecord::Range {
+            low: 0.2,
+            high: 0.7,
+            feather: 0.05,
+        };
+        let band = document
+            .layers()
+            .iter()
+            .find(|layer| matches!(layer.source, LayerSource::Band { .. }))
+            .map(|layer| layer.id)
+            .unwrap();
+        document.layer_mut(band).unwrap().mask = Some(range.clone());
+        let tone = StepRecord::new(StepKind::Operation {
+            operation: crate::tone_step::OPERATION.to_string(),
+            accepts: crate::image_steps::Accepts::Display,
+            settings: crate::tone_step::new_settings(),
+        });
+        let tone_layer = document.add_picture_step(tone);
+        document.layer_mut(tone_layer).unwrap().mask = Some(range);
+        let mut bands = Bands::default();
+        bands.names = inputs.to_vec();
+        bands.tile_band = vec![0, 1];
+        bands.steps = vec![Vec::new(), Vec::new()];
+        let (drawn, _) = scene(
+            &document,
+            &bands,
+            &Place::Final.view(),
+            0,
+            None,
+            &mut crate::output_stretch::ResolvedChains::default(),
+            &[],
+        );
+        let expected = seiza_compose::picture::RangeMask {
+            low: 0.2,
+            high: 0.7,
+            feather: 0.05,
+        };
+        assert!(
+            drawn.omitted.iter().all(|words| !words.contains("range")),
+            "{:?}",
+            drawn.omitted
+        );
+        assert!(drawn.layers.iter().any(|layer| layer.range == Some(expected)));
+        assert_eq!(drawn.finish.len(), 1);
+        assert_eq!(drawn.finish[0].range, Some(expected));
     }
 
     #[test]

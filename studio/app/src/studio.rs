@@ -122,6 +122,13 @@ enum SliderId {
     /// One setting of the view stretch, by its place in the list of that
     /// stretch's settings.
     ViewStretchParam(usize),
+    /// The lowest brightness the selected layer's or step's range mask
+    /// selects in full.
+    RangeLow,
+    /// The highest; the far end selects up to the brightest.
+    RangeHigh,
+    /// How far beyond its edges the range mask fades.
+    RangeFeather,
     /// The selected shared mask's reach.
     Reach,
     /// How far the selected shared mask is smoothed.
@@ -139,7 +146,10 @@ enum SliderId {
 }
 
 impl SliderId {
-    const ALL: [SliderId; 13] = [
+    const ALL: [SliderId; 16] = [
+        SliderId::RangeLow,
+        SliderId::RangeHigh,
+        SliderId::RangeFeather,
         SliderId::Headroom,
         SliderId::HdrKnee,
         SliderId::SkyFloor,

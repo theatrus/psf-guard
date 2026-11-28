@@ -77,6 +77,11 @@
   fit your inputs, each input's tools and the parts it goes to, and a card
   for each part with its blend, palette, order and **Remove part**. Every
   change there is an ordinary edit of the layers, which **Undo** reverses.
+- PSF Studio can limit a layer, an adjustment or a step by brightness:
+  **Mask by brightness** under Mask sets **From**, **To** and **Softness**.
+  A layer that shows an input follows its own brightness; an adjustment or
+  a step follows the brightness of the picture it changes. Steps on the
+  picture with such a mask are drawn now instead of left out.
 - When a target has no channel stacks yet, PSF Studio says so and offers
   **Build stacks in PSF Guard**, which opens the target's Stacks page,
   instead of failing as it prepares the picture.

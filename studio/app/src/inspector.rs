@@ -291,6 +291,12 @@ impl Studio {
                 pane.child(Self::heading("Mask"))
                     .child(div().text_xs().child(words))
             })
+            // A step on layers or on the picture can be limited by
+            // brightness; an input's steps are baked into the input.
+            .when(stage != StageKind::Linear && stage != StageKind::Stretch, |pane| {
+                pane.when(step.mask.is_none(), |pane| pane.child(Self::heading("Mask")))
+                    .child(self.range_block(&step.mask, cx))
+            })
             .when(masked, |pane| {
                 pane.child(Self::act(
                     "Remove mask",
@@ -1430,6 +1436,53 @@ impl Studio {
     }
 
     /// A layer's mask, and the button that removes it.
+    /// A mask by brightness: its sliders when the layer or step has one, or
+    /// the button that adds one when it has no mask.
+    pub(super) fn range_block(&self, mask: &Option<MaskRecord>, cx: &mut Context<Self>) -> gpui::Div {
+        match mask {
+            Some(MaskRecord::Range { low, high, feather }) => {
+                let to = if *high >= super::panes::RANGE_BRIGHTEST {
+                    "To the brightest".to_string()
+                } else {
+                    format!("To {high:.2}")
+                };
+                column()
+                    .child(self.labelled_slider(format!("From {low:.2}"), SliderId::RangeLow, *low, cx))
+                    .child(self.labelled_slider(
+                        to,
+                        SliderId::RangeHigh,
+                        high.min(1.0),
+                        cx,
+                    ))
+                    .child(self.labelled_slider(
+                        format!("Softness {feather:.2}"),
+                        SliderId::RangeFeather,
+                        feather / super::panes::RANGE_MAX_FEATHER,
+                        cx,
+                    ))
+                    .children(Self::help(
+                        "Applies only where the brightness is between From and To, fading out over Softness beyond them. A layer that shows an input reads its own brightness; an adjustment or a step reads the picture it changes.",
+                    ))
+            }
+            None => column().child(Self::act(
+                "Mask by brightness",
+                "range-add",
+                false,
+                cx,
+                |this| {
+                    if let Some(mask) = this.range_mask_mut() {
+                        *mask = Some(MaskRecord::Range {
+                            low: 0.5,
+                            high: super::panes::RANGE_BRIGHTEST,
+                            feather: 0.1,
+                        });
+                    }
+                },
+            )),
+            Some(_) => column(),
+        }
+    }
+
     fn mask_block(&self, layer: &LayerRecord, cx: &mut Context<Self>) -> gpui::Div {
         let id = layer.id;
         column()
@@ -1441,6 +1494,7 @@ impl Studio {
                         "None: it applies everywhere. Paint one with the mask brush.".to_string()
                     })),
             )
+            .child(self.range_block(&layer.mask, cx))
             .when(layer.mask.is_some(), |pane| {
                 pane.child(Self::act(
                     "Remove mask",

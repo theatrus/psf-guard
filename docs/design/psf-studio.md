@@ -3469,7 +3469,14 @@ Gaps to fix, roughly in the order they got in the way:
   can be behind a shared mask; a layer behind a shared mask keeps a painted
   mask (`painted_too`), which limits it as well; and a layer clipped to one
   behind a shared mask is behind it too. An entry behind two shared masks
-  is listed as not drawn. Still open: a range mask on a step. Layers and
+  is listed as not drawn. Range masks were built later on 2026-11-27
+  (Seiza #527 at 3de8a5b3, `RangeMask`): **Mask by brightness** on a
+  layer, an adjustment layer or a step on the layers or the picture sets
+  From, To (the far end is “the brightest”, for HDR) and Softness. A layer
+  that shows an input reads its own value; an adjustment, a step or a
+  group's end reads the luminance of what it changes. CPU and GPU agree
+  (`range_masks_match_the_cpu`). An input's own steps take none, since they
+  are baked into the input. Layers and
   parts move with Move up and Move down, and a part dragged moves whole. A layer dragged within its part goes above the
   row it is dropped on, or below it when dropped on the row's lower half
   (tried in the window on the Iris's RGB stars), so it no longer needs the

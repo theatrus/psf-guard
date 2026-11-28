@@ -1624,6 +1624,15 @@ impl Document {
 
     /// Removes a step's mask, so the step applies everywhere. Returns
     /// whether the document has the step.
+    /// The mask that limits a step: its own, or for an adjustment layer's
+    /// step, its layer's, within which the step applies.
+    pub fn step_mask_mut(&mut self, id: Uuid) -> Option<&mut Option<MaskRecord>> {
+        if let Some(layer) = self.layer_of_adjustment(id) {
+            return self.layer_mut(layer).map(|layer| &mut layer.mask);
+        }
+        self.step_mut(id).map(|(_, step)| &mut step.mask)
+    }
+
     pub fn clear_step_mask(&mut self, id: Uuid) -> bool {
         // An adjustment layer's step applies within its layer's mask.
         if let Some(layer) = self.layer_of_adjustment(id) {
