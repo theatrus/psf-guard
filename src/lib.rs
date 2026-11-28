@@ -46,6 +46,7 @@ pub mod spatial_analysis;
 pub mod star_contours;
 pub mod star_detection;
 pub mod studio;
+pub mod studio_documents;
 pub mod studio_flow;
 pub mod studio_frames;
 pub mod studio_sources;

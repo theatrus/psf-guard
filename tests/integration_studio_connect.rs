@@ -53,15 +53,11 @@ fn app(directory: &tempfile::TempDir) -> Router {
     ));
     state.set_registry_path(Some(database_registry_path));
     let real = psf_guard::server::api_router(Arc::clone(&state));
-    // Stand-ins: a catalog route, and a database's Studio documents.
+    // A stand-in catalog route that is only a read and a write.
     let stand_ins = Router::new()
         .route(
             "/catalog",
             get(|| async { "catalog" }).put(|| async { "changed" }),
-        )
-        .route(
-            "/db/{db}/studio-documents",
-            get(|| async { "documents" }).post(|| async { "saved" }),
         )
         .layer(middleware::from_fn_with_state(
             Arc::clone(&state),
@@ -113,6 +109,14 @@ async fn send(
     let value = serde_json::from_slice(&bytes)
         .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into_owned()));
     (status, value, cookie)
+}
+
+fn document() -> Value {
+    serde_json::from_str(&psf_guard::studio::Document::new("Iris").to_json()).unwrap()
+}
+
+fn new_document() -> Value {
+    json!({ "name": "Iris", "project_id": 11, "target_id": 17, "document": document() })
 }
 
 async fn login(app: &Router, username: &str) -> String {
@@ -228,13 +232,19 @@ async fn an_editor_connects_studio_which_reads_and_saves_documents_only() {
     };
     assert_eq!(call(Method::GET, "/api/catalog").await, StatusCode::OK);
     assert_eq!(
-        call(Method::GET, "/api/db/main/studio-documents").await,
+        call(Method::GET, "/api/db/test/studio-documents").await,
         StatusCode::OK
     );
-    assert_eq!(
-        call(Method::POST, "/api/db/main/studio-documents").await,
-        StatusCode::OK
-    );
+    let (status, created, _) = send(
+        &app,
+        Method::POST,
+        "/api/db/test/studio-documents",
+        new_document(),
+        None,
+        Some(&token),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
     // Nothing else is written with it, although its user is an editor.
     assert_eq!(
         call(Method::PUT, "/api/catalog").await,
@@ -295,8 +305,8 @@ async fn a_viewer_connects_studio_which_cannot_save_documents() {
     let (status, _, _) = send(
         &app,
         Method::POST,
-        "/api/db/main/studio-documents",
-        json!({}),
+        "/api/db/test/studio-documents",
+        new_document(),
         None,
         Some(&token),
     )
@@ -305,7 +315,7 @@ async fn a_viewer_connects_studio_which_cannot_save_documents() {
     let (status, _, _) = send(
         &app,
         Method::GET,
-        "/api/db/main/studio-documents",
+        "/api/db/test/studio-documents",
         Value::Null,
         None,
         Some(&token),
@@ -411,4 +421,112 @@ async fn a_link_ticket_trades_once_for_a_token() {
     )
     .await;
     assert_eq!(again["data"]["status"], "expired");
+}
+
+/// Sends raw bytes, as Studio uploads a file.
+async fn upload(app: &Router, uri: &str, bytes: &[u8], token: &str) -> StatusCode {
+    let request = Request::builder()
+        .method(Method::PUT)
+        .uri(uri)
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::from(bytes.to_vec()))
+        .unwrap();
+    app.clone().oneshot(request).await.unwrap().status()
+}
+
+fn sha256(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+#[tokio::test]
+async fn studio_saves_revisions_files_and_exports_and_a_stale_save_conflicts() {
+    let directory = tempfile::tempdir().unwrap();
+    let app = app(&directory);
+    let (token, _) = connected(&app, "editor").await;
+    let base = "/api/db/test/studio-documents";
+    let call = |method: Method, uri: String, body: Value| {
+        let app = app.clone();
+        let token = token.clone();
+        async move {
+            let (status, value, _) = send(&app, method, &uri, body, None, Some(&token)).await;
+            (status, value)
+        }
+    };
+
+    // The edited file goes up first; a wrong hash is refused.
+    let edited = b"pixels an editor saved";
+    let sha = sha256(edited);
+    assert_eq!(
+        upload(
+            &app,
+            &format!("{base}/files/{}", "0".repeat(64)),
+            edited,
+            &token
+        )
+        .await,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        upload(&app, &format!("{base}/files/{sha}"), edited, &token).await,
+        StatusCode::OK
+    );
+    let mut new = new_document();
+    new["files"] = json!([{ "role": "edited", "sha256": sha, "name": "Iris.edit.tif" }]);
+    let (status, created) = call(Method::POST, base.to_string(), new).await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let id = created["data"]["id"].as_str().unwrap().to_string();
+
+    // Two computers start from revision 1; the second save conflicts.
+    let save = json!({ "base_revision": 1, "document": document() });
+    let (status, saved) = call(Method::PUT, format!("{base}/{id}"), save.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(saved["data"]["revisions"][1]["revision"], 2);
+    assert_eq!(saved["data"]["revisions"][1]["saved_by"], "editor");
+    let (status, conflict) = call(Method::PUT, format!("{base}/{id}"), save).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(conflict["data"]["revisions"][1]["revision"], 2);
+
+    // A revision reads back as the document; the file downloads.
+    let (status, revision) =
+        call(Method::GET, format!("{base}/{id}/revisions/2"), Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(revision["name"], "Iris");
+    let request = Request::builder()
+        .uri(format!("{base}/files/{sha}"))
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(&bytes[..], edited);
+
+    // An export of revision 2.
+    let picture = b"an exported picture";
+    let export_sha = sha256(picture);
+    upload(&app, &format!("{base}/files/{export_sha}"), picture, &token).await;
+    let (status, exported) = call(
+        Method::POST,
+        format!("{base}/{id}/exports"),
+        json!({ "sha256": export_sha, "revision": 2, "name": "Iris.tif", "format": "tif" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{exported}");
+    assert_eq!(exported["data"]["exports"][0]["size"], picture.len());
+
+    let (_, listed) = call(Method::GET, format!("{base}?project=11"), Value::Null).await;
+    assert_eq!(listed["data"][0]["revision"], 2);
+    assert_eq!(listed["data"][0]["exports"], 1);
+
+    // Delete removes it, and the files only it used.
+    let (status, _) = call(Method::DELETE, format!("{base}/{id}"), Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = call(Method::GET, format!("{base}/{id}"), Value::Null).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = call(Method::GET, format!("{base}/files/{sha}"), Value::Null).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }
