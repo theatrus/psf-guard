@@ -1439,7 +1439,7 @@ impl Studio {
             let Some(color) = layer.color.filter(|_| layer.source.shows_pixels()) else {
                 continue;
             };
-            if layer.blend == BlendMode::Luminance || index >= seiza_compose::gpu::MAX_LAYERS {
+            if layer.blend == BlendMode::Luminance {
                 continue;
             }
             let (hue, saturation, _) = hue_of(color);

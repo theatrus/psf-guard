@@ -1493,8 +1493,14 @@ The spike's canvas draws from the document in three passes, all on the GPU:
 
 With eight layers and two Finish steps at 3840 × 2160 the three passes take
 0.8 to 1.1 ms of GPU time on the M4 Max, against 0.4 to 0.6 ms for the
-earlier single pass. The limits are eight layers, eight Finish steps and
-seven masks per frame.
+earlier single pass. One draw holds 24 layers, 8 Finish steps, 15 painted
+masks, 8 computed masks and 16 heals. Since 2026-11-27 Seiza draws a
+picture with more than that in batches: its Finish steps become steps on
+top of the stack, and each batch of layers starts from the picture the
+batch before it drew, so a group can span batches. Studio passes every
+layer, mask and step to Seiza and leaves nothing out for the picture's
+size. What the GPU cannot draw at all, such as a computed mask of more
+than two inputs, is still listed as left out.
 
 Not drawn yet: Linear-stage steps, which are heavy steps for the tile path;
 a layer whose source is an earlier step's result; a heal whose source is

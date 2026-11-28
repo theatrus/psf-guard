@@ -90,6 +90,9 @@
   A layer that shows an input follows its own brightness; an adjustment or
   a step follows the brightness of the picture it changes. Steps on the
   picture with such a mask are drawn now instead of left out.
+- PSF Studio draws and exports a picture with any number of layers, masks,
+  heals and steps. Before, the canvas and exports left out anything past
+  24 layers, 15 painted masks or 8 steps on the picture.
 - When a target has no channel stacks yet, PSF Studio says so and offers
   **Build stacks in PSF Guard**, which opens the target's Stacks page,
   instead of failing as it prepares the picture.

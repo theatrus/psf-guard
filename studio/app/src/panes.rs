@@ -29,9 +29,6 @@ use gpui::{
     canvas, div, img, prelude::*, px, relative, rgb, AnyElement, Context, MouseButton,
     MouseDownEvent, Rgba, SharedString, Window,
 };
-use seiza_compose::gpu::{
-    MAX_COMPUTED_MASKS, MAX_FINISH_STEPS, MAX_HEALED_LAYERS, MAX_HEALS, MAX_LAYERS, MAX_MASKS,
-};
 use seiza_compose::picture::{Blend, FinishKind, FinishStep, LayerHeal, Segment};
 use seiza_stretch::StretchModel;
 use std::collections::HashMap;
@@ -784,7 +781,7 @@ enum Pushed {
 fn push_step_layer(
     parts: &mut StackParts,
     omitted: &mut Vec<String>,
-    mask_for: &mut impl FnMut(Vec<Segment>) -> Result<Option<usize>, ()>,
+    mask_for: &mut impl FnMut(Vec<Segment>) -> Option<usize>,
     stretches: &mut HashMap<Uuid, Result<seiza_stretch::StretchPlan, output_stretch::NotDrawn>>,
     context: StepContext,
     layer: &LayerRecord,
@@ -796,10 +793,7 @@ fn push_step_layer(
             omitted.push(not_run(step, "the layers beneath it"));
             return Pushed::Nothing;
         }
-        let Ok(mask) = mask_for(layer_strokes(layer)) else {
-            omitted.push(layer.name.clone());
-            return Pushed::Nothing;
-        };
+        let mask = mask_for(layer_strokes(layer));
         // In full, at the top, the tool's image covers every layer beneath
         // it.
         let covers = layer.opacity >= 1.0 && layer.mask.is_none() && layer.group.is_none();
@@ -824,10 +818,6 @@ fn push_step_layer(
         // others add to it, each at the layer's opacity within its mask:
         // the image blended over what is beneath, in a group over its
         // members beneath.
-        if parts.layers.len() + 3 > MAX_LAYERS {
-            omitted.push(layer.name.clone());
-            return Pushed::Nothing;
-        }
         let first = parts.layers.len();
         push_tool_image(
             parts.layers,
@@ -856,15 +846,11 @@ fn push_step_layer(
     // a clip, and its shared mask.
     let heal = matches!(step.kind, StepKind::Heal { .. });
 
-    let masks = if heal {
-        mask_for(step_strokes(step))
-            .and_then(|stroke| Ok((stroke, mask_for(layer_strokes(layer))?)))
+    let (mask, clip) = if heal {
+        let stroke = mask_for(step_strokes(step));
+        (stroke, mask_for(layer_strokes(layer)))
     } else {
-        mask_for(layer_strokes(layer)).map(|mask| (mask, None))
-    };
-    let Ok((mask, clip)) = masks else {
-        omitted.push(layer.name.clone());
-        return Pushed::Nothing;
+        (mask_for(layer_strokes(layer)), None)
     };
     // A heal with no stroke heals nothing.
     if heal && mask.is_none() {
@@ -1152,12 +1138,11 @@ fn blend_of(blend: BlendMode) -> Blend {
 }
 
 /// Adds the adjustments that belong to one layer or one group, after the
-/// entry they change. An adjustment the frame has no room for is recorded
-/// as left out.
+/// entry they change.
 fn push_own_adjustments(
     layers: &mut Vec<Layer>,
     omitted: &mut Vec<String>,
-    mask_for: &mut impl FnMut(Vec<Segment>) -> Result<Option<usize>, ()>,
+    mask_for: &mut impl FnMut(Vec<Segment>) -> Option<usize>,
     shared: &mut Vec<(usize, Uuid, bool, String)>,
     owner: &LayerRecord,
     applied: &[Uuid],
@@ -1182,26 +1167,22 @@ fn push_own_adjustments(
             ));
             continue;
         }
-        match mask_for(mask_strokes(&step.mask)) {
-            Ok(mask) if layers.len() < MAX_LAYERS => {
-                layers.push(Layer {
-                    opacity: step.opacity,
-                    mask,
-                    adjustment: Some((kind, amount(step))),
-                    own: true,
-                    range: range_of(&step.mask),
-                    ..plain_layer()
-                });
-                if let Some((mask, inverted)) = behind {
-                    shared.push((
-                        layers.len() - 1,
-                        mask,
-                        inverted,
-                        format!("{operation} of {}", owner.name),
-                    ));
-                }
-            }
-            _ => omitted.push(format!("{} of {}", operation, owner.name)),
+        let mask = mask_for(mask_strokes(&step.mask));
+        layers.push(Layer {
+            opacity: step.opacity,
+            mask,
+            adjustment: Some((kind, amount(step))),
+            own: true,
+            range: range_of(&step.mask),
+            ..plain_layer()
+        });
+        if let Some((mask, inverted)) = behind {
+            shared.push((
+                layers.len() - 1,
+                mask,
+                inverted,
+                format!("{operation} of {}", owner.name),
+            ));
         }
     }
 }
@@ -1361,35 +1342,26 @@ fn stretch_source<'a>(
         .unwrap_or((band, plan))
 }
 
-/// Adds a heal of one layer to a scene, or records that it is left out
-/// because the frame has no room for it.
+/// Adds a heal of one layer to a scene.
 fn push_heal(
     heals: &mut Vec<LayerHeal>,
-    omitted: &mut Vec<String>,
     layer: usize,
     before_stretch: bool,
     step: &StepRecord,
-    mask: Result<Option<usize>, ()>,
+    mask: Option<usize>,
 ) {
     let StepKind::Heal { offset, shift, .. } = &step.kind else {
         return;
     };
-    let mut healed: Vec<usize> = heals.iter().map(|heal| heal.layer).collect();
-    healed.sort_unstable();
-    healed.dedup();
-    let fits =
-        heals.len() < MAX_HEALS && (healed.contains(&layer) || healed.len() < MAX_HEALED_LAYERS);
-    match mask {
-        Ok(Some(mask)) if fits => heals.push(LayerHeal {
+    // A heal with no stroke heals nothing.
+    if let Some(mask) = mask {
+        heals.push(LayerHeal {
             layer,
             before_transfer: before_stretch,
             offset: *offset,
             shift: shift.first().copied().unwrap_or(0.0),
             mask,
-        }),
-        // A heal with no stroke heals nothing.
-        Ok(None) => {}
-        _ => omitted.push("a heal".to_string()),
+        });
     }
 }
 
@@ -1487,8 +1459,9 @@ impl Scene {
 
 /// What the document asks the canvas to draw for a view. Returns the scene,
 /// without its stretch analyses, and each band's background strength in it.
-/// What one frame has no room for is listed in the scene, never drawn
-/// without its mask.
+/// What the canvas cannot draw is listed in the scene, and a layer whose
+/// mask cannot be drawn is not drawn at all. Seiza draws a scene with more
+/// than one GPU draw holds in batches, so nothing is left out for its size.
 /// `picture_samples` are RGB samples of the combined picture, with the id of
 /// the sampling they came from, for the output stretches Seiza resolves from
 /// the picture. `chains` keeps output stretches resolved before.
@@ -1514,18 +1487,14 @@ pub(super) fn scene(
     // Planes worked out from the whole image that layers read and that are
     // not done yet.
     let mut wanted_planes: Vec<DerivedKey> = Vec::new();
-    // Strokes as a place in `masks`. `Err` when the masks are full: what the
-    // mask limits is then left out, so it is never drawn over the whole
-    // image by mistake.
-    let mut mask_for = |strokes: Vec<Segment>| -> Result<Option<usize>, ()> {
+    // Strokes as a place in `masks`; `None` when there are none. Seiza
+    // draws a picture with more masks than one GPU draw holds in batches.
+    let mut mask_for = |strokes: Vec<Segment>| -> Option<usize> {
         if strokes.is_empty() {
-            return Ok(None);
-        }
-        if masks.len() == MAX_MASKS {
-            return Err(());
+            return None;
         }
         masks.push(strokes);
-        Ok(Some(masks.len() - 1))
+        Some(masks.len() - 1)
     };
     let find = |id: &Uuid| document.layers().iter().find(|layer| layer.id == *id);
     // The mask of each layer drawn so far, for the layers clipped to it.
@@ -1641,17 +1610,6 @@ pub(super) fn scene(
         let name = |layer: Option<&LayerRecord>| {
             layer.map_or("a layer".to_string(), |layer| layer.name.clone())
         };
-        if layers.len() >= MAX_LAYERS {
-            let left_out = match entry {
-                StackEntry::Band { layer, .. }
-                | StackEntry::Adjustment { layer }
-                | StackEntry::Made { layer, .. }
-                | StackEntry::GroupEnd { group: layer } => name(find(&layer)),
-                StackEntry::GroupBegin { .. } => continue,
-            };
-            omitted.push(left_out);
-            continue;
-        }
         let (at, layer, clip) = match entry {
             StackEntry::GroupBegin { .. } => {
                 layers.push(Layer {
@@ -1664,11 +1622,7 @@ pub(super) fn scene(
                 // A group that is gone still has to end, so the layers
                 // after it are not blended into it.
                 let found = find(&group);
-                let mask = found.map_or(Ok(None), |group| mask_for(layer_strokes(group)));
-                if mask.is_err() {
-                    omitted.push(format!("the mask of {}", name(found)));
-                }
-                let mask = mask.unwrap_or(None);
+                let mask = found.and_then(|group| mask_for(layer_strokes(group)));
                 mask_of.insert(group, mask);
                 // A clipped group shows only inside the mask of the layer
                 // beneath its members.
@@ -1677,7 +1631,7 @@ pub(super) fn scene(
                     .and_then(|group| clip_base(document, group.id));
                 let clip = base.and_then(|base| match mask_of.get(&base.id) {
                     Some(mask) => *mask,
-                    None => mask_for(layer_strokes(base)).unwrap_or(None),
+                    None => mask_for(layer_strokes(base)),
                 });
                 if let Some(base) = base
                     && let Some(MaskRecord::Shared { mask, inverted }) = &base.mask
@@ -1723,10 +1677,7 @@ pub(super) fn scene(
                 if !made.visible || tool_plane(bands, *step, 0, true).is_none() {
                     continue;
                 }
-                let Ok(mask) = mask_for(layer_strokes(made)) else {
-                    omitted.push(made.name.clone());
-                    continue;
-                };
+                let mask = mask_for(layer_strokes(made));
                 // Its own heals fix the stars alone, before they are
                 // screened over the picture.
                 let own_heals: Vec<&StepRecord> = made
@@ -1734,10 +1685,6 @@ pub(super) fn scene(
                     .iter()
                     .filter(|own| own.enabled && matches!(own.kind, StepKind::Heal { .. }))
                     .collect();
-                if layers.len() + 5 + own_heals.len() > MAX_LAYERS {
-                    omitted.push(made.name.clone());
-                    continue;
-                }
                 layers.push(Layer {
                     mark: Mark::GroupBegin,
                     ..plain_layer()
@@ -1754,23 +1701,19 @@ pub(super) fn scene(
                     let StepKind::Heal { offset, shift, .. } = &own.kind else {
                         continue;
                     };
-                    match mask_for(step_strokes(own)) {
-                        Ok(Some(stroke)) => {
-                            layers.push(Layer {
-                                mark: Mark::Step(steps.len()),
-                                mask: Some(stroke),
-                                ..plain_layer()
-                            });
-                            steps.push(FinishKind::Heal {
-                                offset: *offset,
-                                shift: std::array::from_fn(|channel| {
-                                    shift.get(channel).copied().unwrap_or(0.0)
-                                }),
-                            });
-                        }
-                        // A heal with no stroke heals nothing.
-                        Ok(None) => {}
-                        Err(()) => omitted.push(format!("a heal of {}", made.name)),
+                    // A heal with no stroke heals nothing.
+                    if let Some(stroke) = mask_for(step_strokes(own)) {
+                        layers.push(Layer {
+                            mark: Mark::Step(steps.len()),
+                            mask: Some(stroke),
+                            ..plain_layer()
+                        });
+                        steps.push(FinishKind::Heal {
+                            offset: *offset,
+                            shift: std::array::from_fn(|channel| {
+                                shift.get(channel).copied().unwrap_or(0.0)
+                            }),
+                        });
                     }
                 }
                 layers.push(Layer {
@@ -1852,10 +1795,7 @@ pub(super) fn scene(
             let Some(kind) = adjustment_kind(operation) else {
                 continue;
             };
-            let Ok(mask) = mask_for(layer_strokes(layer)) else {
-                omitted.push(layer.name.clone());
-                continue;
-            };
+            let mask = mask_for(layer_strokes(layer));
             layers.push(Layer {
                 opacity: if layer.visible { layer.opacity } else { 0.0 },
                 mask,
@@ -2040,14 +1980,11 @@ pub(super) fn scene(
             layer_stretches.push(stages.clone());
             for step in input_heals {
                 let mask = mask_for(step_strokes(step));
-                push_heal(&mut heals, &mut omitted, layers.len() - 1, true, step, mask);
+                push_heal(&mut heals, layers.len() - 1, true, step, mask);
             }
             continue;
         };
-        let Ok(mask) = mask_for(layer_strokes(layer)) else {
-            omitted.push(layer.name.clone());
-            continue;
-        };
+        let mask = mask_for(layer_strokes(layer));
         mask_of.insert(layer.id, mask);
         // A clipped layer shows only inside the mask of the layer it is
         // clipped to, and not at all while that layer is hidden.
@@ -2058,7 +1995,7 @@ pub(super) fn scene(
                 Some(mask) => *mask,
                 // The layer it is clipped to is not in this view.
                 None => {
-                    let mask = mask_for(layer_strokes(base)).unwrap_or(None);
+                    let mask = mask_for(layer_strokes(base));
                     mask_of.insert(base.id, mask);
                     mask
                 }
@@ -2101,7 +2038,7 @@ pub(super) fn scene(
         }
         for step in input_heals {
             let mask = mask_for(step_strokes(step));
-            push_heal(&mut heals, &mut omitted, shown_at, true, step, mask);
+            push_heal(&mut heals, shown_at, true, step, mask);
         }
         // The layer's own edits change it before it is blended. Its heals
         // change the stretched layer; its adjustments follow.
@@ -2110,7 +2047,7 @@ pub(super) fn scene(
         });
         for step in own_heals {
             let mask = mask_for(step_strokes(step));
-            push_heal(&mut heals, &mut omitted, shown_at, false, step, mask);
+            push_heal(&mut heals, shown_at, false, step, mask);
         }
         push_own_adjustments(
             &mut layers,
@@ -2128,9 +2065,7 @@ pub(super) fn scene(
                 .then(|| tool_plane(bands, step, 0, true))
                 .flatten()
         });
-        if let Some(stars) = stars
-            && layers.len() < MAX_LAYERS
-        {
+        if let Some(stars) = stars {
             let shown = &layers[shown_at];
             layers.push(Layer {
                 band: stars,
@@ -2192,10 +2127,6 @@ pub(super) fn scene(
         ) else {
             continue;
         };
-        if finish.len() == MAX_FINISH_STEPS {
-            omitted.push(step.kind.name().to_string());
-            continue;
-        }
         if !draws_step_mask(&step.mask) {
             omitted.push(format!(
                 "{}, whose {} the canvas does not draw",
@@ -2204,10 +2135,7 @@ pub(super) fn scene(
             ));
             continue;
         }
-        let Ok(mask) = mask_for(step_strokes(step)) else {
-            omitted.push(step.kind.name().to_string());
-            continue;
-        };
+        let mask = mask_for(step_strokes(step));
         // A heal with no stroke heals nothing.
         if matches!(kind, FinishKind::Heal { .. }) && mask.is_none() {
             continue;
@@ -2282,7 +2210,7 @@ pub(super) fn scene(
             let strokes = layer_strokes(group);
             if !strokes.is_empty() {
                 if entry.clip.is_none() {
-                    entry.clip = mask_for(strokes).unwrap_or(None);
+                    entry.clip = mask_for(strokes);
                 } else {
                     entry.opacity = 0.0;
                     omitted.push(format!(
@@ -2326,15 +2254,11 @@ pub(super) fn scene(
         .collect();
     // A view of a mask draws white behind that mask, so the mask shows.
     if let Subject::Mask(id) = &view.subject {
-        if layers.len() < MAX_LAYERS {
-            layers.push(Layer {
-                mark: Mark::Solid,
-                ..plain_layer()
-            });
-            wanted.push((layers.len() - 1, *id, false, "the mask".to_string()));
-        } else {
-            omitted.push("the mask".to_string());
-        }
+        layers.push(Layer {
+            mark: Mark::Solid,
+            ..plain_layer()
+        });
+        wanted.push((layers.len() - 1, *id, false, "the mask".to_string()));
     }
     // Each input of a mask is read with the stretch the view gives it,
     // from a row of the stretch tables: a layer's row when a layer shows
@@ -2390,12 +2314,11 @@ pub(super) fn scene(
                     });
             let row = match known {
                 Some(row) => row,
-                None if layer_bands.len() < MAX_LAYERS => {
+                None => {
                     layer_bands.push(stretched_as);
                     layer_stretches.push(stages.clone());
                     layer_bands.len() - 1
                 }
-                None => continue,
             };
             *slot = Some(MaskBand {
                 band: plane,
@@ -2418,19 +2341,15 @@ pub(super) fn scene(
                 })
                 .collect()
         };
-        let touch_ups = mask_for(strokes(StrokeMode::Add))
-            .and_then(|added| Ok((added, mask_for(strokes(StrokeMode::Subtract))?)));
-        let (Some(shared), Ok((added, removed))) = (shared, touch_ups) else {
+        let added = mask_for(strokes(StrokeMode::Add));
+        let removed = mask_for(strokes(StrokeMode::Subtract));
+        let Some(shared) = shared else {
             // A layer is never drawn without its mask.
             layers[at].opacity = 0.0;
             omitted.push(format!("{name}, for its mask"));
             continue;
         };
-        if found != inputs.len()
-            || inputs.is_empty()
-            || inputs.len() > 2
-            || computed.len() == MAX_COMPUTED_MASKS
-        {
+        if found != inputs.len() || inputs.is_empty() || inputs.len() > 2 {
             layers[at].opacity = 0.0;
             omitted.push(format!("{name}, for its mask"));
             continue;
@@ -2460,7 +2379,6 @@ pub(super) fn scene(
         && let Mark::Step(index) = last.mark
         && last.computed.is_none()
         && last.clip.is_none()
-        && on_top.len() + finish.len() < MAX_FINISH_STEPS
     {
         on_top.push(FinishStep {
             kind: steps[index].clone(),
@@ -3401,7 +3319,12 @@ impl Studio {
     }
 
     pub(super) fn slider(&self, id: SliderId, value: f32, cx: &mut Context<Self>) -> AnyElement {
-        let bounds = self.slider_bounds[&id].clone();
+        let bounds = self
+            .slider_bounds
+            .borrow_mut()
+            .entry(id)
+            .or_default()
+            .clone();
         div()
             .flex_1()
             .h(px(20.0))
@@ -4268,6 +4191,86 @@ mod tests {
             .any(|layer| layer.range == Some(expected)));
         assert_eq!(drawn.finish.len(), 1);
         assert_eq!(drawn.finish[0].range, Some(expected));
+    }
+
+    #[test]
+    fn a_document_past_one_gpu_draw_leaves_nothing_out() {
+        use super::{flow_document, scene, Bands};
+        use crate::canvas::Mark;
+        use crate::studio_model::{
+            MaskRecord, PaintedMask, Place, StepKind, StepRecord, Stroke, StrokeMode,
+        };
+        use seiza_compose::gpu::{MAX_FINISH_STEPS, MAX_HEALS, MAX_LAYERS, MAX_MASKS};
+        let inputs = ["ha".to_string(), "oiii".to_string()];
+        let mut document = flow_document(&inputs);
+        let mut bands = Bands::default();
+        bands.names = inputs.to_vec();
+        bands.tile_band = vec![0, 1];
+        bands.steps = vec![Vec::new(), Vec::new()];
+        let draw = |document: &crate::studio_model::Document| {
+            let mut drawn = scene(
+                document,
+                &bands,
+                &Place::Final.view(),
+                0,
+                None,
+                &mut crate::output_stretch::ResolvedChains::default(),
+                &[],
+            )
+            .0;
+            drawn.omitted.sort();
+            drawn
+        };
+        let stroke = |at: f32| Stroke {
+            points: vec![[at, at]],
+            radius: 4.0,
+            hardness: 0.5,
+            mode: StrokeMode::Add,
+        };
+        // What the document's own steps leave out with these test bands.
+        let before = draw(&document).omitted;
+        // More Tone steps, each with a painted mask, and heals than one
+        // draw holds.
+        let steps = MAX_LAYERS + MAX_FINISH_STEPS;
+        for at in 0..steps {
+            let tone = StepRecord::new(StepKind::Operation {
+                operation: crate::tone_step::OPERATION.to_string(),
+                accepts: crate::image_steps::Accepts::Display,
+                settings: crate::tone_step::new_settings(),
+            });
+            let layer = document.add_picture_step(tone);
+            document.layer_mut(layer).unwrap().mask = Some(MaskRecord::Painted(PaintedMask {
+                strokes: vec![stroke(at as f32)],
+                ..Default::default()
+            }));
+        }
+        for at in 0..=MAX_HEALS {
+            document.add_picture_step(StepRecord::new(StepKind::Heal {
+                stroke: stroke(at as f32 + 40.0),
+                offset: [8, 0],
+                shift: vec![0.0; 3],
+            }));
+        }
+        let on_top = draw(&document);
+        assert_eq!(on_top.omitted, before);
+        assert!(on_top.finish.len() > MAX_FINISH_STEPS + MAX_HEALS);
+        assert!(on_top.masks.len() > MAX_MASKS);
+        // With an input on top of them, the steps are layers of the stack.
+        let input = document
+            .layers()
+            .iter()
+            .find(|layer| layer.source.shows_pixels())
+            .unwrap()
+            .id;
+        document.place_layer(input, document.layers().len() - 1, None);
+        let beneath = draw(&document);
+        assert_eq!(beneath.omitted, before);
+        let marked = beneath
+            .layers
+            .iter()
+            .filter(|layer| matches!(layer.mark, Mark::Step(_)))
+            .count();
+        assert!(marked > MAX_LAYERS, "{marked} steps in the stack");
     }
 
     #[test]

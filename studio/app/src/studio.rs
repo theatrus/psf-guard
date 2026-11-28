@@ -22,7 +22,7 @@ use raw_window_handle::{
 };
 use seiza_compose::gpu::{GpuInput, GpuScene, MAX_LAYERS};
 use seiza_compose::picture::{FinishStep, LayerHeal, Picture, Segment, Transfer};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::ptr::NonNull;
@@ -150,30 +150,6 @@ enum SliderId {
     /// The saturation of one layer, by its place in the stack, in the
     /// palette's list of tones.
     ToneSaturation(usize),
-}
-
-impl SliderId {
-    const ALL: [SliderId; 19] = [
-        SliderId::CoreAmount,
-        SliderId::CoreThreshold,
-        SliderId::CoreScale,
-        SliderId::RangeLow,
-        SliderId::RangeHigh,
-        SliderId::RangeFeather,
-        SliderId::Headroom,
-        SliderId::HdrKnee,
-        SliderId::SkyFloor,
-        SliderId::Opacity,
-        SliderId::Hue,
-        SliderId::Saturation,
-        SliderId::Amount,
-        SliderId::LayerAmount,
-        SliderId::StarReduction,
-        SliderId::Reach,
-        SliderId::Smoothing,
-        SliderId::BrushSize,
-        SliderId::MaskBlur,
-    ];
 }
 
 #[derive(Clone, Copy)]
@@ -424,7 +400,7 @@ pub struct Scene {
     /// The masks computed from inputs that the layers refer to.
     computed: Vec<ComputedMask>,
     masks: Vec<Vec<Segment>>,
-    /// What the scene leaves out because one frame cannot draw more.
+    /// What the canvas cannot draw of the document, by name.
     omitted: Vec<String>,
     /// Each band's stretch analysis, at the background strength this scene
     /// draws the band with.
@@ -988,7 +964,8 @@ pub struct Studio {
     _ns_view: Retained<AnyObject>,
     canvas: CanvasHandle,
     canvas_bounds: Rc<Cell<Bounds<Pixels>>>,
-    slider_bounds: HashMap<SliderId, Rc<Cell<Bounds<Pixels>>>>,
+    /// Where each slider was last drawn, made as a slider is first drawn.
+    slider_bounds: RefCell<HashMap<SliderId, Rc<Cell<Bounds<Pixels>>>>>,
     tool: Tool,
     drag: Option<Drag>,
     scale_factor: f32,
@@ -1318,87 +1295,76 @@ impl Studio {
         let mut document = opened.unwrap_or_else(|| panes::flow_document(&band_info.names));
         adopt(&mut document);
         let scene_worker = scene_worker::SceneWorker::start(canvas.clone());
-        let mut studio =
-            Self {
-                native_view,
-                _ns_view: ns_view,
-                canvas,
-                canvas_bounds: Rc::default(),
-                slider_bounds: SliderId::ALL
-                    .into_iter()
-                    .chain((0..MAX_LAYERS).flat_map(|layer| {
-                        [SliderId::ToneHue(layer), SliderId::ToneSaturation(layer)]
-                    }))
-                    .chain((0..8).map(SliderId::StretchParam))
-                    .chain((0..8).map(SliderId::ViewStretchParam))
-                    .chain((0..seiza_compose::tone::CONTROLS.len()).map(SliderId::FinishParam))
-                    .chain((0..tools::MAX_TOOL_SETTINGS).map(SliderId::ToolParam))
-                    .map(|id| (id, Rc::default()))
-                    .collect(),
-                tool: Tool::Pan,
-                drag: None,
-                scale_factor: window.scale_factor(),
-                document,
-                selected: Row::Combined,
-                alone: false,
-                mask_shown: false,
-                brush_removes: false,
-                heal_source: None,
-                heal_offset: None,
-                brush_size: 24.0,
-                crop_from: None,
-                protect_from: None,
-                mask_shows_picture: false,
-                wipe: 0.5,
-                split: Split::WithPicture,
-                pins: Vec::new(),
-                places: Vec::new(),
-                unfolded: HashSet::new(),
-                open_menu: None,
-                window_title: String::new(),
-                toggled: HashSet::new(),
-                stroke: None,
-                scene_version: 0,
-                scene_worker,
-                control: control_wanted.then(control::Control::start).flatten(),
-                bands_generation: 0,
-                base_bands: band_info.clone(),
-                band_info,
-                analysed: Vec::new(),
-                derived: Vec::new(),
-                derive_tasks: Vec::new(),
-                whole_samples: None,
-                store_opening: None,
-                picture_samples: None,
-                picture_wanted: None,
-                source_generation: 0,
-                resolved_chains: Default::default(),
-                histogram: None,
-                final_samples: None,
-                final_wanted: None,
-                final_peak: 1.0,
-                export: None,
-                editor_reading: None,
-                editor_looked: None,
-                servers: Default::default(),
-                server_save: server_documents::ServerSave::new(),
-                export_line: String::new(),
-                renaming: None,
-                setup_open: false,
-                rename_focus: None,
-                tiff_float: false,
-                export_format: None,
-                last_headroom: crate::tone_step::DEFAULT_HEADROOM,
-                view_stretch: panes::new_stretch("auto-mtf"),
-                view_stretch_open: false,
-                parity_report,
-                levels,
-                tools,
-                history: history::History::default(),
-                drop_lower: None,
-                focus: cx.focus_handle(),
-                late: late_tools::Late::default(),
-            };
+        let mut studio = Self {
+            native_view,
+            _ns_view: ns_view,
+            canvas,
+            canvas_bounds: Rc::default(),
+            slider_bounds: RefCell::default(),
+            tool: Tool::Pan,
+            drag: None,
+            scale_factor: window.scale_factor(),
+            document,
+            selected: Row::Combined,
+            alone: false,
+            mask_shown: false,
+            brush_removes: false,
+            heal_source: None,
+            heal_offset: None,
+            brush_size: 24.0,
+            crop_from: None,
+            protect_from: None,
+            mask_shows_picture: false,
+            wipe: 0.5,
+            split: Split::WithPicture,
+            pins: Vec::new(),
+            places: Vec::new(),
+            unfolded: HashSet::new(),
+            open_menu: None,
+            window_title: String::new(),
+            toggled: HashSet::new(),
+            stroke: None,
+            scene_version: 0,
+            scene_worker,
+            control: control_wanted.then(control::Control::start).flatten(),
+            bands_generation: 0,
+            base_bands: band_info.clone(),
+            band_info,
+            analysed: Vec::new(),
+            derived: Vec::new(),
+            derive_tasks: Vec::new(),
+            whole_samples: None,
+            store_opening: None,
+            picture_samples: None,
+            picture_wanted: None,
+            source_generation: 0,
+            resolved_chains: Default::default(),
+            histogram: None,
+            final_samples: None,
+            final_wanted: None,
+            final_peak: 1.0,
+            export: None,
+            editor_reading: None,
+            editor_looked: None,
+            servers: Default::default(),
+            server_save: server_documents::ServerSave::new(),
+            export_line: String::new(),
+            renaming: None,
+            setup_open: false,
+            rename_focus: None,
+            tiff_float: false,
+            export_format: None,
+            last_headroom: crate::tone_step::DEFAULT_HEADROOM,
+            view_stretch: panes::new_stretch("auto-mtf"),
+            view_stretch_open: false,
+            parity_report,
+            levels,
+            tools,
+            history: history::History::default(),
+            drop_lower: None,
+            focus: cx.focus_handle(),
+            late: late_tools::Late::default(),
+        };
         // The patches read as the store opened stand in until every band
         // is sampled over the whole image.
         studio.start_whole_samples();
@@ -1450,7 +1416,14 @@ impl Studio {
     }
 
     fn set_slider(&mut self, id: SliderId, x: Pixels) {
-        let bounds = self.slider_bounds[&id].get();
+        let Some(bounds) = self
+            .slider_bounds
+            .borrow()
+            .get(&id)
+            .map(|bounds| bounds.get())
+        else {
+            return;
+        };
         let value = (f32::from(x - bounds.origin.x) / f32::from(bounds.size.width).max(1.0))
             .clamp(0.0, 1.0);
         self.slider_moved(id, value);
