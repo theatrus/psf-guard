@@ -433,14 +433,14 @@ mod tests {
         let document = workspace.join("M 42.json");
 
         let files = [path];
-        prepare_files(&files, &store, &document, &|_| {}).unwrap();
+        prepare_files(&files, &store, &document, &|_| {}, &|| false).unwrap();
         let saved = std::fs::read_to_string(&document).unwrap();
         let mut picture = crate::studio_model::Document::from_json(&saved).unwrap();
         assert_eq!(picture.name, "M 42");
         picture.name = "Edited M 42".into();
         std::fs::write(&document, picture.to_json()).unwrap();
 
-        prepare_files(&files, &store, &document, &|_| {}).unwrap();
+        prepare_files(&files, &store, &document, &|_| {}, &|| false).unwrap();
         assert_eq!(
             std::fs::read_to_string(document).unwrap(),
             picture.to_json()
