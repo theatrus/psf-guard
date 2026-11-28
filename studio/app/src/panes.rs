@@ -1837,7 +1837,11 @@ pub(super) fn scene(
                             Pushed::Layer => masked.push((layers.len() - 1, layer)),
                             Pushed::Channels(count) => masked
                                 .extend((layers.len() - count..layers.len()).map(|at| (at, layer))),
-                            Pushed::Replaced => masked.clear(),
+                            // Every index into the old layers goes with them.
+                            Pushed::Replaced => {
+                                masked.clear();
+                                shared_wanted.clear();
+                            }
                             Pushed::Nothing => {}
                         }
                     }
@@ -2152,6 +2156,7 @@ pub(super) fn scene(
         layer_stretches.clear();
         heals.clear();
         masked.clear();
+        shared_wanted.clear();
         steps.clear();
         push_tool_image(
             &mut layers,
@@ -2466,6 +2471,9 @@ pub(super) fn scene(
         layers.pop();
     }
     on_top.reverse();
+    // Steps of the stack drawn as Finish steps are part of the combined
+    // picture; the Finish stage's own come after them.
+    let stacked_finish = on_top.len();
     on_top.append(&mut finish);
     let finish = on_top;
     // The narrowband balance, once resolved for these stretches.
@@ -2484,6 +2492,7 @@ pub(super) fn scene(
         layer_bands,
         layer_stretches,
         finish,
+        stacked_finish,
         steps,
         balance,
         heals,
@@ -4387,6 +4396,120 @@ mod tests {
             .steps
             .iter()
             .any(|kind| matches!(kind, FinishKind::Tone(_))));
+    }
+
+    /// A tool's image that covers the stack leaves nothing behind that
+    /// pointed at the layers it replaced: an own adjustment behind a shared
+    /// mask on a layer beneath it gets no mask on the tool's image.
+    #[test]
+    fn a_tool_image_over_the_stack_drops_the_shared_masks_beneath_it() {
+        use super::{flow_document, operation, scene, Bands};
+        use crate::derived::{DerivedKey, DerivedKind, DerivedPlane};
+        use crate::studio_model::{tool_step, LayerSource, MaskRecord, Place, SharedMask};
+        let inputs = ["ha".to_string(), "oiii".to_string()];
+        let mut document = flow_document(&inputs);
+        let mask = document.add_mask(SharedMask::new(vec!["ha".to_string()]));
+        // The last band layer, so its entry sits past the tool image's three.
+        let band = document
+            .layers()
+            .iter()
+            .filter(|layer| matches!(layer.source, LayerSource::Band { .. }))
+            .last()
+            .map(|layer| layer.id)
+            .unwrap();
+        let mut curves = operation("Curves", crate::image_steps::Accepts::Display);
+        curves.mask = Some(MaskRecord::Shared {
+            mask,
+            inverted: false,
+        });
+        document.insert_layer_step(band, curves).unwrap();
+        let removal = tool_step(serde_json::json!({ "provider": "sxt" }));
+        let removal_id = removal.id;
+        document.add_picture_step(removal);
+        let mut bands = Bands::default();
+        bands.names = inputs.to_vec();
+        bands.tile_band = vec![0, 1];
+        bands.steps = vec![Vec::new(), Vec::new()];
+        let planes: Vec<std::sync::Arc<DerivedPlane>> = [false, true]
+            .into_iter()
+            .flat_map(|stars| (0..3).map(move |channel| (stars, channel)))
+            .map(|(stars, channel)| {
+                std::sync::Arc::new(DerivedPlane::of_samples(
+                    DerivedKey {
+                        kind: DerivedKind::Tool {
+                            step: removal_id,
+                            channel,
+                            stars,
+                        },
+                        bands: Vec::new(),
+                        states: Vec::new(),
+                        range: (0.0, 1.0),
+                    },
+                    16,
+                    16,
+                    vec![0.5; 256],
+                    1,
+                ))
+            })
+            .collect();
+        let bands = bands.with_derived(&planes);
+        let (drawn, _) = scene(
+            &document,
+            &bands,
+            &Place::Final.view(),
+            0,
+            None,
+            &mut crate::output_stretch::ResolvedChains::default(),
+            &[],
+        );
+        assert!(
+            drawn.layers.iter().all(|layer| layer.computed.is_none()),
+            "a layer of the tool's image took a shared mask from beneath it"
+        );
+    }
+
+    /// Steps at the top of the stack are drawn as Finish steps, but they are
+    /// still part of the combined picture an output stretch is resolved from.
+    #[test]
+    fn the_combined_picture_keeps_steps_moved_off_the_top_of_the_stack() {
+        use super::{flow_document, scene, Bands};
+        use crate::studio_model::Place;
+        let inputs = ["ha".to_string(), "oiii".to_string()];
+        let mut document = flow_document(&inputs);
+        let adjustments: Vec<_> = document
+            .layers()
+            .iter()
+            .filter(|layer| layer.source.is_adjustment())
+            .map(|layer| layer.id)
+            .collect();
+        for id in adjustments {
+            document.remove_layer(id);
+        }
+        document.add_picture_step(crate::studio_model::StepRecord::new(
+            crate::studio_model::StepKind::Operation {
+                operation: crate::tone_step::OPERATION.to_string(),
+                accepts: crate::image_steps::Accepts::Display,
+                settings: crate::tone_step::new_settings(),
+            },
+        ));
+        let mut bands = Bands::default();
+        bands.names = inputs.to_vec();
+        bands.tile_band = vec![0, 1];
+        bands.steps = vec![Vec::new(), Vec::new()];
+        let (drawn, _) = scene(
+            &document,
+            &bands,
+            &Place::Final.view(),
+            0,
+            None,
+            &mut crate::output_stretch::ResolvedChains::default(),
+            &[],
+        );
+        assert!(
+            !drawn.finish.is_empty(),
+            "the Tone step is drawn as a Finish step"
+        );
+        assert_eq!(drawn.combined(&[]).finish.len(), drawn.finish.len());
     }
 
     #[test]

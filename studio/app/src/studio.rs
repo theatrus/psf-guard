@@ -410,6 +410,9 @@ pub struct Scene {
     /// The stretches, in the same order. None is the view stretch.
     layer_stretches: Vec<Vec<crate::store_tiles::Stretch>>,
     finish: Vec<FinishStep>,
+    /// How many of `finish`, from the first, are steps at the top of the
+    /// stack drawn as Finish steps: part of the combined picture.
+    stacked_finish: usize,
     /// What each layer marked as a step does: a Finish step that changes
     /// only the layers beneath it.
     steps: Vec<seiza_compose::picture::FinishKind>,
@@ -553,9 +556,15 @@ impl Scene {
     /// The combined picture, before the Finish steps: what the canvas
     /// samples for the output stretches resolved from it.
     pub(super) fn combined(&self, nudges: &[f64]) -> Picture {
+        let picture = self.picture(nudges);
         Picture {
-            finish: Vec::new(),
-            ..self.picture(nudges)
+            finish: picture
+                .finish
+                .iter()
+                .take(self.stacked_finish)
+                .cloned()
+                .collect(),
+            ..picture
         }
     }
 }
