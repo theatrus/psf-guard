@@ -20,9 +20,9 @@ half = "2"
 uuid = { version = "1", features = ["v4", "v5", "serde"] }
 sha2 = "0.11"
 seiza-background = "0.4.0"
-# Pinned to the Seiza pull request that adds it, as PSF Guard and PSF Studio
-# pin it, until a release has it.
-seiza-compose = { git = "https://github.com/theatrus/seiza", rev = "a1dbe3d540140e1d778f5b182ab400b96f88e547", default-features = false }
+# Pinned to the Seiza commit on main that added it, as PSF Guard and PSF
+# Studio pin it, until a release has it.
+seiza-compose = { git = "https://github.com/theatrus/seiza", rev = "def5cc3785e1564f783d86cfe8998cc7e19043a6", default-features = false }
 seiza-deconvolution = "0.3.0"
 seiza-fits = "0.9.0"
 seiza-image-io = "0.14.0"
