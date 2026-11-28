@@ -489,6 +489,17 @@ impl StudioDocuments {
         Ok(record)
     }
 
+    /// Renames a document without a new revision. `None` when there is no
+    /// such document.
+    pub fn rename(&self, id: &str, name: &str) -> Result<Option<DocumentRecord>> {
+        let Some(mut record) = self.record(id)? else {
+            return Ok(None);
+        };
+        record.name = clean_name(name)?;
+        self.write_record(&record)?;
+        Ok(Some(record))
+    }
+
     /// Saves a new revision, unless another save arrived first.
     pub fn save(&self, id: &str, save: Save, by: &str, now: i64) -> Result<Option<Saved>> {
         let Some(mut record) = self.record(id)? else {

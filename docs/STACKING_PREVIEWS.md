@@ -630,11 +630,26 @@ the newer version**, which discards them and opens the server's revision.
 **Save this picture to the target** in the panel puts a picture PSF Studio
 opened from stack files on the chosen target, as a new document.
 
+### Name a document
+
+A document from a target starts with the target's name. A picture made
+from stack files takes the OBJECT name in the first file's header. When the
+header has none and the file is named by its hash, as PSF Guard's stored
+stacks are, the picture is called “Untitled picture”. Such a picture takes
+the target's name when you save it to a target or open it from one.
+
+To rename a document in PSF Studio, click its name in the top bar, type the
+new name and press Return; Esc cancels. The rename is an edit: **Undo**
+reverses it, and the next save sends it to the server. On a project's stacks
+page, an editor clicks **Rename** beside a document, types the new name and
+clicks **Rename**. A rename there adds no revision, and PSF Studio takes the
+new name the next time it saves or opens the document.
+
 ### A project's Studio documents
 
 A project's stacks page lists its **PSF Studio documents** under **Stacks**:
-each document's preview, last revision, who saved it and when, and its
-exports, which you can download. **Open in PSF Studio** opens that document.
+each document's name and preview, last revision, who saved it and when, and
+its exports, which you can download. **Open in PSF Studio** opens that document.
 An editor also has:
 
 - **Save as a Color setup**, which saves the document's steps as a Color

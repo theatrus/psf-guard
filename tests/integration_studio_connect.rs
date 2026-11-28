@@ -572,3 +572,50 @@ async fn a_document_of_psf_guard_steps_reads_as_color_processing() {
         "the setup the document came from"
     );
 }
+
+#[tokio::test]
+async fn an_editor_renames_a_document_without_a_new_revision_and_a_viewer_cannot() {
+    let directory = tempfile::tempdir().unwrap();
+    let app = app(&directory);
+    let (token, _) = connected(&app, "editor").await;
+    let base = "/api/db/test/studio-documents";
+    let (status, created, _) =
+        send(&app, Method::POST, base, new_document(), None, Some(&token)).await;
+    assert_eq!(status, StatusCode::OK);
+    let id = created["data"]["id"].as_str().unwrap().to_string();
+    let (status, renamed, _) = send(
+        &app,
+        Method::PATCH,
+        &format!("{base}/{id}"),
+        json!({ "name": "  Iris, Ha blend  " }),
+        None,
+        Some(&token),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(renamed["data"]["name"], "Iris, Ha blend");
+    assert_eq!(renamed["data"]["revision"], 1, "a rename adds no revision");
+    // An empty name is refused.
+    let (status, _, _) = send(
+        &app,
+        Method::PATCH,
+        &format!("{base}/{id}"),
+        json!({ "name": "  " }),
+        None,
+        Some(&token),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let (viewer, _) = connected(&app, "viewer").await;
+    let (status, _, _) = send(
+        &app,
+        Method::PATCH,
+        &format!("{base}/{id}"),
+        json!({ "name": "Mine now" }),
+        None,
+        Some(&viewer),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}

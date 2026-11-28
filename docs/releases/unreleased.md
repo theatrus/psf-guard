@@ -67,6 +67,11 @@
 - PSF Studio's document list shows how long ago each document was saved and
   from which computer, and warns when another computer saved it in the last
   ten minutes. Click a document to list its earlier revisions and open one.
+- Name your PSF Studio documents: click the name in PSF Studio's top bar to
+  rename one, or click **Rename** beside it on the project's stacks page. A
+  document no longer takes a stack file's hash as its name: it starts with
+  the target's name, or “Untitled picture”, and one named by a hash before
+  shows as “Untitled picture” until you rename it.
 - When a target has no channel stacks yet, PSF Studio says so and offers
   **Build stacks in PSF Guard**, which opens the target's Stacks page,
   instead of failing as it prepares the picture.

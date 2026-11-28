@@ -27,6 +27,20 @@ function formatDate(seconds: number): string {
   });
 }
 
+/** What a picture is called when nothing better names it. */
+const UNTITLED_PICTURE = 'Untitled picture';
+
+/**
+ * A document's name for a person. A picture made from a stack file stored
+ * under its hash took that hash as its name; it reads as "Untitled picture".
+ */
+function shownName(name: string): string {
+  let bare = name.trim();
+  while (bare.endsWith(' (copy)')) bare = bare.slice(0, -' (copy)'.length).trimEnd();
+  if (bare === '' || /^[0-9a-f]{16,}$/i.test(bare)) return UNTITLED_PICTURE;
+  return name;
+}
+
 /** Who a server without accounts records as saving. */
 const NO_ACCOUNT = 'this computer';
 
@@ -72,11 +86,21 @@ export default function StudioDocuments({ dbId, projectId, canWrite }: StudioDoc
   });
   const [status, setStatus] = useState<{ id: string; text: string; error: boolean } | null>(null);
   const [naming, setNaming] = useState<{ id: string; name: string } | null>(null);
+  const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
 
   const remove = useMutation({
     mutationFn: (document: StudioDocumentSummary) => apiClient.deleteStudioDocument(dbId, document.id),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey }),
     onError: (error, document) => setStatus({ id: document.id, text: errorMessage(error), error: true }),
+  });
+  const rename = useMutation({
+    mutationFn: ({ id, name }: { id: string; name: string }) =>
+      apiClient.renameStudioDocument(dbId, id, name),
+    onSuccess: () => {
+      setRenaming(null);
+      void queryClient.invalidateQueries({ queryKey });
+    },
+    onError: (error, { id }) => setStatus({ id, text: errorMessage(error), error: true }),
   });
   const saveSetup = useMutation({
     mutationFn: async ({ id, name }: { id: string; name: string }) => {
@@ -94,7 +118,7 @@ export default function StudioDocuments({ dbId, projectId, canWrite }: StudioDoc
   const confirmDelete = (document: StudioDocumentSummary) => {
     const exports = document.exports.length;
     const question =
-      `Delete the Studio document “${document.name}” and its saved revisions` +
+      `Delete the Studio document “${shownName(document.name)}” and its saved revisions` +
       (exports > 0 ? `, and its ${exports} export${exports === 1 ? '' : 's'}` : '') +
       '? Files no other document uses are deleted from the server. This cannot be undone. ' +
       'A copy open in PSF Studio stays on that computer.';
@@ -127,7 +151,33 @@ export default function StudioDocuments({ dbId, projectId, canWrite }: StudioDoc
                 <div className="studio-document-preview studio-document-no-preview" aria-hidden="true" />
               )}
               <div className="studio-document-main">
-                <strong>{document.name}</strong>
+                {renaming?.id === document.id ? (
+                  <form
+                    className="studio-document-setup"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      if (renaming.name.trim()) rename.mutate({ id: document.id, name: renaming.name.trim() });
+                    }}
+                  >
+                    <label>
+                      Name{' '}
+                      <input
+                        value={renaming.name}
+                        onChange={(event) => setRenaming({ id: document.id, name: event.target.value })}
+                        maxLength={120}
+                        autoFocus
+                      />
+                    </label>
+                    <button type="submit" className="save-button" disabled={rename.isPending}>
+                      {rename.isPending ? 'Renaming…' : 'Rename'}
+                    </button>
+                    <button type="button" className="cancel-button" onClick={() => setRenaming(null)}>
+                      Cancel
+                    </button>
+                  </form>
+                ) : (
+                  <strong>{shownName(document.name)}</strong>
+                )}
                 <span className="muted">
                   {target !== undefined && targetNames.get(target) ? `${targetNames.get(target)} · ` : ''}
                   Revision {document.revision}, {savedBy(document)} on {formatDate(document.saved_at)}
@@ -194,11 +244,25 @@ export default function StudioDocuments({ dbId, projectId, canWrite }: StudioDoc
                     className="stack-preview-card-action"
                     onClick={() => {
                       setStatus(null);
-                      setNaming({ id: document.id, name: document.name.slice(0, 64) });
+                      setNaming({ id: document.id, name: shownName(document.name).slice(0, 64) });
                     }}
                     title="Saves the document's steps as a Color processing setup, which color previews can start from. Works when every step is one PSF Guard's color pipeline runs."
                   >
                     Save as a Color setup
+                  </button>
+                )}
+                {canWrite && renaming?.id !== document.id && (
+                  <button
+                    type="button"
+                    className="stack-preview-card-action"
+                    onClick={() => {
+                      setStatus(null);
+                      const name = shownName(document.name);
+                      setRenaming({ id: document.id, name: name === UNTITLED_PICTURE ? '' : name });
+                    }}
+                    title="Renames the document here and in PSF Studio. Adds no revision."
+                  >
+                    Rename
                   </button>
                 )}
                 {canWrite && (

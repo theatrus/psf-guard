@@ -79,6 +79,12 @@ pub struct ServerLink {
     /// is taken as sent, so opening alone saves nothing.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub opened: bool,
+    /// The document's name on the server, as this computer last saw it. A
+    /// save sends the picture's name only when it differs, so a rename on
+    /// the project page is not undone; a newer name from the server is
+    /// taken when the picture has not been renamed here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 /// The link beside a document: `Iris.json` has `Iris.server.json`.
@@ -274,6 +280,8 @@ fn send(
             id,
             json!({
                 "base_revision": revision,
+                // Only a rename made here goes up.
+                "name": (link.name.as_deref() != Some(name)).then_some(name),
                 "document": document,
                 "files": files,
                 "preview": preview,
@@ -666,6 +674,18 @@ impl Studio {
                 link.document_id = Some(record.id.clone());
                 link.revision = record.current().map(|current| current.revision);
                 link.sent = Some(sent);
+                // Renamed on the server, and not here since: the picture
+                // takes the server's name. The text the server holds is
+                // the same otherwise, so this sends nothing more.
+                let known = link.name.clone();
+                if known.as_deref() != Some(record.name.as_str())
+                    && known.as_deref() == Some(self.document.name.as_str())
+                {
+                    self.document.name = record.name.clone();
+                    self.save_document();
+                    link.sent = Some(text_hash(&self.document.to_json()));
+                }
+                link.name = Some(record.name.clone());
                 if let Err(reason) = link.save(&path) {
                     self.server_save.state = Some(SaveState::LocalOnly(format!(
                         "the link was not saved: {reason}"
@@ -770,9 +790,12 @@ impl Studio {
 
     /// Puts the open picture on a server target as a new document: it is
     /// linked to the target, and the next save creates the document there.
+    /// A picture whose name came from a file's hash takes the target's
+    /// name, `target_name`, when there is one.
     pub(super) fn save_picture_to(
         &mut self,
         target: &super::open::TargetLink,
+        target_name: Option<&str>,
     ) -> Result<(), String> {
         let path = self
             .document_path()
@@ -780,6 +803,11 @@ impl Studio {
             .ok_or_else(|| "Open a picture first".to_string())?;
         if self.server_save.link.is_some() {
             return Err("This picture is on a server already".to_string());
+        }
+        if let Some(name) = target_name
+            && crate::studio_model::is_generated_name(&self.document.name)
+        {
+            self.rename_picture(name)?;
         }
         let link = ServerLink {
             server: target.server.clone(),
@@ -887,6 +915,15 @@ fn fetch(
     if !keep_local {
         let text = client.revision_text(&target.database, id, read)?;
         let text = localize(client, &target.database, &entry.files, &text, document_path)?;
+        // The record's name wins over the one in the revision: a rename on
+        // the project page adds no revision.
+        let text = match Document::from_json(&text) {
+            Ok(mut document) if document.name != record.name => {
+                document.name = record.name.clone();
+                document.to_json()
+            }
+            _ => text,
+        };
         let temporary = document_path.with_extension("json.saving");
         std::fs::write(&temporary, &text)
             .and_then(|()| std::fs::rename(&temporary, document_path))
@@ -900,15 +937,39 @@ fn fetch(
         document_id: Some(id.to_string()),
         // Edits kept here were made from the revision they were made from.
         revision: if keep_local {
-            local.and_then(|link| link.revision)
+            local.as_ref().and_then(|link| link.revision)
         } else {
             Some(revision)
         },
         sent: None,
         opened: !keep_local,
+        name: if keep_local {
+            local.as_ref().and_then(|link| link.name.clone())
+        } else {
+            Some(record.name.clone())
+        },
     }
     .save(document_path)
     .map_err(Failure::Failed)
+}
+
+/// Gives a fetched document named from a file's hash the target's name,
+/// in the file written for this computer.
+fn name_from_target(document_path: &Path, target_name: &str) {
+    let Ok(text) = std::fs::read_to_string(document_path) else {
+        return;
+    };
+    let Ok(mut document) = Document::from_json(&text) else {
+        return;
+    };
+    if !crate::studio_model::is_generated_name(&document.name) || target_name.trim().is_empty() {
+        return;
+    }
+    document.name = target_name.trim().to_string();
+    let temporary = document_path.with_extension("json.saving");
+    if std::fs::write(&temporary, document.to_json()).is_ok() {
+        let _ = std::fs::rename(&temporary, document_path);
+    }
 }
 
 /// What fetching a document came to.
@@ -1021,6 +1082,17 @@ impl Studio {
                     return Ok(Fetched::Ready { name, note: None });
                 };
                 let record = client.document_record(&target.database, &id)?;
+                // A document named from a file's hash opens under the
+                // target's name; its next save sends the name.
+                let target_name = client
+                    .targets(&target.database, target.project)
+                    .ok()
+                    .and_then(|targets| {
+                        targets
+                            .into_iter()
+                            .find(|listed| listed.id == target.target)
+                            .map(|listed| listed.name)
+                    });
                 let latest = record.current().map_or(0, |current| current.revision);
                 let at = at.filter(|revision| *revision != latest);
                 let stacks_note = match stacks_changed(&record.stacks, &now) {
@@ -1052,14 +1124,11 @@ impl Studio {
                     Some(revision) => format!("{base}-{short}-r{revision}"),
                     None => format!("{base}-{short}"),
                 };
-                fetch(
-                    &client,
-                    &target,
-                    &record,
-                    &folder.join(format!("{name}.json")),
-                    discard,
-                    at,
-                )?;
+                let path = folder.join(format!("{name}.json"));
+                fetch(&client, &target, &record, &path, discard, at)?;
+                if let Some(target_name) = target_name {
+                    name_from_target(&path, &target_name);
+                }
                 Ok(Fetched::Ready { name, note })
             })();
             *filled.lock().expect("fetching") = Some(outcome);
@@ -1119,6 +1188,7 @@ mod tests {
             revision: Some(3),
             sent: Some(text_hash("{}")),
             opened: false,
+            name: Some("Iris".to_string()),
         };
         link.save(&document).unwrap();
         assert_eq!(ServerLink::load(&document), Some(link));

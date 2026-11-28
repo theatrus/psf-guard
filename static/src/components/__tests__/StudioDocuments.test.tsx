@@ -64,6 +64,37 @@ describe('StudioDocuments', () => {
     expect(screen.queryByRole('button', { name: 'Save as a Color setup' })).toBeNull();
   });
 
+  it('shows a name made from a hash as Untitled picture, and an editor renames it', async () => {
+    const hashed = { ...iris, name: `${'bc9172'.repeat(10)}ab (copy)` };
+    let listed = [hashed];
+    const renamed: string[] = [];
+    server.use(
+      http.get('/api/db/test/studio-documents', () => ok(listed)),
+      http.patch('/api/db/test/studio-documents/:id', async ({ request }) => {
+        const { name } = (await request.json()) as { name: string };
+        renamed.push(name);
+        listed = [{ ...hashed, name }];
+        return ok(listed[0]);
+      }),
+    );
+    show(true);
+    expect(await screen.findByText('Untitled picture')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Rename' }));
+    const field = screen.getByLabelText('Name');
+    expect(field).toHaveValue('');
+    fireEvent.change(field, { target: { value: '  Iris, final  ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Rename' }));
+    expect(await screen.findByText('Iris, final')).toBeInTheDocument();
+    expect(renamed).toEqual(['Iris, final']);
+  });
+
+  it('offers no Rename to a viewer', async () => {
+    server.use(http.get('/api/db/test/studio-documents', () => ok([iris])));
+    show(false);
+    expect(await screen.findByText('Iris')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Rename' })).toBeNull();
+  });
+
   it('deletes a document after the confirmation names what goes', async () => {
     let documents = [iris];
     let deleted = '';

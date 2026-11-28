@@ -142,6 +142,9 @@ pub(super) fn brand_mark() -> Arc<gpui::Image> {
     .clone()
 }
 
+/// The most characters a picture's name keeps, as PSF Guard's server does.
+const MAX_PICTURE_NAME: usize = 120;
+
 /// The names documents had before they were named after their picture.
 const SETUP_NAMES: [&str; 2] = ["PSF Guard default color", "Default"];
 
@@ -151,7 +154,7 @@ impl Studio {
     pub(super) fn picture_name(&self) -> String {
         let named = &self.document.name;
         if !SETUP_NAMES.contains(&named.as_str()) {
-            return named.clone();
+            return crate::studio_model::shown_name(named).to_string();
         }
         self.store_path()
             .and_then(|store| store.file_stem())
@@ -3451,7 +3454,130 @@ impl Studio {
             })
     }
 
-    fn top_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// Starts renaming the picture: the name in the top bar becomes a field
+    /// holding the current name.
+    fn start_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let focus = self
+            .rename_focus
+            .get_or_insert_with(|| cx.focus_handle())
+            .clone();
+        // A picture named from a hash starts with an empty field.
+        self.renaming = Some(
+            if crate::studio_model::is_generated_name(&self.document.name) {
+                String::new()
+            } else {
+                self.picture_name()
+            },
+        );
+        focus.focus(window, cx);
+    }
+
+    /// Renames the picture, as the person typed it. An empty name keeps
+    /// the old one. The rename is an edit: it can be undone, and it is
+    /// saved, to the server too.
+    pub(super) fn rename_picture(&mut self, name: &str) -> Result<(), String> {
+        let name: String = name
+            .chars()
+            .filter(|letter| !letter.is_control())
+            .collect::<String>()
+            .trim()
+            .chars()
+            .take(MAX_PICTURE_NAME)
+            .collect();
+        if name.is_empty() {
+            return Err("A picture needs a name".to_string());
+        }
+        if name != self.document.name {
+            self.document.name = name;
+            self.note_edit();
+            self.save_document();
+        }
+        Ok(())
+    }
+
+    /// The picture's name, which a click turns into a field to rename it.
+    fn name_field(&self, window: &Window, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let Some(typed) = self.renaming.clone() else {
+            return div()
+                .id("picture-name")
+                .px_2()
+                .py_1()
+                .rounded_sm()
+                .cursor_text()
+                .hover(|name| name.bg(rgb(CONTROL)))
+                .child(self.picture_name())
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.start_rename(window, cx);
+                    cx.notify();
+                }))
+                .into_any_element();
+        };
+        let focus = self
+            .rename_focus
+            .clone()
+            .unwrap_or_else(|| cx.focus_handle());
+        let focused = focus.is_focused(window);
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(
+                div()
+                    .id("picture-name-field")
+                    .track_focus(&focus)
+                    .min_w(px(220.0))
+                    .px_2()
+                    .py_1()
+                    .rounded_sm()
+                    .bg(rgb(CONTROL))
+                    .border_1()
+                    .border_color(rgb(SELECTED))
+                    .cursor_text()
+                    .child(format!("{typed}{}", if focused { "▏" } else { "" }))
+                    .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                        let keystroke = &event.keystroke;
+                        let Some(field) = this.renaming.as_mut() else {
+                            return;
+                        };
+                        if keystroke.modifiers.platform && keystroke.key == "v" {
+                            if let Some(text) =
+                                cx.read_from_clipboard().and_then(|item| item.text())
+                            {
+                                field.push_str(text.trim());
+                            }
+                        } else if keystroke.key == "backspace" {
+                            if keystroke.modifiers.alt || keystroke.modifiers.platform {
+                                field.clear();
+                            } else {
+                                field.pop();
+                            }
+                        } else if keystroke.key == "enter" {
+                            let typed = field.clone();
+                            match this.rename_picture(&typed) {
+                                Ok(()) => this.renaming = None,
+                                Err(reason) => this.say(&reason),
+                            }
+                        } else if keystroke.key == "escape" {
+                            this.renaming = None;
+                        } else if !keystroke.modifiers.platform
+                            && !keystroke.modifiers.control
+                            && let Some(letters) = &keystroke.key_char
+                        {
+                            field.push_str(letters);
+                        } else {
+                            return;
+                        }
+                        cx.stop_propagation();
+                        cx.notify();
+                    })),
+            )
+            .child(Self::note(
+                "Press Return to rename, or Esc to cancel".to_string(),
+            ))
+            .into_any_element()
+    }
+
+    fn top_bar(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let splits = Split::ALL
             .into_iter()
             .enumerate()
@@ -3488,7 +3614,7 @@ impl Studio {
                     ),
             )
             .child(div().w(px(1.0)).h(px(20.0)).bg(rgb(CONTROL)))
-            .child(div().px_2().child(self.picture_name()))
+            .child(self.name_field(window, cx))
             .when_some(self.server_save_line(), |bar, line| {
                 bar.child(div().max_w(px(360.0)).child(Self::note(line)))
             })
@@ -3819,7 +3945,7 @@ impl Render for Studio {
                 this.redo();
                 cx.notify();
             }))
-            .child(self.top_bar(cx))
+            .child(self.top_bar(window, cx))
             .child(self.context_strip())
             .child(
                 div()

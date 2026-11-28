@@ -1064,6 +1064,10 @@ pub struct Studio {
     server_save: server_documents::ServerSave,
     /// What the last export said: how far it has got, or how it ended.
     export_line: String,
+    /// The name being typed while the picture is renamed, and the field's
+    /// focus.
+    renaming: Option<String>,
+    rename_focus: Option<gpui::FocusHandle>,
     /// Whether a TIFF export holds 32-bit floats, in place of 16 bits.
     tiff_float: bool,
     /// The export's format, by extension; `None` is AVIF for an HDR picture
@@ -1348,6 +1352,8 @@ impl Studio {
                 servers: Default::default(),
                 server_save: server_documents::ServerSave::new(),
                 export_line: String::new(),
+                renaming: None,
+                rename_focus: None,
                 tiff_float: false,
                 export_format: None,
                 last_headroom: crate::tone_step::DEFAULT_HEADROOM,

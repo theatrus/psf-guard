@@ -499,6 +499,13 @@ impl Studio {
                 }
             }
             "servers" => Ok(self.control_servers()),
+            "rename" => match params["name"].as_str() {
+                Some(name) => self.rename_picture(name).map(|()| {
+                    self.renaming = None;
+                    json!({ "name": self.document.name })
+                }),
+                None => Err("`name` is needed".to_string()),
+            },
             "connect_server" => match params["address"].as_str() {
                 Some(address) => Ok(self.control_connect(address)),
                 None => Err("`address` is needed".to_string()),

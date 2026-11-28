@@ -197,6 +197,30 @@ pub async fn export_route(
 
 /// `DELETE /studio-documents/{id}`: the document, its revisions, and the
 /// files only it uses.
+/// The body of a rename.
+#[derive(Debug, serde::Deserialize)]
+pub struct Rename {
+    pub name: String,
+}
+
+/// `PATCH /studio-documents/{id}`: renames a document without a new
+/// revision.
+pub async fn rename_route(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+    Path((_db, id)): Path<(String, String)>,
+    Json(rename): Json<Rename>,
+) -> Result<Response, AppError> {
+    let store = store(&state, &ctx.id)?;
+    match blocking(&state, move || store.rename(&id, &rename.name)).await? {
+        Some(record) => Ok(Json(ApiResponse::success(
+            crate::studio_documents::DocumentSummary::from(&record),
+        ))
+        .into_response()),
+        None => Err(AppError::NotFound),
+    }
+}
+
 pub async fn delete_route(
     State(state): State<Arc<AppState>>,
     ctx: DbContext,

@@ -131,10 +131,11 @@ const SETUP_NAMES: [&str; 2] = ["PSF Guard default color", "Default"];
 /// A picture's name from its sources folder: the folder's name without
 /// `.sources`.
 fn title_of_sources(folder: &Path) -> String {
-    folder.file_stem().map_or_else(
-        || "Picture".to_string(),
-        |stem| stem.to_string_lossy().into_owned(),
-    )
+    folder
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .filter(|stem| !crate::studio::is_generated_name(stem))
+        .unwrap_or_else(|| crate::studio::UNTITLED_PICTURE.to_string())
 }
 
 /// The file in a sources folder that holds the plate solve of the first
@@ -296,10 +297,12 @@ pub fn studio_files(options: StudioFilesOptions) -> Result<()> {
         .map(|object| object.trim().to_string())
         .filter(|object| !object.is_empty())
         .unwrap_or_else(|| {
-            first.file_stem().map_or_else(
-                || "Picture".to_string(),
-                |stem| stem.to_string_lossy().into_owned(),
-            )
+            // A file stored under its hash names nothing a person chose.
+            first
+                .file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+                .filter(|stem| !crate::studio::is_generated_name(stem))
+                .unwrap_or_else(|| crate::studio::UNTITLED_PICTURE.to_string())
         });
     stacks[0].sky_orientation = Some(crate::server::stack_preview::StackSkyOrientation {
         convention: crate::server::stack_preview::SOURCE_ORIENTATION_NAME.into(),

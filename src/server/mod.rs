@@ -281,6 +281,7 @@ pub fn api_router(state: Arc<AppState>) -> Router {
             "/studio-documents/{id}",
             get(studio_documents::record_route)
                 .put(studio_documents::save_route)
+                .patch(studio_documents::rename_route)
                 .delete(studio_documents::delete_route)
                 .layer(DefaultBodyLimit::max(
                     crate::studio_documents::MAX_DOCUMENT_BYTES + 1024 * 1024,

@@ -623,6 +623,14 @@ Built as proposed, with these differences:
   keeps it (`saved_from`, at most 64 characters). Studio's list says a
   document may still be open on another computer when that computer saved
   it in the last ten minutes. The web list shows the computer too.
+- **Names.** A picture from stack files is named from OBJECT, never from a
+  file's hash (`is_generated_name`: 16 or more hex digits, perhaps with
+  " (copy)"); a hash name shows as “Untitled picture” and takes the
+  target's name when the picture is put on or opened from a target.
+  Studio renames in the top bar as an edit, and a save sends the name only
+  when it differs from the server's name as the link last saw it
+  (`ServerLink::name`), so a rename on the project page
+  (`PATCH /studio-documents/{id}`, no revision) is kept and taken in.
 - **Changed stacks.** A record's stacks keep the frame they were
   registered to and their size. Opening compares them with the target's
   stacks: the same frame and size open with a note; another frame or size

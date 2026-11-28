@@ -644,12 +644,23 @@ impl Studio {
         })
     }
 
+    /// The chosen target's name, once its project's targets are listed.
+    fn chosen_target_name(&self) -> Option<String> {
+        let chosen = self.servers.target?;
+        let (targets, _) = self.servers.targets.done()?;
+        targets
+            .iter()
+            .find(|target| target.id == chosen)
+            .map(|target| target.name.clone())
+    }
+
     /// Puts the open picture on the chosen target.
     fn save_picture_to_chosen(&mut self) {
         let Some(target) = self.chosen_target() else {
             return;
         };
-        match self.save_picture_to(&target) {
+        let name = self.chosen_target_name();
+        match self.save_picture_to(&target, name.as_deref()) {
             Ok(()) => {
                 self.servers.message =
                     Some("The picture is saved to the target as a new document.".to_string());
@@ -1327,7 +1338,7 @@ impl Studio {
             Self::panel_row(
                 SharedString::from(format!("document-{id}")),
                 chosen,
-                document.name.clone(),
+                crate::studio_model::shown_name(&document.name).to_string(),
                 Some(detail),
                 cx,
                 move |this| this.choose_document(open.clone()),
@@ -1635,7 +1646,8 @@ impl Studio {
         let target = self
             .chosen_target()
             .ok_or_else(|| "No target is chosen".to_string())?;
-        self.save_picture_to(&target)?;
+        let name = self.chosen_target_name();
+        self.save_picture_to(&target, name.as_deref())?;
         Ok(self.control_servers())
     }
 

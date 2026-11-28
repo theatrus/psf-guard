@@ -1166,6 +1166,23 @@ export const apiClient = {
 
   /** Deletes a Studio document, its revisions, and the files no other
    *  document uses. */
+  /** Renames a Studio document without a new revision. */
+  renameStudioDocument: async (
+    dbId: string,
+    id: string,
+    name: string,
+  ): Promise<StudioDocumentSummary> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.patch<ApiResponse<StudioDocumentSummary>>(
+      `/db/${encodeURIComponent(dbId)}/studio-documents/${encodeURIComponent(id)}`,
+      { name },
+    );
+    if (!data.success || !data.data) {
+      throw new Error(data.error || 'The Studio document was not renamed');
+    }
+    return data.data;
+  },
+
   deleteStudioDocument: async (dbId: string, id: string): Promise<void> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.delete<ApiResponse<unknown>>(

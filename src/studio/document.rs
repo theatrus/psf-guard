@@ -646,6 +646,31 @@ impl CropRecord {
     }
 }
 
+/// The name a picture gets when nothing better names it.
+pub const UNTITLED_PICTURE: &str = "Untitled picture";
+
+/// Whether `name` was made from a file's hash rather than chosen: 16 or more
+/// hexadecimal digits, perhaps followed by " (copy)". PSF Guard stores stack
+/// files under their hash, so a picture made from them without an OBJECT
+/// header used to take that as its name.
+pub fn is_generated_name(name: &str) -> bool {
+    let mut name = name.trim();
+    while let Some(rest) = name.strip_suffix(" (copy)") {
+        name = rest.trim_end();
+    }
+    name.len() >= 16 && name.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+/// A picture's name for a person: its own, or "Untitled picture" for one
+/// made from a hash.
+pub fn shown_name(name: &str) -> &str {
+    if is_generated_name(name) || name.trim().is_empty() {
+        UNTITLED_PICTURE
+    } else {
+        name
+    }
+}
+
 impl Document {
     /// An empty document with every stage.
     pub fn new(name: &str) -> Self {
@@ -1790,5 +1815,22 @@ impl Document {
         // And from before the Finish stage was adjustment layers.
         document.adopt_adjustment_layers();
         Ok(document)
+    }
+}
+
+#[cfg(test)]
+mod name_tests {
+    use super::*;
+
+    #[test]
+    fn a_hash_is_not_a_name_a_person_chose() {
+        let hash = "bc917211e5bbacc60c11aae57b7763e558e3800024eeb56fb9f3ac23319192fb";
+        assert!(is_generated_name(hash));
+        assert!(is_generated_name(&format!("{hash} (copy) (copy)")));
+        assert!(!is_generated_name("NGC 7023"));
+        assert!(!is_generated_name("cafe"));
+        assert_eq!(shown_name(hash), UNTITLED_PICTURE);
+        assert_eq!(shown_name("Iris"), "Iris");
+        assert_eq!(shown_name("  "), UNTITLED_PICTURE);
     }
 }
