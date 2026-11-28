@@ -293,10 +293,15 @@ impl Studio {
             })
             // A step on layers or on the picture can be limited by
             // brightness; an input's steps are baked into the input.
-            .when(stage != StageKind::Linear && stage != StageKind::Stretch, |pane| {
-                pane.when(step.mask.is_none(), |pane| pane.child(Self::heading("Mask")))
+            .when(
+                stage != StageKind::Linear && stage != StageKind::Stretch,
+                |pane| {
+                    pane.when(step.mask.is_none(), |pane| {
+                        pane.child(Self::heading("Mask"))
+                    })
                     .child(self.range_block(&step.mask, cx))
-            })
+                },
+            )
             .when(masked, |pane| {
                 pane.child(Self::act(
                     "Remove mask",
@@ -385,6 +390,44 @@ impl Studio {
                 ))
                 .children(Self::help(
                     "Takes the stretched sky up to this level to black, and stretches the range above it so white stays white, as the layered stretches' Sky floor does. Use it for what background extraction leaves. 0 leaves the stretch as it is.",
+                ));
+        }
+        // Core compression before any stretch but the layered ones, which
+        // read maps of their own (Layered, HDR has its own compression).
+        if !output && !kind.starts_with("layered") {
+            let core: seiza_stretch::CoreCompression = settings
+                .get(super::panes::CORE_COMPRESSION)
+                .and_then(|value| serde_json::from_value(value.clone()).ok())
+                .unwrap_or(seiza_stretch::CoreCompression {
+                    amount: 0.0,
+                    ..Default::default()
+                });
+            let (low, high) = super::panes::CORE_THRESHOLD;
+            block = block
+                .child(Self::heading("Core compression"))
+                .child(self.labelled_slider(
+                    format!("Amount {:.2}", core.amount),
+                    SliderId::CoreAmount,
+                    core.amount as f32,
+                    cx,
+                ))
+                .when(core.amount > 0.0, |block| {
+                    block
+                        .child(self.labelled_slider(
+                            format!("Threshold {:.0}σ", core.threshold),
+                            SliderId::CoreThreshold,
+                            ((core.threshold / low).ln() / (high / low).ln()) as f32,
+                            cx,
+                        ))
+                        .child(self.labelled_slider(
+                            format!("Size {:.0} px", core.scale),
+                            SliderId::CoreScale,
+                            (core.scale.ln() / 256f64.ln()) as f32,
+                            cx,
+                        ))
+                })
+                .children(Self::help(
+                    "Brings a bright core's broad glow down before the stretch, so the stretch can show more inside it. Structure smaller than Size keeps its contrast. Threshold is how far above the background, in noise sigmas, the compression starts. 0 leaves the stretch as it is.",
                 ));
         }
         // In an HDR picture every stretch continues into the headroom; the
@@ -1438,7 +1481,11 @@ impl Studio {
     /// A layer's mask, and the button that removes it.
     /// A mask by brightness: its sliders when the layer or step has one, or
     /// the button that adds one when it has no mask.
-    pub(super) fn range_block(&self, mask: &Option<MaskRecord>, cx: &mut Context<Self>) -> gpui::Div {
+    pub(super) fn range_block(
+        &self,
+        mask: &Option<MaskRecord>,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
         match mask {
             Some(MaskRecord::Range { low, high, feather }) => {
                 let to = if *high >= super::panes::RANGE_BRIGHTEST {

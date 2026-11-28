@@ -77,6 +77,11 @@
   fit your inputs, each input's tools and the parts it goes to, and a card
   for each part with its blend, palette, order and **Remove part**. Every
   change there is an ordinary edit of the layers, which **Undo** reverses.
+- Any stretch in PSF Studio can take **Core compression**, which used to be
+  part of the Layered, HDR stretch only: it brings a bright core's broad
+  glow down before the stretch, so the stretch can show the structure
+  inside the core. Set **Amount**, **Threshold** and **Size** under a
+  Stretch step.
 - PSF Studio can limit a layer, an adjustment or a step by brightness:
   **Mask by brightness** under Mask sets **From**, **To** and **Softness**.
   A layer that shows an input follows its own brightness; an adjustment or

@@ -9,11 +9,12 @@ use crate::studio_model::{
 use psf_studio_render::synth::{generate_tile, TileKey, BANDS, DOC_HEIGHT, DOC_WIDTH, TILE};
 use psf_studio_render::{Pyramid, TileSource};
 use seiza_compose::gpu::GpuInput;
-use seiza_compose::picture::{LayeredStage, Transfer, TransferStage};
+use seiza_compose::picture::{CoreStage, LayeredStage, Transfer, TransferStage};
 use seiza_compose::ReferenceRegion;
 use seiza_stretch::{
-    LayeredMaps, ResolvedCurve, ResolvedLayered, ResolvedSampleDomain, SampleDomain,
-    SampleNormalization, StretchAnalysis, StretchConfig, StretchModel, StretchParams,
+    CoreCompression, LayeredMaps, ResolvedCore, ResolvedCurve, ResolvedLayered,
+    ResolvedSampleDomain, SampleDomain, SampleNormalization, StretchAnalysis, StretchConfig,
+    StretchModel, StretchParams,
 };
 use std::collections::{BTreeMap, VecDeque};
 use std::path::Path;
@@ -181,6 +182,35 @@ fn maps_key(layered: &ResolvedLayered) -> MapsKey {
     ]
 }
 
+/// The maps key of a core compression: apart from every layered stretch's
+/// by its third entry.
+fn core_key(core: &ResolvedCore) -> MapsKey {
+    [
+        core.median.to_bits(),
+        core.noise.to_bits(),
+        2,
+        core.params.amount.to_bits(),
+        core.params.threshold.to_bits(),
+        core.params.scale.to_bits(),
+        0,
+    ]
+}
+
+/// One stage of a band's stretch: one of Seiza's stretches, or core
+/// compression, which brings a bright core's broad glow down before the
+/// stretch that follows it.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Stretch {
+    Model(StretchModel),
+    Core(CoreCompression),
+}
+
+impl From<StretchModel> for Stretch {
+    fn from(model: StretchModel) -> Self {
+        Stretch::Model(model)
+    }
+}
+
 /// What a plane stretched for display is divided by on the way to the
 /// canvas: the brightest value an HDR stretch gives, at the most headroom.
 /// An SDR plane runs from 0 to 1 within it.
@@ -262,6 +292,24 @@ impl BandStretch {
         Some(maps)
     }
 
+    /// The maps of a core compression of the band, measured from its
+    /// quarter-resolution copy and kept for the settings that made them.
+    fn core_maps(&self, core: &ResolvedCore) -> Option<Arc<LayeredMaps>> {
+        let quarter = self.quarter.as_ref()?;
+        let key = core_key(core);
+        let mut known = self.maps.lock().ok()?;
+        if let Some((_, maps)) = known.iter().find(|(other, _)| *other == key) {
+            return Some(maps.clone());
+        }
+        let (samples, width, height) = quarter.as_ref();
+        let maps = Arc::new(core.measure(samples, *width, *height));
+        if known.len() == 4 {
+            known.remove(0);
+        }
+        known.push((key, maps.clone()));
+        Some(maps)
+    }
+
     /// The tail that takes `curve` into an HDR picture's `headroom`: from a
     /// knee at three quarters of SDR white to the peak at the band's
     /// brightest, measured over the whole band at a quarter of its
@@ -271,6 +319,7 @@ impl BandStretch {
         &self,
         curve: ResolvedCurve,
         (headroom, knee): (f64, f64),
+        compressed_white: Option<f32>,
     ) -> Option<seiza_stretch::HdrTail> {
         let (samples, _, _) = self.quarter.as_deref()?;
         // The tail reaches the peak at the band's brightest, which is often
@@ -287,7 +336,10 @@ impl BandStretch {
             .and_then(|brightest| self.domain.apply(&[brightest], 1).ok())
             .and_then(|unit| unit.first().copied())
             .filter(|unit| unit.is_finite());
-        let white = brightest.map_or(quarter, |brightest| brightest.max(quarter));
+        // After core compression the brightest is what the compression
+        // leaves of it.
+        let white = compressed_white
+            .unwrap_or_else(|| brightest.map_or(quarter, |brightest| brightest.max(quarter)));
         seiza_stretch::HdrTail::resolve(
             curve,
             seiza_stretch::HdrTailParams {
@@ -329,9 +381,9 @@ impl BandStretch {
     /// blur star-core compression needs. `planes` gives the tile channel of
     /// one that is done; one that is not is added to `missing`, and the
     /// stretch is drawn without it meanwhile.
-    pub fn transfer(
+    pub fn transfer<S: Clone + Into<Stretch>>(
         &self,
-        stages: &[StretchModel],
+        stages: &[S],
         nudge: f64,
         hdr: (f64, f64),
         planes: &dyn Fn(&DerivedKey) -> Option<usize>,
@@ -353,6 +405,35 @@ impl BandStretch {
         // The brightest value the stages so far give: above 1 once an HDR
         // stretch reaches into the headroom, which later stretches keep.
         let mut peak = 1.0_f32;
+        // Core compression goes in front of the first stretch, unless that
+        // stretch is a layered one, which reads maps of its own.
+        let all: Vec<Stretch> = stages.iter().cloned().map(Into::into).collect();
+        let first_layered = all.iter().find_map(|stage| match stage {
+            Stretch::Model(model) => Some(matches!(
+                model,
+                StretchModel::Layered(_) | StretchModel::LayeredHdr(_)
+            )),
+            Stretch::Core(_) => None,
+        });
+        let mut compressed_white = None;
+        if first_layered == Some(false)
+            && let Some(params) = all.iter().find_map(|stage| match stage {
+                Stretch::Core(params) if params.amount > 0.0 => Some(*params),
+                _ => None,
+            })
+            && let Ok(core) = ResolvedCore::from_analysis(params, &self.analysis)
+            && let Some(maps) = self.core_maps(&core)
+        {
+            compressed_white = Some(maps.white);
+            transfer.push(TransferStage::Core(CoreStage::new(core, maps)));
+        }
+        let stages: Vec<StretchModel> = all
+            .into_iter()
+            .filter_map(|stage| match stage {
+                Stretch::Model(model) => Some(model),
+                Stretch::Core(_) => None,
+            })
+            .collect();
         for (at, stage) in stages.iter().enumerate() {
             let model = match stage {
                 StretchModel::AutoMtf(params) if nudge != 0.0 => {
@@ -452,7 +533,7 @@ impl BandStretch {
                     },
                 ]);
             } else if let Some(tail) = (at == 0 && headroom > 0.0)
-                .then(|| self.hdr_tail(curve, hdr))
+                .then(|| self.hdr_tail(curve, hdr, compressed_white))
                 .flatten()
             {
                 // In an HDR picture any stretch continues into the headroom
@@ -1629,6 +1710,78 @@ mod tests {
     }
 
     #[test]
+    fn core_compression_goes_before_any_stretch_but_a_layered_one() {
+        // A faint sky with a bright core, at full and quarter resolution.
+        let (width, height) = (64, 64);
+        let value = |x: usize, y: usize| {
+            let r2 = (x as f32 - 32.0).powi(2) + (y as f32 - 32.0).powi(2);
+            100.0 + ((x * 7 + y * 13) % 11) as f32 + 5000.0 * (-r2 / 200.0).exp()
+        };
+        let full: Vec<f32> = (0..width * height)
+            .map(|at| value(at % width, at / width))
+            .collect();
+        let quarter: Vec<f32> = (0..16 * 16)
+            .map(|at| {
+                let (x, y) = ((at % 16) * 4, (at / 16) * 4);
+                (0..16).map(|k| value(x + k % 4, y + k / 4)).sum::<f32>() / 16.0
+            })
+            .collect();
+        let mut band = BandStretch::analyse(&full).unwrap();
+        band.set_quarter(&quarter, 16, 16);
+        let core = Stretch::Core(CoreCompression {
+            amount: 0.6,
+            threshold: 10.0,
+            scale: 8.0,
+        });
+        let auto = StretchModel::AutoMtf(StretchParams::default());
+        let compressed = band.transfer(
+            &[core.clone(), Stretch::Model(auto.clone())],
+            0.0,
+            (0.0, 0.75),
+            &|_| None,
+            &mut Vec::new(),
+        );
+        let at = compressed
+            .stages
+            .iter()
+            .position(|stage| matches!(stage, TransferStage::Core(_)))
+            .expect("a core stage");
+        let curve = compressed
+            .stages
+            .iter()
+            .position(|stage| matches!(stage, TransferStage::Curve(_)))
+            .expect("the stretch");
+        assert!(at < curve, "the compression comes before the stretch");
+        // At the core, the compressed picture is darker than the plain one.
+        let plain = band.transfer(&[auto], 0.0, (0.0, 0.75), &|_| None, &mut Vec::new());
+        let centre = |transfer: &Transfer| {
+            let mut sample = [value(32, 32)];
+            transfer.apply_guided(&mut sample, [32, 32], 1, &|_| None);
+            sample[0]
+        };
+        assert!(
+            centre(&compressed) < centre(&plain) - 0.01,
+            "{} against {}",
+            centre(&compressed),
+            centre(&plain)
+        );
+        // A layered stretch reads maps of its own: no core stage goes first.
+        let layered: StretchModel =
+            serde_json::from_value(serde_json::json!({ "type": "layered" })).unwrap();
+        let alone = band.transfer(
+            &[core, Stretch::Model(layered)],
+            0.0,
+            (0.0, 0.75),
+            &|_| None,
+            &mut Vec::new(),
+        );
+        assert!(!alone
+            .stages
+            .iter()
+            .any(|stage| matches!(stage, TransferStage::Core(_))));
+    }
+
+    #[test]
     fn a_layered_stretch_reads_maps_of_the_whole_band_and_the_picture_s_headroom() {
         // A faint sky with a bright core, at full and quarter resolution.
         let (width, height) = (64, 64);
@@ -1842,7 +1995,7 @@ mod tests {
         let band = BandStretch::analyse(&samples).unwrap();
         // No stretch: the band's range mapped to 0 to 1, and no curve. The
         // view stretch is given as a stretch when a view wants one.
-        let linear = band.transfer(&[], 0.0, (0.0, 0.75), &|_| None, &mut Vec::new());
+        let linear = band.transfer::<Stretch>(&[], 0.0, (0.0, 0.75), &|_| None, &mut Vec::new());
         assert!(linear
             .stages
             .iter()

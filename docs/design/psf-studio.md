@@ -3415,10 +3415,20 @@ Gaps to fix, roughly in the order they got in the way:
 - [x] **A knee for every stretch in HDR mode.** The picture's Knee moves
   where every stretch continues into the headroom, and the tail reaches the
   peak at the band's brightest sample, so no core is left flat at the peak.
-  Still open: core compression, which raises local contrast in the core, is
-  only in Layered, HDR; a stage any stretch can take, or more HDR
-  stretches, would carry it further. The knee is the picture's, not each
-  stretch's.
+  Core compression for any stretch was built later on 2026-11-27 (Seiza
+  #527 at 545a1257): Seiza's `ResolvedCore` takes the HDR layered
+  stretch's compression on its own (the formula is shared, so Layered,
+  HDR is unchanged), and `TransferStage::Core` applies it before whatever
+  stretch follows, reading a map of the blurred log measured from the
+  band's quarter-resolution copy. On the GPU it rides the layered
+  machinery with a core-only flag, and the stretch is the row after it. A
+  Stretch step that is not layered has **Core compression** (Amount,
+  Threshold in sigmas, Size in pixels), kept beside its model as
+  `core_compression`; with HDR the tail reaches the peak at the brightest
+  value after the compression. Found on the way: Seiza's GPU stretch-row
+  cache returned a key's place in its list as the row, which went wrong
+  once a layered stretch had a row after itself; each key keeps its row
+  now. The knee is the picture's, not each stretch's.
 - [x] **Stars' own stretch and star reduction.** A stars input can take a
   stretch of its own, and a stars layer or group a Star reduction (see
   “A stretch of their own, and star reduction”). Since 2026-11-27 the star

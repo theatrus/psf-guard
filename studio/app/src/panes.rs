@@ -17,7 +17,7 @@ use crate::canvas::{Adjustment, ComputedMask, Layer, Mark, MaskBand};
 use crate::derived::{DerivedKey, DerivedKind};
 use crate::image_steps::Accepts;
 use crate::output_stretch::needs_image;
-use crate::store_tiles::{BandState, BandStretch};
+use crate::store_tiles::{BandState, BandStretch, Stretch};
 use crate::studio_model::{
     band_layer, channel_label, color_from_hue, document_from_color_setup, flow_operations, hue_of,
     layer_name, panes, plan, BlendMode, ChannelPlan, CropRecord, Document, LayerRecord,
@@ -266,6 +266,22 @@ pub(super) const STRETCHES: [(&str, &str); 11] = [
 /// own: beside the stretch's model, which Seiza reads, and which PSF Guard's
 /// settings leave out.
 pub(super) const SKY_FLOOR: &str = "sky_floor";
+
+/// The core compression's threshold, from and to, in noise sigmas.
+pub(super) const CORE_THRESHOLD: (f64, f64) = (5.0, 1000.0);
+
+/// The key of a stretch step's core compression, kept beside its model.
+pub(super) const CORE_COMPRESSION: &str = "core_compression";
+
+/// A stretch step's core compression, when it takes out any of the core's
+/// range.
+pub(super) fn core_compression(
+    settings: &serde_json::Value,
+) -> Option<seiza_stretch::CoreCompression> {
+    let core: seiza_stretch::CoreCompression =
+        serde_json::from_value(settings.get(CORE_COMPRESSION)?.clone()).ok()?;
+    (core.amount > 0.0).then_some(core)
+}
 
 /// The highest sky floor, as the layered stretches' own goes.
 pub(super) const MAX_SKY_FLOOR: f64 = 0.5;
@@ -579,7 +595,7 @@ pub(super) fn balance_source(
     document: &Document,
     bands: &Bands,
     layer_bands: &[usize],
-    layer_stretches: &[Vec<StretchModel>],
+    layer_stretches: &[Vec<Stretch>],
     states: &[BandState],
 ) -> Option<BalanceSource> {
     let step = document
@@ -744,7 +760,7 @@ fn finish_kind(
 struct StackParts<'a> {
     layers: &'a mut Vec<Layer>,
     layer_bands: &'a mut Vec<usize>,
-    layer_stretches: &'a mut Vec<Vec<StretchModel>>,
+    layer_stretches: &'a mut Vec<Vec<Stretch>>,
     heals: &'a mut Vec<LayerHeal>,
     steps: &'a mut Vec<FinishKind>,
     stacked: &'a mut Vec<FinishStep>,
@@ -877,7 +893,7 @@ fn push_step_layer(
 fn push_tool_image(
     layers: &mut Vec<Layer>,
     layer_bands: &mut Vec<usize>,
-    layer_stretches: &mut Vec<Vec<StretchModel>>,
+    layer_stretches: &mut Vec<Vec<Stretch>>,
     bands: &Bands,
     step: Uuid,
     stars: bool,
@@ -1212,13 +1228,7 @@ fn band_source(
     plan: &ChannelPlan,
     view_stretch: &[StretchModel],
     omitted: &mut Vec<String>,
-) -> (
-    BandState,
-    usize,
-    Option<(usize, f32)>,
-    Vec<StretchModel>,
-    bool,
-) {
+) -> (BandState, usize, Option<(usize, f32)>, Vec<Stretch>, bool) {
     let label = channel_label(&plan.channel);
     // The steps the view reached that change the input, each with its
     // strength when it is a background extraction.
@@ -1257,7 +1267,7 @@ fn band_source(
     let stages = match &plan.stretch {
         // A channel nothing stretches yet is drawn with the view stretch,
         // and an output leaves it linear.
-        PlannedStretch::Preview => view_stretch.to_vec(),
+        PlannedStretch::Preview => view_stretch.iter().cloned().map(Stretch::from).collect(),
         PlannedStretch::Document(steps) => steps
             .iter()
             .filter_map(|id| document.step(*id))
@@ -1266,16 +1276,26 @@ fn band_source(
                     omitted.push(format!("a stretch of {label} the canvas does not know"));
                     Vec::new()
                 }
-                // A stretch with no sky floor of its own takes one after it.
+                // A stretch with no sky floor of its own takes one after it,
+                // and core compression before it.
                 Some(model) => {
-                    let floor = match (&model, &step.kind) {
-                        (StretchModel::Layered(_) | StretchModel::LayeredHdr(_), _) => None,
-                        (_, StepKind::Operation { settings, .. }) => {
-                            settings[SKY_FLOOR].as_f64().and_then(sky_floor_stage)
-                        }
+                    let layered = matches!(
+                        model,
+                        StretchModel::Layered(_) | StretchModel::LayeredHdr(_)
+                    );
+                    let settings = match &step.kind {
+                        StepKind::Operation { settings, .. } if !layered => Some(settings),
                         _ => None,
                     };
-                    std::iter::once(model).chain(floor).collect()
+                    let floor = settings
+                        .and_then(|settings| settings[SKY_FLOOR].as_f64())
+                        .and_then(sky_floor_stage);
+                    let core = settings.and_then(core_compression);
+                    core.map(Stretch::Core)
+                        .into_iter()
+                        .chain(std::iter::once(Stretch::Model(model)))
+                        .chain(floor.map(Stretch::Model))
+                        .collect::<Vec<_>>()
                 }
             })
             .collect(),
@@ -1487,7 +1507,7 @@ pub(super) fn scene(
     let mut states = vec![BandState::default(); bands.len()];
     let mut layers: Vec<Layer> = Vec::new();
     let mut layer_bands = Vec::new();
-    let mut layer_stretches: Vec<Vec<StretchModel>> = Vec::new();
+    let mut layer_stretches: Vec<Vec<Stretch>> = Vec::new();
     let mut masks: Vec<Vec<Segment>> = Vec::new();
     let mut heals: Vec<LayerHeal> = Vec::new();
     let mut omitted: Vec<String> = Vec::new();
@@ -3065,6 +3085,40 @@ impl Studio {
                 let (_, _, low, high) = tone_step::HDR_KNEE;
                 self.document.hdr_knee = Some(low + (high - low) * position);
             }
+            SliderId::CoreAmount | SliderId::CoreThreshold | SliderId::CoreScale => {
+                let Some(id) = self.selected_step() else {
+                    return;
+                };
+                let Some((
+                    _,
+                    StepRecord {
+                        kind: StepKind::Operation { settings, .. },
+                        ..
+                    },
+                )) = self.document.step(id)
+                else {
+                    return;
+                };
+                let mut settings = settings.clone();
+                let mut core: seiza_stretch::CoreCompression = settings
+                    .get(CORE_COMPRESSION)
+                    .and_then(|value| serde_json::from_value(value.clone()).ok())
+                    .unwrap_or_default();
+                let position = f64::from(position);
+                match slider {
+                    SliderId::CoreAmount => core.amount = (position * 100.0).round() / 100.0,
+                    // From 5 to 1000 sigmas, evenly in their log.
+                    SliderId::CoreThreshold => {
+                        core.threshold = (CORE_THRESHOLD.0
+                            * (CORE_THRESHOLD.1 / CORE_THRESHOLD.0).powf(position))
+                        .round();
+                    }
+                    // From 1 to 256 pixels, evenly in their log.
+                    _ => core.scale = 256f64.powf(position).round().clamp(1.0, 256.0),
+                }
+                settings[CORE_COMPRESSION] = serde_json::to_value(core).unwrap_or_default();
+                self.document.set_step_settings(id, settings);
+            }
             SliderId::SkyFloor => {
                 let Some(id) = self.selected_step() else {
                     return;
@@ -3194,7 +3248,8 @@ impl Studio {
                 self.document.set_step_settings(id, changed);
             }
             SliderId::RangeLow | SliderId::RangeHigh | SliderId::RangeFeather => {
-                if let Some(Some(MaskRecord::Range { low, high, feather })) = self.range_mask_mut() {
+                if let Some(Some(MaskRecord::Range { low, high, feather })) = self.range_mask_mut()
+                {
                     match slider {
                         SliderId::RangeLow => *low = position,
                         SliderId::RangeHigh => {
@@ -4198,7 +4253,10 @@ mod tests {
             "{:?}",
             drawn.omitted
         );
-        assert!(drawn.layers.iter().any(|layer| layer.range == Some(expected)));
+        assert!(drawn
+            .layers
+            .iter()
+            .any(|layer| layer.range == Some(expected)));
         assert_eq!(drawn.finish.len(), 1);
         assert_eq!(drawn.finish[0].range, Some(expected));
     }

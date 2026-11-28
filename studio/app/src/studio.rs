@@ -119,6 +119,13 @@ enum SliderId {
     /// The selected stretch step's sky floor, for a stretch with none of
     /// its own.
     SkyFloor,
+    /// How much of a bright core's range the selected stretch step's core
+    /// compression takes out.
+    CoreAmount,
+    /// Where it starts, in noise sigmas above the background.
+    CoreThreshold,
+    /// The size of the structure it compresses, in pixels.
+    CoreScale,
     /// One setting of the view stretch, by its place in the list of that
     /// stretch's settings.
     ViewStretchParam(usize),
@@ -146,7 +153,10 @@ enum SliderId {
 }
 
 impl SliderId {
-    const ALL: [SliderId; 16] = [
+    const ALL: [SliderId; 19] = [
+        SliderId::CoreAmount,
+        SliderId::CoreThreshold,
+        SliderId::CoreScale,
         SliderId::RangeLow,
         SliderId::RangeHigh,
         SliderId::RangeFeather,
@@ -398,7 +408,7 @@ pub struct Scene {
     /// shows a band, then the ones only computed masks read.
     layer_bands: Vec<usize>,
     /// The stretches, in the same order. None is the view stretch.
-    layer_stretches: Vec<Vec<seiza_stretch::StretchModel>>,
+    layer_stretches: Vec<Vec<crate::store_tiles::Stretch>>,
     finish: Vec<FinishStep>,
     /// What each layer marked as a step does: a Finish step that changes
     /// only the layers beneath it.
@@ -495,7 +505,7 @@ impl Scene {
     fn stretch_of(
         &self,
         band: usize,
-        stages: &[seiza_stretch::StretchModel],
+        stages: &[crate::store_tiles::Stretch],
         nudges: &[f64],
         planes: &dyn Fn(&crate::derived::DerivedKey) -> Option<usize>,
         missing: &mut Vec<crate::derived::DerivedKey>,
