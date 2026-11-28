@@ -535,24 +535,83 @@ progress instead of an idle panel.
 
 PSF Studio is a separate, experimental editor for color processing. It
 starts from a target's channel stacks and keeps its own document of layers,
-so nothing it does changes PSF Guard's previews.
+so nothing it does changes PSF Guard's previews. Studio saves its documents
+to the project on this server, so another computer opens the same picture.
 
-Install PSF Studio on the computer you browse from. Then open a project's
-stacks and click **Open *target* in PSF Studio** over the color stacks. PSF
-Guard shows one link for each target in the color stacks section, when the
-target has channel stacks.
+### Connect PSF Studio to this server
 
-PSF Studio fetches the target's current channel stacks from this server,
-registers them and opens them. Opening the same target again keeps the PSF
-Studio document you left.
+Install PSF Studio on the computer you browse from.
 
-The link carries no sign-in, so PSF Guard shows it only on a server that
-needs none. For a server that needs sign-in, run this on the computer you
-browse from, with an API token from **Settings › Server & access › Users ›
-API tokens**:
+1. In PSF Studio, click **PSF Guard** in the top bar.
+2. Under **Connect to a server**, enter this server's address, such as
+   `guard.example.com` or `localhost:3000`, and click **Connect**.
+3. On a server with sign-in, PSF Studio shows a code and opens the
+   **Connect PSF Studio** page in your browser. Sign in if you need to,
+   check that the page shows the same code, and click **Allow**.
+
+PSF Studio keeps its connection in the macOS Keychain for 90 days. The
+connection can read projects, targets and stacks, and save Studio documents
+and their exports to projects. It cannot grade frames, change plans, sync or
+manage databases. With a read-only account, PSF Studio saves documents on
+its own computer only.
+
+**Settings › Server & access › Users › API tokens** lists each connection as
+“PSF Studio on *computer*”. Click **Revoke** to sign that PSF Studio out; it
+then shows the server as signed out and offers **Connect again**. **Sign
+out** in PSF Studio's panel revokes the connection from the PSF Studio side.
+
+### Open a target
+
+In PSF Studio's **PSF Guard** panel, choose a database, a project and a
+target. **Documents** lists the target's Studio documents, newest first,
+with **New document**. Click **Open**. PSF Studio fetches the document and
+the target's current channel stacks, registers the stacks and opens the
+picture.
+
+In PSF Guard, **Open *target* in PSF Studio** over a project's color stacks
+does the same for the target's newest document. PSF Guard shows one link for
+each target that has channel stacks. On a server with sign-in, the link
+carries a ticket that works once, for about a minute. When PSF Studio is not
+connected to this server yet, it asks whether to connect as your account
+before it keeps the connection.
+
+### Saving
+
+PSF Studio saves the document to the project a few seconds after you stop
+editing. The top bar shows “Saved to *server*”, “Saving to *server*…”, or
+“Saved on this computer only” with the reason. When the server cannot be
+reached, PSF Studio keeps saving on its computer and tries again later.
+
+The server keeps:
+
+- every revision of the document, the last 50 and any revision an export
+  came from;
+- the file an external editor saved at the Finish step, since PSF Studio
+  cannot make it again;
+- exports. **Also save to the project** in PSF Studio's Export section is on
+  for a picture from a server.
+
+The server does not keep what PSF Studio computes from the document: tile
+stores, downloaded stacks and tool results such as star removal. Another
+computer computes them again when it opens the document, which can take
+minutes for some tools.
+
+When another computer saved the document first, PSF Studio keeps your edits
+and shows **Save as a copy**, which saves them as a new document, and **Open
+the newer version**, which discards them and opens the server's revision.
+
+**Save this picture to the target** in the panel puts a picture PSF Studio
+opened from stack files on the chosen target, as a new document.
+
+### From the command line
+
+`psf-guard studio` prepares a target's picture without PSF Studio's panel.
+On a server with sign-in, set `PSF_GUARD_TOKEN` to an API token from
+**Settings › Server & access › Users › API tokens** rather than passing
+`--token`, which every user of the computer can read:
 
 ```bash
-psf-guard studio --server https://guard.example --db DATABASE --project PROJECT --target TARGET --token TOKEN --folder ~/Pictures/studio
+PSF_GUARD_TOKEN=psfg_… psf-guard studio --server https://guard.example --db DATABASE --project PROJECT --target TARGET --folder ~/Pictures/studio
 ```
 
 ## Stacks made by WBPP

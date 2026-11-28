@@ -1152,6 +1152,17 @@ export const apiClient = {
     if (!data.success) throw new Error(data.error || 'The code could not be approved');
   },
 
+  /** A one-time ticket for a link that opens PSF Studio, which lasts about
+   *  a minute. */
+  createStudioTicket: async (): Promise<string> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<{ ticket: string; expires_at: number }>>(
+      '/auth/studio/ticket'
+    );
+    if (!data.data) throw new Error(data.error || 'PSF Studio could not be opened');
+    return data.data.ticket;
+  },
+
   getAuthTokens: async (): Promise<AuthTokenSummary[]> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.get<ApiResponse<AuthTokenSummary[]>>('/auth/tokens');

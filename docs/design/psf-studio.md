@@ -263,7 +263,7 @@ From Studio, a person can sign in to a PSF Guard server, browse its projects
 and stacks, and open one without a link. “Connecting Studio to a PSF Guard
 server” proposes how.
 
-#### Connecting Studio to a PSF Guard server (proposed 2026-11-27)
+#### Connecting Studio to a PSF Guard server (built 2026-11-27)
 
 **Today.** Studio reaches a server only through the `psf-studio://` link or
 `psf-guard studio --server … --token`. The link carries no credential, so
@@ -430,7 +430,7 @@ that person's role.
   bundled Studio saves documents through the desktop app's own store, the
   one a server uses.
 
-#### Saving Studio documents to PSF Guard (proposed 2026-11-27)
+#### Saving Studio documents to PSF Guard (built 2026-11-27)
 
 This replaces the follow-up asked for on 2026-11-25, “PSF Guard records
 Studio documents”, and covers what it listed.
@@ -573,6 +573,46 @@ opens a document whose stacks' fingerprints differ from the record's:
   that came from a server?
 - Should the preview be rendered at every save, or only at close and export?
   Proposed: at close and export, from the canvas, so a save stays small.
+
+#### What is built, and how it differs (2026-11-27)
+
+Built as proposed, with these differences:
+
+- **Where to connect.** **PSF Guard** in Studio's top bar opens a panel over
+  the canvas, not a File menu item: servers and the address field, then
+  databases, projects, targets and the target's documents in columns.
+  **Save this picture to the target** in the panel stands for **File › Save
+  to PSF Guard…**.
+- **Signing out.** A Studio token cannot reach token management, so
+  `POST /api/auth/studio/disconnect` lets it revoke itself.
+- **Records of connects.** Connects, approvals and sign-outs go to the
+  server's log, not the remote audit log, which is per database and about
+  sync. **API tokens** shows a connection as “PSF Studio connection”, without
+  when it was last used: recording each use would write the registry on
+  every request.
+- **The token** lasts a fixed 90 days.
+- **Saving** happens five seconds after edits stop. Nothing is sent when
+  Studio quits, so edits made in the last five seconds wait for the next
+  launch. Opening a revision saves nothing: the link marks it as opened, and
+  the text Studio reads it as counts as sent.
+- **Exports** go to the project when **Also save to the project** is on,
+  which it is for every picture from a server.
+- **The control socket and `psf-studio-mcp`** can connect, browse, open,
+  save a picture to a target, resolve a conflict and sign out.
+
+Not built yet:
+
+- the preview image for lists;
+- the changed-stacks message: a document records its stacks' fingerprints,
+  but opening does not compare them yet;
+- the project page's list of Studio documents in PSF Guard, with **Delete**;
+  deleting is in the API only;
+- **Save as a Color processing setup**.
+
+Found while testing: macOS ties a Keychain item to the program that wrote
+it. A Studio build that is not signed with the same identity, such as each
+development build, asks for Keychain access to the token the last build
+kept. Signed releases keep access.
 
 ### Remote use
 

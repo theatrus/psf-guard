@@ -40,12 +40,25 @@
   page could keep showing it as not installed until you reopened it.
 - A project's color stacks have **Open *target* in PSF Studio** for each
   target there that has channel stacks. The link opens PSF Studio, the separate
-  editor for color processing, which fetches the target's stacks from this
-  server. PSF Studio must be installed on the computer you browse from, and
-  it is still experimental. The link carries no sign-in, so PSF Guard shows
-  it only on a server that needs none. For a server that needs sign-in, run
-  `psf-guard studio` with `--token` on the computer you browse from; see
-  the stacking guide.
+  editor for color processing, on the target's newest Studio document, or a
+  new one from the target's stacks. PSF Studio must be installed on the
+  computer you browse from, and it is still experimental.
+- PSF Studio connects to PSF Guard servers. Click **PSF Guard** in its top
+  bar and enter the server's address; on a server with sign-in, allow the
+  code on the **Connect PSF Studio** page that opens in your browser. Studio
+  then lists the server's projects, targets and Studio documents and opens
+  them, and **Open *target* in PSF Studio** works on servers with sign-in
+  too. **API tokens** in Settings lists each connection; **Revoke** signs it
+  out. A connection can read, and save Studio documents when your account is
+  an editor, and nothing else.
+- PSF Studio saves its documents to the project a few seconds after you stop
+  editing, with the file an external editor saved and, unless you turn off
+  **Also save to the project**, its exports. Another computer opens the same
+  picture; tool results are computed again there. When two computers save
+  the same document, the second keeps its edits and offers **Save as a copy**
+  or **Open the newer version**.
+- `psf-guard studio` reads its token from `PSF_GUARD_TOKEN`, which other
+  users of the computer cannot see, before `--token`.
 - PSF Studio, the experimental color editor, now runs an input's
   deconvolution before its processing tools, can subtract the continuum
   under Ha, OIII and SII from the R, G and B stacks (using each stack's
