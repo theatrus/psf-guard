@@ -10,7 +10,8 @@ description = "PSF-Studio's display transform as a shader step, checked against 
 psf-studio-render = { path = "../render" }
 wgpu.workspace = true
 bytemuck.workspace = true
-lcms2 = "6"
+# Built in, so PSF Studio.app runs on a Mac without Little CMS installed.
+lcms2 = { version = "6", features = ["static"] }
 pollster = "0.4"
 png = "0.17"
 serde_json = "1"

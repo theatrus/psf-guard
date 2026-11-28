@@ -143,12 +143,26 @@ pub(super) struct Tools {
     late_after: bool,
 }
 
+/// The program of the PSF Guard app this Studio ships inside: from
+/// `PSF Guard.app/Contents/Helpers/PSF Studio.app/Contents/MacOS/psf-studio`,
+/// `PSF Guard.app/Contents/MacOS/psf-guard`. `None` for a Studio on its own.
+fn enclosing_psf_guard(executable: &std::path::Path) -> Option<PathBuf> {
+    let studio_app = executable.parent()?.parent()?.parent()?;
+    let helpers = studio_app.parent()?;
+    if helpers.file_name()? != "Helpers" {
+        return None;
+    }
+    let program = helpers.parent()?.join("MacOS").join("psf-guard");
+    program.is_file().then_some(program)
+}
+
 impl Tools {
     /// Asks the program for the tools, without waiting for the answer.
     pub(super) fn new(options: &Options) -> Self {
         let listing = Arc::new(Mutex::new(None));
         // The program given, or the one named by PSF_GUARD, or the one
-        // beside this program, or the one on the PATH.
+        // beside this program, or that of the PSF Guard app this one ships
+        // inside, or the one on the PATH.
         let binary_path = options
             .psf_guard
             .clone()
@@ -157,6 +171,7 @@ impl Tools {
                 let beside = std::env::current_exe().ok()?.with_file_name("psf-guard");
                 beside.is_file().then_some(beside)
             })
+            .or_else(|| enclosing_psf_guard(&std::env::current_exe().ok()?))
             .unwrap_or_else(|| PathBuf::from("psf-guard"));
         {
             let binary = binary_path.clone();
@@ -2047,6 +2062,26 @@ fn take_in_inputs(document: &mut crate::studio_model::Document, names: &[String]
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_studio_inside_psf_guard_runs_psf_guard_s_program() {
+        let folder = tempfile::tempdir().unwrap();
+        let contents = folder.path().join("PSF Guard.app/Contents");
+        let studio = contents.join("Helpers/PSF Studio.app/Contents/MacOS");
+        std::fs::create_dir_all(&studio).unwrap();
+        std::fs::create_dir_all(contents.join("MacOS")).unwrap();
+        let program = contents.join("MacOS/psf-guard");
+        std::fs::write(&program, b"").unwrap();
+        assert_eq!(
+            super::enclosing_psf_guard(&studio.join("psf-studio")),
+            Some(program)
+        );
+        // A Studio on its own has no enclosing app.
+        let alone = folder
+            .path()
+            .join("PSF Studio.app/Contents/MacOS/psf-studio");
+        assert_eq!(super::enclosing_psf_guard(&alone), None);
+    }
 
     fn names(names: &[&str]) -> Vec<String> {
         names.iter().map(|name| name.to_string()).collect()

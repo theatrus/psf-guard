@@ -43,6 +43,9 @@
   editor for color processing, on the target's newest Studio document, or a
   new one from the target's stacks. PSF Studio must be installed on the
   computer you browse from, and it is still experimental.
+- The macOS desktop app now includes PSF Studio, and app updates update PSF
+  Studio too. **Open in PSF Studio** opens the copy that came with the app;
+  you no longer install PSF Studio separately on that Mac.
 - PSF Studio connects to PSF Guard servers. Click **PSF Guard** in its top
   bar and enter the server's address; on a server with sign-in, allow the
   code on the **Connect PSF Studio** page that opens in your browser. Studio

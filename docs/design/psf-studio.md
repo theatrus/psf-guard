@@ -3576,7 +3576,13 @@ Gaps to fix, roughly in the order they got in the way:
 - How does a saved processing setup map to a document template, so setups
   from earlier releases keep their results and cache keys?
 - How are Studio releases versioned and updated next to PSF Guard, when both
-  ship in one installer?
+  ship in one installer? Decided 2026-11-27 for macOS: Studio ships inside
+  the desktop app, at `PSF Guard.app/Contents/Helpers/PSF Studio.app`, with
+  the app's version. The Tauri updater replaces the whole app, so Studio
+  updates with it; Studio has no updater of its own. The desktop app
+  registers its Studio for `psf-studio://` links each time it starts. See
+  [App and server updates](../UPDATES.md). Windows and Linux installers do
+  not include Studio yet.
 - What is the smallest useful set of adjustments for the first Studio
   release?
 - Are clone and heal tools wanted among the manual tweaks? They can be stored

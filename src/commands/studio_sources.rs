@@ -1257,6 +1257,43 @@ pub enum StudioFrom {
     },
 }
 
+/// The PSF Studio that ships inside this PSF Guard app, at
+/// `PSF Guard.app/Contents/Helpers/PSF Studio.app`, when this program is
+/// that app's.
+pub fn bundled_studio() -> Option<PathBuf> {
+    studio_beside(&std::env::current_exe().ok()?)
+}
+
+/// The Studio in the app whose program is `executable`.
+fn studio_beside(executable: &Path) -> Option<PathBuf> {
+    let contents = executable.parent()?.parent()?;
+    let studio = contents.join("Helpers").join("PSF Studio.app");
+    studio.is_dir().then_some(studio)
+}
+
+/// Tells macOS that the bundled PSF Studio opens `psf-studio://` links, so
+/// **Open in PSF Studio** works once PSF Guard has run. macOS finds an app
+/// in Applications on its own, but not one inside another app. Nothing to
+/// do elsewhere, or without a bundled Studio.
+pub fn register_bundled_studio() {
+    #[cfg(target_os = "macos")]
+    if let Some(studio) = bundled_studio() {
+        const LSREGISTER: &str = "/System/Library/Frameworks/CoreServices.framework/Frameworks/\
+LaunchServices.framework/Support/lsregister";
+        match std::process::Command::new(LSREGISTER)
+            .arg("-f")
+            .arg(&studio)
+            .status()
+        {
+            Ok(status) if status.success() => {
+                tracing::info!("Registered {} for psf-studio links", studio.display())
+            }
+            Ok(status) => tracing::warn!("Registering PSF Studio for links ended with {status}"),
+            Err(error) => tracing::warn!("PSF Studio was not registered for links: {error}"),
+        }
+    }
+}
+
 pub struct StudioOptions {
     pub from: StudioFrom,
     /// The folder that holds the picture's store and document.
@@ -1325,6 +1362,7 @@ pub fn studio(mut options: StudioOptions) -> Result<()> {
     let app = options
         .app
         .or_else(|| std::env::var_os("PSF_STUDIO_APP").map(PathBuf::from))
+        .or_else(bundled_studio)
         .ok_or_else(|| {
             anyhow!(
                 "the picture is prepared at {}. To open it, give --app or set PSF_STUDIO_APP \
@@ -1444,5 +1482,22 @@ mod tests {
         assert_eq!(of("masterLight_OIII"), Some(StackColorRole::Oiii));
         assert_eq!(of("M31-L"), Some(StackColorRole::Luminance));
         assert_eq!(of("integration"), None);
+    }
+
+    #[test]
+    fn the_bundled_studio_is_inside_the_app() {
+        let folder = tempfile::tempdir().unwrap();
+        let contents = folder.path().join("PSF Guard.app/Contents");
+        std::fs::create_dir_all(contents.join("Helpers/PSF Studio.app")).unwrap();
+        std::fs::create_dir_all(contents.join("MacOS")).unwrap();
+        assert_eq!(
+            super::studio_beside(&contents.join("MacOS/psf-guard")),
+            Some(contents.join("Helpers/PSF Studio.app"))
+        );
+        // A program outside an app has none.
+        assert_eq!(
+            super::studio_beside(&folder.path().join("bin/psf-guard")),
+            None
+        );
     }
 }
