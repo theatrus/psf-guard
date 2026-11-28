@@ -4413,8 +4413,8 @@ mod tests {
         let band = document
             .layers()
             .iter()
-            .filter(|layer| matches!(layer.source, LayerSource::Band { .. }))
-            .last()
+            .rev()
+            .find(|layer| matches!(layer.source, LayerSource::Band { .. }))
             .map(|layer| layer.id)
             .unwrap();
         let mut curves = operation("Curves", crate::image_steps::Accepts::Display);
