@@ -75,6 +75,29 @@ mod tests {
         serde_json::to_value(processing).unwrap()
     }
 
+    /// A new picture's document is built from the default setup as saved,
+    /// by `psf_studio_core::prepare::new_document`, which PSF Studio uses
+    /// too. It gives the color pipeline the settings PSF Guard's typed
+    /// default does.
+    #[test]
+    fn a_new_document_gives_the_pipeline_the_default_settings() {
+        let roles = [
+            StackColorRole::Luminance,
+            StackColorRole::Red,
+            StackColorRole::Green,
+            StackColorRole::Blue,
+        ];
+        let typed = document_from_processing("M 31", &default_processing(), &roles).unwrap();
+        let mut shared = psf_studio_core::prepare::new_document("M 31", &roles).unwrap();
+        let mut typed = typed;
+        typed.use_layered_stretch();
+        shared.name = typed.name.clone();
+        assert_eq!(
+            as_json(&processing_from_document(&shared).unwrap()),
+            as_json(&processing_from_document(&typed).unwrap())
+        );
+    }
+
     #[test]
     fn the_default_setup_gives_the_pipeline_the_same_settings() {
         let processing = default_processing();

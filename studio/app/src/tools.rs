@@ -1114,6 +1114,12 @@ impl Studio {
         self.tools.binary.clone()
     }
 
+    /// Whether the `psf-guard` program is on this computer: the path given,
+    /// or a bare name found on the PATH.
+    pub(super) fn psf_guard_installed(&self) -> bool {
+        self.psf_guard().is_some_and(|program| installed(&program))
+    }
+
     /// Starts a run of `psf-guard` and follows what it prints. With
     /// `opens`, the run prepares a picture, and its store and document are
     /// opened when it ends.
@@ -1139,10 +1145,12 @@ impl Studio {
     }
 
     /// Starts `job` on a thread of its own as the run in hand: it shows on
-    /// the progress line, and Stop stops the program it is running. The
-    /// store is not opened again when it ends.
+    /// the progress line, and Stop stops the program it is running. With
+    /// `opens`, the job prepares a picture, and its store and document are
+    /// opened when it ends; without, the store is not opened again.
     pub(super) fn start_job(
         &mut self,
+        opens: Option<(PathBuf, PathBuf)>,
         job: impl FnOnce(&Arc<Mutex<Run>>) -> Result<(), String> + Send + 'static,
     ) {
         if self.tools.run.is_some() {
@@ -1151,12 +1159,12 @@ impl Studio {
         let run = Arc::new(Mutex::new(Run {
             line: "Starting…".to_string(),
             done: None,
-            opens: None,
+            late: opens.is_none(),
+            opens,
             chains: None,
             process: None,
             stopped: false,
             started: std::time::Instant::now(),
-            late: true,
         }));
         self.tools.run = Some(run.clone());
         std::thread::spawn(move || {
@@ -2264,4 +2272,15 @@ mod prepared_record {
             assert_eq!(read(&store), None);
         }
     }
+}
+
+/// Whether `program` can be started: a file at a path, or a bare name found
+/// in one of the PATH's folders.
+fn installed(program: &std::path::Path) -> bool {
+    if program.components().count() > 1 {
+        return program.is_file();
+    }
+    std::env::var_os("PATH").is_some_and(|path| {
+        std::env::split_paths(&path).any(|folder| folder.join(program).is_file())
+    })
 }

@@ -139,7 +139,7 @@ where
             .collect(),
     });
     let started = Instant::now();
-    let program = tools.map(|tools| LinearProgram {
+    let program = LinearProgram {
         tools,
         sources: stacks
             .iter()
@@ -147,10 +147,10 @@ where
             .collect(),
         steps,
         progress,
-    });
+    };
     let mut prepared = RegisteredChannels::prepare(
         &inputs,
-        program.as_ref(),
+        Some(&program),
         continuum.as_ref(),
         &seiza_stacking::GpuOptions::cpu(),
     )?;
@@ -334,6 +334,188 @@ where
     });
     write_atomically(&record, serde_json::to_string(&prepared_record)?)?;
     Ok(())
+}
+
+/// One stack file a person has, as a picture's source.
+pub struct StackFile {
+    pub role: StackColorRole,
+    /// The file, as a whole path.
+    pub path: PathBuf,
+    /// The file's identity: the tools' results are kept under it, and a
+    /// changed file gets a new one.
+    pub identity: String,
+    /// The file's size and time, which change when it is written again.
+    pub revision: String,
+    /// The file's name, for a person to read.
+    pub label: String,
+}
+
+impl StackFile {
+    /// Reads where `path` is and when it was last written.
+    pub fn new(role: StackColorRole, path: &Path) -> Result<Self> {
+        let path =
+            std::fs::canonicalize(path).with_context(|| format!("finding {}", path.display()))?;
+        if !crate::image_io::is_image_path(&path) {
+            bail!("{} is not a FITS or XISF file", path.display());
+        }
+        let stamp =
+            std::fs::metadata(&path).with_context(|| format!("reading {}", path.display()))?;
+        let modified = stamp
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |since| since.as_nanos());
+        let identity = {
+            use sha2::{Digest, Sha256};
+            let digest = Sha256::digest(format!("{}|{}|{modified}", path.display(), stamp.len()));
+            digest
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        };
+        let label = path.file_name().map_or_else(
+            || role_name(role).unwrap_or_default(),
+            |file| file.to_string_lossy().into_owned(),
+        );
+        Ok(Self {
+            role,
+            identity,
+            revision: format!("{}-{modified}", stamp.len()),
+            label,
+            path,
+        })
+    }
+
+    /// The file as a stack to prepare, read in place.
+    pub fn stack(&self) -> PrepareStack {
+        PrepareStack {
+            role: self.role,
+            path: self.path.clone(),
+            source: format!("mono:{}:0", self.identity),
+            revision: self.revision.clone(),
+            key: format!("{}:0:{}", self.identity, self.revision),
+            clipping: None,
+        }
+    }
+}
+
+/// A stack file's channel: its FILTER header, classified as PSF Guard
+/// classifies a filter's name, or failing that the parts of the file's
+/// name.
+pub fn channel_of_file(path: &Path) -> Result<StackColorRole> {
+    let header =
+        seiza_image_io::read_header(path).with_context(|| format!("reading {}", path.display()))?;
+    let from_header = crate::image_io::header_text(&header.cards, "FILTER")
+        .and_then(|filter| crate::color::classify_filter(filter.trim()));
+    let from_name = || {
+        let name = path.file_stem()?.to_string_lossy().into_owned();
+        // The last part that is a filter's name: a target's name comes
+        // first in most file names.
+        name.split(|character: char| !character.is_alphanumeric())
+            .rev()
+            .find_map(crate::color::classify_filter)
+    };
+    from_header.or_else(from_name).ok_or_else(|| {
+        anyhow::anyhow!(
+            "{} does not say which channel it is: its FILTER header and its name name no filter",
+            path.display()
+        )
+    })
+}
+
+/// What a picture from stack files is called: what the first file shows,
+/// from its OBJECT header, or the file's name. A file stored under its
+/// hash names nothing a person chose, and gives "Untitled picture".
+pub fn picture_title(headers: &[(String, seiza_fits::HeaderValue)], first: &Path) -> String {
+    crate::image_io::header_text(headers, "OBJECT")
+        .map(|object| object.trim().to_string())
+        .filter(|object| !object.is_empty())
+        .unwrap_or_else(|| {
+            first
+                .file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+                .filter(|stem| !crate::studio::is_generated_name(stem))
+                .unwrap_or_else(|| crate::studio::UNTITLED_PICTURE.to_string())
+        })
+}
+
+/// The names documents had when they were named after the setup they
+/// started from.
+const SETUP_NAMES: [&str; 2] = ["PSF Guard default color", "Default"];
+
+/// A picture's document: the one saved at `saved`, when there is one, else
+/// a new one for `roles` ([`new_document`]). A saved document named after
+/// the setup it started from, as they were before, takes the picture's
+/// title, and is saved with it.
+pub fn picture_document(
+    title: &str,
+    roles: &[StackColorRole],
+    saved: Option<&Path>,
+) -> Result<Document> {
+    let Some(path) = saved else {
+        return new_document(title, roles);
+    };
+    let text =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let mut document = Document::from_json(&text)?;
+    if SETUP_NAMES.contains(&document.name.as_str()) && title != document.name {
+        document.name = title.to_string();
+        write_atomically(path, document.to_json())?;
+    }
+    Ok(document)
+}
+
+/// No processing tools: what PSF Studio prepares with when PSF Guard is not
+/// on the computer. Tool and deconvolution steps are left for later, and
+/// the picture's record says they did not run.
+pub struct NoTools;
+
+impl LinearTools for NoTools {
+    type Tool = serde_json::Value;
+
+    fn extend_chain(
+        &self,
+        _chain: &[serde_json::Value],
+        _tool: &serde_json::Value,
+    ) -> Option<Vec<serde_json::Value>> {
+        None
+    }
+
+    fn name(&self, tool: &serde_json::Value) -> String {
+        tool["provider"].as_str().unwrap_or("a tool").to_string()
+    }
+
+    fn run_chain(
+        &self,
+        _run: &crate::channels::ChainRun<'_, serde_json::Value>,
+        _progress: &dyn Fn(&str, f32),
+    ) -> Result<crate::channels::ChainResult> {
+        bail!("processing tools run through PSF Guard, which is not on this computer")
+    }
+
+    fn deconvolve(
+        &self,
+        _config: seiza_deconvolution::DeconvolutionConfig,
+        _source: &str,
+        _revision: &str,
+        _frame: &seiza_stacking::FitsFrame,
+    ) -> Result<(LinearImage, String)> {
+        bail!("deconvolution runs through PSF Guard, which is not on this computer")
+    }
+}
+
+/// A new picture's document: PSF Guard's default color setup for these
+/// channels, with the layered stretch Studio starts from.
+pub fn new_document(title: &str, roles: &[StackColorRole]) -> Result<Document> {
+    let settings: serde_json::Value = serde_json::from_str(crate::DEFAULT_COLOR_SETTINGS)?;
+    let names = roles
+        .iter()
+        .map(|role| role_name(*role))
+        .collect::<Result<Vec<_>, _>>()?;
+    let names: Vec<&str> = names.iter().map(String::as_str).collect();
+    let mut document = crate::studio::document_from_color_setup(title, &settings, &names)?;
+    document.use_layered_stretch();
+    Ok(document)
 }
 
 /// The document's Linear steps that change the stacks' samples, in its
@@ -646,4 +828,120 @@ pub fn write_atomically(path: &Path, contents: impl AsRef<[u8]>) -> Result<()> {
     std::fs::write(&temporary, contents)
         .with_context(|| format!("writing {}", temporary.display()))?;
     std::fs::rename(&temporary, path).with_context(|| format!("writing {}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use seiza_fits::{HeaderValue, WriteHeaderCard};
+
+    /// A 192 x 128 Ha stack: a sky with a gradient, noise and a few stars,
+    /// as PixInsight writes one, its samples within 0 to 1.
+    fn write_ha(folder: &Path) -> PathBuf {
+        let (width, height) = (192, 128);
+        let mut state = 7_u32;
+        let mut noise = move || {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (state >> 8) as f32 / (1 << 24) as f32 - 0.5
+        };
+        // Stars spread over the frame, enough for registration to find.
+        let stars: Vec<(f32, f32)> = (0..24)
+            .map(|at| {
+                let at = at as f32;
+                (12.0 + (at * 37.0) % 168.0, 10.0 + (at * 23.0) % 108.0)
+            })
+            .collect();
+        let pixels: Vec<f32> = (0..width * height)
+            .map(|at| {
+                let (x, y) = ((at % width) as f32, (at / width) as f32);
+                let star: f32 = stars
+                    .iter()
+                    .map(|(cx, cy)| {
+                        let distance = (x - cx).powi(2) + (y - cy).powi(2);
+                        0.6 * (-distance / 4.0).exp()
+                    })
+                    .sum();
+                0.05 + 0.02 * x / width as f32 + 0.002 * noise() + star
+            })
+            .collect();
+        let path = folder.join("M42_Ha.xisf");
+        seiza_xisf::write_f32_image(
+            &path,
+            width,
+            height,
+            seiza_fits::F32ImageData::Mono(&pixels),
+            &[
+                WriteHeaderCard::new("IMAGETYP", HeaderValue::String("LIGHT".into())),
+                WriteHeaderCard::new("OBJECT", HeaderValue::String("M 42".into())),
+                WriteHeaderCard::new("FILTER", HeaderValue::String("Ha".into())),
+            ],
+        )
+        .expect("the stack is written");
+        path
+    }
+
+    /// Without tools, a picture from one stack file is prepared: its
+    /// channel and name come from the file, the store and its record are
+    /// written, and the record says the colors were not asked for.
+    #[test]
+    fn a_stack_file_is_prepared_without_tools() {
+        let folder = tempfile::tempdir().unwrap();
+        let file = write_ha(folder.path());
+        let role = channel_of_file(&file).unwrap();
+        assert_eq!(role, StackColorRole::Ha);
+        let stack = StackFile::new(role, &file).unwrap();
+        let header = seiza_image_io::read_header(&stack.path).unwrap();
+        assert_eq!(picture_title(&header.cards, &stack.path), "M 42");
+        let document = picture_document("M 42", &[role], None).unwrap();
+        let output = folder.path().join("picture.pgtiles");
+        let lines = std::sync::Mutex::new(Vec::new());
+        prepare_store(Prepare {
+            stacks: &[stack.stack()],
+            document: &document,
+            tools: None::<&NoTools>,
+            folder: &output.with_extension("sources"),
+            output: &output,
+            calibrate: &|_| Calibration::NotAsked,
+            report: &|line| lines.lock().unwrap().push(line.to_string()),
+            progress: &|_, _, _| {},
+        })
+        .unwrap();
+        assert!(output.is_file());
+        let record: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(output.with_extension("prepared.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(record["calibration"]["status"], "not_asked");
+        // The background extraction ran, and is in the record.
+        assert!(
+            record["program"]["ha"]
+                .as_array()
+                .is_some_and(|steps| steps.iter().any(|step| step["operation"] == op::BACKGROUND)),
+            "{record}"
+        );
+        assert!(lines
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|line| line.contains("background")),);
+    }
+
+    /// A file's channel comes from its name when its header has none.
+    #[test]
+    fn a_files_channel_comes_from_its_name_without_a_filter() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("NGC7000_OIII_stack.xisf");
+        seiza_xisf::write_f32_image(
+            &path,
+            4,
+            3,
+            seiza_fits::F32ImageData::Mono(&[0.1; 12]),
+            &[WriteHeaderCard::new(
+                "IMAGETYP",
+                HeaderValue::String("LIGHT".into()),
+            )],
+        )
+        .unwrap();
+        assert_eq!(channel_of_file(&path).unwrap(), StackColorRole::Oiii);
+    }
 }

@@ -199,8 +199,9 @@ pub struct ChainResult {
 
 /// The Linear steps to run on the channels, and what runs their tools.
 pub struct LinearProgram<'a, R: LinearTools> {
-    /// What runs the tools and deconvolutions.
-    pub tools: &'a R,
+    /// What runs the tools and deconvolutions. With none, tool steps and
+    /// deconvolutions are passed over, and the other steps run.
+    pub tools: Option<&'a R>,
     /// Each stack's source and revision, which the results are kept by.
     pub sources: BTreeMap<StackColorRole, (String, String)>,
     /// The steps, in order.
@@ -623,15 +624,14 @@ impl RegisteredChannels {
                     tool,
                     shifted,
                 } if wanted.len() == 1 => {
+                    let Some(tools) = program.tools else {
+                        continue;
+                    };
                     let channel = members[0];
                     let track = &mut tracks[channel];
                     // A tool with a shifted second pass runs alone: its
                     // result is the average of two runs.
-                    let chain = match program
-                        .tools
-                        .extend_chain(&track.chain, tool)
-                        .filter(|_| !*shifted)
-                    {
+                    let chain = match tools.extend_chain(&track.chain, tool).filter(|_| !*shifted) {
                         Some(chain) => chain,
                         None => {
                             track.settle();
@@ -639,8 +639,7 @@ impl RegisteredChannels {
                         }
                     };
                     let source = &program.sources[&roles[channel]].0;
-                    let mut outcome = program
-                        .tools
+                    let mut outcome = tools
                         .run_chain(
                             &ChainRun {
                                 chain: &chain,
@@ -662,8 +661,7 @@ impl RegisteredChannels {
                         };
                         let both = shifted_passes(&track.start, first, &mut |image, suffix| {
                             let revision = format!("{}:{suffix}", track.revision);
-                            let moved = program
-                                .tools
+                            let moved = tools
                                 .run_chain(
                                     &ChainRun {
                                         chain: &chain,
@@ -722,7 +720,7 @@ impl RegisteredChannels {
                         plane,
                         correction: false,
                     });
-                    tool_runs.push((roles[channel], program.tools.name(tool)));
+                    tool_runs.push((roles[channel], tools.name(tool)));
                 }
                 LinearStep::Tool {
                     step: id,
@@ -731,6 +729,9 @@ impl RegisteredChannels {
                     tool,
                     ..
                 } => {
+                    let Some(tools) = program.tools else {
+                        continue;
+                    };
                     if members.len() < 2 {
                         continue;
                     }
@@ -739,7 +740,7 @@ impl RegisteredChannels {
                     let extended = group
                         .as_ref()
                         .filter(|track| track.roles == *wanted)
-                        .and_then(|track| program.tools.extend_chain(&track.chain, tool));
+                        .and_then(|track| tools.extend_chain(&track.chain, tool));
                     let track = match (extended, group.take()) {
                         (Some(chain), Some(mut track)) => {
                             track.chain = chain;
@@ -790,8 +791,7 @@ impl RegisteredChannels {
                             }
                         }
                     };
-                    let outcome = program
-                        .tools
+                    let outcome = tools
                         .run_chain(
                             &ChainRun {
                                 chain: &track.chain,
@@ -831,7 +831,7 @@ impl RegisteredChannels {
                             plane,
                             correction: false,
                         });
-                        tool_runs.push((roles[*channel], program.tools.name(tool)));
+                        tool_runs.push((roles[*channel], tools.name(tool)));
                     }
                     group = Some(track);
                 }
@@ -840,6 +840,9 @@ impl RegisteredChannels {
                     role,
                     config,
                 } => {
+                    let Some(tools) = program.tools else {
+                        continue;
+                    };
                     let channel = members[0];
                     let label = channel_names[channel].clone();
                     let track = &mut tracks[channel];
@@ -852,8 +855,7 @@ impl RegisteredChannels {
                         image: track.image.clone(),
                         ..frames[channel].clone()
                     };
-                    let (restored, kept) = program
-                        .tools
+                    let (restored, kept) = tools
                         .deconvolve(*config, source, &track.revision, &frame)
                         .map_err(|error| anyhow!("the deconvolution of {label}: {error}"))?;
                     track.image = restored.clone();

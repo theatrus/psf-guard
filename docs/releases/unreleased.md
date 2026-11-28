@@ -46,6 +46,11 @@
 - The macOS desktop app now includes PSF Studio, and app updates update PSF
   Studio too. **Open in PSF Studio** opens the copy that came with the app;
   you no longer install PSF Studio separately on that Mac.
+- PSF Studio opens stack files on a computer without PSF Guard. It reads
+  each file's channel, registers the channels and extracts their
+  backgrounds as PSF Guard does. Processing tools and Gaia color
+  calibration still need PSF Guard: Studio lists the tools as still to run,
+  and says why the colors are not calibrated.
 - PSF Studio connects to PSF Guard servers. Click **PSF Guard** in its top
   bar and enter the server's address; on a server with sign-in, allow the
   code on the **Connect PSF Studio** page that opens in your browser. Studio

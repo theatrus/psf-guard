@@ -3859,6 +3859,7 @@ dependencies = [
 name = "psf-studio"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "gpui",
  "gpui_platform",
  "half",

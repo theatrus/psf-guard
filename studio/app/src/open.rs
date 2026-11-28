@@ -2,9 +2,13 @@
 //!
 //! A picture is opened from stack files a person picks, or from a link a
 //! PSF Guard page sends: `psf-studio://open?server=…&db=…&project=…&target=…`.
-//! Either way Studio runs `psf-guard studio`, the command a person can run
-//! by hand, so the stacks are fetched, registered and prepared by the same
-//! code, and then shows the picture it prepared.
+//! Studio runs `psf-guard studio`, the command a person can run by hand,
+//! when PSF Guard is on the computer: it fetches, registers and prepares
+//! the stacks, runs the processing tools and calibrates colors against
+//! Gaia. Without PSF Guard, Studio prepares stack files itself with the
+//! same code, from `psf-studio-core`; their tools wait for PSF Guard and
+//! their colors stay uncalibrated. Either way Studio then shows the picture
+//! it prepared.
 //!
 //! Pictures are kept in Studio's own folder, never beside a person's
 //! stacks: a store and a document per picture. Opening the same target or
@@ -188,8 +192,8 @@ impl Studio {
         );
     }
 
-    /// Opens stack files, one per channel. `psf-guard` reads each file's
-    /// channel from its FILTER header or its name.
+    /// Opens stack files, one per channel, each file's channel read from
+    /// its FILTER header or its name.
     pub(super) fn open_files(&mut self, mut files: Vec<PathBuf>) {
         if files.is_empty() {
             return;
@@ -213,12 +217,33 @@ impl Studio {
             || "picture".into(),
             |stem| stem.to_string_lossy().into_owned(),
         );
+        let name = format!("{stem}-{identity}");
+        if !self.psf_guard_installed() {
+            self.prepare_files_here(&name, files);
+            return;
+        }
         let mut arguments = Vec::new();
         for file in files {
             arguments.push("--file".into());
             arguments.push(file.into());
         }
-        self.prepare_and_open(&format!("{stem}-{identity}"), arguments, None);
+        self.prepare_and_open(&name, arguments, None);
+    }
+
+    /// Prepares the picture `name` from stack files in this program, on a
+    /// thread of its own, and opens it when it is ready.
+    fn prepare_files_here(&mut self, name: &str, files: Vec<PathBuf>) {
+        let folder = pictures_folder();
+        let name = file_name(name);
+        let store = folder.join(format!("{name}.pgtiles"));
+        let document = folder.join(format!("{name}.json"));
+        let opens = Some((store.clone(), document.clone()));
+        self.start_job(opens, move |run| {
+            prepare_files(&files, &store, &document, &|line| {
+                super::tools::set_line(run, line)
+            })
+            .map_err(|error| format!("{error:#}"))
+        });
     }
 
     /// Asks which stack files to open, then opens them.
@@ -262,6 +287,88 @@ impl Studio {
             None => self.say("Not opened: the link does not name a target on a server"),
         }
     }
+}
+
+/// Prepares a picture from stack files: its store at `store`, and its
+/// document at `document`, which is kept when it is there already. Each
+/// file's channel comes from its FILTER header or its name. `line` hears
+/// what is being done.
+fn prepare_files(
+    files: &[PathBuf],
+    store: &std::path::Path,
+    document: &std::path::Path,
+    line: &dyn Fn(&str),
+) -> anyhow::Result<()> {
+    use psf_studio_core::prepare::{
+        channel_of_file, picture_document, picture_title, prepare_store, write_atomically,
+        Calibration, NoTools, Prepare, StackFile,
+    };
+    if let Some(folder) = store.parent() {
+        std::fs::create_dir_all(folder)?;
+    }
+    line("Reading the stack files");
+    let mut stacks: Vec<StackFile> = Vec::new();
+    for file in files {
+        let role = channel_of_file(file)?;
+        if let Some(other) = stacks.iter().find(|stack| stack.role == role) {
+            anyhow::bail!(
+                "{} and {} are both {}: open one file per channel",
+                other.path.display(),
+                file.display(),
+                role.label()
+            );
+        }
+        stacks.push(StackFile::new(role, file)?);
+    }
+    let Some(first) = stacks.first() else {
+        anyhow::bail!("no stack files were given");
+    };
+    let header = seiza_image_io::read_header(&first.path)?;
+    let title = picture_title(&header.cards, &first.path);
+    let roles: Vec<_> = stacks.iter().map(|stack| stack.role).collect();
+    let saved = document.is_file().then_some(document);
+    let picture = picture_document(&title, &roles, saved)?;
+    // Colors are calibrated against Gaia from a plate solve, which PSF
+    // Guard makes.
+    let wants_calibration = {
+        use crate::studio_model::{flow_operations, StageKind};
+        let rgb = ["red", "green", "blue"]
+            .iter()
+            .all(|channel| picture.channels().iter().any(|own| own == channel));
+        let step = picture
+            .stage(StageKind::Linear)
+            .steps
+            .iter()
+            .find(|step| step.kind.name() == flow_operations::COLOR_CALIBRATION);
+        rgb && step.is_none_or(|step| step.enabled)
+    };
+    let prepare_stacks: Vec<_> = stacks.iter().map(StackFile::stack).collect();
+    prepare_store(Prepare {
+        stacks: &prepare_stacks,
+        document: &picture,
+        tools: None::<&NoTools>,
+        folder: &store.with_extension("sources"),
+        output: store,
+        calibrate: &|_| {
+            if wants_calibration {
+                Calibration::Skipped {
+                    why: "colors are calibrated against Gaia by PSF Guard, which is not on this \
+                          computer"
+                        .into(),
+                }
+            } else {
+                Calibration::NotAsked
+            }
+        },
+        report: &|text| line(text.trim()),
+        progress: &|channel, tool, fraction| {
+            line(&format!("{channel}: {tool} ({:.0}%)", fraction * 100.0))
+        },
+    })?;
+    if saved.is_none() {
+        write_atomically(document, picture.to_json())?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -436,7 +436,7 @@ impl Studio {
         let picture_samples = self.picture_samples.clone();
         let resolved = self.scene_worker.resolved();
         let levels = usize::from(self.levels);
-        self.start_job(move |run| {
+        self.start_job(None, move |run| {
             let mut planes = planes;
             let folder = folder(&store);
             std::fs::create_dir_all(&folder).map_err(|error| error.to_string())?;

@@ -508,6 +508,15 @@ impl Studio {
                 Ok(json!({ "setup_open": self.setup_open }))
             }
             "servers" => Ok(self.control_servers()),
+            // Stack files to open as a picture, one per channel, as Open
+            // opens them.
+            "open_files" => match serde_json::from_value::<Vec<PathBuf>>(params["files"].clone()) {
+                Ok(files) if !files.is_empty() => {
+                    self.open_files(files);
+                    Ok(json!({ "running": self.is_running() }))
+                }
+                _ => Err("`files` (a list of stack files) is needed".to_string()),
+            },
             "rename" => match params["name"].as_str() {
                 Some(name) => self.rename_picture(name).map(|()| {
                     self.renaming = None;

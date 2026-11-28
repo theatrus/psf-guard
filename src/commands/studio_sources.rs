@@ -3,11 +3,9 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use crate::processing_setups::DEFAULT_COLOR_SETTINGS;
 use crate::server::stack_preview::color::{StackColorRole, StackColorSource};
 use crate::server::workers::Workers;
 use crate::studio::Document;
-use crate::studio_flow::document_from_processing;
 use crate::studio_sources::{RegisteredChannels, Server};
 
 pub struct StudioSourcesOptions {
@@ -114,10 +112,6 @@ pub async fn studio_sources(options: StudioSourcesOptions) -> Result<()> {
 }
 
 use psf_studio_core::prepare::{write_atomically, Calibration, Prepare, PrepareStack};
-
-/// The names documents had when they were named after the setup they
-/// started from.
-const SETUP_NAMES: [&str; 2] = ["PSF Guard default color", "Default"];
 
 /// A picture's name from its sources folder: the folder's name without
 /// `.sources`.
@@ -235,38 +229,16 @@ pub fn studio_files(options: StudioFilesOptions) -> Result<()> {
         {
             bail!("{name} is given twice");
         }
-        let path = std::fs::canonicalize(file).with_context(|| format!("finding {file}"))?;
-        if !crate::image_io::is_image_path(&path) {
-            bail!("{} is not a FITS or XISF file", path.display());
-        }
-        let stamp = std::fs::metadata(&path).with_context(|| format!("reading {file}"))?;
-        let modified = stamp
-            .modified()
-            .ok()
-            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-            .map_or(0, |since| since.as_nanos());
-        // The file's identity: the tools' results are kept under it, and a
-        // changed file gets a new one.
-        let identity = {
-            use sha2::{Digest, Sha256};
-            let digest = Sha256::digest(format!("{}|{}|{modified}", path.display(), stamp.len()));
-            digest
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<String>()
-        };
-        paths.insert(identity.clone(), path.clone());
+        let stack = psf_studio_core::prepare::StackFile::new(role, Path::new(file))?;
+        paths.insert(stack.identity.clone(), stack.path.clone());
         stacks.push(StackColorSource {
             role,
             filter_name: name.to_string(),
-            label: path.file_name().map_or_else(
-                || name.to_string(),
-                |file| file.to_string_lossy().into_owned(),
-            ),
+            label: stack.label,
             exposure_group: None,
-            job_id: identity,
+            job_id: stack.identity,
             group_index: 0,
-            artifact_revision: format!("{}-{modified}", stamp.len()),
+            artifact_revision: stack.revision,
             accepted_frames: 0,
             wbpp: false,
             total_exposure_seconds: None,
@@ -284,17 +256,7 @@ pub fn studio_files(options: StudioFilesOptions) -> Result<()> {
     let frame = crate::image_io::open_linear_frame(&first)
         .with_context(|| format!("reading {}", first.display()))?;
     // The picture is named after what the first file shows, or the file.
-    let title = crate::image_io::header_text(&frame.headers, "OBJECT")
-        .map(|object| object.trim().to_string())
-        .filter(|object| !object.is_empty())
-        .unwrap_or_else(|| {
-            // A file stored under its hash names nothing a person chose.
-            first
-                .file_stem()
-                .map(|stem| stem.to_string_lossy().into_owned())
-                .filter(|stem| !crate::studio::is_generated_name(stem))
-                .unwrap_or_else(|| crate::studio::UNTITLED_PICTURE.to_string())
-        });
+    let title = psf_studio_core::prepare::picture_title(&frame.headers, &first);
     stacks[0].sky_orientation = Some(crate::server::stack_preview::StackSkyOrientation {
         convention: crate::server::stack_preview::SOURCE_ORIENTATION_NAME.into(),
         version: seiza_stacking::SKY_ORIENTATION_VERSION,
@@ -403,27 +365,7 @@ fn prepare_store(
 
     // The document decides what runs: a new one is PSF Guard's default flow.
     let roles: Vec<StackColorRole> = stacks.iter().map(|stack| stack.role).collect();
-    let document = match apply {
-        Some(path) => {
-            let text = std::fs::read_to_string(path)
-                .with_context(|| format!("reading {}", path.display()))?;
-            let mut document = Document::from_json(&text)?;
-            // A document named after the setup it started from, as they
-            // were before, takes its picture's name, and is saved with it.
-            if SETUP_NAMES.contains(&document.name.as_str()) && title != document.name {
-                document.name = title.to_string();
-                write_atomically(path, document.to_json())?;
-            }
-            document
-        }
-        None => {
-            let processing = serde_json::from_str(DEFAULT_COLOR_SETTINGS)?;
-            let mut document = document_from_processing(title, &processing, &roles)?;
-            // Studio starts from the layered stretch.
-            document.use_layered_stretch();
-            document
-        }
-    };
+    let document = psf_studio_core::prepare::picture_document(title, &roles, apply)?;
     // A tool's result is kept beside the downloaded stacks.
     let workers = Workers::default();
     let tools = crate::studio_sources::WorkerTools {
@@ -904,27 +846,8 @@ pub fn studio(mut options: StudioOptions) -> Result<()> {
 /// its FILTER header, classified as PSF Guard classifies a filter's name,
 /// or failing that the parts of the file's name.
 pub fn channel_and_file(file: &str) -> Result<String> {
-    use crate::server::stack_preview::color::classify_filter;
-
-    let path = Path::new(file);
-    let frame = crate::image_io::open_linear_frame(path)
-        .with_context(|| format!("reading {}", path.display()))?;
-    let from_header = crate::image_io::header_text(&frame.headers, "FILTER")
-        .and_then(|filter| classify_filter(filter.trim()));
-    let from_name = || {
-        let name = path.file_stem()?.to_string_lossy().into_owned();
-        // The last part that is a filter's name: a target's name comes
-        // first in most file names.
-        name.split(|character: char| !character.is_alphanumeric())
-            .rev()
-            .find_map(classify_filter)
-    };
-    let role = from_header.or_else(from_name).ok_or_else(|| {
-        anyhow!(
-            "{} does not say which channel it is; give it as --channel CHANNEL={file}",
-            path.display()
-        )
-    })?;
+    let role = psf_studio_core::prepare::channel_of_file(Path::new(file))
+        .map_err(|error| anyhow!("{error:#}; give it as --channel CHANNEL={file}"))?;
     Ok(format!("{}={file}", crate::studio_flow::role_name(role)?))
 }
 

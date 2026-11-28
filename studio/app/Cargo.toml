@@ -30,6 +30,7 @@ half = "2"
 sha2 = "0.11"
 thiserror = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
+anyhow = "1.0"
 # Talking to PSF Guard servers: connecting, browsing their projects.
 ureq = { version = "3", features = ["json"] }
 

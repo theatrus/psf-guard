@@ -3221,10 +3221,27 @@ opening.
 **Opening from inside Studio and from PSF Guard.** Studio lives in
 `studio/`, a workspace of its own, and its program is `psf-studio`.
 
-- **Open** in Studio's top bar asks for stack files and opens them. Studio
-  passes the files to `psf-guard studio --file …`, which reads each file's
-  channel from its `FILTER` header with PSF Guard's own filter classifier,
-  or from the file's name.
+- **Open** in Studio's top bar asks for stack files and opens them. Each
+  file's channel comes from its `FILTER` header with PSF Guard's filter
+  classifier, or from the file's name. When the `psf-guard` program is on
+  the computer, Studio passes the files to `psf-guard studio --file …`,
+  which also runs the processing tools and calibrates colors against Gaia.
+  Without it (built 2026-11-27), Studio prepares the files itself with
+  `psf_studio_core::prepare`, the code `psf-guard` runs: registration,
+  background extraction, continuum subtraction and the layered stretches.
+  The tool and deconvolution steps are left out of the picture's record,
+  so Studio lists them as still to run, and the colors stay uncalibrated,
+  with a note that says why.
+- **Shared code.** `crates/psf-studio-core` holds what both programs run:
+  the document model and tile store, image steps, frame reading
+  (`image_io`), the color steps (registration, background extraction,
+  display stretches, continuum fits, the filter classifier), registered
+  channels with their Linear steps, and preparing a store. Processing
+  tools run behind the `LinearTools` trait; PSF Guard implements it on its
+  workers. PSF Guard keeps downloading from a server, plate solving and
+  Gaia color calibration, which it passes to `prepare_store` as a hook.
+  Next: open a server's target without `psf-guard`, then run the tools
+  through Seiza's own runners (`seiza_stacking::external`).
 - PSF Guard's color stacks show **Open *target* in PSF Studio**, a link of
   the form `psf-studio://open?server=…&db=…&project=…&target=…`. The
   application registers that scheme (`studio/bundle-macos.sh` writes the

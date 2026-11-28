@@ -59,6 +59,7 @@ use crate::server::extract::DbContext;
 use crate::server::handlers::AppError;
 // Shared with PSF Studio.
 use crate::server::state::AppState;
+pub(crate) use psf_studio_core::color::classify_filter;
 pub use psf_studio_core::color::{StackBackgroundExtraction, StackColorRole};
 
 const STACK_COLOR_CACHE_VERSION: u32 = 17;
@@ -5926,85 +5927,6 @@ fn availability(sources: &BTreeMap<i32, TargetSources>) -> Vec<StackColorTargetA
             }
         })
         .collect()
-}
-
-pub(crate) fn classify_filter(filter_name: &str) -> Option<StackColorRole> {
-    let folded = filter_name
-        .to_lowercase()
-        .replace('α', "alpha")
-        .replace('β', "beta");
-    let compact = folded
-        .chars()
-        .filter(|character| character.is_ascii_alphanumeric())
-        .collect::<String>();
-    let exact = match compact.as_str() {
-        "l" | "lum" | "luminance" => Some(StackColorRole::Luminance),
-        "r" | "red" => Some(StackColorRole::Red),
-        "g" | "green" => Some(StackColorRole::Green),
-        "b" | "blue" => Some(StackColorRole::Blue),
-        "ha" | "halpha" | "hydrogenalpha" => Some(StackColorRole::Ha),
-        "oiii" | "o3" | "oxygeniii" => Some(StackColorRole::Oiii),
-        "sii" | "s2" | "sulfurii" | "sulphurii" => Some(StackColorRole::Sii),
-        _ => None,
-    };
-    if exact.is_some() {
-        return exact;
-    }
-    let distinctive_suffix = [
-        (StackColorRole::Ha, ["halpha", "hydrogenalpha"].as_slice()),
-        (StackColorRole::Oiii, ["oiii", "oxygeniii"].as_slice()),
-        (
-            StackColorRole::Sii,
-            ["sii", "sulfurii", "sulphurii"].as_slice(),
-        ),
-    ]
-    .into_iter()
-    .filter_map(|(role, aliases)| {
-        aliases
-            .iter()
-            .any(|alias| compact.ends_with(alias))
-            .then_some(role)
-    })
-    .collect::<Vec<_>>();
-    if let [role] = distinctive_suffix.as_slice() {
-        return Some(*role);
-    }
-    let tokens = folded
-        .split(|character: char| !character.is_ascii_alphanumeric())
-        .filter(|token| !token.is_empty())
-        .collect::<HashSet<_>>();
-    let mut candidates = [
-        (StackColorRole::Luminance, ["lum", "luminance"].as_slice()),
-        (StackColorRole::Red, ["red"].as_slice()),
-        (StackColorRole::Green, ["green"].as_slice()),
-        (StackColorRole::Blue, ["blue"].as_slice()),
-        (StackColorRole::Ha, ["ha", "halpha"].as_slice()),
-        (StackColorRole::Oiii, ["oiii", "o3"].as_slice()),
-        (StackColorRole::Sii, ["sii", "s2"].as_slice()),
-    ]
-    .into_iter()
-    .filter_map(|(role, aliases)| {
-        aliases
-            .iter()
-            .any(|alias| tokens.contains(alias))
-            .then_some(role)
-    })
-    .collect::<Vec<_>>();
-    if tokens.contains("h") && tokens.contains("alpha") {
-        candidates.push(StackColorRole::Ha);
-    }
-    if tokens.contains("oxygen") && tokens.contains("iii") {
-        candidates.push(StackColorRole::Oiii);
-    }
-    if (tokens.contains("sulfur") || tokens.contains("sulphur")) && tokens.contains("ii") {
-        candidates.push(StackColorRole::Sii);
-    }
-    candidates.sort_unstable();
-    candidates.dedup();
-    match candidates.as_slice() {
-        [role] => Some(*role),
-        _ => None,
-    }
 }
 
 fn source_is_current(
