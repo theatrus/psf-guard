@@ -7525,6 +7525,12 @@
   flex: 1;
 }
 
+.studio-connect-actions .cancel-button {
+  border: 1px solid var(--color-border-secondary);
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+}
+
 .auth-warning {
   padding-left: 0.75rem;
   border-left: 3px solid var(--color-warning);

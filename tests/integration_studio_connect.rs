@@ -268,6 +268,22 @@ async fn an_editor_connects_studio_which_reads_and_saves_documents_only() {
         .find(|token| token["scope"] == "studio")
         .expect("a Studio token");
     assert_eq!(studio["label"], "PSF Studio on Observatory Mac");
+
+    // Signing out revokes the token it presents.
+    let (status, _, _) = send(
+        &app,
+        Method::POST,
+        "/api/auth/studio/disconnect",
+        Value::Null,
+        None,
+        Some(&token),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        call(Method::GET, "/api/catalog").await,
+        StatusCode::UNAUTHORIZED
+    );
 }
 
 #[tokio::test]

@@ -498,6 +498,17 @@ impl Studio {
                     Ok(json!({ "started": !running, "queued": self.run_is_queued() }))
                 }
             }
+            "servers" => Ok(self.control_servers()),
+            "connect_server" => match params["address"].as_str() {
+                Some(address) => Ok(self.control_connect(address)),
+                None => Err("`address` is needed".to_string()),
+            },
+            "browse_server" => self.control_browse(params),
+            "sign_out_server" => match params["address"].as_str() {
+                Some(address) => self.control_sign_out(address),
+                None => Err("`address` is needed".to_string()),
+            },
+            "open_server_target" => self.control_open_server_target(),
             "capture" => return self.start_capture(params, reply.clone()),
             "sample" => return self.start_sample(params, reply.clone()),
             other => Err(format!("unknown method `{other}`")),

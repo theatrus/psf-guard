@@ -988,6 +988,9 @@ pub struct Studio {
     editor_reading: Option<editor::EditorReading>,
     /// When the file out with an editor was last looked at.
     editor_looked: Option<Instant>,
+    /// The PSF Guard panel: servers Studio is connected to, and browsing
+    /// them.
+    servers: server_panel::ServerPanel,
     /// What the last export said: how far it has got, or how it ended.
     export_line: String,
     /// Whether a TIFF export holds 32-bit floats, in place of 16 bits.
@@ -1178,6 +1181,7 @@ impl Studio {
                 this.follow_scenes();
                 this.follow_export();
                 this.follow_editor();
+                this.follow_servers();
                 this.follow_derived();
                 this.follow_store_opening();
                 this.follow_late();
@@ -1261,6 +1265,7 @@ impl Studio {
                 export: None,
                 editor_reading: None,
                 editor_looked: None,
+                servers: Default::default(),
                 export_line: String::new(),
                 tiff_float: false,
                 export_format: None,
@@ -1790,6 +1795,10 @@ mod parts;
 mod protect;
 #[path = "scene_worker.rs"]
 mod scene_worker;
+#[path = "server_panel.rs"]
+mod server_panel;
+#[path = "servers.rs"]
+pub(crate) mod servers;
 #[path = "tools.rs"]
 mod tools;
 #[path = "tree.rs"]

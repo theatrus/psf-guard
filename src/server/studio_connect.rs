@@ -594,6 +594,51 @@ pub async fn token_route(
     .into_response()
 }
 
+/// `POST /api/auth/studio/disconnect`: a Studio token revokes itself, when
+/// PSF Studio signs out.
+pub async fn disconnect_route(
+    State(state): State<Arc<AppState>>,
+    Extension(access): Extension<RequestAccess>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    let (Some(auth), Some(secret)) = (
+        state.server_auth(),
+        crate::server::auth::bearer_token(&headers),
+    ) else {
+        return AppError::BadRequest("Send the PSF Studio token to revoke".to_string())
+            .into_response();
+    };
+    if access.scope != TokenScope::Studio {
+        return AppError::Forbidden(
+            "Only a PSF Studio token revokes itself here; revoke other tokens in Settings"
+                .to_string(),
+        )
+        .into_response();
+    }
+    let Some(id) = auth.token_id_of(secret) else {
+        return AppError::NotFound.into_response();
+    };
+    let registry_path = match require_registry_path(&state) {
+        Ok(path) => AuthRegistry::path_for_database_registry(&path),
+        Err(error) => return error.into_response(),
+    };
+    let worker = auth.clone();
+    match tokio::task::spawn_blocking(move || worker.revoke_token(&registry_path, &id, None)).await
+    {
+        Ok(Ok(())) => {
+            tracing::info!(
+                "PSF Studio signed out: {:?} revoked its token",
+                access.username
+            );
+            Json(ApiResponse::success(())).into_response()
+        }
+        Ok(Err(error)) => AppError::BadRequest(error.to_string()).into_response(),
+        Err(error) => {
+            AppError::InternalError(format!("Token task failed: {error}")).into_response()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

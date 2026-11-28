@@ -797,6 +797,10 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route("/auth/studio/ticket", post(studio_connect::ticket_route))
         .route("/auth/studio/token", post(studio_connect::token_route))
         .route(
+            "/auth/studio/disconnect",
+            post(studio_connect::disconnect_route),
+        )
+        .route(
             "/auth/users",
             get(user_admin::list_users).post(user_admin::create_user),
         )

@@ -198,6 +198,37 @@ fn tools() -> Value {
             }), &["path"]),
         },
         {
+            "name": "studio_servers",
+            "description": "The PSF Guard panel: the servers Studio is connected to, a connect under way (its code and approval page while it waits), and the databases, projects and targets listed for the chosen server, with each target's channel stacks.",
+            "inputSchema": object(json!({ "instance": instance }), &[]),
+        },
+        {
+            "name": "studio_connect_server",
+            "description": "Connects Studio to a PSF Guard server at `address`, as the PSF Guard panel's Connect does. A server with sign-in shows a code and opens its Connect PSF Studio page in the browser, where a signed-in person allows it; follow with studio_servers until the connect is gone from it.",
+            "inputSchema": object(json!({ "instance": instance, "address": { "type": "string" } }), &["address"]),
+        },
+        {
+            "name": "studio_browse_server",
+            "description": "Chooses a connected `server`, a `database` id, a `project` id and a `target` id in the PSF Guard panel, as clicking them does. Give the server first, then each next one once studio_servers lists it.",
+            "inputSchema": object(json!({
+                "instance": instance,
+                "server": { "type": "string" },
+                "database": { "type": "string" },
+                "project": { "type": "integer" },
+                "target": { "type": "integer" }
+            }), &[]),
+        },
+        {
+            "name": "studio_open_server_target",
+            "description": "Opens the target chosen in the PSF Guard panel, as Open does: the server's channel stacks are fetched with Studio's connection and prepared. Follow it with studio_wait_idle.",
+            "inputSchema": object(json!({ "instance": instance }), &[]),
+        },
+        {
+            "name": "studio_sign_out_server",
+            "description": "Signs Studio out of the server at `address`, as Sign out does: its token is revoked on the server and deleted from the Keychain.",
+            "inputSchema": object(json!({ "instance": instance, "address": { "type": "string" } }), &["address"]),
+        },
+        {
             "name": "studio_show_clipping",
             "description": "Marks pixels at their pane's peak with magenta and black stripes, as the Clipping toggle does, so clipped areas such as an HDR core show in a capture; `on` false turns it off.",
             "inputSchema": object(json!({ "instance": instance, "on": { "type": "boolean" } }), &[]),
@@ -361,6 +392,25 @@ impl Server {
                 json!({ "stops": arguments["stops"], "knee": arguments["knee"] }),
             ),
             "studio_export" => forward(self.instance(arguments)?, "export", arguments.clone()),
+            "studio_servers" => forward(self.instance(arguments)?, "servers", json!({})),
+            "studio_connect_server" => forward(
+                self.instance(arguments)?,
+                "connect_server",
+                json!({ "address": arguments["address"] }),
+            ),
+            "studio_browse_server" => forward(
+                self.instance(arguments)?,
+                "browse_server",
+                arguments.clone(),
+            ),
+            "studio_open_server_target" => {
+                forward(self.instance(arguments)?, "open_server_target", json!({}))
+            }
+            "studio_sign_out_server" => forward(
+                self.instance(arguments)?,
+                "sign_out_server",
+                json!({ "address": arguments["address"] }),
+            ),
             "studio_show_clipping" => forward(
                 self.instance(arguments)?,
                 "show_clipping",

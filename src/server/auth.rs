@@ -508,6 +508,16 @@ impl ServerAuth {
         })
     }
 
+    /// The id of the token whose secret this is, if it is known.
+    pub(crate) fn token_id_of(&self, secret: &str) -> Option<String> {
+        self.tokens
+            .read()
+            .unwrap()
+            .iter()
+            .find(|token| token.matches(secret))
+            .map(|token| token.id.clone())
+    }
+
     pub(crate) fn revoke_token(
         &self,
         registry_path: &FilePath,
@@ -903,7 +913,7 @@ fn same_origin_request_is_https(headers: &HeaderMap) -> Option<bool> {
 /// The secret from `Authorization: Bearer psfg_…`. Other bearer values are
 /// not ours (remote sync keys live on routes this middleware skips) and read
 /// as no token, so the cookie still gets its turn.
-fn bearer_token(headers: &HeaderMap) -> Option<&str> {
+pub(crate) fn bearer_token(headers: &HeaderMap) -> Option<&str> {
     let value = headers
         .get(axum::http::header::AUTHORIZATION)?
         .to_str()
@@ -954,6 +964,9 @@ pub(crate) fn is_studio_document_path(path: &str) -> bool {
         })
 }
 
+/// Where a Studio token revokes itself: the one `/auth/` path it may use.
+pub(crate) const STUDIO_DISCONNECT_PATH: &str = "/auth/studio/disconnect";
+
 pub(crate) const READ_ONLY_REFUSAL: &str = "This account has read-only access";
 pub(crate) const STUDIO_SCOPE_REFUSAL: &str =
     "A PSF Studio connection can read, and save Studio documents, but not do this";
@@ -977,7 +990,7 @@ fn refusal(
     if scope == TokenScope::Studio
         && (path == "/mcp"
             || path.starts_with("/mcp/")
-            || path.starts_with("/auth/")
+            || (path.starts_with("/auth/") && path != STUDIO_DISCONNECT_PATH)
             || (path == "/me/preferences" && !reads))
     {
         return Some(STUDIO_SCOPE_REFUSAL);

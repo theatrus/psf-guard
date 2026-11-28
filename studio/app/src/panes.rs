@@ -3507,6 +3507,20 @@ impl Studio {
                             }))
                     }),
             )
+            .child(
+                div()
+                    .id("open-server")
+                    .px_2()
+                    .py_1()
+                    .rounded_sm()
+                    .bg(rgb(if self.servers.open { SELECTED } else { CONTROL }))
+                    .cursor_pointer()
+                    .child("PSF Guard")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.toggle_server_panel(window, cx);
+                        cx.notify();
+                    })),
+            )
             .child(Self::history_button(
                 "Undo",
                 "undo",
@@ -3766,8 +3780,10 @@ impl Render for Studio {
         let handle = self.canvas.clone();
         let canvas_bounds = self.canvas_bounds.clone();
 
+        let server_panel = self.server_panel(window, cx);
         div()
             .size_full()
+            .relative()
             .flex()
             .flex_col()
             .bg(rgb(BACKGROUND))
@@ -3848,6 +3864,7 @@ impl Render for Studio {
                     )
                     .child(self.inspector(cx)),
             )
+            .children(server_panel)
     }
 }
 

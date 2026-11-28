@@ -87,6 +87,9 @@ pub(super) struct TargetLink {
     pub database: String,
     pub project: i32,
     pub target: i32,
+    /// A one-time ticket from a signed-in click, which Studio trades for a
+    /// token when it is not connected to the server yet.
+    pub ticket: Option<String>,
 }
 
 /// Reads a `psf-studio://open?…` link. `None` for any other text.
@@ -102,13 +105,22 @@ pub(super) fn target_link(link: &str) -> Option<TargetLink> {
         database: field(query, "db")?,
         project: field(query, "project")?.parse().ok()?,
         target: field(query, "target")?.parse().ok()?,
+        ticket: field(query, "ticket").filter(|ticket| !ticket.is_empty()),
     })
 }
 
 impl Studio {
     /// Starts `psf-guard studio` for one picture and opens it when the
     /// run ends.
-    fn prepare_and_open(&mut self, name: &str, arguments: Vec<std::ffi::OsString>) {
+    ///
+    /// A server's token goes to `psf-guard` in `PSF_GUARD_TOKEN`, not as an
+    /// argument, which every process on the computer can read.
+    fn prepare_and_open(
+        &mut self,
+        name: &str,
+        arguments: Vec<std::ffi::OsString>,
+        token: Option<String>,
+    ) {
         let Some(binary) = self.psf_guard() else {
             return;
         };
@@ -123,13 +135,18 @@ impl Studio {
             .arg("--name")
             .arg(&name)
             .arg("--no-open");
+        match token {
+            Some(token) => command.env("PSF_GUARD_TOKEN", token),
+            None => command.env_remove("PSF_GUARD_TOKEN"),
+        };
         let store = folder.join(format!("{name}.pgtiles"));
         let document = folder.join(format!("{name}.json"));
         self.start_run(command, Some((store, document)));
     }
 
-    /// Opens a target's channel stacks from a PSF Guard server.
-    pub(super) fn open_target(&mut self, link: &TargetLink) {
+    /// Opens a target's channel stacks from a PSF Guard server, with the
+    /// server's token when it signs people in.
+    pub(super) fn open_target_with(&mut self, link: &TargetLink, token: Option<String>) {
         // The server and the database as given are part of the picture's
         // identity, so two servers' targets never share one picture.
         let identity = {
@@ -156,6 +173,7 @@ impl Studio {
                 "--target".into(),
                 link.target.to_string().into(),
             ],
+            token,
         );
     }
 
@@ -189,7 +207,7 @@ impl Studio {
             arguments.push("--file".into());
             arguments.push(file.into());
         }
-        self.prepare_and_open(&format!("{stem}-{identity}"), arguments);
+        self.prepare_and_open(&format!("{stem}-{identity}"), arguments, None);
     }
 
     /// Asks which stack files to open, then opens them.
@@ -229,7 +247,7 @@ impl Studio {
             return;
         };
         match target_link(&link) {
-            Some(target) => self.open_target(&target),
+            Some(target) => self.open_link(target),
             None => self.say("Not opened: the link does not name a target on a server"),
         }
     }
@@ -250,7 +268,15 @@ mod tests {
                 database: "my-db".to_string(),
                 project: 11,
                 target: 17,
+                ticket: None,
             })
+        );
+        assert_eq!(
+            target_link(
+                "psf-studio://open?server=https%3A%2F%2Fguard&db=a&project=1&target=2&ticket=ab12"
+            )
+            .and_then(|link| link.ticket),
+            Some("ab12".to_string())
         );
         // A server that is not HTTP, a missing field and another scheme.
         assert_eq!(
